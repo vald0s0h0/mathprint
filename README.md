@@ -34,6 +34,10 @@ produit dans Corrections.
 Le NAS ne construit plus les images localement : il les tire depuis GHCR et
 une release suffit à mettre à jour la production, sans rien toucher sur place.
 
+Procédure clic par clic (File Station + Container Manager, sans SSH) :
+[**DEPLOIEMENT_NAS.md**](DEPLOIEMENT_NAS.md). Résumé en ligne de commande
+ci-dessous pour un déploiement Docker Compose classique.
+
 ```bash
 cp .env.example .env   # DB_PASSWORD, SECRET_KEY, HMAC_KEY, MATHPRINT_VERSION
 docker compose up -d
