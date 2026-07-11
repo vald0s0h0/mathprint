@@ -5,7 +5,7 @@ import { useNavigate } from 'react-router-dom'
 import { api, setToken } from '../api'
 
 export default function Login() {
-  const [email, setEmail] = useState('prof@mathprint.local')
+  const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const navigate = useNavigate()

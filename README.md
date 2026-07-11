@@ -19,10 +19,9 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 cd frontend && npm install && npm run dev
 ```
 
-Compte amorcé (base vide uniquement) : `admin@mathprint.local` / `changeme`
-par défaut, personnalisable via `MATHPRINT_ADMIN_EMAIL` /
-`MATHPRINT_ADMIN_NAME` / `MATHPRINT_ADMIN_PASSWORD` (ou `ADMIN_*` dans `.env`
-pour Docker Compose — voir `.env.example`).
+Base vide : le premier accès à `http://localhost:5173` affiche un écran de
+démarrage pour créer le compte administrateur (e-mail/prénom/mot de passe +
+clés API facultatives) — aucun compte préconfiguré à connaître.
 Classe « 5e Mock » (5 élèves imaginaires) créée en mode mock — désactivable
 dans Paramètres → Système.
 

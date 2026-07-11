@@ -1,11 +1,13 @@
 import { AppShell, Group, NavLink, Text, Title } from '@mantine/core'
+import { useEffect, useState } from 'react'
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
-import { getToken, setToken } from './api'
+import { api, getToken, setToken } from './api'
 import Competencies from './pages/Competencies'
 import Corrections from './pages/Corrections'
 import Dashboard from './pages/Dashboard'
 import Login from './pages/Login'
 import SettingsPage from './pages/Settings'
+import Setup from './pages/Setup'
 import Students from './pages/Students'
 import Subjects from './pages/Subjects'
 
@@ -22,6 +24,16 @@ export default function App() {
   const location = useLocation()
   const navigate = useNavigate()
   const authed = !!getToken()
+  const [needsSetup, setNeedsSetup] = useState<boolean | null>(null)
+
+  useEffect(() => {
+    api.get<{ needs_setup: boolean }>('/api/setup/status')
+      .then((r) => setNeedsSetup(r.needs_setup))
+      .catch(() => setNeedsSetup(false))
+  }, [])
+
+  if (needsSetup === null) return null
+  if (needsSetup) return <Setup onDone={() => setNeedsSetup(false)} />
 
   if (!authed && location.pathname !== '/login') return <Navigate to="/login" />
   if (location.pathname === '/login') return <Login />

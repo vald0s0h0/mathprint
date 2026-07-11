@@ -1,7 +1,11 @@
-"""Amorçage : utilisateur professeur, année scolaire, grilles de compétences
-officielles (extraites des programmes cycles 3 et 4 — voir
-scripts/extract_competencies.py), catalogue d'exercices et classe mock de
-5 élèves imaginaires (désactivable dans Réglages, §9.4)."""
+"""Amorçage : année scolaire, grilles de compétences officielles (extraites
+des programmes cycles 3 et 4 — voir scripts/extract_competencies.py),
+catalogue d'exercices et classe mock de 5 élèves imaginaires (désactivable
+dans Réglages, §9.4).
+
+Le premier compte administrateur n'est PAS créé ici : c'est l'écran de
+démarrage (routers/setup.py, tant qu'aucun User n'existe) qui s'en charge,
+avec les identifiants choisis par l'enseignant."""
 import json
 from pathlib import Path
 
@@ -10,10 +14,10 @@ from sqlalchemy.orm import Session
 from .config import settings
 from .models import (
     Competency, CompetencyFramework, ExerciseCatalog, ExerciseCompetency,
-    SchoolClass, SchoolYear, Student, User,
+    SchoolClass, SchoolYear, Student,
 )
 from .services.exercises import GENERATORS
-from .services.security import hash_password, new_pseudonym
+from .services.security import new_pseudonym
 
 COMPETENCIES_JSON = Path(__file__).resolve().parent / "data" / "competencies_fr.json"
 
@@ -94,11 +98,9 @@ def seed_exercises(db: Session, by_grade: dict[str, list[Competency]]):
 
 
 def seed(db: Session):
-    if db.query(User).first():
-        return  # déjà amorcé
+    if db.query(CompetencyFramework).first():
+        return  # contenu déjà amorcé (indépendant de la création du 1er compte)
 
-    db.add(User(email=settings.admin_email, password_hash=hash_password(settings.admin_password),
-                display_name=settings.admin_name, role="admin"))
     year = SchoolYear(label="2026-2027", active=True)
     db.add(year)
     db.flush()

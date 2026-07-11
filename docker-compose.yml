@@ -11,6 +11,10 @@
 # dès qu'une nouvelle image "latest" est disponible — voir README.
 # Pour figer le NAS sur une version précise plutôt que de suivre "latest",
 # définir MATHPRINT_VERSION=vX.Y.Z dans .env (Watchtower ne bougera plus).
+#
+# Premier démarrage : ouvrir l'application dans un navigateur, un écran de
+# démarrage crée le premier compte administrateur (email/mot de passe/clés
+# API facultatives) — rien à préconfigurer dans .env pour ça.
 services:
   db:
     image: postgres:16-alpine
@@ -47,13 +51,12 @@ services:
         condition: service_started
     environment:
       MATHPRINT_DATABASE_URL: postgresql+psycopg2://mathprint:${DB_PASSWORD}@db/mathprint
-      MATHPRINT_SECRET_KEY: ${SECRET_KEY:?definir SECRET_KEY}
-      MATHPRINT_HMAC_KEY: ${HMAC_KEY:?definir HMAC_KEY}
       MATHPRINT_MOCK_MODE: ${MOCK_MODE:-true}
       MATHPRINT_MATHALEA_URL: http://mathalea:8123
-      MATHPRINT_ADMIN_EMAIL: ${ADMIN_EMAIL:?definir ADMIN_EMAIL dans .env}
-      MATHPRINT_ADMIN_NAME: ${ADMIN_NAME:-Administrateur}
-      MATHPRINT_ADMIN_PASSWORD: ${ADMIN_PASSWORD:?definir ADMIN_PASSWORD dans .env}
+      # SECRET_KEY/HMAC_KEY : générés automatiquement au 1er démarrage et
+      # persistés dans /data/runtime_secrets.env (services/bootstrap.py) —
+      # rien à fournir ici. Le tout premier compte se crée depuis l'écran de
+      # démarrage de l'application (routers/setup.py), pas via l'environnement.
     volumes:
       - ./volumes/data:/data          # /data/assessments, /data/catalog, /data/backups
     restart: unless-stopped

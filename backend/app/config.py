@@ -3,27 +3,33 @@
 Tout est surchargeable par variable d'environnement (préfixe MATHPRINT_).
 Aucun identifiant de modèle LLM n'est codé en dur ailleurs que dans ce
 registre par défaut, modifiable en base via system_settings / provider_configs.
+
+SECRET_KEY/HMAC_KEY n'ont pas besoin d'être fournis : au premier démarrage
+sur des valeurs par défaut, `services.bootstrap.ensure_strong_secrets()` en
+génère de vrais et les persiste dans `_RUNTIME_ENV_FILE` (sur le volume
+`/data`, donc stable d'un redémarrage/mise à jour à l'autre) — rechargé ici
+via `env_file` à chaque démarrage du processus.
 """
+import os
 from pathlib import Path
 
 from pydantic_settings import BaseSettings
 
+_DATA_DIR = Path(os.environ.get(
+    "MATHPRINT_DATA_DIR", str(Path(__file__).resolve().parents[2] / "data")))
+_RUNTIME_ENV_FILE = _DATA_DIR / "runtime_secrets.env"
+
 
 class Settings(BaseSettings):
-    model_config = {"env_prefix": "MATHPRINT_"}
+    model_config = {"env_prefix": "MATHPRINT_", "env_file": str(_RUNTIME_ENV_FILE),
+                    "env_file_encoding": "utf-8"}
 
     # --- Base ---
     database_url: str = "sqlite:///./mathprint.db"
-    data_dir: Path = Path(__file__).resolve().parents[2] / "data"
-    secret_key: str = "change-me-on-nas"          # JWT
-    hmac_key: str = "change-me-hmac-key"          # signature des QR pages
+    data_dir: Path = _DATA_DIR
+    secret_key: str = "change-me-on-nas"          # JWT — voir bootstrap.py
+    hmac_key: str = "change-me-hmac-key"          # signature des QR pages — idem
     session_hours: int = 12
-
-    # --- Compte professeur amorcé au premier démarrage (seed.py) ---
-    # Ne jamais coder les vraies valeurs en dur ici : ce fichier est public.
-    admin_email: str = "admin@mathprint.local"
-    admin_name: str = "Administrateur"
-    admin_password: str = "changeme"
 
     # --- Registre de modèles par défaut (RM-011 : jamais codé en dur ailleurs) ---
     deepseek_model: str = "deepseek-v4-flash"

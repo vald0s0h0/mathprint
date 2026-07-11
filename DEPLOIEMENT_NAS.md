@@ -25,8 +25,10 @@ jour DSM au préalable.
 
 ## 2. Créer le fichier `.env` (File Station)
 
-Le mot de passe de la base et les clés de l'application ne doivent **jamais**
-rester aux valeurs par défaut du dépôt (elles sont publiques sur GitHub).
+Le mot de passe de la base ne doit **jamais** rester à la valeur par défaut
+du dépôt (elle est publique sur GitHub). Les clés internes de l'application
+(JWT, signature des QR) et le compte administrateur, eux, n'ont **rien à
+préparer ici** — voir §6.
 
 1. Dans `/docker/mathprint`, clic droit → Créer → Fichier texte vierge,
    nommé exactement **`.env`** (bien penser au point initial ; File Station
@@ -36,31 +38,20 @@ rester aux valeurs par défaut du dépôt (elles sont publiques sur GitHub).
 
    ```env
    DB_PASSWORD=<mot de passe long et unique>
-   SECRET_KEY=<chaîne aléatoire longue>
-   HMAC_KEY=<autre chaîne aléatoire longue>
    MOCK_MODE=false
    MATHPRINT_VERSION=latest
-
-   ADMIN_EMAIL=<votre e-mail>
-   ADMIN_NAME=<votre prénom>
-   ADMIN_PASSWORD=<votre mot de passe>
    ```
 
-   - `DB_PASSWORD` / `SECRET_KEY` / `HMAC_KEY` : n'importe quelle phrase
-     longue et imprévisible convient (20+ caractères, mélange de mots/chiffres) ;
-     elles ne sont jamais affichées nulle part dans l'application. Si vous
-     avez un gestionnaire de mots de passe, générez-en trois là plutôt qu'à
-     la main.
+   - `DB_PASSWORD` : n'importe quelle phrase longue et imprévisible convient
+     (20+ caractères, mélange de mots/chiffres) ; elle n'est jamais affichée
+     nulle part dans l'application. Si vous avez un gestionnaire de mots de
+     passe, générez-la là plutôt qu'à la main.
    - `MOCK_MODE=false` : désactive la classe fictive « 5e Mock » et les
      réponses simulées — à mettre à `true` uniquement pour tester l'appli
      sans données réelles.
    - `MATHPRINT_VERSION=latest` : le NAS suit automatiquement chaque nouvelle
      publication (voir §7). Remplacer par ex. `v1.2.0` pour figer une version
      précise et couper la mise à jour automatique.
-   - `ADMIN_EMAIL` / `ADMIN_NAME` / `ADMIN_PASSWORD` : le compte professeur
-     créé **une seule fois**, au tout premier démarrage sur une base vide
-     (`seed.py`) — sans effet si vous relancez le projet sur une base déjà
-     amorcée. Mettre vos vraies valeurs ici, jamais dans un fichier commité.
 3. Enregistrer.
 
 ## 3. Créer le projet Docker Compose (Container Manager)
@@ -119,16 +110,24 @@ Recommandé plutôt que d'utiliser directement le port 8080 en HTTP.
 L'application est ensuite accessible en `https://` sans exposer le port 8080
 directement.
 
-## 6. Première connexion
+## 6. Premier lancement : créer votre compte administrateur
 
-Le compte professeur est créé automatiquement au tout premier démarrage
-(base vide) avec les valeurs `ADMIN_EMAIL` / `ADMIN_PASSWORD` de votre `.env`
-(§2) — pas de mot de passe par défaut à changer : vous vous connectez
-directement avec vos propres identifiants.
+Ouvrir `https://<votre-nom-d-hôte>` (ou `http://<IP-du-NAS>:8080`) dans un
+navigateur affiche directement un **écran de démarrage** tant qu'aucun
+compte n'existe : e-mail, prénom, mot de passe (8 caractères minimum), et
+une section « Clés API (facultatif) » pour Mathpix/DeepSeek/Anthropic — à
+laisser vide pour rester en mode simulé et les ajouter plus tard dans
+Paramètres → API. Valider crée le compte et vous connecte immédiatement ;
+cet écran ne réapparaît plus ensuite.
 
-Si vous devez changer ce mot de passe plus tard (l'interface ne propose pas
-encore d'écran dédié — à demander en évolution si besoin), la commande
-suivante depuis Container Manager le fait en une étape, sans SSH :
+Aucun mot de passe par défaut, rien à taper dans `.env` pour ça : les clés
+internes de l'application (JWT, signature des QR) sont elles aussi générées
+automatiquement à ce moment-là et stockées sur le volume `/data` (donc
+stables d'une mise à jour à l'autre).
+
+Si vous devez changer votre mot de passe plus tard (l'interface ne propose
+pas encore d'écran dédié pour ça — à demander en évolution si besoin), la
+commande suivante depuis Container Manager le fait en une étape, sans SSH :
 
 1. Container Manager → conteneur `mathprint-api` (ou `api`) → **Détails** →
    onglet **Terminal** → **Créer** → `sh` (ou `bash`).
