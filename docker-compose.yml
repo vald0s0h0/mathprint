@@ -51,6 +51,9 @@ services:
       MATHPRINT_HMAC_KEY: ${HMAC_KEY:?definir HMAC_KEY}
       MATHPRINT_MOCK_MODE: ${MOCK_MODE:-true}
       MATHPRINT_MATHALEA_URL: http://mathalea:8123
+      MATHPRINT_ADMIN_EMAIL: ${ADMIN_EMAIL:?definir ADMIN_EMAIL dans .env}
+      MATHPRINT_ADMIN_NAME: ${ADMIN_NAME:-Administrateur}
+      MATHPRINT_ADMIN_PASSWORD: ${ADMIN_PASSWORD:?definir ADMIN_PASSWORD dans .env}
     volumes:
       - ./volumes/data:/data          # /data/assessments, /data/catalog, /data/backups
     restart: unless-stopped

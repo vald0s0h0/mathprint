@@ -40,6 +40,10 @@ rester aux valeurs par défaut du dépôt (elles sont publiques sur GitHub).
    HMAC_KEY=<autre chaîne aléatoire longue>
    MOCK_MODE=false
    MATHPRINT_VERSION=latest
+
+   ADMIN_EMAIL=<votre e-mail>
+   ADMIN_NAME=<votre prénom>
+   ADMIN_PASSWORD=<votre mot de passe>
    ```
 
    - `DB_PASSWORD` / `SECRET_KEY` / `HMAC_KEY` : n'importe quelle phrase
@@ -53,6 +57,10 @@ rester aux valeurs par défaut du dépôt (elles sont publiques sur GitHub).
    - `MATHPRINT_VERSION=latest` : le NAS suit automatiquement chaque nouvelle
      publication (voir §7). Remplacer par ex. `v1.2.0` pour figer une version
      précise et couper la mise à jour automatique.
+   - `ADMIN_EMAIL` / `ADMIN_NAME` / `ADMIN_PASSWORD` : le compte professeur
+     créé **une seule fois**, au tout premier démarrage sur une base vide
+     (`seed.py`) — sans effet si vous relancez le projet sur une base déjà
+     amorcée. Mettre vos vraies valeurs ici, jamais dans un fichier commité.
 3. Enregistrer.
 
 ## 3. Créer le projet Docker Compose (Container Manager)
@@ -111,36 +119,33 @@ Recommandé plutôt que d'utiliser directement le port 8080 en HTTP.
 L'application est ensuite accessible en `https://` sans exposer le port 8080
 directement.
 
-## 6. Première connexion et sécurisation du mot de passe
+## 6. Première connexion
 
-Compte amorcé automatiquement au premier démarrage :
-`prof@mathprint.local` / `mathprint`.
+Le compte professeur est créé automatiquement au tout premier démarrage
+(base vide) avec les valeurs `ADMIN_EMAIL` / `ADMIN_PASSWORD` de votre `.env`
+(§2) — pas de mot de passe par défaut à changer : vous vous connectez
+directement avec vos propres identifiants.
 
-⚠️ **Ce mot de passe est visible dans le code source public du dépôt** —
-à changer immédiatement. L'interface ne propose pas encore d'écran
-« changer mon mot de passe » (à demander en évolution si besoin) ; en
-attendant, la commande suivante depuis Container Manager le fait en une
-étape :
+Si vous devez changer ce mot de passe plus tard (l'interface ne propose pas
+encore d'écran dédié — à demander en évolution si besoin), la commande
+suivante depuis Container Manager le fait en une étape, sans SSH :
 
 1. Container Manager → conteneur `mathprint-api` (ou `api`) → **Détails** →
    onglet **Terminal** → **Créer** → `sh` (ou `bash`).
-2. Coller :
+2. Coller (adapter l'e-mail et le nouveau mot de passe) :
    ```bash
    python3 -c "
    from app.db import SessionLocal
    from app.models import User
    from app.services.security import hash_password
    db = SessionLocal()
-   u = db.query(User).filter_by(email='prof@mathprint.local').first()
+   u = db.query(User).filter_by(email='VOTRE-EMAIL').first()
    u.password_hash = hash_password('VOTRE-NOUVEAU-MOT-DE-PASSE')
    db.commit()
    print('mot de passe mis à jour pour', u.email)
    "
    ```
 3. Se reconnecter sur l'application avec le nouveau mot de passe.
-
-*(C'est la seule étape de ce guide qui touche à un terminal — via l'onglet
-Terminal de Container Manager, pas de SSH nécessaire.)*
 
 ## 7. Mises à jour automatiques — rien à faire
 

@@ -19,6 +19,12 @@ class Settings(BaseSettings):
     hmac_key: str = "change-me-hmac-key"          # signature des QR pages
     session_hours: int = 12
 
+    # --- Compte professeur amorcé au premier démarrage (seed.py) ---
+    # Ne jamais coder les vraies valeurs en dur ici : ce fichier est public.
+    admin_email: str = "admin@mathprint.local"
+    admin_name: str = "Administrateur"
+    admin_password: str = "changeme"
+
     # --- Registre de modèles par défaut (RM-011 : jamais codé en dur ailleurs) ---
     deepseek_model: str = "deepseek-v4-flash"
     deepseek_reasoning_model: str = "deepseek-v4-flash-thinking"

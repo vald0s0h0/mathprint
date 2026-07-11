@@ -97,8 +97,8 @@ def seed(db: Session):
     if db.query(User).first():
         return  # déjà amorcé
 
-    db.add(User(email="prof@mathprint.local", password_hash=hash_password("mathprint"),
-                display_name="Professeur", role="admin"))
+    db.add(User(email=settings.admin_email, password_hash=hash_password(settings.admin_password),
+                display_name=settings.admin_name, role="admin"))
     year = SchoolYear(label="2026-2027", active=True)
     db.add(year)
     db.flush()

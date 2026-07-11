@@ -19,7 +19,10 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 cd frontend && npm install && npm run dev
 ```
 
-Compte amorcé : `prof@mathprint.local` / `mathprint`.
+Compte amorcé (base vide uniquement) : `admin@mathprint.local` / `changeme`
+par défaut, personnalisable via `MATHPRINT_ADMIN_EMAIL` /
+`MATHPRINT_ADMIN_NAME` / `MATHPRINT_ADMIN_PASSWORD` (ou `ADMIN_*` dans `.env`
+pour Docker Compose — voir `.env.example`).
 Classe « 5e Mock » (5 élèves imaginaires) créée en mode mock — désactivable
 dans Paramètres → Système.
 
