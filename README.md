@@ -12,7 +12,7 @@ cd mathalea-service && npm install && npm start
 
 # API (port 8787)
 cd backend
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 .venv/bin/uvicorn app.main:app --port 8787
 
 # Interface (port 5173, proxy /api -> 8787)
