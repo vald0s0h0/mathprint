@@ -67,7 +67,7 @@ services:
     image: ghcr.io/vald0s0h0/mathprint-web:${MATHPRINT_VERSION:-latest}
     depends_on: [api]
     ports:
-      - "8080:80"
+      - "7070:80"
     restart: unless-stopped
     labels:
       - "com.centurylabs.watchtower.enable=true"

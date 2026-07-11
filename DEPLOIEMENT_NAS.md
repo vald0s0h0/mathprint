@@ -25,10 +25,12 @@ jour DSM au préalable.
 
 ## 2. Créer le fichier `.env` (File Station)
 
-Le mot de passe de la base ne doit **jamais** rester à la valeur par défaut
-du dépôt (elle est publique sur GitHub). Les clés internes de l'application
-(JWT, signature des QR) et le compte administrateur, eux, n'ont **rien à
-préparer ici** — voir §6.
+`DB_PASSWORD` est **obligatoire et sans valeur automatique** : Postgres en a
+besoin dès sa toute première initialisation, l'API doit se connecter avec
+exactement le même. Sans lui, `db` peut démarrer avec un mot de passe vide
+et `api` boucle en échec de connexion (voir §10 si ça vous arrive). Les
+autres clés internes de l'application (JWT, signature des QR) et le compte
+administrateur, eux, n'ont **rien à préparer ici** — voir §6.
 
 1. Dans `/docker/mathprint`, clic droit → Créer → Fichier texte vierge,
    nommé exactement **`.env`** (bien penser au point initial ; File Station
@@ -155,6 +157,13 @@ du projet vérifie `ghcr.io` toutes les 5 minutes et redémarre automatiquement
 (voir le dépôt GitHub, `scripts/release.sh` côté développement). `db` et
 `queue` ne sont jamais touchés par Watchtower.
 
+⚠️ Watchtower ne fait que **remplacer l'image** d'un conteneur existant ; il
+ne relit jamais `docker-compose.yml` (ports, variables d'environnement,
+nouveaux services…). Si ce fichier a changé depuis la création du projet
+(ports, `.env` requis, etc.), une mise à jour Watchtower seule ne suffit pas
+— il faut recoller le `docker-compose.yml` à jour dans Container Manager →
+Projet → **Action** → **Modifier**, puis redéployer.
+
 Pour figer le NAS sur une version précise plutôt que de suivre `latest` :
 rouvrir le fichier `.env` (File Station) et remplacer
 `MATHPRINT_VERSION=latest` par ex. par `MATHPRINT_VERSION=v1.2.0`, puis dans
@@ -186,8 +195,10 @@ file CUPS locale.
 
 | Symptôme | Piste |
 |---|---|
-| Un conteneur reste rouge / redémarre en boucle | Container Manager → conteneur → Détails → Journal |
-| `api` ne démarre jamais | Vérifier que `db` est bien passé « healthy » (health-check `pg_isready`) et que `.env` contient bien `DB_PASSWORD`/`SECRET_KEY`/`HMAC_KEY` |
-| Page inaccessible sur `:8080` | Conflit de port avec un autre service DSM — changer le port hôte dans le projet |
+| Un conteneur reste rouge / redémarre en boucle | Container Manager → conteneur → Détails → Journal (le traceback exact y est) |
+| `/` répond mais `/api/...` renvoie 502 | C'est le nginx du conteneur `web` qui ne joint pas `api` : le conteneur `api` est arrêté/en boucle, pas un problème de version — voir la ligne suivante |
+| `api` redémarre en boucle, `db` a l'air « en cours d'exécution » | Cause la plus fréquente : `DB_PASSWORD` absent/vide alors que le volume `volumes/postgres` a déjà été initialisé avec ce mot de passe vide — Postgres ne réapplique son mot de passe qu'à la toute première initialisation d'un volume vide. Corrige `DB_PASSWORD` dans `.env` **et** vide le contenu de `volumes/postgres` (File Station) avant de redémarrer, pour forcer une réinitialisation propre. Sans donnée réelle encore stockée, ce vidage est sans risque. |
+| Le projet ne veut plus s'arrêter (bouton bloqué) | Arrêter d'abord `watchtower` seul (il recrée sans cesse les conteneurs pendant que vous essayez), puis `api` individuellement plutôt que tout le projet d'un coup. Toujours bloqué après ~1 min : Centre de paquets → Container Manager → **Arrêter** puis **Démarrer** le paquet (reset léger). En dernier recours, redémarrer le NAS — tous les conteneurs s'arrêtent proprement au reboot quel que soit leur état. |
+| Page inaccessible sur le port publié | Conflit de port avec un autre service DSM — changer le port hôte dans le projet |
 | `docker compose pull` / Watchtower échoue avec 401/403 | Les images `ghcr.io/vald0s0h0/mathprint-*` sont publiques par défaut ; si elles ont été rendues privées entre-temps, ajouter un `docker login ghcr.io` (jeton `read:packages`) — voir README |
 | Après une mise à jour, comportement inattendu | Revenir en arrière en fixant `MATHPRINT_VERSION` sur le tag précédent dans `.env` (§7) |
