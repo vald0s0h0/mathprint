@@ -1,0 +1,1811 @@
+{
+ "source": "Programmes officiels de mathématiques cycles 3 et 4",
+ "extracted_from": [
+  "Programme de Mathématiques Cycle 3.pdf",
+  "Programme de Mathématiques Cycle 4.pdf"
+ ],
+ "frameworks": [
+  {
+   "grade_level": "6e",
+   "cycle": 3,
+   "name": "Programme officiel 6e (cycle 3)",
+   "version": "2026",
+   "domains": [
+    {
+     "name": "Nombres, calcul et résolution de problèmes",
+     "code": "NC",
+     "themes": [
+      {
+       "name": "Les nombres entiers et décimaux",
+       "code": "NOMB",
+       "competencies": [
+        {
+         "code": "6E-NC-NOMB-01",
+         "label": "Connaître et utiliser la valeur des chiffres selon leur rang dans l'écriture d'un nombre"
+        },
+        {
+         "code": "6E-NC-NOMB-02",
+         "label": "Connaître les liens entre les unités de numération unité, dizaine, centaine, millier, dixième, centième, millième"
+        },
+        {
+         "code": "6E-NC-NOMB-03",
+         "label": "Connaître des grands nombres entiers"
+        },
+        {
+         "code": "6E-NC-NOMB-04",
+         "label": "Reconnaître un nombre décimal"
+        },
+        {
+         "code": "6E-NC-NOMB-05",
+         "label": "Connaître la définition d'un pourcentage"
+        },
+        {
+         "code": "6E-NC-NOMB-06",
+         "label": "Associer et utiliser différentes écritures d'un nombre décimal : écriture à virgule, fraction, nombre mixte, pourcentage"
+        },
+        {
+         "code": "6E-NC-NOMB-07",
+         "label": "Placer sur une demi-droite graduée un point dont l'abscisse est un nombre décimal"
+        },
+        {
+         "code": "6E-NC-NOMB-08",
+         "label": "Repérer un nombre décimal sur une demi-droite graduée"
+        },
+        {
+         "code": "6E-NC-NOMB-09",
+         "label": "Comparer deux nombres décimaux"
+        },
+        {
+         "code": "6E-NC-NOMB-10",
+         "label": "Ordonner une liste de nombres décimaux"
+        },
+        {
+         "code": "6E-NC-NOMB-11",
+         "label": "Donner la valeur arrondie à l'unité, au dixième ou au centième, d'un nombre décimal"
+        },
+        {
+         "code": "6E-NC-NOMB-12",
+         "label": "Déterminer ou connaître la valeur arrondie de certains nombres non décimaux"
+        },
+        {
+         "code": "6E-NC-NOMB-13",
+         "label": "Encadrer un nombre décimal par deux nombres décimaux, intercaler un nombre décimal entre deux nombres décimaux"
+        },
+        {
+         "code": "6E-NC-NOMB-14",
+         "label": "Additionner et soustraire des nombres décimaux"
+        },
+        {
+         "code": "6E-NC-NOMB-15",
+         "label": "Multiplier un nombre entier ou un nombre décimal par 0,1, par 0,01, et par 0,001"
+        },
+        {
+         "code": "6E-NC-NOMB-16",
+         "label": "Connaître le lien avec la division par 10, 100 et par 1 000"
+        },
+        {
+         "code": "6E-NC-NOMB-17",
+         "label": "Comprendre le sens de la multiplication de deux nombres décimaux"
+        },
+        {
+         "code": "6E-NC-NOMB-18",
+         "label": "Calculer le produit de deux nombres décimaux"
+        },
+        {
+         "code": "6E-NC-NOMB-19",
+         "label": "Contrôler les résultats à l'aide d'ordres de grandeur"
+        },
+        {
+         "code": "6E-NC-NOMB-20",
+         "label": "Résoudre des problèmes mettant en jeu des multiplications entre des nombres décimaux"
+        },
+        {
+         "code": "6E-NC-NOMB-21",
+         "label": "Diviser un nombre décimal par un nombre entier non nul inférieur à 10"
+        },
+        {
+         "code": "6E-NC-NOMB-22",
+         "label": "Résoudre des problèmes mettant en jeu des divisions décimales"
+        },
+        {
+         "code": "6E-NC-NOMB-23",
+         "label": "Effectuer la division euclidienne d'un nombre entier par un nombre entier inférieur à 100"
+        },
+        {
+         "code": "6E-NC-NOMB-24",
+         "label": "Résoudre des problèmes mettant en jeu des divisions euclidiennes"
+        }
+       ]
+      },
+      {
+       "name": "Les fractions",
+       "code": "FRAC",
+       "competencies": [
+        {
+         "code": "6E-NC-FRAC-01",
+         "label": "Relier une fraction au résultat exact de la division de son numérateur par son dénominateur"
+        },
+        {
+         "code": "6E-NC-FRAC-02",
+         "label": "Comprendre et connaître la définition du quotient d'un entier a par un entier b non nul"
+        },
+        {
+         "code": "6E-NC-FRAC-03",
+         "label": "Compléter des égalités à trous multiplicatives"
+        },
+        {
+         "code": "6E-NC-FRAC-04",
+         "label": "Placer une fraction sur une demi-droite graduée dans des cas simples"
+        },
+        {
+         "code": "6E-NC-FRAC-05",
+         "label": "Graduer un segment de longueur donnée"
+        },
+        {
+         "code": "6E-NC-FRAC-06",
+         "label": "Savoir que la fraction a b peut représenter un nombre entier, un nombre décimal non entier ou un nombre non décimal"
+        },
+        {
+         "code": "6E-NC-FRAC-07",
+         "label": "La fraction comme opérateur multiplicatif"
+        },
+        {
+         "code": "6E-NC-FRAC-08",
+         "label": "En 6e, l'objectif est de faire opérer une fraction, non seulement sur une quantité ou sur une grandeur comme au cours moyen, mais également sur un nombre entier, ce qui constitue un niveau d'abstraction plus élevé."
+        },
+        {
+         "code": "6E-NC-FRAC-09",
+         "label": "Utiliser une multiplication pour appliquer une fraction à un nombre entier"
+        },
+        {
+         "code": "6E-NC-FRAC-10",
+         "label": "Comparer des fractions"
+        },
+        {
+         "code": "6E-NC-FRAC-11",
+         "label": "Établir des égalités de fractions"
+        },
+        {
+         "code": "6E-NC-FRAC-12",
+         "label": "Comparer et encadrer des fractions"
+        },
+        {
+         "code": "6E-NC-FRAC-13",
+         "label": "Ordonner une liste de nombres écrits sous forme de fractions ou de nombres mixtes"
+        },
+        {
+         "code": "6E-NC-FRAC-14",
+         "label": "Effectuer des opérations sur les fractions"
+        },
+        {
+         "code": "6E-NC-FRAC-15",
+         "label": "Additionner et soustraire des fractions"
+        },
+        {
+         "code": "6E-NC-FRAC-16",
+         "label": "Multiplier une fraction par un nombre entier"
+        },
+        {
+         "code": "6E-NC-FRAC-17",
+         "label": "Résoudre des problèmes mettant en jeu des fractions"
+        },
+        {
+         "code": "6E-NC-FRAC-18",
+         "label": "Inventer des problèmes mettant en jeu des fractions"
+        },
+        {
+         "code": "6E-NC-FRAC-19",
+         "label": "Comprendre le sens d'un pourcentage"
+        },
+        {
+         "code": "6E-NC-FRAC-20",
+         "label": "Calculer une proportion (rapport entre une partie et le tout) et l'exprimer sous forme de pourcentage dans des cas simples"
+        },
+        {
+         "code": "6E-NC-FRAC-21",
+         "label": "Appliquer un pourcentage à une grandeur ou à un nombre"
+        }
+       ]
+      },
+      {
+       "name": "Algèbre",
+       "code": "ALGE",
+       "competencies": [
+        {
+         "code": "6E-NC-ALGE-01",
+         "label": "Utiliser des modèles pré-algébriques pour résoudre des problèmes algébriques"
+        },
+        {
+         "code": "6E-NC-ALGE-02",
+         "label": "Identifier la structure d'un motif évolutif en repérant une régularité et en identifiant une structure"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "name": "Grandeurs et mesures",
+     "code": "GM",
+     "themes": [
+      {
+       "name": "Les longueurs",
+       "code": "LONG",
+       "competencies": [
+        {
+         "code": "6E-GM-LONG-01",
+         "label": "Savoir que le périmètre du disque est proportionnel à son diamètre"
+        },
+        {
+         "code": "6E-GM-LONG-02",
+         "label": "Connaître la formule du périmètre d'un disque"
+        },
+        {
+         "code": "6E-GM-LONG-03",
+         "label": "Calculer le périmètre d'un disque"
+        },
+        {
+         "code": "6E-GM-LONG-04",
+         "label": "Calculer des périmètres de figures composées"
+        },
+        {
+         "code": "6E-GM-LONG-05",
+         "label": "Résoudre des problèmes impliquant des longueurs"
+        }
+       ]
+      },
+      {
+       "name": "Les aires",
+       "code": "AIRE",
+       "competencies": [
+        {
+         "code": "6E-GM-AIRE-01",
+         "label": "Effectuer des conversions d'aire"
+        },
+        {
+         "code": "6E-GM-AIRE-02",
+         "label": "Connaître la formule de l'aire d'un carré ou d'un rectangle"
+        },
+        {
+         "code": "6E-GM-AIRE-03",
+         "label": "Calculer l'aire d'un carré ou d'un rectangle"
+        }
+       ]
+      },
+      {
+       "name": "Les volumes",
+       "code": "VOLU",
+       "competencies": [
+        {
+         "code": "6E-GM-VOLU-01",
+         "label": "Connaître l'unité centimètre cube"
+        },
+        {
+         "code": "6E-GM-VOLU-02",
+         "label": "Comparer des volumes"
+        },
+        {
+         "code": "6E-GM-VOLU-03",
+         "label": "Déterminer un volume"
+        }
+       ]
+      },
+      {
+       "name": "Le repérage dans le temps et les durées",
+       "code": "REPE",
+       "competencies": [
+        {
+         "code": "6E-GM-REPE-01",
+         "label": "Effectuer des calculs sur des horaires et des durées"
+        },
+        {
+         "code": "6E-GM-REPE-02",
+         "label": "Résoudre des problèmes impliquant des horaires et des durées"
+        },
+        {
+         "code": "6E-GM-REPE-03",
+         "label": "Convertir des durées"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "name": "Espace et géométrie",
+     "code": "EG",
+     "themes": [
+      {
+       "name": "Étude de configurations planes",
+       "code": "ETUD",
+       "competencies": [
+        {
+         "code": "6E-EG-ETUD-01",
+         "label": "Connaître et utiliser la définition de la distance entre deux points"
+        },
+        {
+         "code": "6E-EG-ETUD-02",
+         "label": "Connaître et utiliser la définition du milieu d'un segment"
+        },
+        {
+         "code": "6E-EG-ETUD-03",
+         "label": "Cercles et disques"
+        },
+        {
+         "code": "6E-EG-ETUD-04",
+         "label": "Connaître les définitions d'un cercle, d'un disque, d'un rayon, d'un diamètre, d'une corde"
+        },
+        {
+         "code": "6E-EG-ETUD-05",
+         "label": "Comprendre la définition d'un cercle et celle d'un disque sous la forme d'ensembles de points"
+        },
+        {
+         "code": "6E-EG-ETUD-06",
+         "label": "Résoudre des problèmes mettant en jeu des distances à un point"
+        },
+        {
+         "code": "6E-EG-ETUD-07",
+         "label": "Médiatrice d'un segment"
+        },
+        {
+         "code": "6E-EG-ETUD-08",
+         "label": "Connaître la définition de la médiatrice d'un segment"
+        },
+        {
+         "code": "6E-EG-ETUD-09",
+         "label": "Comprendre et utiliser la propriété caractéristique de la médiatrice d'un segment"
+        },
+        {
+         "code": "6E-EG-ETUD-10",
+         "label": "Résoudre des problèmes en s'appuyant sur la propriété caractéristique de la médiatrice"
+        },
+        {
+         "code": "6E-EG-ETUD-11",
+         "label": "Connaître et utiliser les angles ainsi que le lexique et les notations qui s'y rapportent : angle droit, angle plat, angle plein, angle nul, angle aigu, angle obtus, angles opposés par le sommet, angles adjacents, angles supplémentaires"
+        },
+        {
+         "code": "6E-EG-ETUD-12",
+         "label": "Mesurer un angle"
+        },
+        {
+         "code": "6E-EG-ETUD-13",
+         "label": "Construire un angle de mesure donnée"
+        },
+        {
+         "code": "6E-EG-ETUD-14",
+         "label": "Bissectrice d'un angle saillant"
+        },
+        {
+         "code": "6E-EG-ETUD-15",
+         "label": "Connaître la définition de la bissectrice d'un angle saillant"
+        },
+        {
+         "code": "6E-EG-ETUD-16",
+         "label": "Utiliser la définition de la bissectrice d'un angle pour effectuer des constructions et résoudre des problèmes"
+        },
+        {
+         "code": "6E-EG-ETUD-17",
+         "label": "Le triangle se prête à un travail portant conjointement sur les distances et sur les angles. Le positionnement d'un triangle sur la feuille doit être varié. À l'aide du compas, l'élève remarque que la donnée de trois longueurs ne permet pas toujours de construire un triangle."
+        },
+        {
+         "code": "6E-EG-ETUD-18",
+         "label": "Construire des triangles"
+        },
+        {
+         "code": "6E-EG-ETUD-19",
+         "label": "Connaître et utiliser les propriétés angulaires des triangles particuliers : triangle rectangle, triangle isocèle, triangle équilatéral"
+        },
+        {
+         "code": "6E-EG-ETUD-20",
+         "label": "Connaître la valeur de la somme des mesures des angles d'un triangle"
+        },
+        {
+         "code": "6E-EG-ETUD-21",
+         "label": "L'utiliser pour calculer des angles, effectuer des constructions et résoudre des problèmes"
+        },
+        {
+         "code": "6E-EG-ETUD-22",
+         "label": "Savoir que les médiatrices d'un triangle sont concourantes"
+        },
+        {
+         "code": "6E-EG-ETUD-23",
+         "label": "Connaître et construire le cercle circonscrit à un triangle"
+        },
+        {
+         "code": "6E-EG-ETUD-24",
+         "label": "Le travail de construction réalisé au cours moyen se poursuit. Différents supports peuvent être utilisés : papier quadrillé, papier pointé, auxquels on ajoute le papier uni."
+        },
+        {
+         "code": "6E-EG-ETUD-25",
+         "label": "Connaître la définition du symétrique d'un point par rapport à une droite"
+        },
+        {
+         "code": "6E-EG-ETUD-26",
+         "label": "Connaître et utiliser les propriétés de la symétrie axiale pour effectuer des constructions"
+        }
+       ]
+      },
+      {
+       "name": "La vision dans l'espace",
+       "code": "VISI",
+       "competencies": [
+        {
+         "code": "6E-EG-VISI-01",
+         "label": "Voir dans l'espace des assemblages de cubes"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "name": "Organisation et gestion de données et probabilités",
+     "code": "OGD",
+     "themes": [
+      {
+       "name": "Organisation et gestion de données",
+       "code": "ORGA",
+       "competencies": [
+        {
+         "code": "6E-OGD-ORGA-01",
+         "label": "Planifier une enquête et recueillir des données"
+        },
+        {
+         "code": "6E-OGD-ORGA-02",
+         "label": "Réaliser des mesures et les consigner dans un tableau"
+        },
+        {
+         "code": "6E-OGD-ORGA-03",
+         "label": "Construire un tableau simple pour présenter des données (observations, caractères)"
+        },
+        {
+         "code": "6E-OGD-ORGA-04",
+         "label": "Faire un choix en filtrant les données d'un tableau selon un critère"
+        }
+       ]
+      },
+      {
+       "name": "Les probabilités",
+       "code": "PROB",
+       "competencies": [
+        {
+         "code": "6E-OGD-PROB-01",
+         "label": "Savoir que la probabilité d'un évènement est un nombre compris entre 0 et 1"
+        },
+        {
+         "code": "6E-OGD-PROB-02",
+         "label": "Calculer des probabilités dans des situations simples d'équiprobabilité"
+        },
+        {
+         "code": "6E-OGD-PROB-03",
+         "label": "Comparer des résultats d'une expérience aléatoire répétée à une probabilité calculée"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "name": "La proportionnalité",
+     "code": "PF",
+     "themes": [
+      {
+       "name": "La proportionnalité",
+       "code": "PROP",
+       "competencies": [
+        {
+         "code": "6E-PF-PROP-01",
+         "label": "Connaître la définition de la proportionnalité entre deux grandeurs et la mettre en lien avec des expressions de la vie courante"
+        },
+        {
+         "code": "6E-PF-PROP-02",
+         "label": "Identifier si une situation relève du « modèle » de la proportionnalité"
+        },
+        {
+         "code": "6E-PF-PROP-03",
+         "label": "Résoudre un problème de proportionnalité en choisissant une procédure adaptée : propriété de linéarité pour la multiplication ou l'addition, retour à l'unité"
+        },
+        {
+         "code": "6E-PF-PROP-04",
+         "label": "Représenter une situation de proportionnalité à l'aide d'un tableau ou de notations symboliques"
+        },
+        {
+         "code": "6E-PF-PROP-05",
+         "label": "S'initier à la résolution de problèmes d'échelles"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "name": "Initiation à la pensée informatique",
+     "code": "PI",
+     "themes": [
+      {
+       "name": "Initiation à la pensée informatique",
+       "code": "INIT",
+       "competencies": [
+        {
+         "code": "6E-PI-INIT-01",
+         "label": "Identifier une instruction ou une séquence d'instructions"
+        },
+        {
+         "code": "6E-PI-INIT-02",
+         "label": "Produire et exécuter une séquence d'instructions"
+        },
+        {
+         "code": "6E-PI-INIT-03",
+         "label": "Répéter à la main une séquence d'instructions pour accomplir une tâche imposée"
+        },
+        {
+         "code": "6E-PI-INIT-04",
+         "label": "Programmer la construction d'un chemin simple"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "grade_level": "5e",
+   "cycle": 4,
+   "name": "Programme officiel 5e (cycle 4)",
+   "version": "2026",
+   "domains": [
+    {
+     "name": "Nombres et calculs",
+     "code": "NC",
+     "themes": [
+      {
+       "name": "Opérations",
+       "code": "OPER",
+       "competencies": [
+        {
+         "code": "5E-NC-OPER-01",
+         "label": "Additionner, soustraire, multiplier et diviser pour résoudre des problèmes et contrôler la vraisemblance de son résultat."
+        },
+        {
+         "code": "5E-NC-OPER-02",
+         "label": "Connaitre le sens et les situations d'emploi de ces opérations."
+        },
+        {
+         "code": "5E-NC-OPER-03",
+         "label": "Diviser par un nombre décimal."
+        },
+        {
+         "code": "5E-NC-OPER-04",
+         "label": "Enchainer des opérations."
+        },
+        {
+         "code": "5E-NC-OPER-05",
+         "label": "Traduire un problème, une succession donnée d'opérations, un programme de calcul, en une seule expression, en faisant appel ou non à des parenthèses."
+        },
+        {
+         "code": "5E-NC-OPER-06",
+         "label": "Nommer un calcul, distinguer sommes et produits, termes et facteurs."
+        },
+        {
+         "code": "5E-NC-OPER-07",
+         "label": "Connaitre et utiliser les priorités opératoires."
+        },
+        {
+         "code": "5E-NC-OPER-08",
+         "label": "Connaitre et utiliser la distributivité simple sur des exemples numériques."
+        },
+        {
+         "code": "5E-NC-OPER-09",
+         "label": "Utiliser les notions de multiples et diviseurs."
+        },
+        {
+         "code": "5E-NC-OPER-10",
+         "label": "Connaitre les critères de divisibilité par 3 et par 9."
+        },
+        {
+         "code": "5E-NC-OPER-11",
+         "label": "Mobiliser un algorithme dans le cadre du calcul numérique."
+        }
+       ]
+      },
+      {
+       "name": "Nombres relatifs",
+       "code": "NOMB",
+       "competencies": [
+        {
+         "code": "5E-NC-NOMB-01",
+         "label": "Définir les nombres relatifs."
+        },
+        {
+         "code": "5E-NC-NOMB-02",
+         "label": "Définir l'opposé et la valeur absolue d'un nombre."
+        },
+        {
+         "code": "5E-NC-NOMB-03",
+         "label": "Définir la notion de nombre positif, strictement positif, négatif, strictement négatif."
+        },
+        {
+         "code": "5E-NC-NOMB-04",
+         "label": "Utiliser les nombres relatifs pour représenter des grandeurs observables qui peuvent prendre des valeurs inférieures à zéro (température, temps, altitude, etc.), en particulier dans le cadre de la résolution de problèmes."
+        },
+        {
+         "code": "5E-NC-NOMB-05",
+         "label": "Lire l'abscisse d'un nombre relatif sur une droite graduée et placer un nombre relatif d'abscisse donnée."
+        },
+        {
+         "code": "5E-NC-NOMB-06",
+         "label": "Comparer et ranger dans l'ordre croissant et décroissant des nombres décimaux relatifs."
+        },
+        {
+         "code": "5E-NC-NOMB-07",
+         "label": "Additionner deux nombres décimaux relatifs."
+        },
+        {
+         "code": "5E-NC-NOMB-08",
+         "label": "Additionner plusieurs nombres décimaux relatifs."
+        },
+        {
+         "code": "5E-NC-NOMB-09",
+         "label": "Soustraire deux nombres décimaux relatifs."
+        },
+        {
+         "code": "5E-NC-NOMB-10",
+         "label": "Connaitre et justifier les situations dans lesquelles des parenthèses sont indispensables au sens des écritures."
+        },
+        {
+         "code": "5E-NC-NOMB-11",
+         "label": "Simplifier l'écriture de sommes comportant des parenthèses."
+        },
+        {
+         "code": "5E-NC-NOMB-12",
+         "label": "Enchainer additions et soustractions de décimaux relatifs."
+        },
+        {
+         "code": "5E-NC-NOMB-13",
+         "label": "Résoudre des problèmes mobilisant addition et soustraction de nombres décimaux relatifs."
+        }
+       ]
+      },
+      {
+       "name": "Nombres rationnels",
+       "code": "NORA",
+       "competencies": [
+        {
+         "code": "5E-NC-NORA-01",
+         "label": "Comparer des fractions."
+        },
+        {
+         "code": "5E-NC-NORA-02",
+         "label": "Additionner et soustraire des fractions de dénominateurs quelconques."
+        },
+        {
+         "code": "5E-NC-NORA-03",
+         "label": "Résoudre des problèmes avec des additions et soustractions de fractions."
+        }
+       ]
+      },
+      {
+       "name": "Puissances",
+       "code": "PUIS",
+       "competencies": [
+        {
+         "code": "5E-NC-PUIS-01",
+         "label": "Découvrir la notion de puissance d'un nombre et sa notation dans le cas du carré et du cube."
+        },
+        {
+         "code": "5E-NC-PUIS-02",
+         "label": "Connaitre les carrés des entiers de 0 à 12."
+        },
+        {
+         "code": "5E-NC-PUIS-03",
+         "label": "Connaitre le cube de 10."
+        },
+        {
+         "code": "5E-NC-PUIS-04",
+         "label": "Savoir écrire un nombre sous la forme d'une puissance 2 ou 3."
+        },
+        {
+         "code": "5E-NC-PUIS-05",
+         "label": "Calculer la valeur numérique d'expressions contenant des puissances simples, additions, soustractions et produits."
+        },
+        {
+         "code": "5E-NC-PUIS-06",
+         "label": "Calculer la valeur d'une expression littérale contenant une puissance simple."
+        }
+       ]
+      },
+      {
+       "name": "Calcul littéral et algébrique",
+       "code": "CALC",
+       "competencies": [
+        {
+         "code": "5E-NC-CALC-01",
+         "label": "Produire des formules (double, triple, carré, successeur, prédécesseur, aire, périmètre, etc.)."
+        },
+        {
+         "code": "5E-NC-CALC-02",
+         "label": "Calculer la valeur d'une expression littérale par substitution."
+        },
+        {
+         "code": "5E-NC-CALC-03",
+         "label": "Tester si une égalité entre expressions algébriques comportant une variable est vraie ou fausse."
+        },
+        {
+         "code": "5E-NC-CALC-04",
+         "label": "Déterminer si une expression littérale est une somme ou un produit."
+        },
+        {
+         "code": "5E-NC-CALC-05",
+         "label": "Exploiter les relations k(a + b) = ka + kb ou k(a - b) = ka - kb pour factoriser, ou développer une expression littérale."
+        },
+        {
+         "code": "5E-NC-CALC-06",
+         "label": "Réduire une expression littérale de la forme a𝑥 + b, où a et b sont des nombres décimaux."
+        },
+        {
+         "code": "5E-NC-CALC-07",
+         "label": "Démontrer une propriété générale par le calcul littéral."
+        },
+        {
+         "code": "5E-NC-CALC-08",
+         "label": "Utiliser un contre-exemple pour démontrer qu'une assertion est fausse."
+        },
+        {
+         "code": "5E-NC-CALC-09",
+         "label": "Formuler des conjectures en s'appuyant sur un langage algorithmique ou un tableur."
+        },
+        {
+         "code": "5E-NC-CALC-10",
+         "label": "Donner à la lettre le statut d'inconnue."
+        },
+        {
+         "code": "5E-NC-CALC-11",
+         "label": "Modéliser des problèmes relevant des opérations à trous par des équations du type a𝑥 = c ou 𝑥 + b = c ."
+        },
+        {
+         "code": "5E-NC-CALC-12",
+         "label": "Résoudre des équations du type a𝑥 = c ou 𝑥 + b = c par des méthodes arithmétiques s'appuyant sur les opérations inverses."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "name": "Espace et géométrie",
+     "code": "EG",
+     "themes": [
+      {
+       "name": "Repérage sur une droite et dans le plan",
+       "code": "REPE",
+       "competencies": [
+        {
+         "code": "5E-EG-REPE-01",
+         "label": "Sur une droite graduée :"
+        },
+        {
+         "code": "5E-EG-REPE-02",
+         "label": "lire l'abscisse d'un point donné ;"
+        },
+        {
+         "code": "5E-EG-REPE-03",
+         "label": "placer un point d'abscisse donnée."
+        },
+        {
+         "code": "5E-EG-REPE-04",
+         "label": "Dans le plan muni d'un repère orthogonal :"
+        },
+        {
+         "code": "5E-EG-REPE-05",
+         "label": "lire les coordonnées d'un point donné ;"
+        },
+        {
+         "code": "5E-EG-REPE-06",
+         "label": "placer un point de coordonnées données."
+        }
+       ]
+      },
+      {
+       "name": "Représentation de l'espace",
+       "code": "REPR",
+       "competencies": [
+        {
+         "code": "5E-EG-REPR-01",
+         "label": "Construire et mettre en relation différentes représentations en perspectives cavalières des solides suivants : pavé droit, cube, cylindre de révolution, prisme droit."
+        },
+        {
+         "code": "5E-EG-REPR-02",
+         "label": "Savoir mettre en relation une représentation en perspective cavalière et un patron d'un pavé, d'un prisme droit ou d'un cylindre de révolution."
+        },
+        {
+         "code": "5E-EG-REPR-03",
+         "label": "Calculer le volume du cube, du pavé droit, du prisme droit."
+        },
+        {
+         "code": "5E-EG-REPR-04",
+         "label": "Connaitre et convertir des unités usuelles (volume et capacité)."
+        },
+        {
+         "code": "5E-EG-REPR-05",
+         "label": "Calculer l'aire du disque, le volume du cylindre de révolution."
+        }
+       ]
+      },
+      {
+       "name": "Transformations",
+       "code": "TRAN",
+       "competencies": [
+        {
+         "code": "5E-EG-TRAN-01",
+         "label": "Définir le demi-tour, ou symétrie centrale."
+        },
+        {
+         "code": "5E-EG-TRAN-02",
+         "label": "Connaitre les propriétés du demi-tour."
+        }
+       ]
+      },
+      {
+       "name": "Angles",
+       "code": "ANGL",
+       "competencies": [
+        {
+         "code": "5E-EG-ANGL-01",
+         "label": "Caractériser le parallélisme par les angles : angles alternes internes, angles correspondants."
+        }
+       ]
+      },
+      {
+       "name": "Triangles",
+       "code": "TRIA",
+       "competencies": [
+        {
+         "code": "5E-EG-TRIA-01",
+         "label": "Connaitre la somme des angles d'un triangle et savoir la démontrer."
+        },
+        {
+         "code": "5E-EG-TRIA-02",
+         "label": "Construire des triangles à partir de données partielles."
+        },
+        {
+         "code": "5E-EG-TRIA-03",
+         "label": "Connaitre les propriétés des médiatrices et du cercle circonscrit dans le cas de triangles particuliers."
+        },
+        {
+         "code": "5E-EG-TRIA-04",
+         "label": "Calculer l'aire d'un triangle."
+        },
+        {
+         "code": "5E-EG-TRIA-05",
+         "label": "Définir et tracer les hauteurs dans un triangle."
+        },
+        {
+         "code": "5E-EG-TRIA-06",
+         "label": "Savoir que les hauteurs d'un triangle sont concourantes."
+        },
+        {
+         "code": "5E-EG-TRIA-07",
+         "label": "Définir et tracer les médianes dans un triangle."
+        },
+        {
+         "code": "5E-EG-TRIA-08",
+         "label": "Démontrer qu'une médiane partage un triangle en deux triangles d'aires égales."
+        },
+        {
+         "code": "5E-EG-TRIA-09",
+         "label": "Utiliser ces propriétés dans le cas de triangles particuliers."
+        }
+       ]
+      },
+      {
+       "name": "Parallélogrammes",
+       "code": "PARA",
+       "competencies": [
+        {
+         "code": "5E-EG-PARA-01",
+         "label": "Définir le parallélogramme."
+        },
+        {
+         "code": "5E-EG-PARA-02",
+         "label": "Construire des parallélogrammes."
+        },
+        {
+         "code": "5E-EG-PARA-03",
+         "label": "Connaitre les propriétés caractéristiques des côtés opposés et des diagonales."
+        },
+        {
+         "code": "5E-EG-PARA-04",
+         "label": "Utiliser une propriété caractéristique sur les diagonales ou les côtés pour les construire ou donner la nature du quadrilatère."
+        },
+        {
+         "code": "5E-EG-PARA-05",
+         "label": "Définir les parallélogrammes particuliers (rectangle, losange, carré)."
+        },
+        {
+         "code": "5E-EG-PARA-06",
+         "label": "Connaitre les propriétés caractéristiques."
+        },
+        {
+         "code": "5E-EG-PARA-07",
+         "label": "Savoir calculer l'aire d'un parallélogramme et de figures complexes."
+        },
+        {
+         "code": "5E-EG-PARA-08",
+         "label": "Résoudre des problèmes faisant appel à des conversions d'unités de longueur et d'unités d'aires."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "name": "Organisation et gestion de données et probabilités",
+     "code": "OGD",
+     "themes": [
+      {
+       "name": "Statistiques",
+       "code": "STAT",
+       "competencies": [
+        {
+         "code": "5E-OGD-STAT-01",
+         "label": "Recueillir et organiser des données."
+        },
+        {
+         "code": "5E-OGD-STAT-02",
+         "label": "Calculer des effectifs et des fréquences (exprimées sous forme décimale, fractionnaire ou de pourcentage)."
+        },
+        {
+         "code": "5E-OGD-STAT-03",
+         "label": "Lire et interpréter des informations présentées sous forme de tableaux, de diagrammes et de graphiques."
+        },
+        {
+         "code": "5E-OGD-STAT-04",
+         "label": "Représenter, sur papier ou à l'aide d'un tableur-grapheur, des données sous la forme d'un tableau, d'un diagramme (diagramme en barres, diagramme circulaire) ou d'un graphique cartésien."
+        },
+        {
+         "code": "5E-OGD-STAT-05",
+         "label": "Choisir une représentation adaptée à ce qu'il convient de mettre en avant."
+        },
+        {
+         "code": "5E-OGD-STAT-06",
+         "label": "Calculer et interpréter la moyenne simple d'une série de données."
+        }
+       ]
+      },
+      {
+       "name": "Probabilités",
+       "code": "PROB",
+       "competencies": [
+        {
+         "code": "5E-OGD-PROB-01",
+         "label": "Aborder les questions relatives au hasard à partir de problèmes simples."
+        },
+        {
+         "code": "5E-OGD-PROB-02",
+         "label": "Utiliser le vocabulaire des probabilités dans des contextes concrets : expérience aléatoire, issue, évènement."
+        },
+        {
+         "code": "5E-OGD-PROB-03",
+         "label": "Attribuer des probabilités dans des cas simples (équiprobabilité)."
+        },
+        {
+         "code": "5E-OGD-PROB-04",
+         "label": "Répéter matériellement une expérience aléatoire simple. Enregistrer les résultats observés dans un tableau d'effectifs et de fréquences."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "name": "Proportionnalité, fonctions",
+     "code": "PF",
+     "themes": [
+      {
+       "name": "Proportionnalité",
+       "code": "PROP",
+       "competencies": [
+        {
+         "code": "5E-PF-PROP-01",
+         "label": "Utiliser des proportions, des pourcentages."
+        },
+        {
+         "code": "5E-PF-PROP-02",
+         "label": "Calculer, appliquer des proportions, des pourcentages."
+        },
+        {
+         "code": "5E-PF-PROP-03",
+         "label": "Identifier des situations de proportionnalité dans des contextes concrets (prix, recettes, distances, échelles)."
+        },
+        {
+         "code": "5E-PF-PROP-04",
+         "label": "Utiliser un coefficient de proportionnalité dans des contextes concrets (prix unitaire, vitesse moyenne, échelle, etc.)."
+        },
+        {
+         "code": "5E-PF-PROP-05",
+         "label": "Représenter une situation de proportionnalité par un tableau ou un graphique."
+        },
+        {
+         "code": "5E-PF-PROP-06",
+         "label": "Reconnaitre une situation de proportionnalité à partir d'un tableau ou d'un graphique."
+        },
+        {
+         "code": "5E-PF-PROP-07",
+         "label": "Reconnaitre graphiquement qu'un nuage de points est ou n'est pas associé à une situation de proportionnalité entre données discrètes."
+        }
+       ]
+      },
+      {
+       "name": "Fonctions",
+       "code": "FONC",
+       "competencies": [
+        {
+         "code": "5E-PF-FONC-01",
+         "label": "Introduire l'expression : « en fonction de » dans des contextes concrets ou mathématiques."
+        },
+        {
+         "code": "5E-PF-FONC-02",
+         "label": "Produire un tableau de valeurs."
+        },
+        {
+         "code": "5E-PF-FONC-03",
+         "label": "Lire et interpréter un tableau de valeurs."
+        },
+        {
+         "code": "5E-PF-FONC-04",
+         "label": "Placer dans un repère orthogonal donné des points correspondant à un tableau de valeurs."
+        },
+        {
+         "code": "5E-PF-FONC-05",
+         "label": "Lire et interpréter un graphique cartésien donné par une courbe ou un nuage de points."
+        },
+        {
+         "code": "5E-PF-FONC-06",
+         "label": "Traduire la relation de dépendance entre deux grandeurs par un tableau de valeurs à partir d'une formule."
+        },
+        {
+         "code": "5E-PF-FONC-07",
+         "label": "Produire une formule simple représentant la dépendance de deux grandeurs."
+        },
+        {
+         "code": "5E-PF-FONC-08",
+         "label": "Caractériser graphiquement la proportionnalité."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "name": "La pensée informatique",
+     "code": "PI",
+     "themes": [
+      {
+       "name": "La pensée informatique",
+       "code": "PENS",
+       "competencies": [
+        {
+         "code": "5E-PI-PENS-01",
+         "label": "Manipuler des instructions simples et les séquencer."
+        },
+        {
+         "code": "5E-PI-PENS-02",
+         "label": "Identifier les entrées et sorties d'un programme."
+        },
+        {
+         "code": "5E-PI-PENS-03",
+         "label": "Représenter des formules sous la forme d'une expression informatique dans un langage de programmation par blocs."
+        },
+        {
+         "code": "5E-PI-PENS-04",
+         "label": "Calculer la valeur de formules à l'aide d'une suite d'instruction dans un langage de programmation par blocs."
+        },
+        {
+         "code": "5E-PI-PENS-05",
+         "label": "Prévoir la valeur d'une expression informatique avant son exécution."
+        },
+        {
+         "code": "5E-PI-PENS-06",
+         "label": "Analyser un programme simple donné et modifier ses paramètres."
+        },
+        {
+         "code": "5E-PI-PENS-07",
+         "label": "Effectuer une boucle inconditionnelle simple permettant de répéter une séquence linéaire d'instructions un nombre précis de fois."
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "grade_level": "4e",
+   "cycle": 4,
+   "name": "Programme officiel 4e (cycle 4)",
+   "version": "2026",
+   "domains": [
+    {
+     "name": "Nombres et calculs",
+     "code": "NC",
+     "themes": [
+      {
+       "name": "Opérations sur les nombres relatifs",
+       "code": "OPER",
+       "competencies": [
+        {
+         "code": "4E-NC-OPER-01",
+         "label": "Multiplier deux nombres relatifs : d'abord dans le cas où un seul des facteurs est négatif, puis, grâce à la distributivité, dans le cas où les deux facteurs sont négatifs."
+        },
+        {
+         "code": "4E-NC-OPER-02",
+         "label": "Diviser deux nombres relatifs."
+        },
+        {
+         "code": "4E-NC-OPER-03",
+         "label": "Savoir calculer un enchainement d'opérations avec des nombres relatifs."
+        },
+        {
+         "code": "4E-NC-OPER-04",
+         "label": "Utiliser le vocabulaire (somme, quotient, etc.) à partir d'un enchainement d'opérations dans un programme de calcul et inversement."
+        }
+       ]
+      },
+      {
+       "name": "Nombres rationnels",
+       "code": "NOMB",
+       "competencies": [
+        {
+         "code": "4E-NC-NOMB-01",
+         "label": "Simplifier une fraction."
+        },
+        {
+         "code": "4E-NC-NOMB-02",
+         "label": "Définir la notion de nombre rationnel : le quotient de deux nombres entiers relatifs."
+        },
+        {
+         "code": "4E-NC-NOMB-03",
+         "label": "Exprimer l'opposé d'un nombre rationnel."
+        },
+        {
+         "code": "4E-NC-NOMB-04",
+         "label": "Calculer le produit de nombres rationnels."
+        },
+        {
+         "code": "4E-NC-NOMB-05",
+         "label": "Calculer et représenter la fraction d'une fraction, d'un nombre, d'une quantité."
+        },
+        {
+         "code": "4E-NC-NOMB-06",
+         "label": "Définir l'inverse d'un nombre et connaitre sa notation."
+        },
+        {
+         "code": "4E-NC-NOMB-07",
+         "label": "Déterminer l'inverse d'une fraction."
+        },
+        {
+         "code": "4E-NC-NOMB-08",
+         "label": "Diviser des fractions."
+        },
+        {
+         "code": "4E-NC-NOMB-09",
+         "label": "Calculer la valeur d'expressions comportant plusieurs opérations avec des fractions."
+        },
+        {
+         "code": "4E-NC-NOMB-10",
+         "label": "Résoudre des problèmes mobilisant les opérations sur les fractions : addition, soustraction, multiplication, division, inverse."
+        }
+       ]
+      },
+      {
+       "name": "Puissances",
+       "code": "PUIS",
+       "competencies": [
+        {
+         "code": "4E-NC-PUIS-01",
+         "label": "Définir les puissances d'exposant positif d'un nombre a."
+        },
+        {
+         "code": "4E-NC-PUIS-02",
+         "label": "Multiplier des puissances d'exposant entier naturel d'un même nombre entre elles."
+        },
+        {
+         "code": "4E-NC-PUIS-03",
+         "label": "Multiplier des puissances d'un même exposant entier naturel de deux nombres entre elles."
+        },
+        {
+         "code": "4E-NC-PUIS-04",
+         "label": "Résoudre des problèmes faisant intervenir des puissances."
+        }
+       ]
+      },
+      {
+       "name": "Racine carrée",
+       "code": "RACI",
+       "competencies": [
+        {
+         "code": "4E-NC-RACI-01",
+         "label": "Comprendre et connaitre la définition de la racine carrée d'un nombre positif."
+        },
+        {
+         "code": "4E-NC-RACI-02",
+         "label": "Encadrer la racine carrée d'un entier par deux nombres entiers consécutifs."
+        }
+       ]
+      },
+      {
+       "name": "Calcul littéral et algébrique",
+       "code": "CALC",
+       "competencies": [
+        {
+         "code": "4E-NC-CALC-01",
+         "label": "Produire des formules et tester leur vraisemblance : aires de formes géométriques simples, nombres pairs/impairs, etc."
+        },
+        {
+         "code": "4E-NC-CALC-02",
+         "label": "Connaitre et utiliser la distributivité simple pour développer et factoriser une expression algébrique."
+        },
+        {
+         "code": "4E-NC-CALC-03",
+         "label": "Utiliser le calcul algébrique pour produire des démonstrations."
+        },
+        {
+         "code": "4E-NC-CALC-04",
+         "label": "Résoudre une équation du premier degré du type a𝑥 + b = c."
+        },
+        {
+         "code": "4E-NC-CALC-05",
+         "label": "Mettre en équation un problème et le résoudre à l'aide d'une équation du premier degré du type a𝑥 + b = c𝑥 + d."
+        },
+        {
+         "code": "4E-NC-CALC-06",
+         "label": "Formuler des conjectures à l'aide d'un algorithme ou d'un tableur pour résoudre de manière exacte ou approchée une équation."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "name": "Espace et géométrie",
+     "code": "EG",
+     "themes": [
+      {
+       "name": "Représentation de l'espace",
+       "code": "REPR",
+       "competencies": [
+        {
+         "code": "4E-EG-REPR-01",
+         "label": "Reconnaitre des solides (pyramide, cône de révolution)."
+        },
+        {
+         "code": "4E-EG-REPR-02",
+         "label": "Construire et mettre en relation différentes représentations des solides (pavé droit, cube, cylindre de révolution, prisme droit, pyramides et cônes de révolution)."
+        },
+        {
+         "code": "4E-EG-REPR-03",
+         "label": "Connaitre le volume de la pyramide et du cône de révolution."
+        }
+       ]
+      },
+      {
+       "name": "Parallélogrammes et translations",
+       "code": "PARA",
+       "competencies": [
+        {
+         "code": "4E-EG-PARA-01",
+         "label": "Comprendre l'effet d'une translation."
+        },
+        {
+         "code": "4E-EG-PARA-02",
+         "label": "Faire le lien avec les parallélogrammes, les angles."
+        },
+        {
+         "code": "4E-EG-PARA-03",
+         "label": "Connaitre et utiliser les propriétés de conservations des translations."
+        }
+       ]
+      },
+      {
+       "name": "Triangles",
+       "code": "TRIA",
+       "competencies": [
+        {
+         "code": "4E-EG-TRIA-01",
+         "label": "Connaitre les trois théorèmes relatifs à la droite des milieux dans un triangle."
+        },
+        {
+         "code": "4E-EG-TRIA-02",
+         "label": "Connaitre le théorème de Pythagore, sa réciproque, sa contraposée."
+        },
+        {
+         "code": "4E-EG-TRIA-03",
+         "label": "Mener un travail de logique sur la réciproque et la contraposée."
+        },
+        {
+         "code": "4E-EG-TRIA-04",
+         "label": "Caractériser un triangle rectangle à l'aide de son cercle circonscrit, par son inscription dans un demi-cercle dont le diamètre est un côté du triangle."
+        },
+        {
+         "code": "4E-EG-TRIA-05",
+         "label": "Déterminer le centre du cercle circonscrit d'un triangle rectangle."
+        },
+        {
+         "code": "4E-EG-TRIA-06",
+         "label": "Construire des rectangles sans équerre."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "name": "Organisation et gestion de données et probabilités",
+     "code": "OGD",
+     "themes": [
+      {
+       "name": "Statistiques",
+       "code": "STAT",
+       "competencies": [
+        {
+         "code": "4E-OGD-STAT-01",
+         "label": "Calculer une moyenne pondérée dans le cas d'une série discrète de petits effectifs présentée sous forme de données brutes, d'un tableau ou d'un diagramme en barres."
+        },
+        {
+         "code": "4E-OGD-STAT-02",
+         "label": "Déterminer une médiane et l'interpréter dans le cas d'une série de petit effectif présentée sous forme de données brutes."
+        },
+        {
+         "code": "4E-OGD-STAT-03",
+         "label": "Calculer et interpréter l'étendue d'une série présentée sous forme de données brutes, d'un tableau, d'un diagramme en barres, d'un diagramme circulaire."
+        },
+        {
+         "code": "4E-OGD-STAT-04",
+         "label": "Comprendre l'évolution de la médiane et de la moyenne quand on ajoute une valeur extrême."
+        },
+        {
+         "code": "4E-OGD-STAT-05",
+         "label": "Résoudre des problèmes faisant intervenir les différents indicateurs."
+        },
+        {
+         "code": "4E-OGD-STAT-06",
+         "label": "Résoudre des problèmes de comparaison de séries statistiques."
+        },
+        {
+         "code": "4E-OGD-STAT-07",
+         "label": "Utiliser le tableur pour calculer une moyenne, une médiane et l'étendue d'une série statistique."
+        }
+       ]
+      },
+      {
+       "name": "Probabilités",
+       "code": "PROB",
+       "competencies": [
+        {
+         "code": "4E-OGD-PROB-01",
+         "label": "Utiliser le vocabulaire et les notations ensemblistes pour décrire une expérience aléatoire dans des cas simples et définir la notion d'évènement."
+        },
+        {
+         "code": "4E-OGD-PROB-02",
+         "label": "Définir : complémentaire, réunion, intersection, ensemble vide (évènement impossible)."
+        },
+        {
+         "code": "4E-OGD-PROB-03",
+         "label": "Calculer la probabilité d'un évènement et de l'évènement contraire."
+        },
+        {
+         "code": "4E-OGD-PROB-04",
+         "label": "Exemples simples d'expériences aléatoires à deux épreuves (par exemple, lancer de deux pièces, d'une pièce et d'un dé, de deux dés, etc.)."
+        },
+        {
+         "code": "4E-OGD-PROB-05",
+         "label": "À partir de la répétition d'une expérience aléatoire, réalisée matériellement ou simulée, comparer des graphiques de distributions (fréquentielle et probabiliste)."
+        },
+        {
+         "code": "4E-OGD-PROB-06",
+         "label": "Observer la fluctuation des fréquences pour un nombre de répétitions fixé de l'expérience aléatoire."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "name": "Proportionnalité, fonctions",
+     "code": "PF",
+     "themes": [
+      {
+       "name": "Proportionnalité",
+       "code": "PROP",
+       "competencies": [
+        {
+         "code": "4E-PF-PROP-01",
+         "label": "Utiliser des grandeurs quotients, avec ou sans unités."
+        },
+        {
+         "code": "4E-PF-PROP-02",
+         "label": "Comparer deux nombres ou deux grandeurs à l'aide de leur rapport ou ratio."
+        },
+        {
+         "code": "4E-PF-PROP-03",
+         "label": "Exprimer la proportionnalité entre deux suites de nombres par des égalités de rapports ou sous forme de ratio."
+        },
+        {
+         "code": "4E-PF-PROP-04",
+         "label": "Déterminer une quatrième proportionnelle."
+        },
+        {
+         "code": "4E-PF-PROP-05",
+         "label": "Calculer avec des pourcentages."
+        },
+        {
+         "code": "4E-PF-PROP-06",
+         "label": "Rendre compte d'une augmentation ou une diminution exprimée en pourcentages au moyen d'un coefficient multiplicateur"
+        },
+        {
+         "code": "4E-PF-PROP-07",
+         "label": "Définir le coefficient multiplicateur."
+        },
+        {
+         "code": "4E-PF-PROP-08",
+         "label": "Résoudre des problèmes de partage proportionnel."
+        }
+       ]
+      },
+      {
+       "name": "Fonctions",
+       "code": "FONC",
+       "competencies": [
+        {
+         "code": "4E-PF-FONC-01",
+         "label": "Savoir appliquer un programme de calcul à deux (plusieurs) étapes à un nombre simple puis à une variable."
+        },
+        {
+         "code": "4E-PF-FONC-02",
+         "label": "Savoir retrouver le nombre de départ après avoir remonté un programme de calcul simple."
+        },
+        {
+         "code": "4E-PF-FONC-03",
+         "label": "Produire une formule littérale représentant la dépendance d'une grandeur en fonction d'une autre."
+        },
+        {
+         "code": "4E-PF-FONC-04",
+         "label": "Représenter l'expression d'une grandeur en fonction d'une autre par un graphique."
+        },
+        {
+         "code": "4E-PF-FONC-05",
+         "label": "Comprendre la dépendance d'une grandeur en fonction d'une autre."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "name": "La pensée informatique",
+     "code": "PI",
+     "themes": [
+      {
+       "name": "La pensée informatique",
+       "code": "PENS",
+       "competencies": [
+        {
+         "code": "4E-PI-PENS-01",
+         "label": "Représenter des conditions simples."
+        },
+        {
+         "code": "4E-PI-PENS-02",
+         "label": "Écrire des instructions conditionnelles."
+        },
+        {
+         "code": "4E-PI-PENS-03",
+         "label": "Manipuler une variable."
+        },
+        {
+         "code": "4E-PI-PENS-04",
+         "label": "Écrire un programme simple donné pour réaliser un objectif ou résoudre un problème."
+        },
+        {
+         "code": "4E-PI-PENS-05",
+         "label": "Modifier un programme donné pour changer son comportement."
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "grade_level": "3e",
+   "cycle": 4,
+   "name": "Programme officiel 3e (cycle 4)",
+   "version": "2026",
+   "domains": [
+    {
+     "name": "Nombres et calculs",
+     "code": "NC",
+     "themes": [
+      {
+       "name": "Nombres rationnels",
+       "code": "NOMB",
+       "competencies": [
+        {
+         "code": "3E-NC-NOMB-01",
+         "label": "Mettre une fraction sous forme irréductible."
+        },
+        {
+         "code": "3E-NC-NOMB-02",
+         "label": "Rendre irréductible une fraction."
+        },
+        {
+         "code": "3E-NC-NOMB-03",
+         "label": "Résoudre des problèmes faisant appel à des fractions."
+        }
+       ]
+      },
+      {
+       "name": "Puissances",
+       "code": "PUIS",
+       "competencies": [
+        {
+         "code": "3E-NC-PUIS-01",
+         "label": "Définir les puissances d'exposant négatif d'un nombre."
+        },
+        {
+         "code": "3E-NC-PUIS-02",
+         "label": "Multiplier et diviser des puissances."
+        },
+        {
+         "code": "3E-NC-PUIS-03",
+         "label": "Déterminer la notation scientifique d'un nombre."
+        },
+        {
+         "code": "3E-NC-PUIS-04",
+         "label": "Résoudre des problèmes notamment en utilisant la notation scientifique."
+        }
+       ]
+      },
+      {
+       "name": "Racine carrée",
+       "code": "RACI",
+       "competencies": [
+        {
+         "code": "3E-NC-RACI-01",
+         "label": "Résoudre analytiquement et graphiquement des équations de la forme 𝑥2 = a."
+        },
+        {
+         "code": "3E-NC-RACI-02",
+         "label": "Résoudre des problèmes utilisant la racine carrée."
+        }
+       ]
+      },
+      {
+       "name": "Calcul littéral et algébrique",
+       "code": "CALC",
+       "competencies": [
+        {
+         "code": "3E-NC-CALC-01",
+         "label": "Simplifier des expressions produits ou des rapports comportant des facteurs communs."
+        },
+        {
+         "code": "3E-NC-CALC-02",
+         "label": "Utiliser la double distributivité pour développer et factoriser des expressions dont le facteur est apparent."
+        },
+        {
+         "code": "3E-NC-CALC-03",
+         "label": "Résoudre analytiquement et graphiquement une inéquation du premier degré du type a𝑥 ⩾ b."
+        },
+        {
+         "code": "3E-NC-CALC-04",
+         "label": "Résoudre une équation produit nul."
+        },
+        {
+         "code": "3E-NC-CALC-05",
+         "label": "Manipuler les trois identités remarquables pour développer et factoriser : a 2 + 2ab + b 2 = (a + b) 2 a 2 - 2ab + b 2 = (a - b) 2 a 2 - b 2 = (a - b) (a + b)"
+        },
+        {
+         "code": "3E-NC-CALC-06",
+         "label": "Pratiquer un raisonnement par analyse-synthèse dans le cadre d'une résolution d'équation."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "name": "Espace et géométrie",
+     "code": "EG",
+     "themes": [
+      {
+       "name": "Représentation de l'espace",
+       "code": "REPR",
+       "competencies": [
+        {
+         "code": "3E-EG-REPR-01",
+         "label": "Définir la boule et la sphère."
+        },
+        {
+         "code": "3E-EG-REPR-02",
+         "label": "Définir les grands cercles, le diamètre."
+        },
+        {
+         "code": "3E-EG-REPR-03",
+         "label": "Visualiser et réaliser des sections de pavé parallèlement à une face, de cylindre parallèlement ou perpendiculairement à son axe, d'une boule."
+        },
+        {
+         "code": "3E-EG-REPR-04",
+         "label": "Connaitre et utiliser la formule du volume d'une boule de rayon donné."
+        }
+       ]
+      },
+      {
+       "name": "Triangles",
+       "code": "TRIA",
+       "competencies": [
+        {
+         "code": "3E-EG-TRIA-01",
+         "label": "Connaitre et appliquer le théorème de Thalès, sa réciproque, sa contraposée (configurations des triangles emboités et configuration dite du papillon)."
+        },
+        {
+         "code": "3E-EG-TRIA-02",
+         "label": "Connaitre et utiliser les lignes trigonométriques dans le triangle rectangle : cosinus, sinus, tangente."
+        }
+       ]
+      },
+      {
+       "name": "Translations et vecteurs",
+       "code": "TRAN",
+       "competencies": [
+        {
+         "code": "3E-EG-TRAN-01",
+         "label": "Définir et utiliser la translation : définition ponctuelle avec parallélogramme."
+        },
+        {
+         "code": "3E-EG-TRAN-02",
+         "label": "Définir et utiliser les notions de vecteur, de vecteurs égaux, de vecteur nul, d'opposé d'un vecteur."
+        },
+        {
+         "code": "3E-EG-TRAN-03",
+         "label": "Définir et utiliser la somme de deux vecteurs par enchainement de deux translations."
+        },
+        {
+         "code": "3E-EG-TRAN-04",
+         "label": "Découvrir et utiliser la relation de Chasles."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "name": "Organisation et gestion de données et probabilités",
+     "code": "OGD",
+     "themes": [
+      {
+       "name": "Statistiques",
+       "code": "STAT",
+       "competencies": [
+        {
+         "code": "3E-OGD-STAT-01",
+         "label": "Calculer des effectifs cumulés croissants."
+        },
+        {
+         "code": "3E-OGD-STAT-02",
+         "label": "Donner les quartiles et la médiane d'une série donnée sous forme de tableau d'effectifs ou de diagramme en barres."
+        },
+        {
+         "code": "3E-OGD-STAT-03",
+         "label": "Construire et utiliser des boites à moustache pour représenter les valeurs de position d'une série statistique."
+        },
+        {
+         "code": "3E-OGD-STAT-04",
+         "label": "Comprendre et interpréter des données statistiques."
+        },
+        {
+         "code": "3E-OGD-STAT-05",
+         "label": "Utiliser le tableur pour calculer une moyenne, une médiane et l'étendue d'une série statistique."
+        }
+       ]
+      },
+      {
+       "name": "Probabilités",
+       "code": "PROB",
+       "competencies": [
+        {
+         "code": "3E-OGD-PROB-01",
+         "label": "Connaitre et savoir appliquer la relation 𝑃(𝐴 ∪ 𝐵) + 𝑃(𝐴 ∩ 𝐵) = 𝑃(𝐴) + 𝑃(𝐵)."
+        },
+        {
+         "code": "3E-OGD-PROB-02",
+         "label": "Simuler des expériences aléatoires indépendantes."
+        },
+        {
+         "code": "3E-OGD-PROB-03",
+         "label": "Observer la stabilisation des fréquences lorsqu'on augmente le nombre de répétitions de l'expérience aléatoire, faire le lien entre fréquence et probabilité selon le nombre de répétitions."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "name": "Proportionnalité, fonctions",
+     "code": "PF",
+     "themes": [
+      {
+       "name": "Proportionnalité",
+       "code": "PROP",
+       "competencies": [
+        {
+         "code": "3E-PF-PROP-01",
+         "label": "Traduire une augmentation ou une diminution en pourcentages."
+        },
+        {
+         "code": "3E-PF-PROP-02",
+         "label": "Relier la représentation graphique d'une situation de proportionnalité avec le théorème de Thalès."
+        },
+        {
+         "code": "3E-PF-PROP-03",
+         "label": "Connaitre et utiliser les fonctions linéaires."
+        }
+       ]
+      },
+      {
+       "name": "Fonctions",
+       "code": "FONC",
+       "competencies": [
+        {
+         "code": "3E-PF-FONC-01",
+         "label": "Utiliser les différentes représentations d'une fonction."
+        },
+        {
+         "code": "3E-PF-FONC-02",
+         "label": "Définir et connaitre le vocabulaire : image, antécédents."
+        },
+        {
+         "code": "3E-PF-FONC-03",
+         "label": "Définir et utiliser les fonctions linéaires."
+        },
+        {
+         "code": "3E-PF-FONC-04",
+         "label": "Résoudre graphiquement des équations et des inéquations linéaires."
+        },
+        {
+         "code": "3E-PF-FONC-05",
+         "label": "Relier fonctions linéaires et proportionnalité."
+        },
+        {
+         "code": "3E-PF-FONC-06",
+         "label": "Définir et utiliser les fonctions affines."
+        },
+        {
+         "code": "3E-PF-FONC-07",
+         "label": "Déterminer graphiquement les coefficients d'une fonction affine."
+        },
+        {
+         "code": "3E-PF-FONC-08",
+         "label": "Représenter la fonction carré."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "name": "La pensée informatique",
+     "code": "PI",
+     "themes": [
+      {
+       "name": "La pensée informatique",
+       "code": "PENS",
+       "competencies": [
+        {
+         "code": "3E-PI-PENS-01",
+         "label": "Approfondir la notion de variables."
+        },
+        {
+         "code": "3E-PI-PENS-02",
+         "label": "Utiliser des conditions composées."
+        },
+        {
+         "code": "3E-PI-PENS-03",
+         "label": "Utiliser une boucle conditionnelle."
+        },
+        {
+         "code": "3E-PI-PENS-04",
+         "label": "Structurer des programmes."
+        },
+        {
+         "code": "3E-PI-PENS-05",
+         "label": "Écrire un programme donné pour réaliser un objectif ou résoudre un problème."
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

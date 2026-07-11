@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# Node
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Données d'exécution (générées, jamais versionnées) — racine seulement,
+# ne pas masquer backend/app/data/competencies_fr.json (source versionnée)
+/data/
+backend/mathprint.db
+backend/*.db
+volumes/
+
+# Dépendance externe épinglée : clonée à part (README) / par la CI de release
+mathalea/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# OS / éditeurs
+.DS_Store
+
+# Logs
+*.log

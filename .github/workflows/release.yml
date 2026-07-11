@@ -1,0 +1,96 @@
+# Publie les images Docker MathPrint sur GHCR à chaque tag "vX.Y.Z".
+# Le NAS (docker-compose.yml + Watchtower) suit ensuite automatiquement
+# la mise à jour de "latest" — voir README > Déploiement.
+name: Release Docker images
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_OWNER: ${{ github.repository_owner }}
+  # MathALÉA n'est pas versionné dans ce dépôt (trop volumineux) : commit
+  # épinglé de https://github.com/mathalea/mathalea correspondant à la v2.8.2.
+  MATHALEA_PIN: 3c6092ef38154b802c063ad500b27f12fdf03df8
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r backend/requirements.txt
+      - run: cd backend && python -m pytest tests/ -q
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: cd frontend && npm ci && npx tsc -b
+
+  build-push:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout MathPrint
+        uses: actions/checkout@v4
+
+      - name: Cloner MathALÉA (épinglé)
+        run: |
+          git clone --quiet https://github.com/mathalea/mathalea.git mathalea
+          git -C mathalea checkout --quiet "$MATHALEA_PIN"
+
+      - name: Version (sans le "v" initial)
+        id: ver
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Connexion à GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push — api
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/mathprint-api:${{ steps.ver.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/mathprint-api:latest
+
+      - name: Build & push — web
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/mathprint-web:${{ steps.ver.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/mathprint-web:latest
+
+      - name: Build & push — mathalea
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: mathalea-service/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/mathprint-mathalea:${{ steps.ver.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/mathprint-mathalea:latest
+
+      - name: Créer la release GitHub
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true

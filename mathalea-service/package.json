@@ -1,0 +1,12 @@
+{
+  "name": "mathalea-service",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Runner headless MathALÉA pour MathPrint : génération déterministe (seed) d'énoncés, corrections et réponses attendues via HTTP JSON.",
+  "scripts": {
+    "start": "node --import ./register.mjs server.js"
+  },
+  "dependencies": {
+    "seedrandom": "^3.0.5"
+  }
+}

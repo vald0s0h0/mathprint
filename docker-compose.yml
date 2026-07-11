@@ -1,0 +1,80 @@
+# MathPrint sur Synology DS224+ (§11.1).
+# Le reverse-proxy HTTPS est assuré par Synology (portail d'applications).
+# En V1, worker-cv / worker-doc / scheduler tournent dans le processus API
+# (BackgroundTasks + table jobs) ; ils seront extraits en services dédiés
+# lors de la phase 4 (durcissement) si la charge le nécessite.
+#
+# Images pré-construites (GitHub Actions, .github/workflows/release.yml) :
+# chaque tag "vX.Y.Z" poussé sur le dépôt publie mathalea/api/web sur
+# ghcr.io/vald0s0h0/mathprint-* (version + "latest"). Watchtower surveille les
+# 3 services applicatifs (label ci-dessous) et les met à jour automatiquement
+# dès qu'une nouvelle image "latest" est disponible — voir README.
+# Pour figer le NAS sur une version précise plutôt que de suivre "latest",
+# définir MATHPRINT_VERSION=vX.Y.Z dans .env (Watchtower ne bougera plus).
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: mathprint
+      POSTGRES_USER: mathprint
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?definir DB_PASSWORD dans .env}
+    volumes:
+      - ./volumes/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mathprint"]
+      interval: 10s
+      retries: 5
+
+  queue:
+    image: redis:7-alpine
+    # file rapide et verrous temporaires ; aucune donnée métier unique (§11.1)
+    volumes:
+      - ./volumes/redis:/data
+
+  mathalea:
+    image: ghcr.io/vald0s0h0/mathprint-mathalea:${MATHPRINT_VERSION:-latest}
+    # génération MathALÉA versionnée et épinglée (§11.1)
+    restart: unless-stopped
+    labels:
+      - "com.centurylabs.watchtower.enable=true"
+
+  api:
+    image: ghcr.io/vald0s0h0/mathprint-api:${MATHPRINT_VERSION:-latest}
+    depends_on:
+      db:
+        condition: service_healthy
+      mathalea:
+        condition: service_started
+    environment:
+      MATHPRINT_DATABASE_URL: postgresql+psycopg2://mathprint:${DB_PASSWORD}@db/mathprint
+      MATHPRINT_SECRET_KEY: ${SECRET_KEY:?definir SECRET_KEY}
+      MATHPRINT_HMAC_KEY: ${HMAC_KEY:?definir HMAC_KEY}
+      MATHPRINT_MOCK_MODE: ${MOCK_MODE:-true}
+      MATHPRINT_MATHALEA_URL: http://mathalea:8123
+    volumes:
+      - ./volumes/data:/data          # /data/assessments, /data/catalog, /data/backups
+    restart: unless-stopped
+    labels:
+      - "com.centurylabs.watchtower.enable=true"
+
+  web:
+    image: ghcr.io/vald0s0h0/mathprint-web:${MATHPRINT_VERSION:-latest}
+    depends_on: [api]
+    ports:
+      - "8080:80"
+    restart: unless-stopped
+    labels:
+      - "com.centurylabs.watchtower.enable=true"
+
+  # met à jour automatiquement mathalea/api/web dès qu'une nouvelle image est
+  # publiée sur ghcr.io (poll 5 min) ; db/queue ne portent pas le label et ne
+  # sont donc jamais touchés par Watchtower.
+  watchtower:
+    image: containrrr/watchtower
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      WATCHTOWER_LABEL_ENABLE: "true"
+      WATCHTOWER_CLEANUP: "true"
+      WATCHTOWER_POLL_INTERVAL: "300"
+    restart: unless-stopped
