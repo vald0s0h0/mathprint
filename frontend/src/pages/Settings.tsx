@@ -1,12 +1,13 @@
-// Paramètres (§9.6) : API, Imprimantes, Calibration, Pédagogie, Documents, Système.
+// Paramètres (§9.6) : Mon compte, API, Imprimantes, Calibration, Pédagogie, Documents, Système.
 import {
-  Badge, Button, Card, FileButton, Group, Stack, Switch, Table, Tabs, Text,
+  Badge, Button, Card, FileButton, Group, PasswordInput, Stack, Switch, Table, Tabs, Text,
   TextInput, Title,
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
 import { useEffect, useState } from 'react'
 import { api, getToken } from '../api'
 
+type Me = { id: string; email: string; display_name: string; role: string }
 type Provider = { provider: string; model: string; secret_preview: string; active: boolean }
 type PrintersInfo = {
   local: { name: string; default?: boolean; status: string }[]
@@ -20,6 +21,11 @@ type SystemStatus = {
 }
 
 export default function SettingsPage() {
+  const [me, setMe] = useState<Me | null>(null)
+  const [curPwd, setCurPwd] = useState('')
+  const [newPwd, setNewPwd] = useState('')
+  const [confirmPwd, setConfirmPwd] = useState('')
+  const [pwdLoading, setPwdLoading] = useState(false)
   const [providers, setProviders] = useState<Provider[]>([])
   const [system, setSystem] = useState<Record<string, any>>({})
   const [status, setStatus] = useState<SystemStatus | null>(null)
@@ -31,6 +37,7 @@ export default function SettingsPage() {
   const [netUri, setNetUri] = useState('')
 
   function refresh() {
+    api.get<Me>('/api/auth/me').then(setMe)
     api.get<Provider[]>('/api/settings/providers').then(setProviders)
     api.get<Record<string, any>>('/api/settings/system').then(setSystem)
     api.get<SystemStatus>('/api/system/status').then(setStatus)
@@ -39,6 +46,27 @@ export default function SettingsPage() {
     api.get<any[]>('/api/system/calibration/profiles').then(setCalibrations)
   }
   useEffect(refresh, [])
+
+  async function changePassword() {
+    if (newPwd.length < 8) {
+      notifications.show({ color: 'red', message: 'Nouveau mot de passe : 8 caractères minimum' })
+      return
+    }
+    if (newPwd !== confirmPwd) {
+      notifications.show({ color: 'red', message: 'Les mots de passe ne correspondent pas' })
+      return
+    }
+    setPwdLoading(true)
+    try {
+      await api.post('/api/auth/me/password', { current_password: curPwd, new_password: newPwd })
+      notifications.show({ color: 'green', message: 'Mot de passe mis à jour' })
+      setCurPwd(''); setNewPwd(''); setConfirmPwd('')
+    } catch (e) {
+      notifications.show({ color: 'red', message: (e as Error).message })
+    } finally {
+      setPwdLoading(false)
+    }
+  }
 
   async function save(provider: string) {
     const e = edit[provider] || { model: '', secret: '' }
@@ -112,8 +140,9 @@ export default function SettingsPage() {
   return (
     <Stack>
       <Title order={2}>Paramètres</Title>
-      <Tabs defaultValue="api">
+      <Tabs defaultValue="compte">
         <Tabs.List>
+          <Tabs.Tab value="compte">Mon compte</Tabs.Tab>
           <Tabs.Tab value="api">API</Tabs.Tab>
           <Tabs.Tab value="imprimantes">Imprimantes</Tabs.Tab>
           <Tabs.Tab value="calibration">Calibration</Tabs.Tab>
@@ -121,6 +150,35 @@ export default function SettingsPage() {
           <Tabs.Tab value="documents">Documents</Tabs.Tab>
           <Tabs.Tab value="systeme">Système</Tabs.Tab>
         </Tabs.List>
+
+        <Tabs.Panel value="compte" pt="md">
+          <Card withBorder maw={420}>
+            {me && (
+              <Group justify="space-between" mb="md">
+                <div>
+                  <Text fw={600}>{me.display_name}</Text>
+                  <Text size="sm" c="dimmed">{me.email}</Text>
+                </div>
+                <Badge>{me.role}</Badge>
+              </Group>
+            )}
+            <Stack gap="xs">
+              <Text fw={600} size="sm">Changer le mot de passe</Text>
+              <PasswordInput label="Mot de passe actuel" value={curPwd}
+                onChange={(e) => setCurPwd(e.target.value)} />
+              <PasswordInput label="Nouveau mot de passe" value={newPwd}
+                description="8 caractères minimum"
+                onChange={(e) => setNewPwd(e.target.value)} />
+              <PasswordInput label="Confirmer le nouveau mot de passe" value={confirmPwd}
+                onChange={(e) => setConfirmPwd(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && changePassword()} />
+              <Button size="xs" onClick={changePassword} loading={pwdLoading}
+                disabled={!curPwd || !newPwd}>
+                Mettre à jour le mot de passe
+              </Button>
+            </Stack>
+          </Card>
+        </Tabs.Panel>
 
         <Tabs.Panel value="api" pt="md">
           <Stack>

@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from ..deps import current_user
 from ..models import User
-from ..services.security import make_token, verify_password
+from ..services.security import hash_password, make_token, verify_password
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -33,3 +33,20 @@ def login(body: LoginIn, db: Session = Depends(get_db)):
 def me(user: User = Depends(current_user)):
     return {"id": user.id, "email": user.email,
             "display_name": user.display_name, "role": user.role}
+
+
+class ChangePasswordIn(BaseModel):
+    current_password: str
+    new_password: str
+
+
+@router.post("/me/password")
+def change_password(body: ChangePasswordIn, db: Session = Depends(get_db),
+                    user: User = Depends(current_user)):
+    if not verify_password(body.current_password, user.password_hash):
+        raise HTTPException(401, "Mot de passe actuel incorrect")
+    if len(body.new_password) < 8:
+        raise HTTPException(422, "Le nouveau mot de passe doit compter au moins 8 caractères")
+    user.password_hash = hash_password(body.new_password)
+    db.commit()
+    return {"ok": True}
