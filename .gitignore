@@ -24,8 +24,9 @@ mathalea/
 .env.*
 !.env.example
 
-# OS / éditeurs
+# OS / éditeurs / outils locaux
 .DS_Store
+.claude/
 
 # Logs
 *.log
