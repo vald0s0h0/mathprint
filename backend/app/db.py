@@ -45,14 +45,14 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
     "jobs": [
         ("assessment_id", "TEXT"),
         ("progress_message", "TEXT"),
-        ("updated_at", "DATETIME"),
+        ("updated_at", "TIMESTAMP"),
     ],
     "assessments": [
         ("error_message", "TEXT"),
     ],
     "students": [
         ("next_plan_json", "JSON"),
-        ("next_plan_updated_at", "DATETIME"),
+        ("next_plan_updated_at", "TIMESTAMP"),
     ],
 }
 
@@ -69,7 +69,7 @@ def run_migrations():
                 if name not in existing:
                     if col_type == "BOOLEAN":
                         default = "0" if engine.dialect.name == "sqlite" else "FALSE"
-                    elif col_type in ("JSON", "DATETIME"):
+                    elif col_type in ("JSON", "TIMESTAMP"):
                         default = "NULL"
                     else:
                         default = "''"
