@@ -55,6 +55,11 @@ class Settings(BaseSettings):
     printing_enabled: bool = True
 
     # --- Divers ---
+    # renseignés par la CI au build de l'image (Dockerfile ARG GIT_SHA/BUILD_TIME) ;
+    # affichés dans Paramètres → Système pour vérifier qu'une mise à jour a bien
+    # été appliquée sur le NAS.
+    build_sha: str = "dev"
+    build_time: str = ""
     mock_mode: bool = True               # classe mock + fournisseurs simulés (désactivable dans Réglages)
     correction_color: str = "#C62828"
     dropout_color: str = "#F5B7A8"       # rouge saumon clair

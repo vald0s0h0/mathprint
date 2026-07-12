@@ -20,8 +20,10 @@ type PrintersInfo = {
   local: { name: string; default?: boolean; status: string }[]
   network: { name: string; uri: string; status: string }[]
 }
+type Build = { sha: string; time: string }
 type SystemStatus = {
-  version: string; database: { ok: boolean; url_scheme: string }
+  version: string; build?: Build
+  database: { ok: boolean; url_scheme: string }
   mathalea: { status?: string; mathaleaVersion?: string; exercises?: number }
   disk: { total_gb: number; free_gb: number; alert: boolean }
   mock_mode: boolean; last_backup: string | null
@@ -42,6 +44,7 @@ export default function SettingsPage() {
   const [edit, setEdit] = useState<Record<string, { model: string; secret: string }>>({})
   const [netName, setNetName] = useState('')
   const [netUri, setNetUri] = useState('')
+  const [webBuild, setWebBuild] = useState<Build | null>(null)
   const { refreshSystem } = useAppState()
 
   function refresh() {
@@ -52,6 +55,9 @@ export default function SettingsPage() {
     api.get<PrintersInfo>('/api/printers').then(setPrinters)
     api.get<{ name: string; size: number }[]>('/api/system/backups').then(setBackups)
     api.get<any[]>('/api/system/calibration/profiles').then(setCalibrations)
+    // build de l'interface web (image nginx) — absent en dev, servi en no-cache
+    fetch('/build.json').then((r) => (r.ok ? r.json() : null)).then(setWebBuild)
+      .catch(() => setWebBuild(null))
   }
   useEffect(refresh, [])
 
@@ -375,6 +381,15 @@ export default function SettingsPage() {
                     Synchroniser le catalogue MathALÉA
                   </Button>
                 </Group>
+                <Text size="xs" c="dimmed" mt="sm">
+                  Version {status.version}
+                  {status.build?.sha && status.build.sha !== 'dev' &&
+                    ` — API build ${status.build.sha}${status.build.time ? ` (${status.build.time})` : ''}`}
+                  {webBuild?.sha && webBuild.sha !== 'dev' &&
+                    ` · Web build ${webBuild.sha}`}
+                  {status.build?.sha && webBuild?.sha && status.build.sha !== webBuild.sha &&
+                    ' — ⚠ web et API sur des builds différents (mise à jour en cours ou incomplète)'}
+                </Text>
               </Card>
             )}
             <Card withBorder>

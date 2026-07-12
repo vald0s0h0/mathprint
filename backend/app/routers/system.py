@@ -38,6 +38,7 @@ def status(db: Session = Depends(get_db)):
         if (settings.data_dir / BACKUP_DIR_KEY).exists() else []
     return {
         "version": "0.9.0",
+        "build": {"sha": settings.build_sha, "time": settings.build_time},
         "database": {"ok": db_ok, "url_scheme": settings.database_url.split(":")[0]},
         "mathalea": mathalea or {"status": "unreachable"},
         "disk": {"total_gb": round(disk.total / 1e9, 1),

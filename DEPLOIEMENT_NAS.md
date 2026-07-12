@@ -71,7 +71,7 @@ administrateur, eux, n'ont **rien à préparer ici** — voir §6.
    automatiquement dans le dossier choisi à l'étape 3, ainsi que le `.env`
    créé à l'étape 2.)*
 5. Cliquer **Suivant** : Container Manager liste les ports détectés
-   (`8080` pour le service `web`). Vérifier qu'il n'entre pas en conflit avec
+   (`7070` pour le service `web`). Vérifier qu'il n'entre pas en conflit avec
    un autre service du NAS (DSM utilise en général 5000/5001) ; sinon
    modifier ici le port hôte.
 6. Cliquer **Suivant** puis **Terminer** (ou **Exécuter** selon la version).
@@ -84,17 +84,17 @@ Premier démarrage : compter 1 à 2 minutes, principalement pour l'image
 
 ## 4. Vérifier que tout tourne
 
-Dans Container Manager → **Projet** → `mathprint`, les 6 conteneurs
-(`db`, `queue`, `mathalea`, `api`, `web`, `watchtower`) doivent passer au vert
+Dans Container Manager → **Projet** → `mathprint`, les 5 conteneurs
+(`db`, `queue`, `mathalea`, `api`, `web`) doivent passer au vert
 (« En cours d'exécution »). En cas de souci, clic sur un conteneur →
 **Détails** → onglet **Journal** affiche ses logs sans passer par SSH.
 
-Tester ensuite dans un navigateur : `http://<IP-du-NAS>:8080` doit afficher
+Tester ensuite dans un navigateur : `http://<IP-du-NAS>:7070` doit afficher
 l'écran de connexion MathPrint.
 
 ## 5. Exposer l'application en HTTPS (reverse proxy Synology)
 
-Recommandé plutôt que d'utiliser directement le port 8080 en HTTP.
+Recommandé plutôt que d'utiliser directement le port 7070 en HTTP.
 
 1. **Panneau de configuration** → **Portail de connexion** (ou « Application
    Portal » selon la version DSM) → onglet **Avancé** → **Reverse Proxy** →
@@ -104,17 +104,17 @@ Recommandé plutôt que d'utiliser directement le port 8080 en HTTP.
    pour ce NAS (ex. `mathprint.votre-nom.synology.me` ou un nom local),
    Port `443`.
 4. Bloc **Destination** : Protocole `HTTP`, Nom d'hôte `localhost`,
-   Port `8080`.
+   Port `7070`.
 5. Enregistrer. Vérifier qu'un certificat valide est assigné à ce nom d'hôte
    dans **Panneau de configuration** → **Sécurité** → **Certificat**
    (Let's Encrypt via QuickConnect/DDNS, ou certificat importé).
 
-L'application est ensuite accessible en `https://` sans exposer le port 8080
+L'application est ensuite accessible en `https://` sans exposer le port 7070
 directement.
 
 ## 6. Premier lancement : créer votre compte administrateur
 
-Ouvrir `https://<votre-nom-d-hôte>` (ou `http://<IP-du-NAS>:8080`) dans un
+Ouvrir `https://<votre-nom-d-hôte>` (ou `http://<IP-du-NAS>:7070`) dans un
 navigateur affiche directement un **écran de démarrage** tant qu'aucun
 compte n'existe : e-mail, prénom, mot de passe (8 caractères minimum), et
 une section « Clés API (facultatif) » pour Mathpix/DeepSeek/Anthropic — à
@@ -148,27 +148,61 @@ commande suivante depuis Container Manager le fait en une étape, sans SSH :
    ```
 3. Se reconnecter sur l'application avec le nouveau mot de passe.
 
-## 7. Mises à jour automatiques — rien à faire
+## 7. Mises à jour automatiques (tâche planifiée DSM)
 
-Une fois l'installation ci-dessus terminée, **aucune action supplémentaire
-n'est nécessaire pour les futures mises à jour** : le service `watchtower`
-du projet vérifie `ghcr.io` toutes les 5 minutes et redémarre automatiquement
-`mathalea`/`api`/`web` dès qu'une nouvelle version « latest » est publiée
-(voir le dépôt GitHub, `scripts/release.sh` côté développement). `db` et
-`queue` ne sont jamais touchés par Watchtower.
+Côté développement, **chaque `git push` sur `main` publie automatiquement**
+de nouvelles images `latest` sur `ghcr.io` (workflow
+`.github/workflows/deploy.yml`, après tests). Côté NAS, la mise à jour est
+assurée par une **tâche planifiée DSM** — le mécanisme natif Synology, bien
+plus fiable que Watchtower avec Container Manager (abandonné : conteneurs
+recréés hors projet, arrêts bloqués, mises à jour silencieusement ignorées).
 
-⚠️ Watchtower ne fait que **remplacer l'image** d'un conteneur existant ; il
-ne relit jamais `docker-compose.yml` (ports, variables d'environnement,
-nouveaux services…). Si ce fichier a changé depuis la création du projet
-(ports, `.env` requis, etc.), une mise à jour Watchtower seule ne suffit pas
-— il faut recoller le `docker-compose.yml` à jour dans Container Manager →
-Projet → **Action** → **Modifier**, puis redéployer.
+La tâche exécute `scripts/nas-update.sh`, qui fait exactement ce qu'on
+ferait à la main : `docker compose pull` puis `docker compose up -d` — seuls
+les conteneurs dont l'image a changé sont recréés, `db`/`queue` ne sont
+jamais touchés, et le projet reste géré par Container Manager.
 
-Pour figer le NAS sur une version précise plutôt que de suivre `latest` :
-rouvrir le fichier `.env` (File Station) et remplacer
-`MATHPRINT_VERSION=latest` par ex. par `MATHPRINT_VERSION=v1.2.0`, puis dans
-Container Manager → Projet `mathprint` → **Action** → **Redéployer** (ou
-arrêter/démarrer le projet) pour appliquer.
+### Mise en place (une seule fois, ~2 minutes)
+
+1. Déposer `scripts/nas-update.sh` (depuis ce dépôt) dans
+   `/docker/mathprint/` via File Station (à côté du `docker-compose.yml`).
+2. **Panneau de configuration** → **Planificateur de tâches** → **Créer** →
+   **Tâche planifiée** → **Script défini par l'utilisateur**.
+3. Onglet **Général** : nom `MathPrint update`, utilisateur **root**
+   (indispensable pour la commande docker).
+4. Onglet **Programmer** : Quotidien, puis « Exécuter à la même fréquence
+   dans la journée » → toutes les **1 heure** (ou 15 min si vous voulez des
+   mises à jour plus rapides).
+5. Onglet **Paramètres de tâche** → zone **Script utilisateur** :
+   ```sh
+   bash /volume1/docker/mathprint/nas-update.sh
+   ```
+   (adapter `volume1` si votre dossier partagé `docker` est ailleurs).
+   Facultatif : cocher « Envoyer les détails d'exécution par e-mail »
+   uniquement en cas d'erreur.
+6. **OK**, puis clic droit sur la tâche → **Exécuter** pour un premier test.
+
+### Vérifier qu'une mise à jour a bien été appliquée
+
+- Dans MathPrint : **Paramètres → Système** affiche « API build `abc1234` »
+  et « Web build `abc1234` » — le sha du commit publié. S'il change après un
+  push + une exécution de la tâche, la chaîne fonctionne de bout en bout.
+- Sur le NAS : `/docker/mathprint/update.log` (File Station) journalise
+  chaque exécution (« déjà à jour » ou liste des conteneurs recréés).
+
+⚠️ Comme avant, la tâche met à jour **les images**, pas le
+`docker-compose.yml` lui-même. S'il évolue (nouveau service, nouveau port,
+nouvelle variable `.env`), recoller le fichier à jour dans Container
+Manager → Projet → **Action** → **Modifier**, puis redéployer — les notes de
+version le signalent quand c'est nécessaire.
+
+### Figer ou revenir en arrière
+
+Rouvrir `.env` (File Station) et remplacer `MATHPRINT_VERSION=latest` par
+un tag précis — `v1.2.0` (release) ou `sha-abc1234` (n'importe quel commit
+publié) — puis Container Manager → Projet `mathprint` → **Action** →
+**Redéployer**. La tâche planifiée peut rester active : elle ne trouvera
+jamais rien de plus récent qu'un tag figé.
 
 ## 8. Sauvegardes
 
@@ -198,7 +232,8 @@ file CUPS locale.
 | Un conteneur reste rouge / redémarre en boucle | Container Manager → conteneur → Détails → Journal (le traceback exact y est) |
 | `/` répond mais `/api/...` renvoie 502 | C'est le nginx du conteneur `web` qui ne joint pas `api` : le conteneur `api` est arrêté/en boucle, pas un problème de version — voir la ligne suivante |
 | `api` redémarre en boucle, `db` a l'air « en cours d'exécution » | Cause la plus fréquente : `DB_PASSWORD` absent/vide alors que le volume `volumes/postgres` a déjà été initialisé avec ce mot de passe vide — Postgres ne réapplique son mot de passe qu'à la toute première initialisation d'un volume vide. Corrige `DB_PASSWORD` dans `.env` **et** vide le contenu de `volumes/postgres` (File Station) avant de redémarrer, pour forcer une réinitialisation propre. Sans donnée réelle encore stockée, ce vidage est sans risque. |
-| Le projet ne veut plus s'arrêter (bouton bloqué) | Arrêter d'abord `watchtower` seul (il recrée sans cesse les conteneurs pendant que vous essayez), puis `api` individuellement plutôt que tout le projet d'un coup. Toujours bloqué après ~1 min : Centre de paquets → Container Manager → **Arrêter** puis **Démarrer** le paquet (reset léger). En dernier recours, redémarrer le NAS — tous les conteneurs s'arrêtent proprement au reboot quel que soit leur état. |
+| Le projet ne veut plus s'arrêter (bouton bloqué) | Arrêter `api` individuellement plutôt que tout le projet d'un coup. Toujours bloqué après ~1 min : Centre de paquets → Container Manager → **Arrêter** puis **Démarrer** le paquet (reset léger). En dernier recours, redémarrer le NAS — tous les conteneurs s'arrêtent proprement au reboot quel que soit leur état. |
 | Page inaccessible sur le port publié | Conflit de port avec un autre service DSM — changer le port hôte dans le projet |
-| `docker compose pull` / Watchtower échoue avec 401/403 | Les images `ghcr.io/vald0s0h0/mathprint-*` sont publiques par défaut ; si elles ont été rendues privées entre-temps, ajouter un `docker login ghcr.io` (jeton `read:packages`) — voir README |
-| Après une mise à jour, comportement inattendu | Revenir en arrière en fixant `MATHPRINT_VERSION` sur le tag précédent dans `.env` (§7) |
+| `docker compose pull` échoue avec 401/403 | Les images `ghcr.io/vald0s0h0/mathprint-*` sont publiques par défaut ; si elles ont été rendues privées entre-temps, ajouter un `docker login ghcr.io` (jeton `read:packages`) — voir README |
+| Les mises à jour ne semblent jamais s'appliquer | Dans l'ordre : ① Paramètres → Système : noter le build affiché. ② GitHub → onglet Actions : le workflow « Deploy latest images » du dernier push est-il vert ? (sinon rien n'a été publié). ③ File Station → `update.log` : la tâche tourne-t-elle, et dit-elle « déjà à jour » ou liste-t-elle des conteneurs ? ④ `.env` : `MATHPRINT_VERSION` est-il bien `latest` (un tag figé bloque tout) ? ⑤ Navigateur : forcer le rechargement (Ctrl+Maj+R) — les anciennes versions pouvaient rester en cache, corrigé depuis (nginx no-cache). |
+| Après une mise à jour, comportement inattendu | Revenir en arrière en fixant `MATHPRINT_VERSION` sur un tag précédent (`vX.Y.Z` ou `sha-abc1234`) dans `.env` (§7) |

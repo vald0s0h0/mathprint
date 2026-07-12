@@ -33,39 +33,44 @@ produit dans Corrections.
 
 ## Déploiement NAS (Docker Compose) & mises à jour automatiques
 
-Le NAS ne construit plus les images localement : il les tire depuis GHCR et
-une release suffit à mettre à jour la production, sans rien toucher sur place.
+Le NAS ne construit rien localement : il tire les images depuis GHCR.
 
-Procédure clic par clic (File Station + Container Manager, sans SSH) :
-[**DEPLOIEMENT_NAS.md**](DEPLOIEMENT_NAS.md). Résumé en ligne de commande
-ci-dessous pour un déploiement Docker Compose classique.
+**Publier une mise à jour = `git push` sur `main`, c'est tout.**
+`.github/workflows/deploy.yml` lance les tests puis publie sur
+`ghcr.io/vald0s0h0/` les images qui ont changé (`mathprint-api`,
+`mathprint-web`, `mathprint-mathalea`) sous deux tags : `latest` et
+`sha-XXXXXXX` (retour arrière précis). Le NAS se met ensuite à jour tout
+seul via une tâche planifiée DSM qui exécute `scripts/nas-update.sh`
+(`docker compose pull && up -d` — plus de Watchtower, peu fiable avec
+Container Manager Synology).
+
+Procédure clic par clic (File Station + Container Manager + Planificateur
+de tâches, sans SSH) : [**DEPLOIEMENT_NAS.md**](DEPLOIEMENT_NAS.md).
+Résumé en ligne de commande pour un déploiement Docker Compose classique :
 
 ```bash
-cp .env.example .env   # DB_PASSWORD, SECRET_KEY, HMAC_KEY, MATHPRINT_VERSION
+cp .env.example .env   # DB_PASSWORD (seul secret requis), MATHPRINT_VERSION
 docker compose up -d
-# services : db (PostgreSQL), queue (Redis), mathalea/api/web (ghcr.io/vald0s0h0/mathprint-*),
-# watchtower (met à jour mathalea/api/web automatiquement)
+# services : db (PostgreSQL), queue (Redis), mathalea/api/web (ghcr.io/vald0s0h0/mathprint-*)
+# mise à jour : cron/tâche planifiée → scripts/nas-update.sh
 ```
 
-**Publier une nouvelle version** (depuis un poste de dev, dépôt à jour) :
+**Vérifier qu'une mise à jour est en service** : Paramètres → Système affiche
+le build (sha du commit + date) de l'API et du web.
+
+**Publier une version jalonnée** (optionnel — pour épingler un état stable) :
 
 ```bash
 ./scripts/release.sh v1.2.0
 ```
 
-Ce script crée le tag git et le pousse. `.github/workflows/release.yml` fait
-alors le reste : tests backend/frontend, build des 3 images
-(`mathprint-api`, `mathprint-web`, `mathprint-mathalea`), publication sur
-`ghcr.io/vald0s0h0/` avec le tag de version **et** `latest`, création de la
-release GitHub. Le service `watchtower` du NAS vérifie `ghcr.io` toutes les
-5 minutes (label `com.centurylabs.watchtower.enable`) et redémarre
-automatiquement mathalea/api/web dès que `latest` change — **aucune
-intervention manuelle sur le NAS**. `db` et `queue` ne portent pas ce label et
-ne sont donc jamais touchés.
+Crée le tag git ; `.github/workflows/release.yml` publie les images
+`v1.2.0` + met à jour `latest`, et crée la release GitHub.
 
 Pour figer le NAS sur une version précise plutôt que de suivre `latest`,
-définir `MATHPRINT_VERSION=v1.2.0` dans `.env` puis `docker compose up -d`
-(Watchtower cessera alors de mettre ce déploiement à jour).
+définir `MATHPRINT_VERSION=v1.2.0` (ou `sha-abc1234`) dans `.env` puis
+`docker compose up -d` — la tâche de mise à jour ne trouvera plus rien de
+plus récent.
 
 **Première publication** : les paquets GHCR créés par la CI héritent parfois
 d'une visibilité privée par défaut — si `docker compose pull` échoue sur le

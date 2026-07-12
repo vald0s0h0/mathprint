@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Publie une nouvelle version MathPrint : crée le tag git vX.Y.Z et le pousse.
-# La CI (.github/workflows/release.yml) construit alors les 3 images et les
-# publie sur ghcr.io (version + "latest") ; Watchtower met ensuite le NAS à
-# jour automatiquement dans les 5 minutes (voir README > Déploiement).
+# Publie une version JALONNÉE vX.Y.Z (optionnel : le déploiement continu
+# publie déjà "latest" à chaque push sur main via deploy.yml). La CI
+# (.github/workflows/release.yml) construit les 3 images, les publie sur
+# ghcr.io (vX.Y.Z + "latest") et crée la release GitHub. Utile pour épingler
+# un état stable (MATHPRINT_VERSION=vX.Y.Z sur le NAS).
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 

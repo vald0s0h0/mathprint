@@ -4,13 +4,16 @@
 # (BackgroundTasks + table jobs) ; ils seront extraits en services dédiés
 # lors de la phase 4 (durcissement) si la charge le nécessite.
 #
-# Images pré-construites (GitHub Actions, .github/workflows/release.yml) :
-# chaque tag "vX.Y.Z" poussé sur le dépôt publie mathalea/api/web sur
-# ghcr.io/vald0s0h0/mathprint-* (version + "latest"). Watchtower surveille les
-# 3 services applicatifs (label ci-dessous) et les met à jour automatiquement
-# dès qu'une nouvelle image "latest" est disponible — voir README.
-# Pour figer le NAS sur une version précise plutôt que de suivre "latest",
-# définir MATHPRINT_VERSION=vX.Y.Z dans .env (Watchtower ne bougera plus).
+# Images pré-construites (GitHub Actions) :
+# - chaque push sur main publie mathalea/api/web en ":latest" + ":sha-XXXXXXX"
+#   sur ghcr.io/vald0s0h0/mathprint-* (.github/workflows/deploy.yml) ;
+# - un tag git "vX.Y.Z" publie en plus une version épinglable (release.yml).
+#
+# Mises à jour du NAS : PAS de Watchtower (peu fiable avec Container Manager
+# Synology). Une tâche planifiée DSM lance scripts/nas-update.sh qui fait
+# `docker compose pull && up -d` — voir DEPLOIEMENT_NAS.md §7.
+# Pour figer une version : MATHPRINT_VERSION=vX.Y.Z (ou sha-XXXXXXX) dans .env
+# — le pull ne trouvera alors jamais rien de plus récent.
 #
 # Premier démarrage : ouvrir l'application dans un navigateur, un écran de
 # démarrage crée le premier compte administrateur (email/mot de passe/clés
@@ -39,8 +42,6 @@ services:
     image: ghcr.io/vald0s0h0/mathprint-mathalea:${MATHPRINT_VERSION:-latest}
     # génération MathALÉA versionnée et épinglée (§11.1)
     restart: unless-stopped
-    labels:
-      - "com.centurylabs.watchtower.enable=true"
 
   api:
     image: ghcr.io/vald0s0h0/mathprint-api:${MATHPRINT_VERSION:-latest}
@@ -60,27 +61,10 @@ services:
     volumes:
       - ./volumes/data:/data          # /data/assessments, /data/catalog, /data/backups
     restart: unless-stopped
-    labels:
-      - "com.centurylabs.watchtower.enable=true"
 
   web:
     image: ghcr.io/vald0s0h0/mathprint-web:${MATHPRINT_VERSION:-latest}
     depends_on: [api]
     ports:
       - "7070:80"
-    restart: unless-stopped
-    labels:
-      - "com.centurylabs.watchtower.enable=true"
-
-  # met à jour automatiquement mathalea/api/web dès qu'une nouvelle image est
-  # publiée sur ghcr.io (poll 5 min) ; db/queue ne portent pas le label et ne
-  # sont donc jamais touchés par Watchtower.
-  watchtower:
-    image: containrrr/watchtower
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    environment:
-      WATCHTOWER_LABEL_ENABLE: "true"
-      WATCHTOWER_CLEANUP: "true"
-      WATCHTOWER_POLL_INTERVAL: "300"
     restart: unless-stopped

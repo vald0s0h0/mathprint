@@ -235,5 +235,5 @@ def dashboard(db: Session = Depends(get_db)):
         "classes": classes,
         "assessments_draft": db.query(Assessment).filter_by(status="draft").count(),
         "system": {"mock_mode": mock_enabled(db), "data_dir": str(settings.data_dir),
-                   "version": "0.9.0"},
+                   "version": "0.9.0", "build_sha": settings.build_sha},
     }
