@@ -2,6 +2,7 @@
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -15,6 +16,7 @@ from ..models import (
     SystemSetting, User,
 )
 from ..services.forgetting import recall_probability
+from ..services.runtime_settings import apply_mock_mode, mock_enabled
 
 router = APIRouter(prefix="/api", tags=["misc"], dependencies=[Depends(current_user)])
 
@@ -96,7 +98,7 @@ def set_provider(body: ProviderIn, db: Session = Depends(get_db)):
 @router.get("/settings/system")
 def get_system_settings(db: Session = Depends(get_db)):
     rows = {r.key: r.value_json for r in db.query(SystemSetting).all()}
-    rows.setdefault("mock_mode", {"enabled": settings.mock_mode})
+    rows["mock_mode"] = {"enabled": mock_enabled(db)}
     rows.setdefault("forgetting_threshold", {"value": settings.forgetting_threshold})
     rows.setdefault("correction_color", {"value": settings.correction_color})
     rows.setdefault("dropout_color", {"value": settings.dropout_color})
@@ -116,10 +118,59 @@ def set_system_setting(body: SettingIn, db: Session = Depends(get_db),
         row = SystemSetting(key=body.key)
         db.add(row)
     row.value_json = body.value
-    row.version += 1
+    row.version = (row.version or 0) + 1  # None tant que la ligne n'est pas flushée
     row.updated_by = user.id
+    if body.key == "mock_mode":
+        apply_mock_mode(db, bool(body.value.get("enabled")))
     db.commit()
     return {"ok": True}
+
+
+class TemplatesPreviewIn(BaseModel):
+    templates: dict = {}
+
+
+@router.post("/settings/templates/preview")
+def templates_preview(body: TemplatesPreviewIn):
+    """PDF d'exemple rendu avec les templates fournis (éditeur visuel des
+    Paramètres → Documents) : en-tête, cartes exercice (dont maths et QCM)
+    et rappel de leçon, sans toucher à la base."""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas as _canvas
+
+    from ..services import pdfgen
+    from ..services.runtime_settings import DEFAULT_TEMPLATES, _merge
+
+    tpl = {k: _merge(DEFAULT_TEMPLATES[k], (body.templates or {}).get(k, {}))
+           for k in DEFAULT_TEMPLATES}
+    out_dir = settings.data_dir / "tmp"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / "template_preview.pdf"
+    c = _canvas.Canvas(str(path), pagesize=A4)
+    items = [
+        {"kind": "lesson", "title": "Rappel — Additionner des fractions",
+         "content": "Pour additionner deux fractions, on les met au même "
+                    "dénominateur, puis on additionne les numérateurs.",
+         "example": "Exemple : 1/2 + 1/3 = 3/6 + 2/6 = 5/6."},
+        {"kind": "exercise", "item_id": "demo-1",
+         "statement": "Calculer : 3/4 + 5/6 = ?",
+         "response_type": "short_text", "choices": [], "level5": 2},
+        {"kind": "exercise", "item_id": "demo-2",
+         "statement": "Développer puis réduire : 3(x + 5)",
+         "response_type": "short_text", "choices": [], "level5": 4},
+        {"kind": "exercise", "item_id": "demo-3",
+         "statement": "Que vaut 7 × 8 ?",
+         "response_type": "qcm_single",
+         "choices": ["54", "56", "63", "48"], "level5": 1},
+    ]
+    pdfgen.render_copy(
+        c, student_name="Durand Camille", class_name="5eA",
+        title="Sujet d'exemple — aperçu des templates", assessment_type="training",
+        items=items, pages_meta=[{"page_id": "demo", "payload": "MP1|demo|0"}],
+        tpl=tpl)
+    c.save()
+    return FileResponse(path, media_type="application/pdf",
+                        filename="template_preview.pdf")
 
 
 # ------------------------------------------------------------- coûts
@@ -148,7 +199,12 @@ def costs(db: Session = Depends(get_db)):
 
 @router.get("/dashboard")
 def dashboard(db: Session = Depends(get_db)):
-    batches = (db.query(ScanBatch).order_by(ScanBatch.created_at.desc()).limit(5).all())
+    # les lots des classes archivées (dont les classes mock désactivées) sont exclus
+    batches = (db.query(ScanBatch)
+               .join(Assessment, ScanBatch.assessment_id == Assessment.id)
+               .join(SchoolClass, Assessment.class_id == SchoolClass.id)
+               .filter(SchoolClass.archived_at.is_(None))
+               .order_by(ScanBatch.created_at.desc()).limit(6).all())
     pending_reviews = db.query(ManualReview).filter(ManualReview.resolved_at.is_(None)).count()
 
     classes = []
@@ -159,19 +215,25 @@ def dashboard(db: Session = Depends(get_db)):
                   if student_ids else [])
         due = sum(1 for st in states if recall_probability(st) < settings.forgetting_threshold)
         avg = sum(st.mastery for st in states) / len(states) if states else 0
-        classes.append({"id": c.id, "name": c.name, "students": len(student_ids),
+        classes.append({"id": c.id, "name": c.name, "grade_level": c.grade_level,
+                        "students": len(student_ids),
                         "avg_mastery": round(avg, 2), "due_competencies": due,
                         "is_mock": c.is_mock})
 
-    assessment_titles = {a.id: a.title for a in db.query(Assessment).all()}
+    assessments = {a.id: a for a in db.query(Assessment).all()}
+    class_grades = {c.id: c.grade_level for c in db.query(SchoolClass).all()}
     return {
         "pending_reviews": pending_reviews,
         "recent_batches": [{"id": b.id, "status": b.status,
                             "assessment_id": b.assessment_id,
-                            "assessment_title": assessment_titles.get(b.assessment_id, "?"),
+                            "assessment_title": assessments[b.assessment_id].title
+                            if b.assessment_id in assessments else "?",
+                            "grade_level": class_grades.get(
+                                assessments[b.assessment_id].class_id, "")
+                            if b.assessment_id in assessments else "",
                             "created_at": str(b.created_at)} for b in batches],
         "classes": classes,
         "assessments_draft": db.query(Assessment).filter_by(status="draft").count(),
-        "system": {"mock_mode": settings.mock_mode, "data_dir": str(settings.data_dir),
+        "system": {"mock_mode": mock_enabled(db), "data_dir": str(settings.data_dir),
                    "version": "0.9.0"},
     }

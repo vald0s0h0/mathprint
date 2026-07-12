@@ -1,11 +1,18 @@
-// Paramètres (§9.6) : Mon compte, API, Imprimantes, Calibration, Pédagogie, Documents, Système.
+// Paramètres (§9.6) : Mon compte, API, Imprimantes, Calibration, Pédagogie,
+// Documents (éditeur de templates), Système (dont mode démo désactivable).
 import {
-  Badge, Button, Card, FileButton, Group, PasswordInput, Stack, Switch, Table, Tabs, Text,
-  TextInput, Title,
+  Badge, Button, Card, ColorInput, FileButton, Group, PasswordInput, Stack,
+  Switch, Table, Tabs, Text, TextInput, Title,
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
+import {
+  Database, FileText, FlaskConical, KeyRound, Printer, Ruler, Save,
+  SlidersHorizontal, UserRound,
+} from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { api, getToken } from '../api'
+import TemplateEditor from '../components/TemplateEditor'
+import { useAppState } from '../state/AppState'
 
 type Me = { id: string; email: string; display_name: string; role: string }
 type Provider = { provider: string; model: string; secret_preview: string; active: boolean }
@@ -35,6 +42,7 @@ export default function SettingsPage() {
   const [edit, setEdit] = useState<Record<string, { model: string; secret: string }>>({})
   const [netName, setNetName] = useState('')
   const [netUri, setNetUri] = useState('')
+  const { refreshSystem } = useAppState()
 
   function refresh() {
     api.get<Me>('/api/auth/me').then(setMe)
@@ -77,7 +85,19 @@ export default function SettingsPage() {
 
   async function setMock(enabled: boolean) {
     await api.post('/api/settings/system', { key: 'mock_mode', value: { enabled } })
-    notifications.show({ color: 'blue', message: `Mode mock ${enabled ? 'activé' : 'désactivé'}` })
+    notifications.show({
+      color: 'blue',
+      message: enabled
+        ? 'Mode démo activé — la classe de démonstration réapparaît'
+        : 'Mode démo désactivé — toutes les données de démonstration sont masquées',
+    })
+    refresh()
+    refreshSystem() // met à jour le badge « démo » global et les boutons de simulation
+  }
+
+  async function saveColor(key: string, value: string) {
+    await api.post('/api/settings/system', { key, value: { value } })
+    notifications.show({ color: 'green', message: 'Couleur enregistrée' })
     refresh()
   }
 
@@ -140,15 +160,15 @@ export default function SettingsPage() {
   return (
     <Stack>
       <Title order={2}>Paramètres</Title>
-      <Tabs defaultValue="compte">
+      <Tabs defaultValue="compte" keepMounted={false}>
         <Tabs.List>
-          <Tabs.Tab value="compte">Mon compte</Tabs.Tab>
-          <Tabs.Tab value="api">API</Tabs.Tab>
-          <Tabs.Tab value="imprimantes">Imprimantes</Tabs.Tab>
-          <Tabs.Tab value="calibration">Calibration</Tabs.Tab>
-          <Tabs.Tab value="pedagogie">Pédagogie</Tabs.Tab>
-          <Tabs.Tab value="documents">Documents</Tabs.Tab>
-          <Tabs.Tab value="systeme">Système</Tabs.Tab>
+          <Tabs.Tab value="compte" leftSection={<UserRound size={15} />}>Mon compte</Tabs.Tab>
+          <Tabs.Tab value="api" leftSection={<KeyRound size={15} />}>API</Tabs.Tab>
+          <Tabs.Tab value="imprimantes" leftSection={<Printer size={15} />}>Imprimantes</Tabs.Tab>
+          <Tabs.Tab value="calibration" leftSection={<Ruler size={15} />}>Calibration</Tabs.Tab>
+          <Tabs.Tab value="pedagogie" leftSection={<SlidersHorizontal size={15} />}>Pédagogie</Tabs.Tab>
+          <Tabs.Tab value="documents" leftSection={<FileText size={15} />}>Documents</Tabs.Tab>
+          <Tabs.Tab value="systeme" leftSection={<Database size={15} />}>Système</Tabs.Tab>
         </Tabs.List>
 
         <Tabs.Panel value="compte" pt="md">
@@ -159,7 +179,7 @@ export default function SettingsPage() {
                   <Text fw={600}>{me.display_name}</Text>
                   <Text size="sm" c="dimmed">{me.email}</Text>
                 </div>
-                <Badge>{me.role}</Badge>
+                <Badge variant="light">{me.role}</Badge>
               </Group>
             )}
             <Stack gap="xs">
@@ -173,7 +193,7 @@ export default function SettingsPage() {
                 onChange={(e) => setConfirmPwd(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && changePassword()} />
               <Button size="xs" onClick={changePassword} loading={pwdLoading}
-                disabled={!curPwd || !newPwd}>
+                leftSection={<Save size={14} />} disabled={!curPwd || !newPwd}>
                 Mettre à jour le mot de passe
               </Button>
             </Stack>
@@ -183,8 +203,8 @@ export default function SettingsPage() {
         <Tabs.Panel value="api" pt="md">
           <Stack>
             <Text size="sm" c="dimmed">
-              Les identifiants de modèles ne sont jamais codés en dur (RM-011). Les clés sont
-              chiffrées au repos et jamais renvoyées intégralement.
+              Sans clé, un service reste en mode simulé. Les clés sont chiffrées au repos
+              et jamais renvoyées intégralement.
             </Text>
             {(['mathpix', 'deepseek', 'anthropic'] as const).map((p) => {
               const row = providers.find((x) => x.provider === p)
@@ -193,9 +213,10 @@ export default function SettingsPage() {
                   <Group justify="space-between">
                     <Group>
                       <Text fw={600} tt="capitalize">{p}</Text>
-                      {row?.active
-                        ? <Badge color="green">configuré {row.secret_preview}</Badge>
-                        : <Badge color="gray">mode mock</Badge>}
+                      {row?.active && row.secret_preview
+                        ? <Badge variant="light" color="green">configuré {row.secret_preview}</Badge>
+                        : <Badge variant="light" color="gray"
+                            leftSection={<FlaskConical size={11} />}>simulé</Badge>}
                     </Group>
                   </Group>
                   <Group mt="sm" grow>
@@ -219,8 +240,9 @@ export default function SettingsPage() {
               {printers?.local.length
                 ? printers.local.map((p) => (
                   <Group key={p.name} gap="xs" py={2}>
-                    <Text size="sm">🖨 {p.name}</Text>
-                    {p.default && <Badge size="xs" color="blue">par défaut</Badge>}
+                    <Printer size={14} />
+                    <Text size="sm">{p.name}</Text>
+                    {p.default && <Badge size="xs" variant="light" color="blue">par défaut</Badge>}
                     <Badge size="xs" color="gray" variant="light">{p.status}</Badge>
                   </Group>
                 ))
@@ -230,7 +252,7 @@ export default function SettingsPage() {
               <Text fw={600} mb="xs">Imprimantes réseau (IPP, pilotées depuis le NAS)</Text>
               {printers?.network.map((p) => (
                 <Group key={p.name} gap="xs" py={2}>
-                  <Text size="sm">🌐 {p.name}</Text>
+                  <Text size="sm">{p.name}</Text>
                   <Text size="xs" c="dimmed">{p.uri}</Text>
                 </Group>
               ))}
@@ -252,7 +274,7 @@ export default function SettingsPage() {
 
         <Tabs.Panel value="calibration" pt="md">
           <Card withBorder>
-            <Text fw={600}>Assistant de calibration imprimante/scanner (§11.5)</Text>
+            <Text fw={600}>Assistant de calibration imprimante/scanner</Text>
             <Text size="sm" c="dimmed" mt="xs">
               1. Télécharger la page test → 2. L'imprimer à 100 % → 3. La scanner →
               4. Déposer le scan : offsets, échelle et rotation sont mesurés sur les 4 marqueurs.
@@ -288,7 +310,7 @@ export default function SettingsPage() {
         </Tabs.Panel>
 
         <Tabs.Panel value="pedagogie" pt="md">
-          <Card withBorder>
+          <Card withBorder maw={640}>
             <Table>
               <Table.Tbody>
                 <Table.Tr>
@@ -296,7 +318,7 @@ export default function SettingsPage() {
                   <Table.Td>{system.forgetting_threshold?.value ?? 0.8}</Table.Td>
                 </Table.Tr>
                 <Table.Tr>
-                  <Table.Td>Variation automatique max du niveau par cycle</Table.Td>
+                  <Table.Td>Variation automatique max du niveau (1-10) par cycle de révision</Table.Td>
                   <Table.Td>±1</Table.Td>
                 </Table.Tr>
                 <Table.Tr>
@@ -309,42 +331,25 @@ export default function SettingsPage() {
         </Tabs.Panel>
 
         <Tabs.Panel value="documents" pt="md">
-          <Card withBorder>
-            <Table>
-              <Table.Tbody>
-                <Table.Tr>
-                  <Table.Td>Couleur dropout des zones</Table.Td>
-                  <Table.Td>
-                    <Group gap="xs">
-                      <div style={{ width: 18, height: 18, background: system.dropout_color?.value ?? '#F5B7A8', borderRadius: 3 }} />
-                      {system.dropout_color?.value ?? '#F5B7A8'} (rouge saumon clair)
-                    </Group>
-                  </Table.Td>
-                </Table.Tr>
-                <Table.Tr>
-                  <Table.Td>Couleur de correction (overlay)</Table.Td>
-                  <Table.Td>
-                    <Group gap="xs">
-                      <div style={{ width: 18, height: 18, background: system.correction_color?.value ?? '#C62828', borderRadius: 3 }} />
-                      {system.correction_color?.value ?? '#C62828'}
-                    </Group>
-                  </Table.Td>
-                </Table.Tr>
-                <Table.Tr>
-                  <Table.Td>QR principal (identité)</Table.Td>
-                  <Table.Td>24 mm, haut droit, unique par page, signé HMAC</Table.Td>
-                </Table.Tr>
-                <Table.Tr>
-                  <Table.Td>Fiduciels de placement</Table.Td>
-                  <Table.Td>3 tags AprilTag 16h5 (11 mm) — un type par coin TL/BL/BR, translation/rotation/échelle uniquement</Table.Td>
-                </Table.Tr>
-                <Table.Tr>
-                  <Table.Td>Marges de page</Table.Td>
-                  <Table.Td>9 mm</Table.Td>
-                </Table.Tr>
-              </Table.Tbody>
-            </Table>
-          </Card>
+          <Stack>
+            <TemplateEditor />
+            <Card withBorder maw={640}>
+              <Text fw={600} mb="xs">Couleurs techniques</Text>
+              <Group grow>
+                <ColorInput size="xs" label="Zones de réponse élève (dropout)"
+                  description="Supprimée avant OCR — garder un ton clair"
+                  value={system.dropout_color?.value ?? '#F5B7A8'}
+                  onChangeEnd={(v) => saveColor('dropout_color', v)} />
+                <ColorInput size="xs" label="Encre de correction (overlay)"
+                  value={system.correction_color?.value ?? '#C62828'}
+                  onChangeEnd={(v) => saveColor('correction_color', v)} />
+              </Group>
+              <Text size="xs" c="dimmed" mt="sm">
+                Figé pour le repérage scanner : QR 24 mm signé HMAC (haut droit),
+                3 fiduciels AprilTag 11 mm (coins), marges 9 mm.
+              </Text>
+            </Card>
+          </Stack>
         </Tabs.Panel>
 
         <Tabs.Panel value="systeme" pt="md">
@@ -353,15 +358,15 @@ export default function SettingsPage() {
               <Card withBorder>
                 <Text fw={600} mb="xs">État des services</Text>
                 <Group gap="lg">
-                  <Badge color={status.database.ok ? 'green' : 'red'}>
+                  <Badge variant="light" color={status.database.ok ? 'green' : 'red'}>
                     Base {status.database.url_scheme} {status.database.ok ? 'OK' : 'KO'}
                   </Badge>
-                  <Badge color={status.mathalea.status === 'ok' ? 'green' : 'red'}>
+                  <Badge variant="light" color={status.mathalea.status === 'ok' ? 'green' : 'red'}>
                     MathALÉA {status.mathalea.status === 'ok'
                       ? `v${status.mathalea.mathaleaVersion} (${status.mathalea.exercises} exos)`
                       : 'injoignable'}
                   </Badge>
-                  <Badge color={status.disk.alert ? 'red' : 'green'}>
+                  <Badge variant="light" color={status.disk.alert ? 'red' : 'green'}>
                     Disque {status.disk.free_gb} / {status.disk.total_gb} Go libres
                   </Badge>
                 </Group>
@@ -377,7 +382,7 @@ export default function SettingsPage() {
                 <div>
                   <Text fw={600}>Sauvegardes</Text>
                   <Text size="sm" c="dimmed">
-                    Dump de la base dans /data/backups — rétention 30 fichiers (§11.6).
+                    Dump de la base dans /data/backups — rétention 30 fichiers.
                   </Text>
                 </div>
                 <Button size="xs" onClick={doBackup}>Sauvegarder maintenant</Button>
@@ -390,15 +395,21 @@ export default function SettingsPage() {
               ))}
             </Card>
             <Card withBorder>
-              <Group justify="space-between">
+              <Group justify="space-between" align="flex-start">
                 <div>
-                  <Text fw={600}>Classe mock</Text>
-                  <Text size="sm" c="dimmed">
-                    Classe « 5e Mock » avec 5 élèves imaginaires pour les tests.
+                  <Group gap={6}>
+                    <FlaskConical size={16} />
+                    <Text fw={600}>Mode démonstration</Text>
+                  </Group>
+                  <Text size="sm" c="dimmed" maw={480}>
+                    Classe fictive « 5e Mock » et fournisseurs simulés pour découvrir
+                    l'application sans clé API ni scanner. Une fois désactivé, plus
+                    aucune donnée ni bouton de démonstration n'apparaît.
                   </Text>
                 </div>
-                <Switch checked={system.mock_mode?.enabled ?? true}
-                  onChange={(e) => setMock(e.currentTarget.checked)} label="Mode mock" />
+                <Switch checked={system.mock_mode?.enabled ?? false}
+                  onChange={(e) => setMock(e.currentTarget.checked)}
+                  label={system.mock_mode?.enabled ? 'Activé' : 'Désactivé'} />
               </Group>
             </Card>
           </Stack>

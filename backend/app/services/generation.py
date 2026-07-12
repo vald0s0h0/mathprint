@@ -30,6 +30,7 @@ from ..models import (
 from . import exercise_gen
 from . import exercises as exgen
 from . import pdfgen
+from .runtime_settings import doc_templates
 from .security import sign_page
 
 
@@ -91,6 +92,7 @@ def generate_assessment(db: Session, assessment: Assessment,
         raise ValueError("Aucun exercice sélectionné")
 
     out_dir = assessment_dir(assessment.id)
+    tpl = doc_templates(db)
     pdf_path = out_dir / "subject_batch.pdf"
     c = canvas.Canvas(str(pdf_path), pagesize=A4)
     manifest = {"assessment_id": assessment.id, "protocol": "MP1", "copies": []}
@@ -156,7 +158,7 @@ def generate_assessment(db: Session, assessment: Assessment,
             c, student_name=f"{student.last_name} {student.first_name}",
             class_name=school_class.name, title=assessment.title,
             assessment_type=assessment.type, items=render_items,
-            pages_meta=pages_meta, font_size=font_size)
+            pages_meta=pages_meta, font_size=font_size, tpl=tpl)
 
         used_pages = max((z["page_index"] for z in zones), default=0) + 1
         if used_pages > max_pages:

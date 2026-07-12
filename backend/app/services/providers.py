@@ -42,7 +42,8 @@ def _config(db: Session, provider: str) -> ProviderConfig | None:
 
 
 def _mock_enabled(db: Session, cfg: ProviderConfig | None) -> bool:
-    return settings.mock_mode or cfg is None or not cfg.encrypted_secret
+    from .runtime_settings import mock_enabled
+    return mock_enabled(db) or cfg is None or not cfg.encrypted_secret
 
 
 # ------------------------------------------------------------------- Mathpix

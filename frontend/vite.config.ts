@@ -4,6 +4,7 @@ import { defineConfig } from 'vite'
 export default defineConfig({
   plugins: [react()],
   server: {
-    proxy: { '/api': 'http://localhost:8787' },
+    // cible surchargable : MATHPRINT_API=http://localhost:8899 npm run dev
+    proxy: { '/api': process.env.MATHPRINT_API ?? 'http://localhost:8787' },
   },
 })

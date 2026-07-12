@@ -13,6 +13,7 @@ from ..config import settings
 from ..db import get_db
 from ..deps import current_user, require_role
 from ..models import CalibrationProfile, Job, User
+from ..services.runtime_settings import mock_enabled
 
 router = APIRouter(prefix="/api/system", tags=["system"],
                    dependencies=[Depends(current_user)])
@@ -43,7 +44,7 @@ def status(db: Session = Depends(get_db)):
                  "free_gb": round(disk.free / 1e9, 1),
                  "alert": disk.free / disk.total < 0.1},
         "data_dir": str(settings.data_dir),
-        "mock_mode": settings.mock_mode,
+        "mock_mode": mock_enabled(db),
         "last_backup": backups[0].name if backups else None,
     }
 

@@ -24,6 +24,7 @@ rotation, échelle) — un type de tag par coin, identique sur toutes les pages.
 """
 import io
 import json
+import re
 from datetime import date
 
 import cv2
@@ -34,8 +35,10 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 from reportlab.pdfgen import canvas
 from reportlab.lib.utils import ImageReader
+from reportlab.pdfbase.pdfmetrics import stringWidth
 
 from ..config import settings
+from .runtime_settings import DEFAULT_TEMPLATES
 
 PAGE_W, PAGE_H = A4  # 595.27 x 841.89 pt
 MARGIN = 9 * mm
@@ -108,13 +111,14 @@ def _draw_markers(c: canvas.Canvas, page_payload: str):
 
 # ------------------------------------------------------------------- icônes
 
-def _icon_pencil(c: canvas.Canvas, x: float, y: float, size: float = 3.2 * mm):
+def _icon_pencil(c: canvas.Canvas, x: float, y: float, size: float = 3.2 * mm,
+                 color=DOT_ON):
     """Petit crayon vectoriel (corps incliné + pointe)."""
     c.saveState()
     c.translate(x, y)
     c.rotate(45)
-    c.setFillColor(DOT_ON)
-    c.setStrokeColor(DOT_ON)
+    c.setFillColor(color)
+    c.setStrokeColor(color)
     body_w, body_h = size * 0.32, size * 0.85
     c.rect(-body_w / 2, 0, body_w, body_h, stroke=0, fill=1)
     p = c.beginPath()
@@ -144,12 +148,13 @@ def _icon_book(c: canvas.Canvas, x: float, y: float, size: float = 3.4 * mm):
     c.restoreState()
 
 
-def _difficulty_dots(c: canvas.Canvas, x_right: float, y: float, level5: int):
+def _difficulty_dots(c: canvas.Canvas, x_right: float, y: float, level5: int,
+                     color=DOT_ON):
     """5 pastilles, remplies jusqu'au niveau de difficulté."""
     r = 0.85 * mm
     for i in range(5):
         cx = x_right - (4 - i) * 2.6 * mm
-        c.setFillColor(DOT_ON if i < level5 else DOT_OFF)
+        c.setFillColor(color if i < level5 else DOT_OFF)
         c.circle(cx, y, r, stroke=0, fill=1)
 
 
@@ -166,7 +171,12 @@ def _solid(c: canvas.Canvas):
 # ------------------------------------------------------------------- en-tête
 
 def _draw_header(c: canvas.Canvas, student_name: str, class_name: str, title: str,
-                 assessment_type: str, the_date: str):
+                 assessment_type: str, the_date: str, tpl: dict | None = None):
+    tpl = tpl or DEFAULT_TEMPLATES["header"]
+    accent = HexColor(tpl.get("accent", "#37474F"))
+    name_fs = float(tpl.get("name_size", 14))
+    class_fs = float(tpl.get("class_size", 10))
+    title_fs = float(tpl.get("title_size", 8))
     y_top = PAGE_H - MARGIN
     header_bottom = y_top - HEADER_H
     label = "Contrôle" if assessment_type == "control" else "Entraînement"
@@ -174,19 +184,21 @@ def _draw_header(c: canvas.Canvas, student_name: str, class_name: str, title: st
     # --- colonne droite : identité élève (haute, grosse) puis méta (basse, petite) ---
     id_right = PAGE_W - MARGIN - QR_MAIN - 4 * mm  # calé sur le bord gauche du QR
     c.setFillColor(black)
-    c.setFont("Helvetica-Bold", 14)
+    c.setFont("Helvetica-Bold", name_fs)
     c.drawRightString(id_right, y_top - 6.5 * mm, student_name)
-    c.setFont("Helvetica-Bold", 10)
+    c.setFont("Helvetica-Bold", class_fs)
     c.setFillColor(HexColor("#455A64"))
-    c.drawRightString(id_right, y_top - 12 * mm, f"Classe {class_name}")
+    c.drawRightString(id_right, y_top - 6.5 * mm - name_fs * 0.55 - 2 * mm,
+                      f"Classe {class_name}")
 
     meta_y = y_top - QR_MAIN - 4 * mm
-    c.setFont("Helvetica-Bold", 8)
-    c.setFillColor(TITLE_RULE)
+    c.setFont("Helvetica-Bold", title_fs)
+    c.setFillColor(accent)
     c.drawRightString(PAGE_W - MARGIN, meta_y, title)
-    c.setFont("Helvetica", 7)
-    c.setFillColor(HexColor("#6A737C"))
-    c.drawRightString(PAGE_W - MARGIN, meta_y - 4 * mm, f"{label}  ·  {the_date}")
+    if tpl.get("show_date", True):
+        c.setFont("Helvetica", max(6.0, title_fs - 1))
+        c.setFillColor(HexColor("#6A737C"))
+        c.drawRightString(PAGE_W - MARGIN, meta_y - 4 * mm, f"{label}  ·  {the_date}")
 
     # --- colonne gauche : Note (calée sur le fiduciel TL) + Appréciation (grande) ---
     nx, ny, nw, nh = NOTE_BOX
@@ -209,7 +221,7 @@ def _draw_header(c: canvas.Canvas, student_name: str, class_name: str, title: st
     c.setFillColor(black)
 
     # filet séparateur en-tête / exercices
-    c.setStrokeColor(TITLE_RULE)
+    c.setStrokeColor(accent)
     c.setLineWidth(1.1)
     c.line(MARGIN, header_bottom, PAGE_W - MARGIN, header_bottom)
 
@@ -228,6 +240,81 @@ def _wrap(text: str, width_pt: float, font_size: int) -> list[str]:
     if cur:
         lines.append(cur)
     return lines
+
+
+# ------------------------------------------------------- mise en forme maths
+# Les énoncés du type « Calculer : 3/4 + 5/6 = ? » sont rendus avec des
+# fractions empilées, × et exposants typographiques, centrés sur la carte,
+# pour une lisibilité maximale côté élève.
+
+_FRAC_RE = re.compile(r"(?<![\w/])(\d+)\s*/\s*(\d+)(?![\w/])")
+_SUPERSCRIPTS = {"^2": "\u00b2", "**2": "\u00b2", "^3": "\u00b3", "**3": "\u00b3"}
+
+
+def _normalize_math(expr: str) -> str:
+    for k, v in _SUPERSCRIPTS.items():
+        expr = expr.replace(k, v)
+    return " ".join(expr.replace("*", "\u00d7").split())
+
+
+def _math_tokens(expr: str) -> list[tuple]:
+    """Découpe une expression en jetons ("text", s) / ("frac", num, den)."""
+    tokens, pos = [], 0
+    for m in _FRAC_RE.finditer(expr):
+        if m.start() > pos:
+            tokens.append(("text", expr[pos:m.start()]))
+        tokens.append(("frac", m.group(1), m.group(2)))
+        pos = m.end()
+    if pos < len(expr):
+        tokens.append(("text", expr[pos:]))
+    return tokens
+
+
+def _token_width(tok: tuple, fs: float) -> float:
+    if tok[0] == "frac":
+        sub = fs * 0.82
+        return max(stringWidth(tok[1], "Helvetica", sub),
+                   stringWidth(tok[2], "Helvetica", sub)) + 4
+    return stringWidth(tok[1], "Helvetica", fs)
+
+
+def _statement_layout(statement: str, width: float, font_size: int,
+                      math_size: int) -> dict:
+    """Sépare l'énoncé en consigne (texte) + expression mathématique mise en
+    valeur. Retourne {intro_lines, math_tokens, math_h, height}."""
+    statement = _normalize_math(statement)
+    intro, tokens, math_h = statement, [], 0.0
+    if ":" in statement:
+        head, tail = statement.split(":", 1)
+        tail = tail.strip()
+        if tail and any(ch.isdigit() for ch in tail) and len(tail) < 80:
+            cand = _math_tokens(tail)
+            total_w = sum(_token_width(t, math_size) for t in cand)
+            if total_w <= width - 4:
+                intro, tokens = head.strip() + " :", cand
+                has_frac = any(t[0] == "frac" for t in cand)
+                math_h = math_size * (2.5 if has_frac else 1.6)
+    intro_lines = _wrap(intro, width, font_size) if intro else []
+    return {"intro_lines": intro_lines, "math_tokens": tokens, "math_h": math_h,
+            "height": len(intro_lines) * (font_size + 2.6) + math_h}
+
+
+def _draw_math(c: canvas.Canvas, x: float, y_mid: float, tokens: list[tuple],
+               fs: float):
+    """Dessine les jetons à partir de x, centrés verticalement sur y_mid."""
+    sub = fs * 0.82
+    for tok in tokens:
+        w = _token_width(tok, fs)
+        if tok[0] == "frac":
+            c.setLineWidth(max(0.8, fs * 0.07))
+            c.line(x + 1, y_mid, x + w - 1, y_mid)
+            c.setFont("Helvetica", sub)
+            c.drawCentredString(x + w / 2, y_mid + sub * 0.3, tok[1])
+            c.drawCentredString(x + w / 2, y_mid - sub * 1.02, tok[2])
+        else:
+            c.setFont("Helvetica", fs)
+            c.drawString(x, y_mid - fs * 0.34, tok[1])
+        x += w
 
 
 def _qcm_layout(choices: list[str], width: float, font_size: int) -> list[dict]:
@@ -292,42 +379,61 @@ def _draw_answer_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float,
     return meta
 
 
+def _exercise_head_h(tpl: dict) -> float:
+    return max(5.2 * mm, float(tpl.get("title_size", 9)) + 6)
+
+
+def _exercise_card_h(layout: dict, zone_h: float, tpl: dict) -> float:
+    return _exercise_head_h(tpl) + layout["height"] + zone_h + STRIP_H + 3 * CARD_PAD
+
+
 def _draw_exercise_card(c: canvas.Canvas, x: float, y_top: float, w: float,
-                        seq: int, statement_lines: list[str], zone_h: float,
+                        seq: int, layout: dict, zone_h: float,
                         level5: int, response_type: str, choices: list[str],
-                        font_size: int) -> tuple[float, dict, dict]:
+                        tpl: dict) -> tuple[float, dict, dict]:
     """Carte exercice complète. Retourne (hauteur, geo zone réponse, meta)."""
-    head_h = 5.2 * mm
-    text_h = len(statement_lines) * (font_size + 2.6)
-    card_h = head_h + text_h + zone_h + STRIP_H + 3 * CARD_PAD
+    font_size = int(tpl.get("font_size", 9))
+    title_fs = float(tpl.get("title_size", font_size))
+    math_fs = float(tpl.get("math_size", 12))
+    border = HexColor(tpl.get("border", "#C7CDD4"))
+    accent = HexColor(tpl.get("accent", "#455A64"))
+    radius = max(0.0, float(tpl.get("radius", 2.2))) * mm
+    head_h = _exercise_head_h(tpl)
+    card_h = _exercise_card_h(layout, zone_h, tpl)
     y = y_top - card_h
 
     # ombre puis carte
-    c.setFillColor(CARD_SHADOW)
-    c.roundRect(x + 1.1, y - 1.3, w, card_h, RADIUS, stroke=0, fill=1)
+    if tpl.get("shadow", True):
+        c.setFillColor(CARD_SHADOW)
+        c.roundRect(x + 1.1, y - 1.3, w, card_h, radius, stroke=0, fill=1)
     c.setFillColor(white)
-    c.setStrokeColor(CARD_BORDER)
+    c.setStrokeColor(border)
     c.setLineWidth(0.9)
-    c.roundRect(x, y, w, card_h, RADIUS, stroke=1, fill=1)
+    c.roundRect(x, y, w, card_h, radius, stroke=1, fill=1)
 
     # ligne de titre : icône + "Exercice N" + pastilles difficulté
     ty = y + card_h - head_h
-    _icon_pencil(c, x + CARD_PAD + 1.2 * mm, ty + 1.2 * mm)
+    _icon_pencil(c, x + CARD_PAD + 1.2 * mm, ty + 1.2 * mm, color=accent)
     c.setFillColor(black)
-    c.setFont("Helvetica-Bold", font_size)
+    c.setFont("Helvetica-Bold", title_fs)
     c.drawString(x + CARD_PAD + 3.6 * mm, ty + 0.8 * mm, f"Exercice {seq}")
-    _difficulty_dots(c, x + w - CARD_PAD - 1 * mm, ty + 1.8 * mm, level5)
+    _difficulty_dots(c, x + w - CARD_PAD - 1 * mm, ty + 1.8 * mm, level5, color=accent)
     c.setStrokeColor(HexColor("#E4E8EC"))
     c.setLineWidth(0.5)
     c.line(x + CARD_PAD, ty - 0.6 * mm, x + w - CARD_PAD, ty - 0.6 * mm)
 
-    # énoncé
+    # consigne puis expression mathématique centrée
     c.setFont("Helvetica", font_size)
     c.setFillColor(black)
     line_y = ty - 1.4 * mm - font_size
-    for line in statement_lines:
+    for line in layout["intro_lines"]:
         c.drawString(x + CARD_PAD, line_y, line)
         line_y -= font_size + 2.6
+    if layout["math_tokens"]:
+        total_w = sum(_token_width(t, math_fs) for t in layout["math_tokens"])
+        y_mid = line_y + font_size - layout["math_h"] / 2
+        c.setStrokeColor(black)
+        _draw_math(c, x + (w - total_w) / 2, y_mid, layout["math_tokens"], math_fs)
 
     # zone réponse élève (saumon)
     zone_y = y + STRIP_H + CARD_PAD
@@ -350,9 +456,12 @@ def _draw_exercise_card(c: canvas.Canvas, x: float, y_top: float, w: float,
 
 def _draw_lesson_card(c: canvas.Canvas, x: float, y_top: float, w: float,
                       title: str, content: str, example: str,
-                      font_size: int) -> float:
+                      tpl: dict) -> float:
     """Cadre rappel de leçon : fond ambre clair + icône livre, sans zone réponse."""
-    fs = max(7, font_size - 1)
+    fs = max(6, int(tpl.get("font_size", 8)))
+    bg = HexColor(tpl.get("bg", "#FFF6DF"))
+    border = HexColor(tpl.get("border", "#E4C46A"))
+    text_color = HexColor(tpl.get("text", "#6B5310"))
     content_lines = _wrap(content, w - 2 * CARD_PAD, fs)
     example_lines = _wrap(example, w - 2 * CARD_PAD, fs) if example else []
     head_h = 5 * mm
@@ -360,14 +469,14 @@ def _draw_lesson_card(c: canvas.Canvas, x: float, y_top: float, w: float,
     card_h = head_h + body_h + 2.5 * CARD_PAD
     y = y_top - card_h
 
-    c.setFillColor(LESSON_BG)
-    c.setStrokeColor(LESSON_BORDER)
+    c.setFillColor(bg)
+    c.setStrokeColor(border)
     c.setLineWidth(0.9)
     c.roundRect(x, y, w, card_h, RADIUS, stroke=1, fill=1)
 
     ty = y + card_h - head_h
     _icon_book(c, x + CARD_PAD + 1.6 * mm, ty + 0.6 * mm)
-    c.setFillColor(LESSON_TEXT)
+    c.setFillColor(text_color)
     c.setFont("Helvetica-Bold", fs)
     c.drawString(x + CARD_PAD + 4.4 * mm, ty + 0.8 * mm, title[:80])
 
@@ -388,10 +497,16 @@ def _draw_lesson_card(c: canvas.Canvas, x: float, y_top: float, w: float,
 
 def render_copy(pdf_canvas: canvas.Canvas, *, student_name: str, class_name: str,
                 title: str, assessment_type: str, items: list[dict],
-                pages_meta: list[dict], font_size: int = 9) -> list[dict]:
+                pages_meta: list[dict], font_size: int = 9,
+                tpl: dict | None = None) -> list[dict]:
     """Dessine une copie complète. `items` : dicts avec kind=exercise
     (item_id, statement, response_type, choices, level5) ou kind=lesson
-    (title, content, example). Retourne les zones pour le manifeste."""
+    (title, content, example). `tpl` : templates éditables (runtime_settings).
+    Retourne les zones pour le manifeste."""
+    tpl = tpl or DEFAULT_TEMPLATES
+    ex_tpl, lesson_tpl = tpl["exercise"], tpl["lesson"]
+    font_size = int(ex_tpl.get("font_size", font_size))
+    math_fs = int(ex_tpl.get("math_size", 12))
     zones = []
     col_w = (PAGE_W - 2 * MARGIN - COL_GAP) / 2
     today = date.today().strftime("%d/%m/%Y")
@@ -428,13 +543,14 @@ def render_copy(pdf_canvas: canvas.Canvas, *, student_name: str, class_name: str
                 new_page()
 
     _draw_markers(pdf_canvas, pages_meta[0]["payload"])
-    _draw_header(pdf_canvas, student_name, class_name, title, assessment_type, today)
+    _draw_header(pdf_canvas, student_name, class_name, title, assessment_type, today,
+                 tpl["header"])
 
     seq = 0
     for item in items:
         x = MARGIN + col * (col_w + COL_GAP)
         if item.get("kind") == "lesson":
-            fs = max(7, font_size - 1)
+            fs = max(6, int(lesson_tpl.get("font_size", 8)))
             n_lines = len(_wrap(item.get("content", ""), col_w - 2 * CARD_PAD, fs)) + \
                 len(_wrap(item.get("example", ""), col_w - 2 * CARD_PAD, fs))
             est_h = 5 * mm + n_lines * (fs + 2.4) + 2.5 * CARD_PAD
@@ -443,21 +559,22 @@ def render_copy(pdf_canvas: canvas.Canvas, *, student_name: str, class_name: str
             used = _draw_lesson_card(pdf_canvas, x, y_cursor, col_w,
                                      item.get("title", "Rappel"),
                                      item.get("content", ""),
-                                     item.get("example", ""), font_size)
+                                     item.get("example", ""), lesson_tpl)
             y_cursor -= used + gap
             continue
 
         seq += 1
         choices = item.get("choices", [])
-        stmt_lines = _wrap(item["statement"], col_w - 2 * CARD_PAD, font_size)
+        layout = _statement_layout(item["statement"], col_w - 2 * CARD_PAD,
+                                   font_size, math_fs)
         zone_h = _zone_height(item["response_type"], choices, col_w, font_size)
-        card_h = 5.2 * mm + len(stmt_lines) * (font_size + 2.6) + zone_h + STRIP_H + 3 * CARD_PAD
+        card_h = _exercise_card_h(layout, zone_h, ex_tpl)
         place(card_h + gap)
         x = MARGIN + col * (col_w + COL_GAP)
 
         _, zone_geo, meta = _draw_exercise_card(
-            pdf_canvas, x, y_cursor, col_w, seq, stmt_lines, zone_h,
-            item.get("level5", 3), item["response_type"], choices, font_size)
+            pdf_canvas, x, y_cursor, col_w, seq, layout, zone_h,
+            item.get("level5", 3), item["response_type"], choices, ex_tpl)
         zones.append({
             "item_id": item["item_id"], "page_index": page_idx,
             "page_id": pages_meta[page_idx]["page_id"],

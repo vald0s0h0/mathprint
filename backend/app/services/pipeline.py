@@ -25,6 +25,7 @@ from . import grading as grader
 from . import providers
 from .forgetting import apply_evidence
 from .pdfgen import render_overlay
+from .runtime_settings import mock_enabled
 from .security import verify_page_payload
 
 PHASES = ["uploaded", "split", "identified", "registered", "cropped",
@@ -190,7 +191,7 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
                         db, item=item, zone=zone, student=student,
                         ocr_text="", conf=1.0, selected=None, corr_id=corr_id)
                 else:
-                    hint = _expected_as_text(item.expected_json) if settings.mock_mode else None
+                    hint = _expected_as_text(item.expected_json) if mock_enabled(db) else None
                     ocr = providers.mathpix_ocr(db, crop_path.read_bytes(), corr_id,
                                                 expected_hint=hint)
                     db.add(OcrAttempt(zone_id=zone.id, provider="mathpix",
@@ -380,6 +381,8 @@ def build_overlays(db: Session, batch: ScanBatch) -> str:
             "comment": f"Score {total:g}/{maxtotal:g}",
         })
 
-    render_overlay(str(path), copies_annotations=pages_annotations)
+    from .runtime_settings import get_setting
+    color = (get_setting(db, "correction_color") or {}).get("value")
+    render_overlay(str(path), copies_annotations=pages_annotations, color=color)
     _set_status(db, batch, "overlay_ready", path=str(path))
     return str(path)

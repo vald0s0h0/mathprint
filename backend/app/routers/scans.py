@@ -1,5 +1,6 @@
 """Lots de scans, machine d'états, file de validation professeur (§6, §9.5)."""
 import hashlib
+import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile
@@ -10,8 +11,9 @@ from ..config import settings
 from ..db import SessionLocal, get_db
 from ..deps import current_user
 from ..models import (
-    Assessment, Copy, CopyItem, FileObject, GradingDecision, ManualReview,
-    OcrAttempt, ScanBatch, SchoolClass, Student, StudentResponse, User,
+    Assessment, Copy, CopyItem, DocumentPage, FileObject, GradingDecision,
+    ManualReview, OcrAttempt, ScanBatch, SchoolClass, Student, StudentResponse,
+    User,
 )
 from ..services.pipeline import PHASES, build_overlays, finalize_batch, process_batch
 
@@ -31,16 +33,51 @@ def _run_pipeline(batch_id: str):
         db.close()
 
 
+def _detect_assessment(db: Session, content: bytes) -> str | None:
+    """Identifie le sujet depuis le QR signé d'une page : le QR suffit, aucun
+    choix manuel d'évaluation n'est nécessaire au dépôt (§5.3)."""
+    from ..services import worker_cv
+    from ..services.security import verify_page_payload
+
+    tmp_dir = settings.data_dir / "scans" / "tmp"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    tmp = tmp_dir / f"detect-{uuid.uuid4().hex}.pdf"
+    tmp.write_bytes(content)
+    try:
+        for img in worker_cv.raster_pdf(str(tmp)):
+            for text, _quad in worker_cv._detect_qrcodes(img):
+                page_id = verify_page_payload(text)
+                if not page_id:
+                    continue
+                page = db.get(DocumentPage, page_id)
+                copy = db.get(Copy, page.copy_id) if page else None
+                if copy:
+                    return copy.assessment_id
+    finally:
+        tmp.unlink(missing_ok=True)
+    return None
+
+
 @router.post("/batches")
-async def create_batch(assessment_id: str, tasks: BackgroundTasks,
+async def create_batch(tasks: BackgroundTasks, assessment_id: str | None = None,
                        file: UploadFile | None = None,
                        db: Session = Depends(get_db),
                        user: User = Depends(current_user)):
+    content = await file.read() if file is not None else None
+    if not assessment_id:
+        if content is None:
+            raise HTTPException(422, "Déposer un PDF, ou préciser une évaluation "
+                                     "pour un lot simulé")
+        assessment_id = _detect_assessment(db, content)
+        if not assessment_id:
+            raise HTTPException(422, "Aucun QR MathPrint reconnu dans ce scan — "
+                                     "vérifier qu'il s'agit bien de copies générées ici")
+    if not db.get(Assessment, assessment_id):
+        raise HTTPException(404, "Évaluation inconnue")
     batch = ScanBatch(assessment_id=assessment_id, uploaded_by=user.id)
     db.add(batch)
     db.flush()
-    if file is not None:
-        content = await file.read()
+    if content is not None:
         d = settings.data_dir / "assessments" / assessment_id / "scans" / "original"
         d.mkdir(parents=True, exist_ok=True)
         path = d / f"{batch.id}.pdf"
@@ -52,14 +89,18 @@ async def create_batch(assessment_id: str, tasks: BackgroundTasks,
         batch.source_file_id = fo.id
     db.commit()
     tasks.add_task(_run_pipeline, batch.id)
-    return {"id": batch.id}
+    return {"id": batch.id, "assessment_id": assessment_id}
 
 
 @router.get("/batches")
 def list_batches(assessment_id: str | None = None, db: Session = Depends(get_db)):
-    q = db.query(ScanBatch).order_by(ScanBatch.created_at.desc())
+    q = (db.query(ScanBatch)
+         .join(Assessment, ScanBatch.assessment_id == Assessment.id)
+         .join(SchoolClass, Assessment.class_id == SchoolClass.id)
+         .filter(SchoolClass.archived_at.is_(None))
+         .order_by(ScanBatch.created_at.desc()))
     if assessment_id:
-        q = q.filter_by(assessment_id=assessment_id)
+        q = q.filter(ScanBatch.assessment_id == assessment_id)
     return [_batch_view(db, b) for b in q.all()]
 
 
@@ -88,7 +129,10 @@ def _batch_view(db: Session, b: ScanBatch) -> dict:
     cls = db.get(SchoolClass, assessment.class_id) if assessment else None
     return {"id": b.id, "assessment_id": b.assessment_id, "status": b.status,
             "assessment_title": assessment.title if assessment else "?",
+            "assessment_type": assessment.type if assessment else "training",
             "class_name": cls.name if cls else "?",
+            "class_id": cls.id if cls else None,
+            "grade_level": cls.grade_level if cls else "",
             "page_count": b.page_count, "error": b.error,
             "pending_reviews": pending, "segments": segments,
             "overlay_printed": b.overlay_printed, "overlay_distributed": b.overlay_distributed,
