@@ -42,6 +42,18 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("status", "TEXT"),
         ("blocks_json", "JSON"),
     ],
+    "jobs": [
+        ("assessment_id", "TEXT"),
+        ("progress_message", "TEXT"),
+        ("updated_at", "DATETIME"),
+    ],
+    "assessments": [
+        ("error_message", "TEXT"),
+    ],
+    "students": [
+        ("next_plan_json", "JSON"),
+        ("next_plan_updated_at", "DATETIME"),
+    ],
 }
 
 
@@ -57,10 +69,19 @@ def run_migrations():
                 if name not in existing:
                     if col_type == "BOOLEAN":
                         default = "0" if engine.dialect.name == "sqlite" else "FALSE"
-                    elif col_type == "JSON":
+                    elif col_type in ("JSON", "DATETIME"):
                         default = "NULL"
                     else:
                         default = "''"
                     conn.execute(text(
                         f"ALTER TABLE {table} ADD COLUMN {name} {col_type} "
                         f"DEFAULT {default}"))
+        if "assessments" in tables:
+            conn.execute(text(
+                "UPDATE assessments SET personalization_mode='common_variants' "
+                "WHERE personalization_mode='equivalent_variants'"))
+            conn.execute(text(
+                "UPDATE assessments SET personalization_mode='individual' "
+                "WHERE personalization_mode IN ('guided_individual','free_individual')"))
+            conn.execute(text(
+                "UPDATE assessments SET status='ready' WHERE status='generated'"))

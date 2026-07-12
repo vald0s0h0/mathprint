@@ -158,7 +158,7 @@ def _awaiting_scan_rows(db: Session) -> list[dict]:
     scanned_ids = {a for (a,) in db.query(ScanBatch.assessment_id).distinct()}
     q = (db.query(Assessment)
          .join(SchoolClass, Assessment.class_id == SchoolClass.id)
-         .filter(Assessment.status.in_(("generated", "printed")),
+         .filter(Assessment.status.in_(("ready", "printed")),
                  SchoolClass.archived_at.is_(None))
          .order_by(Assessment.created_at.desc()))
     out = []

@@ -388,7 +388,8 @@ export default function Corrections() {
             correction, sans scanner. Choisir le sujet à simuler :
           </Text>
           <Select placeholder="Évaluation générée"
-            data={assessments.filter((a) => a.status !== 'draft' && matches(a.grade_level))
+            data={assessments.filter((a) =>
+              !['draft', 'queued', 'generating', 'error'].includes(a.status) && matches(a.grade_level))
               .map((a) => ({ value: a.id, label: a.title }))}
             value={mockAssessment} onChange={setMockAssessment} />
           <Button onClick={simulateMock} disabled={!mockAssessment}>Lancer la simulation</Button>

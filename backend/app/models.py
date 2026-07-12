@@ -68,6 +68,11 @@ class Student(Base):
     llm_pseudonym: Mapped[str] = mapped_column(String, unique=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     level_locked: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Trame prévisionnelle issue du dernier compte rendu de correction
+    # (compétences visées, difficulté, quantité, mix de types, rythme) —
+    # réutilisée à la création d'un sujet individuel pour éviter un 2e appel LLM.
+    next_plan_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    next_plan_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     school_class: Mapped["SchoolClass | None"] = relationship(back_populates="students")
 
 
@@ -180,14 +185,17 @@ class Assessment(Base):
     class_id: Mapped[str] = mapped_column(ForeignKey("classes.id"))
     type: Mapped[str] = mapped_column(String, default="training")  # control | training
     title: Mapped[str] = mapped_column(String)
-    status: Mapped[str] = mapped_column(String, default="draft")  # draft|generated|printed|scanning|finalized
+    status: Mapped[str] = mapped_column(String, default="draft")
+    # draft|queued|generating|ready|error|printed|scanning|finalized
     scheduled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     duration_min: Mapped[int] = mapped_column(Integer, default=55)  # conservé, informatif
     pages_target: Mapped[int] = mapped_column(Integer, default=1)   # 1=recto, 2=recto/verso…
     duplex: Mapped[bool] = mapped_column(Boolean, default=False)
     personalization_mode: Mapped[str] = mapped_column(String, default="common")
-    # common | equivalent_variants | guided_individual | free_individual
+    # common | common_variants | individual
     blueprint_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    # {"competency_ids": [...]} choisi à l'étape Exercices de l'assistant
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
 
@@ -492,6 +500,9 @@ class Job(Base):
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     error_code: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    assessment_id: Mapped[str | None] = mapped_column(ForeignKey("assessments.id"), nullable=True)
+    progress_message: Mapped[str | None] = mapped_column(String, nullable=True)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class AuditLog(Base):

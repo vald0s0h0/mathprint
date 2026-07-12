@@ -42,11 +42,13 @@ def competencies(framework_id: str | None = None, db: Session = Depends(get_db))
             for c in q.all()]
 
 
-@router.get("/competencies/tree")
-def competencies_tree(framework_id: str, db: Session = Depends(get_db)):
-    """Hiérarchie domaine > thème > compétences pour l'affichage compact."""
-    rows = (db.query(Competency).filter_by(framework_id=framework_id)
-            .order_by(Competency.order_index).all())
+def build_competency_tree(rows: list[Competency], competency_extra=None) -> list[dict]:
+    """Hiérarchie domaine > thème > compétences, dans l'ordre `order_index`
+    (rows doit déjà être trié) — partagée par l'onglet Compétences et le
+    tableau de l'étape Exercices de l'assistant sujet (competency-matrix),
+    qui doivent afficher exactement la même hiérarchie. `competency_extra`,
+    si fourni, reçoit chaque Competency et retourne des champs additionnels
+    fusionnés dans l'entrée (ex. maîtrise par classe)."""
     domains: list[dict] = []
     for c in rows:
         d = next((x for x in domains if x["code"] == c.domain_code), None)
@@ -57,8 +59,19 @@ def competencies_tree(framework_id: str, db: Session = Depends(get_db)):
         if t is None:
             t = {"code": c.theme_code, "name": c.theme_name, "competencies": []}
             d["themes"].append(t)
-        t["competencies"].append({"id": c.id, "code": c.code, "label": c.label})
+        entry = {"id": c.id, "code": c.code, "label": c.label}
+        if competency_extra:
+            entry.update(competency_extra(c))
+        t["competencies"].append(entry)
     return domains
+
+
+@router.get("/competencies/tree")
+def competencies_tree(framework_id: str, db: Session = Depends(get_db)):
+    """Hiérarchie domaine > thème > compétences pour l'affichage compact."""
+    rows = (db.query(Competency).filter_by(framework_id=framework_id)
+            .order_by(Competency.order_index).all())
+    return build_competency_tree(rows)
 
 
 # ------------------------------------------------------------- paramètres

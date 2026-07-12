@@ -620,9 +620,11 @@ def ensure_bank(db: Session, competency: Competency, level: int,
     return rows + added
 
 
-def pick_exercise(db: Session, competency: Competency, level: int,
-                  seed: int) -> GeneratedExercise:
-    """Choisit un exercice de banque, en générant si nécessaire."""
+def bank_rows_near_level(db: Session, competency: Competency,
+                         level: int) -> tuple[list[GeneratedExercise], int]:
+    """Comme pick_exercise, mais retourne toute la banque du niveau le plus
+    proche disponible (pour une sélection en aval équilibrée par type de
+    réponse, cf. services.distribution)."""
     for candidate in sorted(range(1, 6), key=lambda l: abs(l - level)):
         try:
             rows = ensure_bank(db, competency, candidate)
@@ -631,8 +633,37 @@ def pick_exercise(db: Session, competency: Competency, level: int,
                     .filter_by(competency_id=competency.id,
                                difficulty_level=candidate, status="active").all())
         if rows:
-            return rows[seed % len(rows)]
+            return rows, candidate
     raise ValueError(f"Aucun exercice disponible pour {competency.code}")
+
+
+def pick_exercise(db: Session, competency: Competency, level: int,
+                  seed: int) -> GeneratedExercise:
+    """Choisit un exercice de banque, en générant si nécessaire."""
+    rows, _ = bank_rows_near_level(db, competency, level)
+    return rows[seed % len(rows)]
+
+
+def ensure_catalog_ref(db: Session, competency: Competency) -> ExerciseCatalog:
+    """Get-or-create l'entrée catalogue « exercice IA » d'une compétence —
+    seul lien encore nécessaire vers exercise_catalog/copy_items, les
+    exercices concrets restant en banque generated_exercises (compétence ×
+    niveau)."""
+    ref = f"deepseek:{competency.id}"
+    row = db.query(ExerciseCatalog).filter_by(provider="deepseek", provider_ref=ref).first()
+    if row:
+        return row
+    from ..models import CompetencyFramework
+    fw = db.get(CompetencyFramework, competency.framework_id)
+    row = ExerciseCatalog(
+        provider="deepseek", provider_ref=ref,
+        title=f"[IA] {competency.label}", grade_level=fw.grade_level if fw else "5e",
+        difficulty=5, response_type="short_text", automation_tier="auto")
+    db.add(row)
+    db.flush()
+    db.add(ExerciseCompetency(exercise_id=row.id, competency_id=competency.id,
+                              weight=1.0, evidence_strength=1.0))
+    return row
 
 
 # ================================================================ rappels de leçon

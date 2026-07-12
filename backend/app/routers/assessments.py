@@ -1,5 +1,7 @@
-"""Assistant sujets (§3.1) : création, proposition automatique, génération, fichiers."""
+"""Assistant sujets (§3.1) : création, tableau de compétences, adaptation,
+génération en file de fond, fichiers."""
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
@@ -10,10 +12,12 @@ from ..config import settings
 from ..db import get_db
 from ..deps import current_user
 from ..models import (
-    Assessment, Copy, ExerciseCatalog, ExerciseCompetency, SchoolClass, Student,
+    Assessment, Competency, CompetencyFramework, Copy, ExerciseCatalog,
+    ExerciseCompetency, SchoolClass, Student, StudentCompetencyState,
 )
+from ..services import job_worker
 from ..services.forgetting import due_competencies
-from ..services.generation import generate_assessment
+from .misc import build_competency_tree
 
 router = APIRouter(prefix="/api/assessments", tags=["assessments"],
                    dependencies=[Depends(current_user)])
@@ -24,11 +28,16 @@ class AssessmentIn(BaseModel):
     type: str = "training"          # control | training
     title: str
     pages: int = 1                  # 1 = recto, 2 = recto/verso, etc.
-    personalization_mode: str = "common"
+
+
+class AssessmentPatch(BaseModel):
+    title: str | None = None
+    pages: int | None = None
+    personalization_mode: Literal["common", "common_variants", "individual"] | None = None
+    competency_ids: list[str] | None = None
 
 
 class GenerateIn(BaseModel):
-    exercise_ids: list[str]
     font_size: int = 10
 
 
@@ -44,6 +53,7 @@ def list_assessments(db: Session = Depends(get_db)):
                     "class_id": a.class_id,
                     "grade_level": cls.grade_level if cls else "",
                     "personalization_mode": a.personalization_mode,
+                    "error_message": a.error_message,
                     "created_at": str(a.created_at)})
     return out
 
@@ -55,11 +65,35 @@ def create_assessment(body: AssessmentIn, db: Session = Depends(get_db)):
     if not 1 <= body.pages <= 6:
         raise HTTPException(422, "pages entre 1 et 6")
     a = Assessment(class_id=body.class_id, type=body.type, title=body.title,
-                   pages_target=body.pages, duplex=body.pages >= 2,
-                   personalization_mode=body.personalization_mode)
+                   pages_target=body.pages, duplex=body.pages >= 2)
     db.add(a)
     db.commit()
     return {"id": a.id}
+
+
+@router.patch("/{assessment_id}")
+def patch_assessment(assessment_id: str, body: AssessmentPatch, db: Session = Depends(get_db)):
+    """Enregistre au fil de l'assistant : compétences cochées (étape
+    Exercices) puis mode d'adaptation (étape Adaptation) — un sujet déjà mis
+    en file/généré est immuable (§5.5)."""
+    a = db.get(Assessment, assessment_id)
+    if not a:
+        raise HTTPException(404)
+    if a.status != "draft":
+        raise HTTPException(409, "Sujet déjà mis en file de génération")
+    if body.title is not None:
+        a.title = body.title
+    if body.pages is not None:
+        if not 1 <= body.pages <= 6:
+            raise HTTPException(422, "pages entre 1 et 6")
+        a.pages_target = body.pages
+        a.duplex = body.pages >= 2
+    if body.personalization_mode is not None:
+        a.personalization_mode = body.personalization_mode
+    if body.competency_ids is not None:
+        a.blueprint_json = {**(a.blueprint_json or {}), "competency_ids": body.competency_ids}
+    db.commit()
+    return {"ok": True}
 
 
 @router.get("/exercises")
@@ -85,28 +119,16 @@ class PrepareAiIn(BaseModel):
 
 @router.post("/exercises/ai-prepare")
 def prepare_ai_exercise(body: PrepareAiIn, db: Session = Depends(get_db)):
-    """Crée (ou retrouve) l'entrée catalogue « exercice IA » d'une compétence.
-    Les exercices concrets sont générés par deepseek-v4-pro et stockés en
-    banque par niveau 1-5 ; le niveau réel est choisi copie par copie."""
-    from ..models import Competency, CompetencyFramework
+    """Crée (ou retrouve) l'entrée catalogue « exercice IA » d'une compétence
+    et amorce sa banque au niveau standard, pour préchauffage manuel — la
+    génération réelle d'un sujet passe par le worker de fond (job_worker),
+    pas par cet endpoint."""
     from ..services import exercise_gen
 
     comp = db.get(Competency, body.competency_id)
     if not comp:
         raise HTTPException(404, "Compétence inconnue")
-    fw = db.get(CompetencyFramework, comp.framework_id)
-    ref = f"deepseek:{comp.id}"
-    row = db.query(ExerciseCatalog).filter_by(provider="deepseek", provider_ref=ref).first()
-    if not row:
-        row = ExerciseCatalog(
-            provider="deepseek", provider_ref=ref,
-            title=f"[IA] {comp.label}", grade_level=fw.grade_level if fw else "5e",
-            difficulty=5, response_type="short_text", automation_tier="auto")
-        db.add(row)
-        db.flush()
-        db.add(ExerciseCompetency(exercise_id=row.id, competency_id=comp.id,
-                                  weight=1.0, evidence_strength=1.0))
-    # amorcer la banque au niveau standard pour valider la faisabilité tout de suite
+    row = exercise_gen.ensure_catalog_ref(db, comp)
     try:
         bank = exercise_gen.ensure_bank(db, comp, level=3)
     except Exception as e:
@@ -133,7 +155,6 @@ def sync_mathalea(db: Session = Depends(get_db)):
     Les exercices avec réponse structurée (AMCNum/mathLive) sont automatisables ;
     les autres passent en validation obligatoire."""
     from ..services import mathalea_client
-    from ..models import Competency, CompetencyFramework
 
     try:
         entries = mathalea_client.catalog()
@@ -187,51 +208,109 @@ def sync_mathalea(db: Session = Depends(get_db)):
             "total": len(entries)}
 
 
-@router.get("/{assessment_id}/suggestion")
-def suggest_exercises(assessment_id: str, db: Session = Depends(get_db)):
-    """Proposition automatique : privilégie les compétences dues (courbe d'oubli),
-    répartition 60/30/10 en entraînement (§7.4). Déterministe ; DeepSeek n'est
-    utilisé que pour affiner, jamais pour planifier."""
+@router.get("/{assessment_id}/suggested-competencies")
+def suggested_competencies(assessment_id: str, db: Session = Depends(get_db)):
+    """Proposition automatique de compétences à cocher : privilégie celles
+    dues (courbe d'oubli) sur l'ensemble de la classe (§7.4). Déterministe ;
+    DeepSeek n'intervient jamais pour planifier."""
     a = db.get(Assessment, assessment_id)
     if not a:
         raise HTTPException(404)
-    cls = db.get(SchoolClass, a.class_id)
     students = db.query(Student).filter_by(class_id=a.class_id, active=True).all()
 
-    due_comp_ids: set[str] = set()
+    due_comp_ids: list[str] = []
+    seen: set[str] = set()
     for s in students:
         for d in due_competencies(db, s.id):
-            due_comp_ids.add(d["competency_id"])
+            if d["competency_id"] not in seen:
+                seen.add(d["competency_id"])
+                due_comp_ids.append(d["competency_id"])
 
-    exercises = db.query(ExerciseCatalog).filter_by(grade_level=cls.grade_level).all()
-    if not exercises:
-        exercises = db.query(ExerciseCatalog).all()
-
-    def is_due(e):
-        links = db.query(ExerciseCompetency).filter_by(exercise_id=e.id).all()
-        return any(l.competency_id in due_comp_ids for l in links)
-
-    due_ex = [e for e in exercises if is_due(e)]
-    others = [e for e in exercises if not is_due(e)]
-    easy = sorted(others, key=lambda e: e.difficulty)
-    picked = (due_ex[:3] + easy[:3])[:6] or exercises[:6]
-    return {"exercise_ids": [e.id for e in picked],
-            "reason": f"{len(due_ex)} exercice(s) lié(s) à des compétences dues ; "
-                      "complété par consolidation accessible (répartition 60/30/10)."}
+    return {"competency_ids": due_comp_ids[:8],
+            "reason": f"{len(due_comp_ids)} compétence(s) due(s) (courbe de l'oubli) "
+                      "sur au moins un élève de la classe." if due_comp_ids else
+                      "Aucune compétence due pour l'instant : à choisir manuellement."}
 
 
-@router.post("/{assessment_id}/generate")
+@router.get("/competency-matrix")
+def competency_matrix(grade_level: str, db: Session = Depends(get_db)):
+    """Tableau complet des compétences du niveau (même hiérarchie/ordre que
+    l'onglet Compétences), une colonne de maîtrise moyenne par classe du
+    niveau — alimente l'étape Exercices de l'assistant sujet."""
+    classes = (db.query(SchoolClass)
+               .filter_by(grade_level=grade_level)
+               .filter(SchoolClass.archived_at.is_(None)).all())
+    fw = (db.query(CompetencyFramework).filter_by(grade_level=grade_level).first())
+    rows = (db.query(Competency).filter_by(framework_id=fw.id)
+            .order_by(Competency.order_index).all() if fw else [])
+
+    class_ids = [c.id for c in classes]
+    student_class: dict[str, str] = {}
+    if class_ids:
+        for s in db.query(Student).filter(Student.class_id.in_(class_ids), Student.active.is_(True)).all():
+            student_class[s.id] = s.class_id
+
+    # une seule requête batch : évite un N+1 par cellule du tableau
+    sums: dict[tuple[str, str], float] = {}
+    counts: dict[tuple[str, str], int] = {}
+    if student_class:
+        states = (db.query(StudentCompetencyState)
+                  .filter(StudentCompetencyState.student_id.in_(student_class.keys())).all())
+        for st in states:
+            cid = student_class.get(st.student_id)
+            if not cid:
+                continue
+            key = (cid, st.competency_id)
+            sums[key] = sums.get(key, 0.0) + st.mastery
+            counts[key] = counts.get(key, 0) + 1
+
+    def mastery_by_class(competency: Competency) -> dict[str, float | None]:
+        out = {}
+        for c in classes:
+            key = (c.id, competency.id)
+            out[c.id] = round(sums[key] / counts[key], 3) if counts.get(key) else None
+        return out
+
+    domains = build_competency_tree(
+        rows, competency_extra=lambda c: {"mastery_by_class": mastery_by_class(c)})
+    return {"classes": [{"id": c.id, "name": c.name} for c in classes], "domains": domains}
+
+
+@router.get("/{assessment_id}/job")
+def assessment_job(assessment_id: str, db: Session = Depends(get_db)):
+    job = job_worker.latest_job(db, assessment_id)
+    if not job:
+        raise HTTPException(404, "Aucune génération en file pour ce sujet")
+    return {"status": job.status, "progress": job.progress,
+            "progress_message": job.progress_message, "error": job.error_code}
+
+
+@router.get("/jobs/active")
+def active_generation_jobs(db: Session = Depends(get_db)):
+    out = []
+    for job in job_worker.active_jobs(db):
+        a = db.get(Assessment, job.assessment_id)
+        if not a:
+            continue
+        cls = db.get(SchoolClass, a.class_id)
+        out.append({"assessment_id": a.id, "title": a.title,
+                    "class_name": cls.name if cls else "?",
+                    "status": job.status, "progress": job.progress})
+    return out
+
+
+@router.post("/{assessment_id}/generate", status_code=202)
 def generate(assessment_id: str, body: GenerateIn, db: Session = Depends(get_db)):
     a = db.get(Assessment, assessment_id)
     if not a:
         raise HTTPException(404)
-    if a.status not in ("draft",):
-        raise HTTPException(409, "Sujet déjà généré (manifeste immuable après impression, §5.5)")
-    try:
-        report = generate_assessment(db, a, body.exercise_ids, body.font_size)
-    except ValueError as e:
-        raise HTTPException(422, str(e))
-    return report
+    if a.status not in ("draft", "error"):
+        raise HTTPException(409, "Sujet déjà en file ou généré (manifeste immuable, §5.5)")
+    if not (a.blueprint_json or {}).get("competency_ids"):
+        raise HTTPException(422, "Aucune compétence sélectionnée")
+    a.status = "draft"  # autorise un nouvel essai depuis un état d'erreur
+    job = job_worker.enqueue_generation(db, a, body.font_size)
+    return {"job_id": job.id, "status": "queued"}
 
 
 @router.get("/{assessment_id}/copies")

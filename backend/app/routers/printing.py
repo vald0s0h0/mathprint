@@ -141,7 +141,7 @@ def print_file(body: PrintIn, db: Session = Depends(get_db),
                                     "lp": r.stdout.strip()}))
         if body.file == "subject_batch.pdf":
             assessment = db.get(Assessment, body.assessment_id)
-            if assessment and assessment.status == "generated":
+            if assessment and assessment.status == "ready":
                 assessment.status = "printed"
         db.commit()
         return {"ok": True, "lp_output": r.stdout.strip()}

@@ -1,10 +1,10 @@
 import {
-  ActionIcon, AppShell, Badge, Group, NavLink, SegmentedControl, Text, Title,
-  Tooltip, useComputedColorScheme, useMantineColorScheme,
+  ActionIcon, AppShell, Badge, Group, Loader, Menu, NavLink, Progress,
+  SegmentedControl, Text, Title, Tooltip, useComputedColorScheme, useMantineColorScheme,
 } from '@mantine/core'
 import {
-  FlaskConical, GraduationCap, LayoutDashboard, Library, LogOut, Moon, ScanLine,
-  Settings as SettingsIcon, Sun, Target, Users, FileText,
+  FlaskConical, GraduationCap, LayoutDashboard, Library, LogOut, Moon,
+  ScanLine, Settings as SettingsIcon, Sun, Target, Users, FileText,
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
@@ -48,7 +48,7 @@ export default function App() {
   const navigate = useNavigate()
   const authed = !!getToken()
   const [needsSetup, setNeedsSetup] = useState<boolean | null>(null)
-  const { cycle, setCycle, mockMode, refreshSystem } = useAppState()
+  const { cycle, setCycle, mockMode, refreshSystem, activeJobs } = useAppState()
 
   useEffect(() => {
     api.get<{ needs_setup: boolean }>('/api/setup/status')
@@ -81,6 +81,26 @@ export default function App() {
                    { value: 'all', label: 'Tout' }]} />
 
           <Group gap="xs" wrap="nowrap">
+            {activeJobs.length > 0 && (
+              <Menu shadow="md" width={280} position="bottom-end">
+                <Menu.Target>
+                  <Badge variant="light" color="orange" style={{ cursor: 'pointer' }}
+                    leftSection={<Loader size={11} color="orange" />}>
+                    {activeJobs.length} sujet(s) en cours
+                  </Badge>
+                </Menu.Target>
+                <Menu.Dropdown>
+                  <Menu.Label>Génération en file de fond</Menu.Label>
+                  {activeJobs.map((j) => (
+                    <div key={j.assessment_id} style={{ padding: '4px 12px' }}>
+                      <Text size="xs" fw={600} lineClamp={1}>{j.title} — {j.class_name}</Text>
+                      <Progress value={j.progress} size={4} mt={2}
+                        color={j.status === 'running' ? 'orange' : 'gray'} />
+                    </div>
+                  ))}
+                </Menu.Dropdown>
+              </Menu>
+            )}
             {mockMode && (
               <Tooltip label="Mode démonstration actif — désactivable dans Paramètres → Système">
                 <Badge variant="light" color="grape" leftSection={<FlaskConical size={12} />}>

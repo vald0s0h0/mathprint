@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .db import Base, SessionLocal, engine, run_migrations
 from .routers import assessments, auth, content, misc, org, printing, scans, setup, students, system
 from .seed import seed
+from .services import job_worker
 from .services.bootstrap import ensure_strong_secrets
 
 app = FastAPI(title="MathPrint", version="0.9.0",
@@ -30,8 +31,10 @@ def startup():
     db = SessionLocal()
     try:
         seed(db)
+        job_worker.resume_stuck_jobs(db)
     finally:
         db.close()
+    job_worker.start_worker()
 
 
 @app.get("/api/health")

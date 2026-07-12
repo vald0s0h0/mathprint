@@ -1,42 +1,35 @@
-// Écran Sujets : assistant en 4 étapes (§3.1), recherche MathALÉA/builtin,
-// aperçu PDF intégré et impression directe. Les sujets sont groupés par
-// classe et filtrés par le cycle global.
+// Écran Sujets : assistant en 4 étapes (contexte, exercices, adaptation,
+// génération). La génération tourne dans un worker de fond côté API : la
+// modale se ferme dès la mise en file, et la liste (groupée par classe,
+// filtrée par le cycle global) affiche la progression jusqu'à "prêt".
 import {
-  Alert, Badge, Button, Card, Checkbox, Divider, Group, Modal, NumberInput,
-  Radio, ScrollArea, SegmentedControl, Select, Stack, Stepper, Text, TextInput,
-  Title,
+  Alert, Badge, Button, Card, Group, Modal, NumberInput, Radio, Select,
+  Stack, Stepper, Text, TextInput, Title,
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
-import { Eye, FileText, Plus, Sparkles } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { AlertTriangle, Eye, FileText, Plus, RotateCcw } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api } from '../api'
-import MathText from '../components/MathText'
 import PdfPreviewModal from '../components/PdfPreview'
 import PrintButton from '../components/PrintButton'
+import AdaptationStep from './subjects/AdaptationStep'
+import CompetencyMatrixStep from './subjects/CompetencyMatrixStep'
 import { useAppState } from '../state/AppState'
 
 type Cls = { id: string; name: string; grade_level: string }
-type Exo = {
-  id: string; title: string; difficulty: number; response_type: string
-  automation_tier: string; provider: string; provider_ref: string; grade_level: string
-}
 type Assessment = {
   id: string; title: string; type: string; status: string
   class_name: string; class_id: string; grade_level: string
-  personalization_mode: string
+  personalization_mode: string; error_message: string | null
 }
-
-const MODES = [
-  { value: 'common', label: 'Commun', desc: 'Le même sujet pour toute la classe' },
-  { value: 'equivalent_variants', label: 'Variantes équivalentes', desc: 'Mêmes exercices, nombres différents (anti-copie)' },
-  { value: 'guided_individual', label: 'Individuel encadré', desc: 'Difficulté adaptée au niveau, blueprint commun' },
-  { value: 'free_individual', label: 'Individuel libre', desc: 'Chaque copie optimisée pour l’élève' },
-]
 
 const STATUS_LABEL: Record<string, { label: string; color: string }> = {
   draft: { label: 'brouillon', color: 'gray' },
-  generated: { label: 'généré', color: 'blue' },
+  queued: { label: 'en file', color: 'yellow' },
+  generating: { label: 'génération…', color: 'orange' },
+  ready: { label: 'prêt', color: 'blue' },
+  error: { label: 'échec', color: 'red' },
   printed: { label: 'imprimé', color: 'cyan' },
   scanning: { label: 'scan en cours', color: 'orange' },
   finalized: { label: 'corrigé', color: 'green' },
@@ -45,7 +38,6 @@ const STATUS_LABEL: Record<string, { label: string; color: string }> = {
 export default function Subjects() {
   const [list, setList] = useState<Assessment[]>([])
   const [classes, setClasses] = useState<Cls[]>([])
-  const [exercises, setExercises] = useState<Exo[]>([])
   const [open, setOpen] = useState(false)
   const [step, setStep] = useState(0)
   const [previewId, setPreviewId] = useState<string | null>(null)
@@ -57,26 +49,24 @@ export default function Subjects() {
   const [type, setType] = useState('training')
   const [title, setTitle] = useState('')
   const [pages, setPages] = useState(1)
-  // compétences IA (exercices DeepSeek)
-  const [competencies, setCompetencies] = useState<{ id: string; code: string; label: string }[]>([])
-  const [aiComp, setAiComp] = useState<string | null>(null)
-  const [aiBusy, setAiBusy] = useState(false)
-  // étape 2 : objectif
-  const [selectedEx, setSelectedEx] = useState<string[]>([])
-  const [search, setSearch] = useState('')
-  const [provider, setProvider] = useState('all')
+  // étape 2 : compétences cochées
+  const [competencyIds, setCompetencyIds] = useState<string[]>([])
   const [suggestReason, setSuggestReason] = useState('')
-  // étape 3/4
+  // étape 3 : adaptation
   const [mode, setMode] = useState('common')
+  // étape 4
   const [assessmentId, setAssessmentId] = useState<string | null>(null)
-  const [report, setReport] = useState<{ copies: number; warnings: string[] } | null>(null)
   const [generating, setGenerating] = useState(false)
 
-  function refresh() {
+  const refresh = useCallback(() => {
     api.get<Assessment[]>('/api/assessments').then(setList)
     api.get<Cls[]>('/api/classes').then(setClasses)
-  }
-  useEffect(refresh, [])
+  }, [])
+  useEffect(() => {
+    refresh()
+    const t = setInterval(refresh, 4000)
+    return () => clearInterval(t)
+  }, [refresh])
 
   // ouverture directe depuis le Dashboard (+ Créer un sujet)
   useEffect(() => {
@@ -90,26 +80,6 @@ export default function Subjects() {
   const cycleClasses = classes.filter((c) => matches(c.grade_level))
   const grade = classes.find((c) => c.id === classId)?.grade_level
 
-  useEffect(() => {
-    if (!grade) return
-    api.get<{ id: string; grade_level: string }[]>('/api/competencies/frameworks').then(async (fws) => {
-      const fw = fws.find((f) => f.grade_level === grade)
-      if (fw) {
-        const comps = await api.get<{ id: string; code: string; label: string }[]>(
-          `/api/competencies?framework_id=${fw.id}`)
-        setCompetencies(comps)
-      }
-    })
-  }, [grade])
-  useEffect(() => {
-    const p = new URLSearchParams()
-    if (grade) p.set('grade_level', grade)
-    if (search) p.set('search', search)
-    if (provider !== 'all') p.set('provider', provider)
-    p.set('limit', '120')
-    api.get<Exo[]>(`/api/assessments/exercises?${p}`).then(setExercises)
-  }, [grade, search, provider])
-
   const groups = useMemo(() => {
     const filtered = list.filter((a) => matches(a.grade_level))
     const by = new Map<string, { cls: string; grade: string; rows: Assessment[] }>()
@@ -121,46 +91,39 @@ export default function Subjects() {
     return [...by.values()].sort((x, y) => x.cls.localeCompare(y.cls))
   }, [list, matches])
 
-  async function addAiExercise() {
-    if (!aiComp) return
-    setAiBusy(true)
-    try {
-      const r = await api.post<{ id: string; title: string }>(
-        '/api/assessments/exercises/ai-prepare', { competency_id: aiComp })
-      setSelectedEx((prev) => (prev.includes(r.id) ? prev : [...prev, r.id]))
-      setExercises((prev) => (prev.some((e) => e.id === r.id) ? prev
-        : [{ id: r.id, title: r.title, difficulty: 5, response_type: 'short_text',
-             automation_tier: 'auto', provider: 'deepseek', provider_ref: '',
-             grade_level: grade ?? '' }, ...prev]))
-      notifications.show({ color: 'green', message: `${r.title} — banque prête` })
-    } catch (e) {
-      notifications.show({ color: 'red', message: (e as Error).message })
-    } finally {
-      setAiBusy(false)
-    }
-  }
-
   async function createDraft() {
     const r = await api.post<{ id: string }>('/api/assessments', {
-      class_id: classId, type, title: title || 'Sans titre',
-      pages, personalization_mode: mode,
+      class_id: classId, type, title: title || 'Sans titre', pages,
     })
     setAssessmentId(r.id)
-    const s = await api.get<{ exercise_ids: string[]; reason: string }>(
-      `/api/assessments/${r.id}/suggestion`)
-    setSelectedEx(s.exercise_ids)
-    setSuggestReason(s.reason)
+    try {
+      const s = await api.get<{ competency_ids: string[]; reason: string }>(
+        `/api/assessments/${r.id}/suggested-competencies`)
+      setCompetencyIds(s.competency_ids)
+      setSuggestReason(s.reason)
+    } catch { /* proposition facultative */ }
     setStep(1)
+  }
+
+  async function confirmCompetencies() {
+    if (!assessmentId) return
+    await api.patch(`/api/assessments/${assessmentId}`, { competency_ids: competencyIds })
+    setStep(2)
+  }
+
+  async function confirmAdaptation() {
+    if (!assessmentId) return
+    await api.patch(`/api/assessments/${assessmentId}`, { personalization_mode: mode })
+    setStep(3)
   }
 
   async function generate() {
     if (!assessmentId) return
     setGenerating(true)
     try {
-      const r = await api.post<{ copies: number; warnings: string[] }>(
-        `/api/assessments/${assessmentId}/generate`, { exercise_ids: selectedEx })
-      setReport(r)
-      notifications.show({ color: 'green', message: `${r.copies} copies générées` })
+      await api.post(`/api/assessments/${assessmentId}/generate`, { font_size: 10 })
+      notifications.show({ color: 'blue', message: 'Sujet en file de génération' })
+      reset()
       refresh()
     } catch (e) {
       notifications.show({ color: 'red', message: (e as Error).message })
@@ -169,12 +132,21 @@ export default function Subjects() {
     }
   }
 
-  function reset() {
-    setOpen(false); setStep(0); setAssessmentId(null); setReport(null)
-    setSelectedEx([]); setTitle(''); setSuggestReason(''); setSearch('')
+  async function retry(a: Assessment) {
+    try {
+      await api.post(`/api/assessments/${a.id}/generate`, { font_size: 10 })
+      notifications.show({ color: 'blue', message: 'Nouvel essai en file de génération' })
+      refresh()
+    } catch (e) {
+      notifications.show({ color: 'red', message: (e as Error).message })
+    }
   }
 
-  const shownSelected = new Set(selectedEx)
+  function reset() {
+    setOpen(false); setStep(0); setAssessmentId(null)
+    setCompetencyIds([]); setTitle(''); setSuggestReason('')
+    setMode('common'); setType('training'); setPages(1)
+  }
 
   return (
     <Stack gap="lg">
@@ -196,8 +168,8 @@ export default function Subjects() {
             <FileText size={36} strokeWidth={1.4} opacity={0.5} />
             <Text fw={600}>Aucun sujet {cycle !== 'all' && `en ${cycle}`}</Text>
             <Text size="sm" c="dimmed" ta="center">
-              Créez votre premier sujet : choix de la classe, des exercices,
-              du mode d'adaptation, puis génération des copies PDF.
+              Créez votre premier sujet : choix de la classe, des compétences,
+              du mode d'adaptation, puis génération en file de fond.
             </Text>
             <Button mt="xs" leftSection={<Plus size={16} />} onClick={() => setOpen(true)}>
               Créer un sujet
@@ -226,21 +198,34 @@ export default function Subjects() {
                       <Text fw={600} lineClamp={1}>{a.title}</Text>
                       <Badge size="sm" variant="dot" color={st.color}>{st.label}</Badge>
                     </Group>
-                    {a.status !== 'draft' && (
-                      <Group gap="xs" wrap="nowrap">
-                        <Button size="xs" variant="light" leftSection={<Eye size={14} />}
-                          onClick={() => setPreviewId(a.id)}>
-                          Aperçu
+                    <Group gap="xs" wrap="nowrap">
+                      {a.status === 'error' && (
+                        <Button size="xs" color="red" variant="light"
+                          leftSection={<RotateCcw size={14} />} onClick={() => retry(a)}>
+                          Réessayer
                         </Button>
-                        <PrintButton assessmentId={a.id} file="subject_batch.pdf"
-                          label="Imprimer les sujets" />
-                        {a.status === 'finalized' && (
-                          <PrintButton assessmentId={a.id} file="correction_overlay.pdf"
-                            label="Imprimer l'overlay" />
-                        )}
-                      </Group>
-                    )}
+                      )}
+                      {['ready', 'printed', 'scanning', 'finalized'].includes(a.status) && (
+                        <>
+                          <Button size="xs" variant="light" leftSection={<Eye size={14} />}
+                            onClick={() => setPreviewId(a.id)}>
+                            Aperçu
+                          </Button>
+                          <PrintButton assessmentId={a.id} file="subject_batch.pdf"
+                            label="Imprimer les sujets" />
+                          {a.status === 'finalized' && (
+                            <PrintButton assessmentId={a.id} file="correction_overlay.pdf"
+                              label="Imprimer l'overlay" />
+                          )}
+                        </>
+                      )}
+                    </Group>
                   </Group>
+                  {a.status === 'error' && a.error_message && (
+                    <Alert mt="xs" color="red" p="xs" icon={<AlertTriangle size={14} />}>
+                      {a.error_message}
+                    </Alert>
+                  )}
                 </Card>
               )
             })}
@@ -277,97 +262,28 @@ export default function Subjects() {
           <Stepper.Step label="Exercices">
             <Stack mt="md" gap="xs">
               {suggestReason && <Alert color="blue" p="xs">{suggestReason}</Alert>}
-              <Group gap="xs" align="flex-end">
-                <Select label="Créer un exercice IA ciblé sur une compétence"
-                  placeholder="Rechercher une compétence du programme…"
-                  searchable size="xs" style={{ flex: 1 }}
-                  data={competencies.map((c) => ({ value: c.id, label: c.label }))}
-                  value={aiComp} onChange={setAiComp} limit={30} />
-                <Button size="xs" color="grape" onClick={addAiExercise}
-                  leftSection={<Sparkles size={14} />} loading={aiBusy} disabled={!aiComp}>
-                  Ajouter (5 niveaux)
-                </Button>
-              </Group>
-              <Divider />
-              <Group>
-                <TextInput placeholder="Rechercher un exercice…" value={search} size="xs"
-                  onChange={(e) => setSearch(e.target.value)} style={{ flex: 1 }} />
-                <SegmentedControl size="xs" value={provider} onChange={setProvider}
-                  data={[{ value: 'all', label: 'Tous' },
-                         { value: 'deepseek', label: 'IA' },
-                         { value: 'mathalea', label: 'MathALÉA' },
-                         { value: 'builtin', label: 'Intégrés' }]} />
-                <Badge variant="light">{selectedEx.length} sélectionné(s)</Badge>
-              </Group>
-              <ScrollArea h={330}>
-                <Stack gap={4}>
-                  {exercises.map((e) => (
-                    <Group key={e.id} gap="xs" wrap="nowrap">
-                      <Checkbox
-                        checked={shownSelected.has(e.id)}
-                        onChange={(ev) => setSelectedEx(ev.target.checked
-                          ? [...selectedEx, e.id] : selectedEx.filter((x) => x !== e.id))} />
-                      <Badge size="xs" variant="light"
-                        color={e.provider === 'mathalea' ? 'teal' : e.provider === 'deepseek' ? 'grape' : 'blue'}>
-                        {e.provider === 'mathalea' ? 'MathALÉA'
-                          : e.provider === 'deepseek' ? 'IA ×5 niv.' : 'intégré'}
-                      </Badge>
-                      <Text size="sm" style={{ flex: 1 }} lineClamp={1}>
-                        <MathText text={e.title} />
-                      </Text>
-                      <Badge size="xs" color="gray" variant="light">difficulté {e.difficulty}</Badge>
-                      {e.automation_tier !== 'auto' && (
-                        <Badge size="xs" color="orange" variant="light">revue</Badge>
-                      )}
-                    </Group>
-                  ))}
-                </Stack>
-              </ScrollArea>
-              <Button onClick={() => setStep(2)} disabled={!selectedEx.length}>Continuer</Button>
+              <CompetencyMatrixStep gradeLevel={grade} selected={competencyIds}
+                onChange={setCompetencyIds} />
+              <Button onClick={confirmCompetencies} disabled={!competencyIds.length}>
+                Continuer
+              </Button>
             </Stack>
           </Stepper.Step>
 
           <Stepper.Step label="Adaptation">
-            <Stack mt="md">
-              <Radio.Group label="Personnalisation des copies" value={mode} onChange={setMode}>
-                <Stack mt="xs" gap="xs">
-                  {MODES.map((m) => (
-                    <Radio key={m.value} value={m.value}
-                      label={<span><Text component="span" fw={550} size="sm">{m.label}</Text>
-                        <Text component="span" size="xs" c="dimmed"> — {m.desc}</Text></span>} />
-                  ))}
-                </Stack>
-              </Radio.Group>
-              {type === 'control' && mode !== 'common' && (
-                <Alert color="orange">
-                  Règle d'équité : un contrôle personnalisé conserve un blueprint commun de
-                  compétences ; les notes brutes ne seront pas naïvement comparables.
-                </Alert>
-              )}
-              <Button onClick={() => setStep(3)}>Continuer</Button>
-            </Stack>
+            <AdaptationStep mode={mode} onChange={setMode} type={type} />
+            <Button mt="md" onClick={confirmAdaptation}>Continuer</Button>
           </Stepper.Step>
 
           <Stepper.Step label="Génération">
             <Stack mt="md">
-              <Text size="sm">{selectedEx.length} exercice(s) par copie.</Text>
-              {report ? (
-                <>
-                  <Alert color="green">{report.copies} copies générées.</Alert>
-                  {report.warnings.map((w, i) => <Alert key={i} color="orange">{w}</Alert>)}
-                  <Group>
-                    <Button leftSection={<Eye size={16} />}
-                      onClick={() => setPreviewId(assessmentId)}>
-                      Aperçu des copies
-                    </Button>
-                    {assessmentId && <PrintButton assessmentId={assessmentId}
-                      file="subject_batch.pdf" label="Imprimer le lot" size="sm" />}
-                    <Button variant="light" onClick={reset}>Fermer</Button>
-                  </Group>
-                </>
-              ) : (
-                <Button onClick={generate} loading={generating}>Générer le PDF</Button>
-              )}
+              <Text size="sm">{competencyIds.length} compétence(s) sélectionnée(s).</Text>
+              <Text size="xs" c="dimmed">
+                La génération (et, si besoin, la création d'exercices manquants) se fait en
+                file de fond : la fenêtre se ferme aussitôt, le sujet apparaît dans la liste
+                dès qu'il est prêt.
+              </Text>
+              <Button onClick={generate} loading={generating}>Générer le sujet</Button>
             </Stack>
           </Stepper.Step>
         </Stepper>

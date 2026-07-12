@@ -11,6 +11,11 @@ import { api, getToken } from '../api'
 export type Cycle = '6e' | '5e' | '4e' | '3e' | 'all'
 export const CYCLES: Cycle[] = ['6e', '5e', '4e', '3e']
 
+export type GenerationJob = {
+  assessment_id: string; title: string; class_name: string
+  status: string; progress: number
+}
+
 type AppState = {
   cycle: Cycle
   setCycle: (c: Cycle) => void
@@ -18,11 +23,13 @@ type AppState = {
   matches: (grade?: string | null) => boolean
   mockMode: boolean
   refreshSystem: () => void
+  /** sujets en file de génération de fond (assistant, étape finale) */
+  activeJobs: GenerationJob[]
 }
 
 const Ctx = createContext<AppState>({
   cycle: 'all', setCycle: () => {}, matches: () => true,
-  mockMode: false, refreshSystem: () => {},
+  mockMode: false, refreshSystem: () => {}, activeJobs: [],
 })
 
 export function AppStateProvider({ children }: { children: React.ReactNode }) {
@@ -31,6 +38,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     return (saved === '6e' || saved === '5e' || saved === '4e' || saved === '3e') ? saved : 'all'
   })
   const [mockMode, setMockMode] = useState(false)
+  const [activeJobs, setActiveJobs] = useState<GenerationJob[]>([])
 
   const setCycle = useCallback((c: Cycle) => {
     setCycleRaw(c)
@@ -51,8 +59,18 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(refreshSystem, [refreshSystem])
 
+  useEffect(() => {
+    if (!getToken()) return
+    const poll = () => {
+      api.get<GenerationJob[]>('/api/assessments/jobs/active').then(setActiveJobs).catch(() => {})
+    }
+    poll()
+    const t = setInterval(poll, 4000)
+    return () => clearInterval(t)
+  }, [])
+
   return (
-    <Ctx.Provider value={{ cycle, setCycle, matches, mockMode, refreshSystem }}>
+    <Ctx.Provider value={{ cycle, setCycle, matches, mockMode, refreshSystem, activeJobs }}>
       {children}
     </Ctx.Provider>
   )

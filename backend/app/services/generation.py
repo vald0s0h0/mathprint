@@ -4,11 +4,18 @@ Produit pour une évaluation : copies individuelles (avec seed), instantanés
 d'exercices (RM-014), pages avec QR signés, zones de réponse, subject_batch.pdf,
 copy_manifest.json et generation_report.json.
 
-Sources d'exercices :
-- provider "deepseek" : banque generated_exercises (compétence × niveau 1-5),
-  générée par deepseek-v4-pro et réutilisée ; le niveau de l'exercice suit le
-  niveau 1-10 de l'élève (sauf mode commun : niveau fixe) ;
-- provider "builtin"/"mathalea" : générateurs seedés existants.
+Depuis la refonte de l'assistant sujet, l'étape Exercices ne fait plus
+choisir des ExerciseCatalog un par un : le professeur coche des compétences
+(assessment.blueprint_json["competency_ids"]). Pour chaque élève, cette
+sélection est transformée en une liste d'exercices concrets par
+services.distribution (priorité selon la courbe de l'oubli, difficulté selon
+le mode d'adaptation, mix homogène des types de réponses), piochés dans la
+banque generated_exercises (compétence × niveau 1-5, cf. exercise_gen —
+générée à la demande seulement si la banque est insuffisante).
+
+generate_assessment_job tourne dans le worker de fond (services.job_worker),
+plus dans la requête HTTP : les appels DeepSeek/Claude déclenchés par une
+banque manquante n'y bloquent donc plus la connexion du navigateur.
 
 Rappels de leçon : pour un entraînement, les élèves fragiles (niveau ≤ 4)
 reçoivent un rappel DeepSeek stocké (lesson_snippets) avant le premier
@@ -23,12 +30,10 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..models import (
-    Assessment, Competency, Copy, CopyItem, DocumentPage, ExerciseCatalog,
-    ExerciseCompetency, FileObject, ResponseZone, SchoolClass, Student,
-    StudentLevel,
+    Assessment, Competency, Copy, CopyItem, DocumentPage, FileObject, Job,
+    ResponseZone, SchoolClass, StudentLevel,
 )
-from . import exercise_gen
-from . import exercises as exgen
+from . import distribution, exercise_gen
 from . import pdfgen
 from .runtime_settings import doc_templates
 from .security import sign_page
@@ -46,51 +51,29 @@ def _student_level(db: Session, student_id: str) -> int:
     return lvl.level if lvl else 5
 
 
-def _pick_difficulty(base: int, personalization: str, student_level: int) -> int:
-    """Difficulté 1-10 de l'item : commune, ou adaptée (plage encadrée ±2)."""
-    if personalization == "common":
-        return base
-    delta = max(-2, min(2, student_level - 5))
-    return max(1, min(10, base + delta))
+def _set_progress(db: Session, job: Job | None, progress: int, message: str) -> None:
+    if job is None:
+        return
+    job.progress = progress
+    job.progress_message = message
+    db.commit()
 
 
-def _build_item(db: Session, ex: ExerciseCatalog, seed: int, difficulty: int,
-                warnings: list[str]):
-    """Instantané d'exercice selon le provider. Retourne (gen_dict, level5)."""
-    level5 = exercise_gen.student_level_to_difficulty(difficulty)
-    if ex.provider == "deepseek":
-        comp = db.get(Competency, ex.provider_ref.split(":", 1)[1])
-        row = exercise_gen.pick_exercise(db, comp, level5, seed)
-        choices = row.grading_json.get("choices", [])
-        return {"statement": row.statement, "correction": row.correction,
-                "response_type": row.response_type, "expected": row.expected_json,
-                "grading": row.grading_json, "choices": choices,
-                "figure": row.figure_json,
-                }, row.difficulty_level
-    gen = exgen.generate(ex.provider_ref, seed, difficulty)
-    return {"statement": gen.statement, "correction": gen.correction,
-            "response_type": gen.response_type, "expected": gen.expected,
-            "grading": {**gen.grading, "choices": gen.choices},
-            "choices": gen.choices}, level5
-
-
-def _exercise_competency(db: Session, ex: ExerciseCatalog) -> Competency | None:
-    if ex.provider == "deepseek":
-        return db.get(Competency, ex.provider_ref.split(":", 1)[1])
-    link = db.query(ExerciseCompetency).filter_by(exercise_id=ex.id).first()
-    return db.get(Competency, link.competency_id) if link else None
-
-
-def generate_assessment(db: Session, assessment: Assessment,
-                        exercise_ids: list[str], font_size: int = 9) -> dict:
-    """Génère toutes les copies. Retourne le rapport de génération."""
+def generate_assessment_job(db: Session, assessment: Assessment,
+                            job: Job | None = None, font_size: int = 9) -> dict:
+    """Génère toutes les copies à partir des compétences cochées. Retourne le
+    rapport de génération. Appelé par le worker de fond (job_worker)."""
     school_class = db.get(SchoolClass, assessment.class_id)
     students = [s for s in school_class.students if s.active]
-    catalog = {e.id: e for e in db.query(ExerciseCatalog).filter(
-        ExerciseCatalog.id.in_(exercise_ids)).all()}
-    ordered = [catalog[i] for i in exercise_ids if i in catalog]
-    if not ordered:
-        raise ValueError("Aucun exercice sélectionné")
+    competency_ids = list(dict.fromkeys(
+        (assessment.blueprint_json or {}).get("competency_ids") or []))
+    competencies = {c.id: c for c in db.query(Competency).filter(
+        Competency.id.in_(competency_ids)).all()}
+    ordered_ids = [cid for cid in competency_ids if cid in competencies]
+    if not ordered_ids:
+        raise ValueError("Aucune compétence sélectionnée")
+    catalog_refs = {cid: exercise_gen.ensure_catalog_ref(db, competencies[cid])
+                    for cid in ordered_ids}
 
     out_dir = assessment_dir(assessment.id)
     tpl = doc_templates(db)
@@ -106,27 +89,37 @@ def generate_assessment(db: Session, assessment: Assessment,
     math_fs = int(tpl["exercise"].get("math_size", 12))
     capacity = pdfgen.estimate_capacity(max_pages)
     MAX_FILL_ATTEMPTS = 10
+    total_non_qcm = 0
 
     for s_idx, student in enumerate(students):
-        seed = base_seed if assessment.personalization_mode == "common" else base_seed + s_idx + 1
+        seed = distribution.variant_seed(base_seed, assessment.personalization_mode, s_idx)
         level = _student_level(db, student.id)
+        level5 = distribution.difficulty_level5(assessment.personalization_mode, level)
+        target_mix = settings.exercise_kind_mix
+        if assessment.personalization_mode == "individual":
+            target_mix, level5 = distribution.apply_next_plan(student, target_mix, level5)
+        priority = distribution.priority_competencies(db, student.id, ordered_ids)
+
         copy = Copy(assessment_id=assessment.id, student_id=student.id, seed=seed)
         db.add(copy)
         db.flush()
 
         render_items: list[dict] = []
         lessons_added: set[str] = set()
-        for seq, ex in enumerate(ordered):
-            difficulty = _pick_difficulty(ex.difficulty, assessment.personalization_mode, level)
-            try:
-                gen, level5 = _build_item(db, ex, seed * 100 + seq, difficulty, warnings)
-            except Exception as e:
-                warnings.append(f"{ex.title} ({student.llm_pseudonym}) : {e}")
-                continue
+        kind_counts: dict[str, int] = {}
 
-            # rappel de leçon pour élève fragile (entraînement uniquement, §7.1)
-            comp = _exercise_competency(db, ex)
-            if (assessment.type == "training" and level <= 4 and comp
+        def _add_item(seq: int, comp_id: str, item_seed: int) -> bool:
+            nonlocal total_non_qcm
+            comp = competencies[comp_id]
+            try:
+                bank, _ = exercise_gen.bank_rows_near_level(db, comp, level5)
+                row = distribution.pick_balanced_exercise(
+                    bank, kind_counts, target_mix, item_seed)
+            except Exception as e:
+                warnings.append(f"{comp.code} ({student.llm_pseudonym}) : {e}")
+                return False
+
+            if (assessment.type == "training" and level <= 4
                     and comp.id not in lessons_added and len(lessons_added) < 2):
                 try:
                     snippet = exercise_gen.ensure_lesson(db, comp, level)
@@ -138,59 +131,64 @@ def generate_assessment(db: Session, assessment: Assessment,
                 except Exception as e:
                     warnings.append(f"Rappel {comp.code} indisponible : {e}")
 
+            choices = row.grading_json.get("choices", [])
             item = CopyItem(
-                copy_id=copy.id, catalog_id=ex.id, sequence=seq,
-                difficulty=level5 * 2, response_type=gen["response_type"],
-                statement=gen["statement"], correction=gen["correction"],
-                expected_json=gen["expected"], grading_json=gen["grading"])
+                copy_id=copy.id, catalog_id=catalog_refs[comp_id].id, sequence=seq,
+                difficulty=row.difficulty_level * 2, response_type=row.response_type,
+                statement=row.statement, correction=row.correction,
+                expected_json=row.expected_json, grading_json=row.grading_json)
             db.add(item)
             db.flush()
             render_items.append({"kind": "exercise", "item_id": item.id,
-                                 "statement": gen["statement"],
-                                 "response_type": gen["response_type"],
-                                 "choices": gen["choices"], "level5": level5,
-                                 "figure": gen.get("figure")})
+                                 "statement": row.statement,
+                                 "response_type": row.response_type,
+                                 "choices": choices, "level5": row.difficulty_level,
+                                 "figure": row.figure_json,
+                                 "_bucket": distribution.exercise_bucket(row)})
+            if not row.response_type.startswith("qcm"):
+                total_non_qcm += 1
+            return True
+
+        for seq, comp_id in enumerate(priority):
+            _add_item(seq, comp_id, seed * 100 + seq)
 
         # remplissage automatique (§ remplissage) : tant qu'il reste de la
-        # place sur les pages_target pages, on ajoute des variantes des
-        # exercices déjà sélectionnés — pick_exercise/ensure_bank réutilisent
-        # la banque existante et ne déclenchent une génération LLM que si elle
-        # est épuisée pour cette compétence/ce niveau.
+        # place sur les pages_target pages, on repioche dans les compétences
+        # cochées (priorité, en boucle) — bank_rows_near_level/ensure_bank ne
+        # déclenchent une génération LLM que si la banque est épuisée pour
+        # cette compétence/ce niveau.
         running_h = sum(pdfgen.estimate_item_height(
             ri, ex_tpl_font_size, math_fs, tpl["exercise"], tpl["lesson"])
             for ri in render_items)
-        fill_seq = len(ordered)
+        fill_seq = len(priority)
         fill_attempts = 0
-        while running_h < capacity and fill_attempts < MAX_FILL_ATTEMPTS:
-            ex = ordered[fill_seq % len(ordered)]
-            difficulty = _pick_difficulty(ex.difficulty, assessment.personalization_mode, level)
+        while running_h < capacity and fill_attempts < MAX_FILL_ATTEMPTS and priority:
+            comp_id = priority[fill_seq % len(priority)]
             fill_attempts += 1
-            try:
-                gen, level5 = _build_item(db, ex, seed * 100 + fill_seq, difficulty, warnings)
-            except Exception as e:
-                warnings.append(f"{ex.title} ({student.llm_pseudonym}) remplissage : {e}")
+            before = len(render_items)
+            if not _add_item(fill_seq, comp_id, seed * 100 + fill_seq):
                 fill_seq += 1
                 continue
-            render_item = {"kind": "exercise", "statement": gen["statement"],
-                          "response_type": gen["response_type"],
-                          "choices": gen["choices"], "level5": level5,
-                          "figure": gen.get("figure")}
-            item_h = pdfgen.estimate_item_height(
-                render_item, ex_tpl_font_size, math_fs, tpl["exercise"], tpl["lesson"])
+            added = render_items[before:]
+            item_h = sum(pdfgen.estimate_item_height(
+                ri, ex_tpl_font_size, math_fs, tpl["exercise"], tpl["lesson"])
+                for ri in added)
             if running_h + item_h > capacity:
+                for ri in added:
+                    if ri.get("item_id"):
+                        db.query(CopyItem).filter_by(id=ri["item_id"]).delete()
+                        if not ri["response_type"].startswith("qcm"):
+                            total_non_qcm -= 1
+                        if ri.get("_bucket"):
+                            kind_counts[ri["_bucket"]] = max(0, kind_counts.get(ri["_bucket"], 1) - 1)
+                del render_items[before:]
                 fill_seq += 1
-                continue  # cet item ne rentre pas : on tente une autre variante
-            item = CopyItem(
-                copy_id=copy.id, catalog_id=ex.id, sequence=fill_seq,
-                difficulty=level5 * 2, response_type=gen["response_type"],
-                statement=gen["statement"], correction=gen["correction"],
-                expected_json=gen["expected"], grading_json=gen["grading"])
-            db.add(item)
-            db.flush()
-            render_item["item_id"] = item.id
-            render_items.append(render_item)
+                continue  # cet item ne rentre pas : on tente une autre compétence
             running_h += item_h
             fill_seq += 1
+
+        _set_progress(db, job, round(5 + 90 * (s_idx + 1) / max(1, len(students))),
+                     f"Copie {s_idx + 1}/{len(students)} ({student.llm_pseudonym})")
 
         pages_meta, page_rows = [], []
         for p in range(max_pages):
@@ -238,16 +236,13 @@ def generate_assessment(db: Session, assessment: Assessment,
 
     c.save()
     pdfgen.write_manifest(str(out_dir / "copy_manifest.json"), manifest)
-    report = {"copies": len(students), "exercises_per_copy": len(ordered),
+    report = {"copies": len(students), "competencies": len(ordered_ids),
               "pages_target": max_pages, "warnings": warnings,
-              "estimated_mathpix_calls": sum(
-                  1 for _ in students for e in ordered
-                  if not e.response_type.startswith("qcm"))}
+              "estimated_mathpix_calls": total_non_qcm}
     pdfgen.write_manifest(str(out_dir / "generation_report.json"), report)
 
     db.add(FileObject(owner_type="assessment", owner_id=assessment.id,
                       storage_path=str(pdf_path), mime="application/pdf",
                       size=pdf_path.stat().st_size))
-    assessment.status = "generated"
-    db.commit()
+    _set_progress(db, job, 100, "Terminé")
     return report

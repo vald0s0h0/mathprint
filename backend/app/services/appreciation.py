@@ -1,19 +1,33 @@
 """Zone Appréciation enrichie (§ appréciation) : partie déterministe (progrès
 de compétences depuis ce sujet, jamais de rouge) + courte synthèse Claude
 Haiku, calées sur la zone Appréciation de l'en-tête (pdfgen.header_geometry).
+
+Le même appel Claude produit aussi, en JSON structuré, un plan de travail
+prévisionnel (compétences à revoir, difficulté, mix de types, rythme) —
+persisté sur Student.next_plan_json et réutilisé par services.distribution
+lors de la création d'un sujet individuel, pour éviter un second appel LLM.
 """
+from datetime import datetime, timezone
+
 from sqlalchemy.orm import Session
 
 from ..models import Competency, CompetencyEvidence, CompetencyStateHistory, Copy, CopyItem, Student
-from . import providers
+from . import forgetting, providers
 
 MAX_COMPETENCIES = 3
 
 _SYSTEM = (
-    "Tu rédiges une phrase courte et encourageante (1 phrase, 25 mots maximum) "
-    "pour la zone Appréciation d'une copie de mathématiques. Tu t'appuies "
-    "uniquement sur les progrès de compétences fournis. Jamais de ton négatif, "
-    "jamais de comparaison avec d'autres élèves, pas de nom propre."
+    "Tu produis, pour une copie de mathématiques corrigée, un JSON strict à "
+    "deux champs. \"synthesis\" : une phrase courte et encourageante (1 "
+    "phrase, 25 mots maximum), fondée uniquement sur les progrès de "
+    "compétences fournis, jamais de ton négatif, jamais de comparaison avec "
+    "d'autres élèves, pas de nom propre (chaîne vide si aucun progrès). "
+    "\"next_plan\" : un plan de travail prévisionnel pour les prochains "
+    "exercices de cet élève, fondé sur les compétences dues (courbe "
+    "d'oubli) fournies — {\"competency_ids\": [str,...] (3 maximum), "
+    "\"difficulty_level\": entier 1-5, \"quantity\": entier 2-6, "
+    "\"kind_mix\": {\"application\": float, \"probleme\": float, \"qcm\": "
+    "float} (somme 1.0), \"pacing_days\": entier}."
 )
 
 
@@ -59,21 +73,29 @@ def compute_competency_progress(db: Session, assessment_id: str, student_id: str
     return out[:MAX_COMPETENCIES]
 
 
-def build_synthesis(db: Session, student: Student, progress: list[dict]) -> str:
-    """Courte synthèse Haiku à partir des progrès (jamais le nom réel, RM-010)."""
-    if not progress:
-        return ""
-    summary = "; ".join(
-        f"{p['competency_name']} : {round(p['pct_acquired'] * 100)}% acquis "
-        f"(+{round(p['delta'] * 100)} points depuis ce sujet)" for p in progress)
-    return providers.claude_text(
-        db, "appreciation_synthesis", _SYSTEM,
-        f"Élève {student.llm_pseudonym}. Progrès mesurés : {summary}",
-        max_tokens=120, correlation_id=student.llm_pseudonym)
+def _build_synthesis_and_plan(db: Session, student: Student, progress: list[dict],
+                              due: list[dict]) -> dict:
+    """Un seul appel Claude Haiku (JSON) : synthèse de la zone Appréciation +
+    plan de travail prévisionnel (jamais un second appel LLM à ce stade)."""
+    if not progress and not due:
+        return {"synthesis": "", "next_plan": None}
+    payload = {"pseudonym": student.llm_pseudonym, "progress": progress,
+              "due_competencies": due[:5]}
+    try:
+        result = providers.claude_json(
+            db, "appreciation_synthesis", _SYSTEM, payload,
+            max_tokens=250, correlation_id=student.llm_pseudonym)
+    except Exception:
+        return {"synthesis": "", "next_plan": None}
+    return {"synthesis": result.get("synthesis") or "", "next_plan": result.get("next_plan")}
 
 
 def build_appreciation(db: Session, assessment_id: str, student: Student) -> dict:
-    """Payload complet {progress, synthesis} pour l'overlay et le cache Copy."""
+    """Payload complet {progress, synthesis} pour l'overlay et le cache Copy.
+    Persiste en plus, en aparté, le plan de travail prévisionnel de l'élève."""
     progress = compute_competency_progress(db, assessment_id, student.id)
-    synthesis = build_synthesis(db, student, progress)
-    return {"progress": progress, "synthesis": synthesis}
+    due = forgetting.due_competencies(db, student.id)
+    result = _build_synthesis_and_plan(db, student, progress, due)
+    student.next_plan_json = result.get("next_plan")
+    student.next_plan_updated_at = datetime.now(timezone.utc)
+    return {"progress": progress, "synthesis": result.get("synthesis", "")}

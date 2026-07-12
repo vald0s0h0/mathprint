@@ -10,6 +10,7 @@ import { AlertTriangle, Lock, Plus, RefreshCw, Users, X } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../api'
 import { CYCLES, useAppState } from '../state/AppState'
+import { masteryColor } from '../utils/mastery'
 
 type Cls = {
   id: string; name: string; grade_level: string; school_year: string | null
@@ -29,10 +30,6 @@ type Detail = {
 }
 type Report = { id: string; period: string; content: string; status: string }
 type Year = { id: string; label: string; active: boolean }
-
-function masteryColor(m: number) {
-  return m > 0.6 ? 'green' : m > 0.3 ? 'yellow' : 'red'
-}
 
 // ligne compacte : libellé + mini-barre + % rappel (sans code technique)
 function CompetencyRow({ c }: { c: Detail['competencies'][0] }) {
