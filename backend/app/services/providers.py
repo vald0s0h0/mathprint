@@ -9,6 +9,7 @@ Règles appliquées ici :
 """
 import hashlib
 import json
+import re
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -20,6 +21,10 @@ from ..models import ApiUsageEvent, ProviderConfig
 
 class BudgetExceeded(Exception):
     pass
+
+
+# premier objet {...} d'un texte (extraction tolérante de JSON)
+_JSON_OBJ_RE = re.compile(r"\{.*\}", re.DOTALL)
 
 
 def _today_cost(db: Session, provider: str) -> float:
@@ -135,55 +140,94 @@ def deepseek_json(db: Session, operation: str, system: str, user_payload: dict,
 
 
 def _deepseek_mock(operation: str, payload: dict) -> dict:
-    if operation == "exercise_generation":
-        # Exercices arithmétiques plausibles, déterministes, variés par niveau.
+    if operation in ("exercise_generation", "exercise_repair"):
+        # Exercices déterministes au contrat exgen-3 : LaTeX balisé $...$,
+        # mélange application/problème/QCM/rubric pour exercer toute la chaîne.
         import random
-        level = int(payload.get("difficulty_level", 3))
+        level = int(payload.get("difficulty_level", payload.get("level", 3)))
         count = int(payload.get("count", 3))
         rng = random.Random(f"{payload.get('competency_code')}-{level}")
         span = 4 + level * 6
         exercises = []
-        for i in range(count):
-            kind = rng.choice(["add", "mult", "qcm"] if level <= 3 else ["mult", "expr", "qcm"])
+        for i in range(max(1, count)):
+            kind = rng.choice(
+                ["add", "frac", "qcm", "prob"] if level <= 3
+                else ["frac", "expr", "qcm", "prob"])
             a, b = rng.randint(2, span), rng.randint(2, span)
-            label = payload.get("competency_label", "calcul")
             if kind == "add":
                 exercises.append({
-                    "statement": f"Calculer : {a} + {b} = ?",
-                    "correction": f"{a} + {b} = {a + b}",
+                    "kind": "application",
+                    "statement": f"Calculer : ${a} + {b}$",
+                    "correction": f"${a} + {b} = {a + b}$",
                     "response_type": "short_text",
                     "answer": {"type": "integer", "value": a + b}})
-            elif kind == "mult":
+            elif kind == "frac":
+                d = rng.choice([2, 3, 4, 5])
                 exercises.append({
-                    "statement": f"Calculer : {a} × {b} = ?",
-                    "correction": f"{a} × {b} = {a * b}",
+                    "kind": "application",
+                    "statement": (f"Calculer et donner le résultat sous forme de fraction "
+                                  f"irréductible : $\\dfrac{{{a}}}{{{d}}} + \\dfrac{{{b}}}{{{d}}}$"),
+                    "correction": (f"Les dénominateurs sont égaux : "
+                                   f"$\\dfrac{{{a}}}{{{d}}} + \\dfrac{{{b}}}{{{d}}} = "
+                                   f"\\dfrac{{{a + b}}}{{{d}}}$"),
                     "response_type": "short_text",
-                    "answer": {"type": "integer", "value": a * b}})
+                    "answer": {"type": "rational", "value": [a + b, d]}})
             elif kind == "expr":
                 exercises.append({
-                    "statement": f"Développer puis réduire : {a}(x + {b})",
-                    "correction": f"{a}(x + {b}) = {a}x + {a * b}",
+                    "kind": "application",
+                    "statement": f"Développer puis réduire : ${a}(x + {b})$",
+                    "correction": f"${a}(x + {b}) = {a}x + {a * b}$",
                     "response_type": "short_text",
-                    "answer": {"type": "expression", "value": f"{a}*x + {a * b}", "variable": "x"}})
+                    "answer": {"type": "expression", "value": f"{a}*x + {a * b}",
+                               "variable": "x"}})
+            elif kind == "prob":
+                unit_price, qty = rng.randint(2, 9), rng.randint(3, 8)
+                total = unit_price * qty
+                exercises.append({
+                    "kind": "probleme",
+                    "statement": (f"Lina achète {qty} cahiers à ${unit_price}\\ \\text{{€}}$ "
+                                  "pièce. Elle paie avec un billet de $50\\ \\text{€}$. "
+                                  "Combien la caissière doit-elle lui rendre ? "
+                                  "Détaille ton raisonnement."),
+                    "correction": (f"Prix total : ${qty} \\times {unit_price} = {total}\\ \\text{{€}}$. "
+                                   f"Monnaie rendue : $50 - {total} = {50 - total}\\ \\text{{€}}$."),
+                    "response_type": "multiline_text",
+                    "answer": {"type": "rubric", "steps": [
+                        {"description": "Calcul du prix total",
+                         "expected_text": f"${qty} \\times {unit_price} = {total}$",
+                         "points": 1},
+                        {"description": "Calcul de la monnaie rendue",
+                         "expected_text": f"$50 - {total} = {50 - total}$", "points": 1},
+                    ]}})
             else:
                 good = a * b
-                choices = [str(good), str(good + a), str(good - b), str(a + b)]
+                choices = [f"${good}$", f"${good + a}$", f"${good - b}$", f"${a + b}$"]
                 rng.shuffle(choices)
                 exercises.append({
-                    "statement": f"Que vaut {a} × {b} ?",
-                    "correction": f"{a} × {b} = {good}",
+                    "kind": "application",
+                    "statement": f"Que vaut ${a} \\times {b}$ ?",
+                    "correction": f"${a} \\times {b} = {good}$",
                     "response_type": "qcm_single",
                     "choices": choices,
-                    "answer": {"type": "choice", "correct": [choices.index(str(good))]}})
+                    "answer": {"type": "choice",
+                               "correct": [choices.index(f"${good}$")]}})
         return {"exercises": exercises, "confidence": 0.9, "reason_code": "mock_generation"}
-    if operation == "lesson_snippet":
+    if operation in ("lesson_snippet", "lesson_repair"):
         label = payload.get("competency_label", "la notion")
-        return {"title": f"Rappel — {label}",
-                "content": f"Pour {label.lower()}, on procède étape par étape : on repère "
-                           "les données, on applique la méthode vue en classe, puis on "
-                           "vérifie l'ordre de grandeur du résultat.",
-                "example": "Exemple : on traite d'abord un cas simple avant l'exercice.",
-                "confidence": 0.9, "reason_code": "mock_lesson"}
+        return {
+            "title": f"Rappel — {label}"[:100],
+            "essentiel": f"Pour {label.lower()}, on avance pas à pas. "
+                         "Relis la règle avant de commencer.",
+            "methode": [
+                "Repère les données utiles de l'énoncé.",
+                "Applique la règle vue en classe.",
+                "Vérifie que ton résultat est logique."],
+            "exemple": {
+                "enonce": "On veut calculer $12 + 9$.",
+                "etapes": ["On pose $12 + 9$.", "On calcule : $12 + 9 = 21$."],
+                "resultat": "Le résultat est $21$."},
+            "astuce": "Vérifie toujours l'ordre de grandeur de ton résultat.",
+            "confidence": 0.9, "reason_code": "mock_lesson"}
     if operation == "rubric_grading":
         rubric = payload.get("rubric", [])
         return {"steps": [{"step": s.get("step"), "observed": True, "points": s.get("points", 1),
@@ -235,3 +279,64 @@ def claude_text(db: Session, operation: str, system: str, user_text: str,
             cost=usage.get("input_tokens", 0) * 1e-6 + usage.get("output_tokens", 0) * 5e-6,
             correlation_id=correlation_id)
     return "".join(b.get("text", "") for b in data.get("content", []))
+
+
+def claude_json(db: Session, operation: str, system: str, payload: dict,
+                max_tokens: int = 500, correlation_id: str | None = None) -> dict:
+    """Claude Haiku en mode JSON pour vérification croisée (exercices, rappels)."""
+    cfg = _config(db, "anthropic")
+    if _today_cost(db, "anthropic") > settings.llm_daily_cost_limit_eur:
+        raise BudgetExceeded("Budget Anthropic quotidien atteint")
+    model = cfg.model if cfg and cfg.model else settings.claude_model
+
+    if _mock_enabled(db, cfg):
+        _record(db, "anthropic", model, operation, input_tokens=400, output_tokens=80,
+                cost=0.0, correlation_id=correlation_id)
+        # Mock pour exercice/leçon : verdict structuré favorable (contrat exgen-3)
+        if operation == "exercise_verification":
+            return {"valide": True,
+                    "scores": {"justesse": 5, "adequation_competence": 5,
+                               "adequation_niveau": 4, "clarte": 5},
+                    "problemes": [], "reparable": False,
+                    "raison": "Mock : verdict favorable en mode test"}
+        if operation == "lesson_verification":
+            return {"valide": True,
+                    "scores": {"justesse": 5, "simplicite": 5, "utilite": 5},
+                    "problemes": [], "reparable": False,
+                    "raison": "Mock : verdict favorable en mode test"}
+        return {}
+
+    r = httpx.post(
+        "https://api.anthropic.com/v1/messages",
+        headers={"x-api-key": cfg.encrypted_secret, "anthropic-version": "2023-06-01"},
+        json={
+            "model": model,
+            "max_tokens": max_tokens,
+            "system": [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+            # préremplissage "{" : force une sortie JSON (l'API Messages n'a
+            # pas de response_format JSON)
+            "messages": [{"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+                         {"role": "assistant", "content": "{"}],
+        },
+        timeout=60,
+    )
+    r.raise_for_status()
+    data = r.json()
+    usage = data.get("usage", {})
+    _record(db, "anthropic", model, operation,
+            input_tokens=usage.get("input_tokens", 0), output_tokens=usage.get("output_tokens", 0),
+            cost=usage.get("input_tokens", 0) * 1e-6 + usage.get("output_tokens", 0) * 5e-6,
+            correlation_id=correlation_id)
+
+    content_text = "{" + "".join(b.get("text", "") for b in data.get("content", []))
+    try:
+        return json.loads(content_text)
+    except json.JSONDecodeError:
+        # tolérer du texte résiduel après l'objet JSON
+        m = _JSON_OBJ_RE.search(content_text)
+        if m:
+            try:
+                return json.loads(m.group(0))
+            except json.JSONDecodeError:
+                pass
+        raise ValueError("Réponse Claude hors schéma JSON")

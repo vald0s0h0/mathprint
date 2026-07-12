@@ -59,6 +59,40 @@ def latex_to_text(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
+def latex_to_tagged(s: str) -> str:
+    """Conversion MathALÉA -> texte balisé $...$ (contrat exgen-3).
+
+    Les spans mathématiques sont CONSERVÉS en LaTeX (validés par mathrender)
+    au lieu d'être aplatis en texte ; si un span n'est pas dans le
+    sous-ensemble accepté, on retombe sur l'aplatissement complet."""
+    from . import mathrender
+
+    txt = re.sub(r"<br\s*/?>", "  ", s)
+    txt = re.sub(r"<[^>]+>", "", txt)
+    txt = re.sub(r"\\begin\{[^}]*\}(\[[^\]]*\])?", " ", txt)
+    txt = re.sub(r"\\end\{[^}]*\}", " ", txt)
+    txt = txt.replace("\\\\", "  ").replace("&", " ")
+
+    parts = []
+    for content, is_math in mathrender.split_math_spans(txt):
+        if not is_math:
+            # nettoyage des commandes LaTeX résiduelles hors math
+            t = re.sub(r"\\text(?:bf|it)?\{([^{}]*)\}", r"\1", content)
+            t = re.sub(r"\\num(?:print)?\{([^{}]*)\}", r"\1", t)
+            t = t.replace(r"\ldots", "……").replace(r"\dots", "……")
+            t = t.replace(r"\%", "%").replace(r"\euro", "€")
+            if re.search(r"\\[a-zA-Z]+", t):
+                return latex_to_text(s)  # commandes inconnues hors math : aplatir
+            parts.append(t)
+        else:
+            content = re.sub(r"\\num(?:print)?\{([^{}]*)\}", r"\1", content)
+            clean = mathrender.sanitize_latex(content)
+            if clean is None:
+                return latex_to_text(s)
+            parts.append(f"${clean}$")
+    return re.sub(r"[ \t]+", " ", "".join(parts)).strip()
+
+
 def _expected_from_mathalea(exp: dict | None) -> tuple[dict, dict]:
     """Convertit autoCorrection MathALÉA -> (expected_json, grading_json)."""
     if not exp or not exp.get("values"):
@@ -110,11 +144,11 @@ def generate(ref: str, seed: int, nb_questions: int = 1) -> dict:
     if not questions:
         raise MathaleaUnavailable(f"{ref} : aucune question générée")
 
-    consigne = latex_to_text(data.get("consigne") or "")
-    statement = latex_to_text(questions[0])
+    consigne = latex_to_tagged(data.get("consigne") or "")
+    statement = latex_to_tagged(questions[0])
     if consigne and consigne not in statement:
         statement = f"{consigne} {statement}"
-    correction = latex_to_text(corrections[0]) if corrections else ""
+    correction = latex_to_tagged(corrections[0]) if corrections else ""
     expected, grading = _expected_from_mathalea(expecteds[0] if expecteds else None)
 
     return {

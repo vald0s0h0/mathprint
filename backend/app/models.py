@@ -110,6 +110,15 @@ class LessonSnippet(Base):
     example_latex: Mapped[str] = mapped_column(Text, default="")
     version: Mapped[str] = mapped_column(String, default="1.0")
     validated: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Vérification croisée Claude
+    verifier_model: Mapped[str] = mapped_column(String, default="")
+    verifier_verdict_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Figure illustrative optionnelle
+    figure_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Status: active ou retired
+    status: Mapped[str] = mapped_column(String, default="active")  # active | retired
+    # Rappel structuré v3 : {essentiel, methode[], exemple{enonce,etapes[],resultat}, astuce}
+    blocks_json: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
 class ExerciseCatalog(Base):
@@ -143,6 +152,16 @@ class GeneratedExercise(Base):
     prompt_version: Mapped[str] = mapped_column(String, default="1")
     status: Mapped[str] = mapped_column(String, default="active")  # active | retired
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    # Vérification croisée Claude
+    verifier_model: Mapped[str] = mapped_column(String, default="")
+    verifier_verdict_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Figure illustrative optionnelle
+    figure_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Provenance (deepseek | mathalea) et nature (application | probleme)
+    source: Mapped[str] = mapped_column(String, default="deepseek")
+    kind: Mapped[str] = mapped_column(String, default="application")
+    # Scores qualité du vérificateur (justesse, adéquation compétence/niveau, clarté)
+    quality_json: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
 class ExerciseCompetency(Base):
@@ -181,6 +200,10 @@ class Copy(Base):
     status: Mapped[str] = mapped_column(String, default="generated")  # generated|printed|scanned|graded|finalized|absent
     total_pages: Mapped[int] = mapped_column(Integer, default=1)
     generated_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    # cache {progress, synthesis} de la zone Appréciation (§ appréciation) —
+    # calculé une fois à la finalisation, réutilisé pour une réimpression sans
+    # re-facturer l'appel Claude Haiku.
+    appreciation_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
 
 class CopyItem(Base):
@@ -265,6 +288,20 @@ class ScannedPage(Base):
     original_file_id: Mapped[str | None] = mapped_column(String, nullable=True)
     status: Mapped[str] = mapped_column(String, default="pending")  # pending|identified|registered|blocked
     quality_json: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class SandboxUpload(Base):
+    """Fichier brut déposé au bac à sable (§5c) : PDFs et images en vrac,
+    traités page par page, dédupliqués par sha256 du fichier puis par
+    page_id déjà enregistrée (cf. services/sandbox.py)."""
+    __tablename__ = "sandbox_uploads"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
+    uploaded_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    original_filename: Mapped[str] = mapped_column(String)
+    sha256: Mapped[str] = mapped_column(String, default="")
+    status: Mapped[str] = mapped_column(String, default="processing")
+    # processing | processed | duplicate_rejected | error
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
 
 class OcrAttempt(Base):

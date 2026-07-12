@@ -11,7 +11,7 @@ import { notifications } from '@mantine/notifications'
 import { BookOpen, Eye, Pencil, RotateCcw, Save } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, getToken } from '../api'
-import { renderMath } from './MathText'
+import MathText from './MathText'
 
 export type DocTemplates = {
   header: { name_size: number; class_size: number; title_size: number; accent: string; show_date: boolean }
@@ -270,7 +270,7 @@ export default function TemplateEditor() {
                     onSelect={setSel} size={ex.math_size}
                     onResize={(v) => set('exercise', { math_size: v })}>
                     <span style={{ fontSize: ex.math_size * S, fontWeight: 500 }}>
-                      {renderMath('3/4 + 5/6 = ?')}
+                      <MathText text={'$\\dfrac{3}{4} + \\dfrac{5}{6}$'} centered />
                     </span>
                   </Resizable>
                 </div>

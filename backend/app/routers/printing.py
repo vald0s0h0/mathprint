@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..db import get_db
 from ..deps import current_user
-from ..models import AuditLog, Job, Printer, User
+from ..models import AuditLog, Assessment, Job, Printer, User
 
 router = APIRouter(prefix="/api/printers", tags=["printing"],
                    dependencies=[Depends(current_user)])
@@ -139,6 +139,10 @@ def print_file(body: PrintIn, db: Session = Depends(get_db),
                         entity_type="assessment", entity_id=body.assessment_id,
                         after_json={"printer": body.printer, "file": body.file,
                                     "lp": r.stdout.strip()}))
+        if body.file == "subject_batch.pdf":
+            assessment = db.get(Assessment, body.assessment_id)
+            if assessment and assessment.status == "generated":
+                assessment.status = "printed"
         db.commit()
         return {"ok": True, "lp_output": r.stdout.strip()}
     except subprocess.TimeoutExpired:

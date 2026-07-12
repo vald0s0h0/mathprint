@@ -15,9 +15,25 @@ from ..models import (
     ManualReview, OcrAttempt, ScanBatch, SchoolClass, Student, StudentResponse,
     User,
 )
+from ..services import sandbox as sandbox_service
 from ..services.pipeline import PHASES, build_overlays, finalize_batch, process_batch
 
 router = APIRouter(prefix="/api/scans", tags=["scans"], dependencies=[Depends(current_user)])
+
+
+def _sniff_file(content: bytes) -> tuple[str, str] | None:
+    """(extension, mime) reconnus par signature d'octets (magic bytes) — jamais
+    le Content-Type client, purement déclaratif (§5b : PDF, JPEG, PNG, HEIC)."""
+    if content.startswith(b"%PDF-"):
+        return ".pdf", "application/pdf"
+    if content.startswith(b"\xff\xd8\xff"):
+        return ".jpg", "image/jpeg"
+    if content.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ".png", "image/png"
+    if len(content) >= 12 and content[4:8] == b"ftyp" and content[8:12] in (
+            b"heic", b"heix", b"hevc", b"hevx", b"mif1", b"msf1"):
+        return ".heic", "image/heic"
+    return None
 
 
 def _run_pipeline(batch_id: str):
@@ -33,7 +49,7 @@ def _run_pipeline(batch_id: str):
         db.close()
 
 
-def _detect_assessment(db: Session, content: bytes) -> str | None:
+def _detect_assessment(db: Session, content: bytes, ext: str) -> str | None:
     """Identifie le sujet depuis le QR signé d'une page : le QR suffit, aucun
     choix manuel d'évaluation n'est nécessaire au dépôt (§5.3)."""
     from ..services import worker_cv
@@ -41,10 +57,10 @@ def _detect_assessment(db: Session, content: bytes) -> str | None:
 
     tmp_dir = settings.data_dir / "scans" / "tmp"
     tmp_dir.mkdir(parents=True, exist_ok=True)
-    tmp = tmp_dir / f"detect-{uuid.uuid4().hex}.pdf"
+    tmp = tmp_dir / f"detect-{uuid.uuid4().hex}{ext}"
     tmp.write_bytes(content)
     try:
-        for img in worker_cv.raster_pdf(str(tmp)):
+        for img in worker_cv.raster_any(str(tmp)):
             for text, _quad in worker_cv._detect_qrcodes(img):
                 page_id = verify_page_payload(text)
                 if not page_id:
@@ -64,11 +80,15 @@ async def create_batch(tasks: BackgroundTasks, assessment_id: str | None = None,
                        db: Session = Depends(get_db),
                        user: User = Depends(current_user)):
     content = await file.read() if file is not None else None
+    sniffed = _sniff_file(content) if content is not None else None
+    if content is not None and sniffed is None:
+        raise HTTPException(400, "Format non reconnu — PDF, JPEG, PNG ou HEIC uniquement")
+    ext, mime = sniffed if sniffed else (".pdf", "application/pdf")
     if not assessment_id:
         if content is None:
-            raise HTTPException(422, "Déposer un PDF, ou préciser une évaluation "
+            raise HTTPException(422, "Déposer un scan, ou préciser une évaluation "
                                      "pour un lot simulé")
-        assessment_id = _detect_assessment(db, content)
+        assessment_id = _detect_assessment(db, content, ext)
         if not assessment_id:
             raise HTTPException(422, "Aucun QR MathPrint reconnu dans ce scan — "
                                      "vérifier qu'il s'agit bien de copies générées ici")
@@ -80,16 +100,41 @@ async def create_batch(tasks: BackgroundTasks, assessment_id: str | None = None,
     if content is not None:
         d = settings.data_dir / "assessments" / assessment_id / "scans" / "original"
         d.mkdir(parents=True, exist_ok=True)
-        path = d / f"{batch.id}.pdf"
+        path = d / f"{batch.id}{ext}"
         path.write_bytes(content)  # scan original immuable (RM-002)
         fo = FileObject(owner_type="scan_batch", owner_id=batch.id, storage_path=str(path),
-                        sha256=hashlib.sha256(content).hexdigest(), size=len(content))
+                        sha256=hashlib.sha256(content).hexdigest(), mime=mime, size=len(content))
         db.add(fo)
         db.flush()
         batch.source_file_id = fo.id
     db.commit()
     tasks.add_task(_run_pipeline, batch.id)
     return {"id": batch.id, "assessment_id": assessment_id}
+
+
+@router.post("/sandbox")
+async def sandbox_upload(tasks: BackgroundTasks, files: list[UploadFile],
+                         db: Session = Depends(get_db),
+                         user: User = Depends(current_user)):
+    """Bac à sable (§5c) : dépôt en vrac de PDFs/images mélangés, traité page
+    par page — chaque page est identifiée et associée à son sujet
+    individuellement, les doublons (page déjà enregistrée) sont rejetés
+    automatiquement et silencieusement. Un ScanBatch normal est créé par
+    sujet identifié, puis traité par le pipeline existant sans modification."""
+    results = []
+    for f in files:
+        content = await f.read()
+        sniffed = _sniff_file(content)
+        if sniffed is None:
+            results.append({"filename": f.filename, "status": "unrecognized", "pages_added": 0,
+                            "duplicates_rejected": 0, "blocked_pages": 0, "batches_created": []})
+            continue
+        ext, _mime = sniffed
+        r = sandbox_service.ingest_file(db, f.filename or "scan", ext, content, user.id)
+        results.append(r)
+        for batch_id in r.get("batches_created", []):
+            tasks.add_task(_run_pipeline, batch_id)
+    return {"results": results}
 
 
 @router.get("/batches")
@@ -101,7 +146,36 @@ def list_batches(assessment_id: str | None = None, db: Session = Depends(get_db)
          .order_by(ScanBatch.created_at.desc()))
     if assessment_id:
         q = q.filter(ScanBatch.assessment_id == assessment_id)
-    return [_batch_view(db, b) for b in q.all()]
+    rows = [_batch_view(db, b) for b in q.all()]
+    if not assessment_id:
+        rows += _awaiting_scan_rows(db)
+    return rows
+
+
+def _awaiting_scan_rows(db: Session) -> list[dict]:
+    """Sujets générés/imprimés sans aucun lot de scan encore déposé (§5a) —
+    invisibles jusqu'ici puisque Corrections ne listait que des ScanBatch."""
+    scanned_ids = {a for (a,) in db.query(ScanBatch.assessment_id).distinct()}
+    q = (db.query(Assessment)
+         .join(SchoolClass, Assessment.class_id == SchoolClass.id)
+         .filter(Assessment.status.in_(("generated", "printed")),
+                 SchoolClass.archived_at.is_(None))
+         .order_by(Assessment.created_at.desc()))
+    out = []
+    for a in q.all():
+        if a.id in scanned_ids:
+            continue
+        cls = db.get(SchoolClass, a.class_id)
+        out.append({
+            "id": f"awaiting-{a.id}", "assessment_id": a.id, "status": "awaiting_scan",
+            "assessment_title": a.title, "assessment_type": a.type,
+            "class_name": cls.name if cls else "?", "class_id": cls.id if cls else None,
+            "grade_level": cls.grade_level if cls else "", "page_count": 0,
+            "error": None, "pending_reviews": 0, "segments": [],
+            "overlay_printed": False, "overlay_distributed": False,
+            "created_at": str(a.created_at),
+        })
+    return out
 
 
 @router.get("/batches/{batch_id}")

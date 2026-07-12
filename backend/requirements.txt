@@ -13,5 +13,7 @@ pillow>=10.4
 sympy>=1.13
 opencv-python-headless>=4.10
 pypdfium2>=4.30
+pillow-heif>=0.18
 numpy>=1.26
 psycopg2-binary>=2.9; platform_machine != "unsupported"
+matplotlib>=3.8

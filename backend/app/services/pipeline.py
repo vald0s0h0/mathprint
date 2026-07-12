@@ -23,6 +23,7 @@ from ..models import (
 )
 from . import grading as grader
 from . import providers
+from .appreciation import build_appreciation
 from .forgetting import apply_evidence
 from .pdfgen import render_overlay
 from .runtime_settings import mock_enabled
@@ -128,7 +129,7 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
              .filter(Copy.assessment_id == assessment.id).all())
     page_index = {p.id: (p, c) for p, c in pages}
 
-    images = worker_cv.raster_pdf(src.storage_path)
+    images = worker_cv.raster_any(src.storage_path)
     batch.page_count = len(images)
     _set_status(db, batch, "split", pages=len(images))
 
@@ -375,9 +376,20 @@ def build_overlays(db: Session, batch: ScanBatch) -> str:
         note = None
         if assessment.type == "control" and maxtotal:
             note = f"{round(total / maxtotal * 20, 1)}/20"
+
+        if copy.appreciation_json is None:
+            appreciation = build_appreciation(db, assessment.id, student)
+            copy.appreciation_json = appreciation
+            db.add(copy)
+        else:
+            appreciation = copy.appreciation_json
+
         pages_annotations.append({
             "student": f"{student.first_name} {student.last_name}",
+            "assessment_type": assessment.type,
             "page_zones": zones, "note": note,
+            "progress": appreciation.get("progress"),
+            "synthesis": appreciation.get("synthesis"),
             "comment": f"Score {total:g}/{maxtotal:g}",
         })
 

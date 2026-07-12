@@ -65,6 +65,7 @@ def _build_item(db: Session, ex: ExerciseCatalog, seed: int, difficulty: int,
         return {"statement": row.statement, "correction": row.correction,
                 "response_type": row.response_type, "expected": row.expected_json,
                 "grading": row.grading_json, "choices": choices,
+                "figure": row.figure_json,
                 }, row.difficulty_level
     gen = exgen.generate(ex.provider_ref, seed, difficulty)
     return {"statement": gen.statement, "correction": gen.correction,
@@ -101,6 +102,10 @@ def generate_assessment(db: Session, assessment: Assessment,
     base_seed = int(hashlib.sha256(assessment.id.encode()).hexdigest()[:8], 16)
     max_pages = max(1, min(6, assessment.pages_target or 1))
     assessment.duplex = max_pages >= 2
+    ex_tpl_font_size = int(tpl["exercise"].get("font_size", font_size))
+    math_fs = int(tpl["exercise"].get("math_size", 12))
+    capacity = pdfgen.estimate_capacity(max_pages)
+    MAX_FILL_ATTEMPTS = 10
 
     for s_idx, student in enumerate(students):
         seed = base_seed if assessment.personalization_mode == "common" else base_seed + s_idx + 1
@@ -126,6 +131,7 @@ def generate_assessment(db: Session, assessment: Assessment,
                 try:
                     snippet = exercise_gen.ensure_lesson(db, comp, level)
                     render_items.append({"kind": "lesson", "title": snippet.title,
+                                         "blocks": snippet.blocks_json or None,
                                          "content": snippet.content_latex,
                                          "example": snippet.example_latex})
                     lessons_added.add(comp.id)
@@ -142,7 +148,49 @@ def generate_assessment(db: Session, assessment: Assessment,
             render_items.append({"kind": "exercise", "item_id": item.id,
                                  "statement": gen["statement"],
                                  "response_type": gen["response_type"],
-                                 "choices": gen["choices"], "level5": level5})
+                                 "choices": gen["choices"], "level5": level5,
+                                 "figure": gen.get("figure")})
+
+        # remplissage automatique (§ remplissage) : tant qu'il reste de la
+        # place sur les pages_target pages, on ajoute des variantes des
+        # exercices déjà sélectionnés — pick_exercise/ensure_bank réutilisent
+        # la banque existante et ne déclenchent une génération LLM que si elle
+        # est épuisée pour cette compétence/ce niveau.
+        running_h = sum(pdfgen.estimate_item_height(
+            ri, ex_tpl_font_size, math_fs, tpl["exercise"], tpl["lesson"])
+            for ri in render_items)
+        fill_seq = len(ordered)
+        fill_attempts = 0
+        while running_h < capacity and fill_attempts < MAX_FILL_ATTEMPTS:
+            ex = ordered[fill_seq % len(ordered)]
+            difficulty = _pick_difficulty(ex.difficulty, assessment.personalization_mode, level)
+            fill_attempts += 1
+            try:
+                gen, level5 = _build_item(db, ex, seed * 100 + fill_seq, difficulty, warnings)
+            except Exception as e:
+                warnings.append(f"{ex.title} ({student.llm_pseudonym}) remplissage : {e}")
+                fill_seq += 1
+                continue
+            render_item = {"kind": "exercise", "statement": gen["statement"],
+                          "response_type": gen["response_type"],
+                          "choices": gen["choices"], "level5": level5,
+                          "figure": gen.get("figure")}
+            item_h = pdfgen.estimate_item_height(
+                render_item, ex_tpl_font_size, math_fs, tpl["exercise"], tpl["lesson"])
+            if running_h + item_h > capacity:
+                fill_seq += 1
+                continue  # cet item ne rentre pas : on tente une autre variante
+            item = CopyItem(
+                copy_id=copy.id, catalog_id=ex.id, sequence=fill_seq,
+                difficulty=level5 * 2, response_type=gen["response_type"],
+                statement=gen["statement"], correction=gen["correction"],
+                expected_json=gen["expected"], grading_json=gen["grading"])
+            db.add(item)
+            db.flush()
+            render_item["item_id"] = item.id
+            render_items.append(render_item)
+            running_h += item_h
+            fill_seq += 1
 
         pages_meta, page_rows = [], []
         for p in range(max_pages):

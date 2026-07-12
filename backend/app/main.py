@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .db import Base, SessionLocal, engine, run_migrations
-from .routers import assessments, auth, misc, org, printing, scans, setup, students, system
+from .routers import assessments, auth, content, misc, org, printing, scans, setup, students, system
 from .seed import seed
 from .services.bootstrap import ensure_strong_secrets
 
@@ -17,7 +17,8 @@ app.add_middleware(
 )
 
 for r in (setup.router, auth.router, org.router, assessments.router, scans.router,
-          students.router, misc.router, printing.router, system.router):
+          students.router, misc.router, printing.router, system.router,
+          content.router):
     app.include_router(r)
 
 

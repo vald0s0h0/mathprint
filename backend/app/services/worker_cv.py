@@ -10,6 +10,7 @@ reproductibles. Une page non identifiée est bloquée, jamais devinée (RM-001).
 """
 import io
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -63,6 +64,32 @@ def raster_pdf(path: str, dpi: int = DPI) -> list[np.ndarray]:
     finally:
         doc.close()
     return pages
+
+
+_HEIF_REGISTERED = False
+
+
+def _ensure_heif_opener():
+    """Enregistre le décodeur HEIC/HEIF de Pillow (bac à sable, §5b) une seule fois."""
+    global _HEIF_REGISTERED
+    if _HEIF_REGISTERED:
+        return
+    import pillow_heif
+    pillow_heif.register_heif_opener()
+    _HEIF_REGISTERED = True
+
+
+def raster_any(path: str) -> list[np.ndarray]:
+    """Rasterise un PDF (page par page) ou décode une image (JPEG/PNG/HEIC) en
+    une seule page BGR — dispatch par extension (§5b, images acceptées)."""
+    if Path(path).suffix.lower() == ".pdf":
+        return raster_pdf(path)
+    from PIL import Image
+    if Path(path).suffix.lower() in (".heic", ".heif"):
+        _ensure_heif_opener()
+    with Image.open(path) as im:
+        arr = np.array(im.convert("RGB"))
+    return [cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)]
 
 
 def _detect_qrcodes(img: np.ndarray) -> list[tuple[str, np.ndarray]]:

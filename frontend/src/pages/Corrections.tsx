@@ -6,7 +6,7 @@ import {
   NumberInput, Select, Stack, Text, Title, Tooltip,
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
-import { Eye, FlaskConical, ScanLine, Upload } from 'lucide-react'
+import { Eye, FlaskConical, Inbox, ScanLine, Upload } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../api'
 import MathText from '../components/MathText'
@@ -29,6 +29,10 @@ type Review = {
   proposed_score: number; max_score: number
 }
 type Assessment = { id: string; title: string; status: string; grade_level: string }
+type SandboxResult = {
+  filename: string; status: string; pages_added: number
+  duplicates_rejected: number; blocked_pages: number; batches_created: string[]
+}
 
 const SEG_COLORS = { green: 'var(--mantine-color-green-6)', orange: 'var(--mantine-color-orange-6)', gray: 'var(--mantine-color-gray-4)' }
 const PHASE_LABELS: Record<string, string> = {
@@ -39,6 +43,7 @@ const PHASE_LABELS: Record<string, string> = {
 const STATUS_LABEL: Record<string, string> = {
   uploaded: 'déposé', graded: 'corrigé', review_pending: 'à valider',
   finalized: 'finalisé', overlay_ready: 'overlay prêt', ocr_complete: 'OCR terminé',
+  awaiting_scan: 'en attente de scan',
 }
 const CATEGORY_LABELS: Record<string, string> = {
   rature: 'Rature', double_coche: 'Double coche', ocr_ambigu: 'OCR ambigu',
@@ -68,6 +73,8 @@ export default function Corrections() {
   const [uploading, setUploading] = useState(false)
   const [mockOpen, setMockOpen] = useState(false)
   const [mockAssessment, setMockAssessment] = useState<string | null>(null)
+  const [sandboxUploading, setSandboxUploading] = useState(false)
+  const [sandboxResults, setSandboxResults] = useState<SandboxResult[]>([])
   const { cycle, matches, mockMode } = useAppState()
 
   const refresh = useCallback(() => {
@@ -80,21 +87,46 @@ export default function Corrections() {
     return () => clearInterval(t)
   }, [refresh])
 
-  async function upload(file: File | null) {
+  async function upload(file: File | null, assessmentId?: string) {
     if (!file) return
     setUploading(true)
     try {
       // pas d'évaluation à choisir : le QR de la première page identifiée
-      // associe automatiquement le lot au bon sujet
+      // associe automatiquement le lot au bon sujet (sauf dépôt ciblé sur une
+      // ligne « en attente de scan », où le sujet est déjà connu)
       const fd = new FormData()
       fd.append('file', file)
-      await api.post('/api/scans/batches', fd)
-      notifications.show({ color: 'green', message: 'Sujet reconnu par QR — traitement en cours' })
+      const qs = assessmentId ? `?assessment_id=${assessmentId}` : ''
+      await api.post(`/api/scans/batches${qs}`, fd)
+      notifications.show({ color: 'green', message: 'Scan déposé — traitement en cours' })
       refresh()
     } catch (e) {
       notifications.show({ color: 'red', message: (e as Error).message })
     } finally {
       setUploading(false)
+    }
+  }
+
+  async function uploadSandbox(files: File[]) {
+    if (!files.length) return
+    setSandboxUploading(true)
+    try {
+      const fd = new FormData()
+      for (const f of files) fd.append('files', f)
+      const r = await api.post<{ results: SandboxResult[] }>('/api/scans/sandbox', fd)
+      setSandboxResults(r.results)
+      const pages = r.results.reduce((n, x) => n + x.pages_added, 0)
+      const dups = r.results.reduce((n, x) => n + x.duplicates_rejected +
+        (x.status === 'duplicate_file' ? 1 : 0), 0)
+      notifications.show({
+        color: 'green',
+        message: `${pages} page(s) identifiée(s)${dups ? `, ${dups} doublon(s) ignoré(s)` : ''}`,
+      })
+      refresh()
+    } catch (e) {
+      notifications.show({ color: 'red', message: (e as Error).message })
+    } finally {
+      setSandboxUploading(false)
     }
   }
 
@@ -185,7 +217,8 @@ export default function Corrections() {
               Simuler un lot
             </Button>
           )}
-          <FileButton onChange={upload} accept="application/pdf">
+          <FileButton onChange={(f) => upload(f)}
+            accept="application/pdf,image/jpeg,image/png,image/heic,image/heif">
             {(props) => (
               <Button {...props} leftSection={<Upload size={16} />} loading={uploading}>
                 Déposer un scan
@@ -194,6 +227,52 @@ export default function Corrections() {
           </FileButton>
         </Group>
       </Group>
+
+      <Card withBorder padding="md">
+        <Group justify="space-between" align="flex-start" wrap="nowrap">
+          <Group gap="xs" wrap="nowrap" align="flex-start">
+            <Inbox size={20} strokeWidth={1.6} style={{ marginTop: 2 }} />
+            <div>
+              <Text fw={600} size="sm">Bac à sable</Text>
+              <Text size="xs" c="dimmed">
+                Déposez en une fois tous les PDFs et photos (JPEG, PNG, HEIC) même
+                mélangés entre sujets et classes — chaque page est identifiée
+                individuellement, les doublons sont ignorés automatiquement.
+              </Text>
+            </div>
+          </Group>
+          <FileButton onChange={uploadSandbox} multiple
+            accept="application/pdf,image/jpeg,image/png,image/heic,image/heif">
+            {(props) => (
+              <Button {...props} size="xs" variant="light" leftSection={<Upload size={14} />}
+                loading={sandboxUploading}>
+                Déposer en vrac
+              </Button>
+            )}
+          </FileButton>
+        </Group>
+        {sandboxResults.length > 0 && (
+          <Stack gap={4} mt="sm">
+            {sandboxResults.map((r, i) => (
+              <Group key={i} gap="xs" wrap="nowrap">
+                <Badge size="xs" variant="light"
+                  color={r.status === 'processed' ? 'green'
+                    : r.status === 'unrecognized' || r.status === 'error' ? 'red' : 'gray'}>
+                  {r.status === 'processed' ? `${r.pages_added} page(s)`
+                    : r.status === 'duplicate_file' ? 'doublon' : r.status}
+                </Badge>
+                <Text size="xs" c="dimmed" lineClamp={1}>{r.filename}</Text>
+                {r.duplicates_rejected > 0 && (
+                  <Text size="xs" c="dimmed">— {r.duplicates_rejected} page(s) déjà scannée(s) ignorée(s)</Text>
+                )}
+                {r.blocked_pages > 0 && (
+                  <Text size="xs" c="orange">— {r.blocked_pages} page(s) non identifiée(s)</Text>
+                )}
+              </Group>
+            ))}
+          </Stack>
+        )}
+      </Card>
 
       {groups.length === 0 && (
         <Card withBorder padding="xl">
@@ -217,6 +296,7 @@ export default function Corrections() {
           <Stack gap="xs">
             {g.rows.map((b) => {
               const overlayReady = b.status === 'overlay_ready'
+              const awaitingScan = b.status === 'awaiting_scan'
               const done = overlayReady && b.overlay_printed && b.overlay_distributed
               return (
                 <Card key={b.id} withBorder padding="md" style={done ? { opacity: 0.55 } : undefined}>
@@ -229,16 +309,18 @@ export default function Corrections() {
                         </Badge>
                         <Text fw={600} lineClamp={1}>{b.assessment_title}</Text>
                         <Badge size="sm" variant="dot"
-                          color={done ? 'gray' : overlayReady ? 'green' : b.pending_reviews ? 'orange' : 'blue'}>
+                          color={done ? 'gray' : awaitingScan ? 'gray' : overlayReady ? 'green' : b.pending_reviews ? 'orange' : 'blue'}>
                           {STATUS_LABEL[b.status] ?? b.status}
                           {b.pending_reviews ? ` (${b.pending_reviews})` : ''}
                         </Badge>
                       </Group>
-                      <Group gap="md">
-                        <SegmentBar segments={b.segments} />
-                        <Text size="xs" c="dimmed">{b.page_count} page(s)</Text>
-                        {b.error && <Text size="xs" c="red">{b.error}</Text>}
-                      </Group>
+                      {!awaitingScan && (
+                        <Group gap="md">
+                          <SegmentBar segments={b.segments} />
+                          <Text size="xs" c="dimmed">{b.page_count} page(s)</Text>
+                          {b.error && <Text size="xs" c="red">{b.error}</Text>}
+                        </Group>
+                      )}
                       {(b.status === 'finalized' || overlayReady) && (
                         <Group gap="lg" mt={2}>
                           <Checkbox size="xs" label="Overlay imprimé" disabled={!overlayReady}
@@ -251,12 +333,23 @@ export default function Corrections() {
                       )}
                     </Stack>
                     <Group gap="xs" wrap="nowrap">
+                      {awaitingScan && (
+                        <FileButton onChange={(f) => upload(f, b.assessment_id)}
+                          accept="application/pdf,image/jpeg,image/png,image/heic,image/heif">
+                          {(props) => (
+                            <Button {...props} size="xs" leftSection={<Upload size={14} />}
+                              loading={uploading}>
+                              Déposer le scan
+                            </Button>
+                          )}
+                        </FileButton>
+                      )}
                       {b.pending_reviews > 0 && (
                         <Button size="xs" color="orange" onClick={() => openReviews(b)}>
                           Valider ({b.pending_reviews})
                         </Button>
                       )}
-                      {b.status !== 'finalized' && b.status !== 'overlay_ready' && !b.pending_reviews && (
+                      {!awaitingScan && b.status !== 'finalized' && b.status !== 'overlay_ready' && !b.pending_reviews && (
                         <Button size="xs" onClick={() => finalize(b)}>Finaliser</Button>
                       )}
                       {(b.status === 'finalized' || overlayReady) && (

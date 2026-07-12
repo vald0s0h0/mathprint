@@ -3,7 +3,7 @@ import {
   Tooltip, useComputedColorScheme, useMantineColorScheme,
 } from '@mantine/core'
 import {
-  FlaskConical, GraduationCap, LayoutDashboard, LogOut, Moon, ScanLine,
+  FlaskConical, GraduationCap, LayoutDashboard, Library, LogOut, Moon, ScanLine,
   Settings as SettingsIcon, Sun, Target, Users, FileText,
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
@@ -16,12 +16,14 @@ import Login from './pages/Login'
 import SettingsPage from './pages/Settings'
 import Setup from './pages/Setup'
 import Students from './pages/Students'
+import Bank from './pages/Bank'
 import Subjects from './pages/Subjects'
 import { CYCLES, useAppState, type Cycle } from './state/AppState'
 
 const NAV = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/sujets', label: 'Sujets', icon: FileText },
+  { to: '/banque', label: 'Banque', icon: Library },
   { to: '/corrections', label: 'Corrections', icon: ScanLine },
   { to: '/eleves', label: 'Élèves', icon: Users },
   { to: '/competences', label: 'Compétences', icon: Target },
@@ -111,6 +113,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/sujets" element={<Subjects />} />
+          <Route path="/banque" element={<Bank />} />
           <Route path="/corrections" element={<Corrections />} />
           <Route path="/eleves" element={<Students />} />
           <Route path="/competences" element={<Competencies />} />

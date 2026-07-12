@@ -1,67 +1,90 @@
-// Rendu lisible des énoncés mathématiques côté web : fractions empilées,
-// signe ×, exposants, flèches — miroir du rendu PDF (pdfgen._statement_layout).
+// Rendu fiable des formules mathématiques via KaTeX.
+// Découpe sur $...$ (spans délimitant du LaTeX), renderise via KaTeX côté web.
 import { Box } from '@mantine/core'
-import React from 'react'
+import katex from 'katex'
+import 'katex/dist/katex.min.css'
+import React, { useMemo } from 'react'
 
-const FRAC_RE = /(?<![\w/])(\d+)\s*\/\s*(\d+)(?![\w/])/g
+/** Split text on $...$ délimiteurs. Returns [(content, isMath), ...] */
+function splitMathSpans(text: string): Array<[string, boolean]> {
+  const spans: Array<[string, boolean]> = []
+  let pos = 0
+  while (true) {
+    const start = text.indexOf('$', pos)
+    if (start === -1) {
+      if (pos < text.length) spans.push([text.slice(pos), false])
+      break
+    }
+    if (start > pos) spans.push([text.slice(pos, start), false])
 
-function normalize(text: string): string {
-  return text
-    .replace(/\*\*2|\^2/g, '²')
-    .replace(/\*\*3|\^3/g, '³')
-    .replace(/\*/g, '×')
-    .replace(/->/g, '→')
-}
-
-function Frac({ n, d }: { n: string; d: string }) {
-  return (
-    <span style={{
-      display: 'inline-flex', flexDirection: 'column', alignItems: 'center',
-      verticalAlign: 'middle', margin: '0 0.15em', lineHeight: 1.1,
-    }}>
-      <span style={{ fontSize: '0.85em', padding: '0 0.25em' }}>{n}</span>
-      <span style={{
-        borderTop: '1.5px solid currentColor', fontSize: '0.85em',
-        padding: '0 0.25em', width: '100%', textAlign: 'center',
-      }}>{d}</span>
-    </span>
-  )
-}
-
-export function renderMath(text: string): React.ReactNode[] {
-  const t = normalize(text)
-  const out: React.ReactNode[] = []
-  let last = 0
-  let key = 0
-  for (const m of t.matchAll(FRAC_RE)) {
-    const i = m.index ?? 0
-    if (i > last) out.push(<span key={key++}>{t.slice(last, i)}</span>)
-    out.push(<Frac key={key++} n={m[1]} d={m[2]} />)
-    last = i + m[0].length
+    const end = text.indexOf('$', start + 1)
+    if (end === -1) {
+      spans.push([text.slice(start), false])
+      break
+    }
+    const mathContent = text.slice(start + 1, end)
+    if (mathContent) spans.push([mathContent, true])
+    pos = end + 1
   }
-  if (last < t.length) out.push(<span key={key++}>{t.slice(last)}</span>)
-  return out
+  return spans
+}
+
+/** Rendu d'un span LaTeX, fallback texte brut si erreur (ne devrait jamais arriver). */
+function MathSpan({ latex }: { latex: string }) {
+  try {
+    const html = katex.renderToString(latex, { throwOnError: false })
+    return <span dangerouslySetInnerHTML={{ __html: html }} />
+  } catch (_) {
+    // Fallback : afficher le LaTeX brut ou texte sûr
+    return <span>{latex}</span>
+  }
 }
 
 /** Énoncé complet : consigne + expression mise en valeur, centrée. */
 export default function MathText({ text, centered = false, size }: {
   text: string; centered?: boolean; size?: string | number
 }) {
-  // même heuristique que le PDF : « consigne : expression »
-  const idx = text.indexOf(':')
-  const tail = idx >= 0 ? text.slice(idx + 1).trim() : ''
-  const splittable = idx >= 0 && tail.length > 0 && tail.length < 80 && /\d/.test(tail)
+  const spans = useMemo(() => splitMathSpans(text), [text])
 
-  if (!splittable) {
-    return <Box component="span" fz={size}>{renderMath(text)}</Box>
-  }
-  return (
-    <Box fz={size}>
-      <Box component="span">{text.slice(0, idx).trim()} :</Box>
-      <Box mt={4} ta={centered ? 'center' : 'left'}
-        fz="1.25em" fw={500} style={{ letterSpacing: '0.02em' }}>
-        {renderMath(tail)}
-      </Box>
-    </Box>
+  // Rendre tous les spans (maths + texte intercalés)
+  const elements = spans.map(([content, isMath], i) =>
+    isMath ? (
+      <MathSpan key={i} latex={content} />
+    ) : (
+      <span key={i}>{content}</span>
+    )
   )
+
+  // Heuristique optionnelle : si le texte contient ":", proposer une mise en valeur
+  // (facultatif — conserver pour compatibilité avec l'ancienne UI, mais elle n'est plus
+  // nécessaire puisque le balisage LaTeX est explicite)
+  const colonIdx = text.indexOf(':')
+  const afterColon = colonIdx >= 0 ? text.slice(colonIdx + 1).trim() : ''
+  const splittable = colonIdx >= 0 && afterColon.length > 0 && afterColon.length < 80
+
+  if (splittable && afterColon.split('$').some(s => /\d/.test(s))) {
+    const beforeColon = text.slice(0, colonIdx)
+    const afterSpans = splitMathSpans(afterColon)
+    const afterElements = afterSpans.map(([content, isMath], i) =>
+      isMath ? (
+        <MathSpan key={i} latex={content} />
+      ) : (
+        <span key={i}>{content}</span>
+      )
+    )
+
+    return (
+      <Box fz={size}>
+        <Box component="span">{beforeColon} :</Box>
+        <Box mt={4} ta={centered ? 'center' : 'left'}
+          fz="1.25em" fw={500} style={{ letterSpacing: '0.02em' }}>
+          {afterElements}
+        </Box>
+      </Box>
+    )
+  }
+
+  return <Box component="span" fz={size}>{elements}</Box>
 }
+
+export { splitMathSpans, MathSpan }
