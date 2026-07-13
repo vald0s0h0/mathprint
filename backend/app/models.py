@@ -507,6 +507,8 @@ class Job(Base):
     assessment_id: Mapped[str | None] = mapped_column(ForeignKey("assessments.id"), nullable=True)
     progress_message: Mapped[str | None] = mapped_column(String, nullable=True)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # journal lisible de la génération (bouton « Voir log » de l'écran Sujets)
+    log_text: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class AuditLog(Base):

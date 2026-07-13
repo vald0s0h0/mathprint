@@ -7,10 +7,11 @@ import {
   Stack, Stepper, Text, TextInput, Title,
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
-import { AlertTriangle, Eye, FileText, Plus, RotateCcw } from 'lucide-react'
+import { AlertTriangle, Eye, FileText, Plus, RotateCcw, ScrollText } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api } from '../api'
+import GenerationLogModal from '../components/GenerationLogModal'
 import PdfPreviewModal from '../components/PdfPreview'
 import PrintButton from '../components/PrintButton'
 import AdaptationStep from './subjects/AdaptationStep'
@@ -41,6 +42,7 @@ export default function Subjects() {
   const [open, setOpen] = useState(false)
   const [step, setStep] = useState(0)
   const [previewId, setPreviewId] = useState<string | null>(null)
+  const [logAssessment, setLogAssessment] = useState<Assessment | null>(null)
   const { cycle, matches } = useAppState()
   const [params, setParams] = useSearchParams()
 
@@ -199,6 +201,13 @@ export default function Subjects() {
                       <Badge size="sm" variant="dot" color={st.color}>{st.label}</Badge>
                     </Group>
                     <Group gap="xs" wrap="nowrap">
+                      {['queued', 'generating', 'error'].includes(a.status) && (
+                        <Button size="xs" variant="light" color="gray"
+                          leftSection={<ScrollText size={14} />}
+                          onClick={() => setLogAssessment(a)}>
+                          Voir log
+                        </Button>
+                      )}
                       {a.status === 'error' && (
                         <Button size="xs" color="red" variant="light"
                           leftSection={<RotateCcw size={14} />} onClick={() => retry(a)}>
@@ -235,6 +244,9 @@ export default function Subjects() {
 
       <PdfPreviewModal assessmentId={previewId} opened={!!previewId}
         onClose={() => setPreviewId(null)} />
+
+      <GenerationLogModal assessmentId={logAssessment?.id ?? null}
+        title={logAssessment?.title} onClose={() => setLogAssessment(null)} />
 
       <Modal opened={open} onClose={reset} title={<Text fw={650}>Créer un sujet</Text>} size="xl">
         <Stepper active={step} onStepClick={setStep} allowNextStepsSelect={false} size="sm">

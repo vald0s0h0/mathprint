@@ -32,6 +32,7 @@ insertion est tracée sur CopyItem.lesson_snippet_id (exercice qui suit
 immédiatement le rappel), pour audit/traçabilité.
 """
 import hashlib
+import logging
 from pathlib import Path
 
 from reportlab.lib.pagesizes import A4
@@ -47,6 +48,8 @@ from . import distribution, exercise_gen, forgetting
 from . import pdfgen
 from .runtime_settings import doc_templates
 from .security import sign_page
+
+logger = logging.getLogger(__name__)
 
 
 def assessment_dir(assessment_id: str) -> Path:
@@ -84,6 +87,9 @@ def generate_assessment_job(db: Session, assessment: Assessment,
         raise ValueError("Aucune compétence sélectionnée")
     catalog_refs = {cid: exercise_gen.ensure_catalog_ref(db, competencies[cid])
                     for cid in ordered_ids}
+    logger.info("%s élève(s), %s compétence(s) : %s",
+                len(students), len(ordered_ids),
+                ", ".join(competencies[cid].code for cid in ordered_ids))
 
     out_dir = assessment_dir(assessment.id)
     tpl = doc_templates(db)
@@ -102,6 +108,10 @@ def generate_assessment_job(db: Session, assessment: Assessment,
     total_non_qcm = 0
 
     for s_idx, student in enumerate(students):
+        _set_progress(db, job, round(5 + 90 * s_idx / max(1, len(students))),
+                      f"Copie {s_idx + 1}/{len(students)} — sélection des exercices "
+                      f"(banque générée à la demande si besoin)")
+        logger.info("Copie %s/%s (%s)", s_idx + 1, len(students), student.llm_pseudonym)
         seed = distribution.variant_seed(base_seed, assessment.personalization_mode, s_idx)
         level = _student_level(db, student.id)
         level5 = distribution.difficulty_level5(assessment.personalization_mode, level)
@@ -129,6 +139,7 @@ def generate_assessment_job(db: Session, assessment: Assessment,
                 row = distribution.pick_balanced_exercise(
                     bank, kind_counts, target_mix, item_seed)
             except Exception as e:
+                logger.warning("%s (%s) : %s", comp.code, student.llm_pseudonym, e)
                 warnings.append(f"{comp.code} ({student.llm_pseudonym}) : {e}")
                 return False
 
@@ -251,6 +262,7 @@ def generate_assessment_job(db: Session, assessment: Assessment,
                        "meta": z["meta"]} for z, zr in zone_rows],
         })
 
+    _set_progress(db, job, 96, "Assemblage du PDF…")
     c.save()
     pdfgen.write_manifest(str(out_dir / "copy_manifest.json"), manifest)
     report = {"copies": len(students), "competencies": len(ordered_ids),

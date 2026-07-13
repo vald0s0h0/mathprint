@@ -28,6 +28,7 @@ Formats de réponse (choisis selon la tâche, jamais de tracé élève) :
 """
 
 import json
+import logging
 import re
 from pathlib import Path
 
@@ -40,6 +41,7 @@ from ..models import (
 )
 from . import figures, grading, mathrender, providers
 
+logger = logging.getLogger(__name__)
 
 PROMPT_VERSION = "exgen-3"
 
@@ -531,6 +533,8 @@ def ensure_bank(db: Session, competency: Competency, level: int,
     missing = min_variants - len(rows)
     if missing <= 0:
         return rows
+    logger.info("Banque %s niveau %s : %s variante(s) en stock, %s à créer",
+                competency.code, level, len(rows), missing)
 
     # normalisations existantes (toutes variantes/niveaux de la compétence)
     existing_norms = {
@@ -566,9 +570,13 @@ def ensure_bank(db: Session, competency: Competency, level: int,
         for cand in _harvest_mathalea(db, competency, level,
                                       min(missing, min_variants // 2), existing_norms):
             _store(cand, cand["_source"], cand.get("_verdict", {}))
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Moisson MathALÉA %s niveau %s impossible : %s",
+                       competency.code, level, e)
     missing = min_variants - len(rows) - len(added)
+    if added:
+        logger.info("MathALÉA : %s exercice(s) moissonné(s) pour %s niveau %s",
+                    len(added), competency.code, level)
 
     # 2) génération DeepSeek (jusqu'à 3 lots)
     avoid = [mathrender.strip_math(ex.statement)[:120]
@@ -578,12 +586,16 @@ def ensure_bank(db: Session, competency: Competency, level: int,
             break
         system, payload = _generation_payload(db, competency, level,
                                               missing, avoid)
+        logger.info("DeepSeek : génération de %s exercice(s) pour %s niveau %s "
+                    "(lot %s/3)…", missing, competency.code, level, gen_attempt + 1)
         try:
             data = providers.deepseek_json(
                 db, "exercise_generation", system, payload,
                 max_tokens=6000, model=settings.deepseek_pro_model,
                 correlation_id=f"exgen-{competency.code}-L{level}-att{gen_attempt}")
-        except Exception:
+        except Exception as e:
+            logger.warning("DeepSeek indisponible pour %s niveau %s : %s",
+                           competency.code, level, e)
             if len(rows) + len(added) >= 1:
                 break
             raise
@@ -593,10 +605,14 @@ def ensure_bank(db: Session, competency: Competency, level: int,
                 break
             valid = _validate_exercise(raw, competency, db, existing_norms)
             if valid is None:
+                logger.info("Exercice rejeté (validation déterministe) — %s niveau %s",
+                            competency.code, level)
                 continue
             is_good, verdict = _verify_with_claude(db, competency, level, valid)
             if not is_good:
                 # une passe de réparation guidée par la critique
+                logger.info("Vérification Claude négative — tentative de réparation "
+                            "(%s niveau %s)", competency.code, level)
                 fixed_raw = _repair_exercise(db, competency, level, valid, verdict)
                 if fixed_raw is None:
                     continue
@@ -617,6 +633,8 @@ def ensure_bank(db: Session, competency: Competency, level: int,
         raise ValueError(
             f"Aucun exercice n'a passé les contrôles qualité pour "
             f"{competency.code} niveau {level}")
+    logger.info("Banque %s niveau %s prête : %s variante(s)",
+                competency.code, level, len(rows) + len(added))
     return rows + added
 
 

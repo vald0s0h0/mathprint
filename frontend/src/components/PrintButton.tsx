@@ -1,6 +1,7 @@
 // Impression d'un document via les imprimantes CUPS locales ou IPP réseau (§11.5).
 import { Button, Checkbox, Group, NumberInput, Popover, Select, Stack, Text } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
+import { Printer } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { api } from '../api'
 
@@ -54,8 +55,9 @@ export default function PrintButton({
   return (
     <Popover opened={opened} onChange={setOpened} width={300} position="bottom-end" withArrow>
       <Popover.Target>
-        <Button size={size as never} variant="light" onClick={() => setOpened((o) => !o)}>
-          🖨 {label}
+        <Button size={size as never} variant="light" leftSection={<Printer size={14} />}
+          onClick={() => setOpened((o) => !o)}>
+          {label}
         </Button>
       </Popover.Target>
       <Popover.Dropdown>

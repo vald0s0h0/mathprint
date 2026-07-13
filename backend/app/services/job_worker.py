@@ -12,6 +12,7 @@ import logging
 import threading
 from datetime import datetime, timezone
 
+from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from ..db import SessionLocal
@@ -22,6 +23,45 @@ logger = logging.getLogger(__name__)
 _TYPE = "assessment_generation"
 _wake = threading.Event()
 _started = False
+
+_LOG_MAX_CHARS = 120_000  # ~1500 lignes ; on tronque par le début au-delà
+
+
+class _JobLogHandler(logging.Handler):
+    """Capture les logs `app.*` émis pendant un job et les persiste dans
+    jobs.log_text via une session dédiée (commit immédiat, indépendant de la
+    transaction du job) : le bouton « Voir log » de l'écran Sujets lit cette
+    colonne en direct, même pendant un long appel LLM."""
+
+    def __init__(self, job_id: str):
+        super().__init__(level=logging.INFO)
+        self.job_id = job_id
+        self.lines: list[str] = []
+        self.setFormatter(logging.Formatter("%(asctime)s %(levelname).1s %(message)s",
+                                            datefmt="%H:%M:%S"))
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            self.lines.append(self.format(record))
+        except Exception:
+            return
+        text = "\n".join(self.lines)
+        if len(text) > _LOG_MAX_CHARS:
+            text = text[-_LOG_MAX_CHARS:]
+        # Échec d'écriture toléré en silence (ex. SQLite : la transaction du
+        # job tient le verrou d'écriture) : les lignes restent en mémoire et
+        # le texte complet est réécrit au prochain message — rien n'est perdu.
+        # En Postgres (prod), chaque message est visible immédiatement.
+        try:
+            db = SessionLocal()
+            try:
+                db.execute(update(Job).where(Job.id == self.job_id)
+                           .values(log_text=text))
+                db.commit()
+            finally:
+                db.close()
+        except Exception:
+            pass
 
 
 def enqueue_generation(db: Session, assessment: Assessment, font_size: int = 10) -> Job:
@@ -64,12 +104,20 @@ def _run_job(db: Session, job: Job) -> None:
         return
     assessment.status = "generating"
     db.commit()
+    # tout ce que les services app.* loguent (INFO+) pendant ce job est
+    # recopié dans jobs.log_text, consultable depuis l'écran Sujets
+    handler = _JobLogHandler(job.id)
+    app_logger = logging.getLogger("app")
+    app_logger.addHandler(handler)
     try:
+        logger.info("Génération du sujet « %s » (tentative %s)",
+                    assessment.title, job.attempts)
         font_size = (job.payload_json or {}).get("font_size", 10)
         generation.generate_assessment_job(db, assessment, job, font_size)
         job.status = "done"
         job.progress = 100
         assessment.status = "ready"
+        logger.info("Sujet « %s » prêt", assessment.title)
     except Exception as e:
         logger.exception("Échec génération sujet %s", assessment.id)
         db.rollback()
@@ -79,6 +127,8 @@ def _run_job(db: Session, job: Job) -> None:
         job.error_code = str(e)[:400]
         assessment.status = "error"
         assessment.error_message = str(e)[:400]
+    finally:
+        app_logger.removeHandler(handler)
     job.updated_at = datetime.now(timezone.utc)
     db.commit()
 
@@ -116,6 +166,9 @@ def start_worker() -> None:
     if _started:
         return
     _started = True
+    # niveau INFO sur le package app : nécessaire pour que _JobLogHandler
+    # reçoive les messages de progression (le root logger est à WARNING)
+    logging.getLogger("app").setLevel(logging.INFO)
     threading.Thread(target=_loop, daemon=True, name="mathprint-job-worker").start()
 
 

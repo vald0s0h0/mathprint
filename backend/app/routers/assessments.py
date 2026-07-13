@@ -285,6 +285,18 @@ def assessment_job(assessment_id: str, db: Session = Depends(get_db)):
             "progress_message": job.progress_message, "error": job.error_code}
 
 
+@router.get("/{assessment_id}/generation-log")
+def generation_log(assessment_id: str, db: Session = Depends(get_db)):
+    """Journal lisible du dernier job de génération (bouton « Voir log »)."""
+    job = job_worker.latest_job(db, assessment_id)
+    if not job:
+        raise HTTPException(404, "Aucune génération en file pour ce sujet")
+    return {"status": job.status, "progress": job.progress,
+            "progress_message": job.progress_message, "error": job.error_code,
+            "updated_at": job.updated_at.isoformat() if job.updated_at else None,
+            "log": job.log_text or ""}
+
+
 @router.get("/jobs/active")
 def active_generation_jobs(db: Session = Depends(get_db)):
     out = []
