@@ -3,9 +3,14 @@ de compétences depuis ce sujet, jamais de rouge) + courte synthèse Claude
 Haiku, calées sur la zone Appréciation de l'en-tête (pdfgen.header_geometry).
 
 Le même appel Claude produit aussi, en JSON structuré, un plan de travail
-prévisionnel (compétences à revoir, difficulté, mix de types, rythme) —
-persisté sur Student.next_plan_json et réutilisé par services.distribution
-lors de la création d'un sujet individuel, pour éviter un second appel LLM.
+prévisionnel (compétences à revoir, difficulté, mix de types, rythme, ET
+compétences devant recevoir un rappel de leçon) — persisté sur
+Student.next_plan_json et réutilisé par services.distribution lors de la
+création du sujet suivant, pour éviter un second appel LLM. Les rappels de
+leçon ainsi ciblés (lesson_competency_ids) sont consommés par
+services.distribution.lesson_review_targets puis services.generation, qui
+les insère dans la copie de l'élève — jamais deux fois dans le même sujet,
+mais peuvent réapparaître d'un sujet à l'autre tant que la lacune persiste.
 """
 from datetime import datetime, timezone
 
@@ -27,7 +32,13 @@ _SYSTEM = (
     "d'oubli) fournies — {\"competency_ids\": [str,...] (3 maximum), "
     "\"difficulty_level\": entier 1-5, \"quantity\": entier 2-6, "
     "\"kind_mix\": {\"application\": float, \"probleme\": float, \"qcm\": "
-    "float} (somme 1.0), \"pacing_days\": entier}."
+    "float} (somme 1.0), \"pacing_days\": entier, "
+    "\"lesson_competency_ids\": [str,...] (2 maximum, uniquement parmi "
+    "due_competencies) — les compétences pour lesquelles un rappel de leçon "
+    "doit être proposé avant les exercices du prochain sujet ; réserve ce "
+    "champ aux vraies lacunes (maîtrise faible ou échec récent d'après le "
+    "motif fourni), jamais une compétence simplement due par le temps mais "
+    "déjà bien maîtrisée — liste vide si aucune lacune ne le justifie}."
 )
 
 

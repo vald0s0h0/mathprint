@@ -226,6 +226,10 @@ class CopyItem(Base):
     correction: Mapped[str] = mapped_column(Text)       # instantané correction
     expected_json: Mapped[dict] = mapped_column(JSON, default=dict)   # réponse(s) attendue(s)
     grading_json: Mapped[dict] = mapped_column(JSON, default=dict)    # barème, tolérances
+    # rappel de leçon inséré juste avant cet exercice dans la copie (§
+    # accompagnement personnalisé, services.distribution.lesson_review_targets)
+    # — pas de ForeignKey stricte : trace historique même si le rappel en
+    # banque est ensuite retiré/régénéré, à l'image de statement/correction.
     lesson_snippet_id: Mapped[str | None] = mapped_column(String, nullable=True)
 
 

@@ -54,6 +54,9 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("next_plan_json", "JSON"),
         ("next_plan_updated_at", "TIMESTAMP"),
     ],
+    "copy_items": [
+        ("lesson_snippet_id", "TEXT"),
+    ],
 }
 
 

@@ -226,7 +226,11 @@ def _deepseek_mock(operation: str, payload: dict) -> dict:
                 "enonce": "On veut calculer $12 + 9$.",
                 "etapes": ["On pose $12 + 9$.", "On calcule : $12 + 9 = 21$."],
                 "resultat": "Le résultat est $21$."},
-            "astuce": "Vérifie toujours l'ordre de grandeur de ton résultat.",
+            "encarts": [
+                {"type": "conseil",
+                 "texte": "Vérifie toujours l'ordre de grandeur de ton résultat."},
+                {"type": "attention",
+                 "texte": "Ne confonds pas l'ordre des opérations avec l'ordre de l'énoncé."}],
             "confidence": 0.9, "reason_code": "mock_lesson"}
     if operation == "rubric_grading":
         rubric = payload.get("rubric", [])
@@ -306,13 +310,14 @@ def claude_json(db: Session, operation: str, system: str, payload: dict,
                     "raison": "Mock : verdict favorable en mode test"}
         if operation == "appreciation_synthesis":
             due = payload.get("due_competencies") or []
+            weak = [d.get("competency_id") for d in due if (d.get("mastery") or 0) < 0.5]
             return {"synthesis": ("Bon travail sur ce sujet : les progrès mesurés sont "
                                   "nets, continue sur cette lancée pour la suite."),
                     "next_plan": {
                         "competency_ids": [d.get("competency_id") for d in due[:3]],
                         "difficulty_level": 3, "quantity": 4,
                         "kind_mix": {"application": 0.55, "probleme": 0.35, "qcm": 0.10},
-                        "pacing_days": 7}}
+                        "pacing_days": 7, "lesson_competency_ids": weak[:2]}}
         return {}
 
     r = httpx.post(

@@ -14,13 +14,13 @@ import { api, getToken } from '../api'
 import MathText from './MathText'
 
 export type DocTemplates = {
-  header: { name_size: number; class_size: number; title_size: number; accent: string; show_date: boolean }
+  header: { name_size: number; title_size: number; accent: string; show_date: boolean }
   exercise: { font_size: number; title_size: number; math_size: number; border: string; accent: string; radius: number; shadow: boolean }
   lesson: { font_size: number; bg: string; border: string; text: string }
 }
 
 export const TEMPLATE_DEFAULTS: DocTemplates = {
-  header: { name_size: 14, class_size: 10, title_size: 8, accent: '#37474F', show_date: true },
+  header: { name_size: 14, title_size: 8, accent: '#37474F', show_date: true },
   exercise: { font_size: 9, title_size: 9, math_size: 12, border: '#C7CDD4', accent: '#455A64', radius: 2.2, shadow: true },
   lesson: { font_size: 8, bg: '#FFF6DF', border: '#E4C46A', text: '#6B5310' },
 }
@@ -29,17 +29,17 @@ export const TEMPLATE_DEFAULTS: DocTemplates = {
 const S = 1.7
 
 type Sel =
-  | { part: 'header'; field: 'name_size' | 'title_size' | 'class_size' }
+  | { part: 'header'; field: 'name_size' | 'title_size' }
   | { part: 'exercise'; field: 'font_size' | 'math_size' | 'title_size' }
   | { part: 'lesson'; field: 'font_size' }
   | null
 
 const FIELD_LABELS: Record<string, string> = {
-  name_size: 'Nom de l’élève', class_size: 'Ligne classe', title_size: 'Titre',
+  name_size: 'Nom, classe', title_size: 'Titre',
   font_size: 'Texte', math_size: 'Expression mathématique',
 }
 const LIMITS: Record<string, [number, number]> = {
-  name_size: [9, 24], class_size: [6, 16], title_size: [6, 16],
+  name_size: [9, 24], title_size: [6, 16],
   font_size: [6, 14], math_size: [8, 20],
 }
 
@@ -184,7 +184,8 @@ export default function TemplateEditor() {
                 <div>
                   <div style={{
                     border: '1.5px dashed #9AA3AC', borderRadius: 6, width: 84, height: 44,
-                    fontSize: 9, color: '#9AA3AC', textAlign: 'center', paddingTop: 2,
+                    fontSize: 9, color: '#9AA3AC', textAlign: 'center', paddingTop: 30,
+                    boxSizing: 'border-box',
                   }}>NOTE</div>
                   <div style={{
                     border: '1.5px dashed #9AA3AC', borderRadius: 6, width: 190, height: 30,
@@ -193,23 +194,13 @@ export default function TemplateEditor() {
                 </div>
                 <div style={{ textAlign: 'right' }}>
                   <Group gap={8} justify="flex-end" wrap="nowrap">
-                    <div>
-                      <Resizable sel={sel} me={{ part: 'header', field: 'name_size' }}
-                        onSelect={setSel} size={h.name_size}
-                        onResize={(v) => set('header', { name_size: v })}>
-                        <span style={{ fontWeight: 700, fontSize: h.name_size * S }}>
-                          Durand Camille
-                        </span>
-                      </Resizable>
-                      <br />
-                      <Resizable sel={sel} me={{ part: 'header', field: 'class_size' }}
-                        onSelect={setSel} size={h.class_size}
-                        onResize={(v) => set('header', { class_size: v })}>
-                        <span style={{ fontWeight: 700, fontSize: h.class_size * S, color: '#455A64' }}>
-                          Classe 5eA
-                        </span>
-                      </Resizable>
-                    </div>
+                    <Resizable sel={sel} me={{ part: 'header', field: 'name_size' }}
+                      onSelect={setSel} size={h.name_size}
+                      onResize={(v) => set('header', { name_size: v })}>
+                      <span style={{ fontWeight: 700, fontSize: h.name_size * S }}>
+                        Durand Camille  /  5eA
+                      </span>
+                    </Resizable>
                     <div style={{
                       width: 52, height: 52, background:
                         'repeating-conic-gradient(#111 0% 25%, #fff 0% 50%) 0 0 / 10px 10px',
@@ -278,10 +269,8 @@ export default function TemplateEditor() {
               <div style={{
                 border: '1.5px solid #F5B7A8', borderRadius: 6, height: 34, marginTop: 4,
               }} title="Zone de réponse élève (rouge saumon, supprimée avant OCR)" />
-              <div style={{
-                border: '1.5px dashed #9AA3AC', borderRadius: 4, height: 16, marginTop: 6,
-                fontSize: 8, color: '#9AA3AC', textAlign: 'right', paddingRight: 6,
-              }}>correction</div>
+              <div style={{ height: 10 }}
+                title="Bande de correction (hors carte, invisible sur le sujet imprimé)" />
             </div>
 
             {/* rappel de leçon */}

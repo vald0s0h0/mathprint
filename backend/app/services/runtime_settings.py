@@ -56,8 +56,7 @@ def apply_mock_mode(db: Session, enabled: bool):
 # sont exposés — la géométrie des marqueurs (QR/fiduciels) reste FIGÉE.
 DEFAULT_TEMPLATES: dict = {
     "header": {
-        "name_size": 14,        # nom de l'élève (pt)
-        "class_size": 10,       # ligne "Classe …"
+        "name_size": 14,        # ligne "Nom  /  Classe"
         "title_size": 8,        # titre du sujet
         "accent": "#37474F",    # filet séparateur + titre
         "show_date": True,

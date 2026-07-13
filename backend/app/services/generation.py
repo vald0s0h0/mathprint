@@ -17,9 +17,19 @@ generate_assessment_job tourne dans le worker de fond (services.job_worker),
 plus dans la requête HTTP : les appels DeepSeek/Claude déclenchés par une
 banque manquante n'y bloquent donc plus la connexion du navigateur.
 
-Rappels de leçon : pour un entraînement, les élèves fragiles (niveau ≤ 4)
-reçoivent un rappel DeepSeek stocké (lesson_snippets) avant le premier
-exercice de chaque compétence concernée (2 max par copie).
+Rappels de leçon : pour un entraînement (jamais en contrôle), chaque élève
+reçoit jusqu'à settings.max_lessons_per_copy rappels (lesson_snippets),
+insérés avant le premier exercice de la compétence concernée. Les
+compétences ciblées viennent de services.distribution.lesson_review_targets
+— en priorité le plan post-correction personnalisé (lacunes identifiées par
+le LLM à la correction précédente, cf. services.appreciation), à défaut un
+repli déterministe sur la courbe de l'oubli (maîtrise faible), à défaut
+l'ancien filet de sécurité "élève fragile" (niveau ≤ 4). Jamais deux fois la
+même compétence dans une même copie ; un rappel peut en revanche réapparaître
+d'un sujet à l'autre pour le même élève tant que la lacune persiste — c'est
+voulu (accompagnement personnalisé, pas de nouveauté à tout prix). Chaque
+insertion est tracée sur CopyItem.lesson_snippet_id (exercice qui suit
+immédiatement le rappel), pour audit/traçabilité.
 """
 import hashlib
 from pathlib import Path
@@ -33,7 +43,7 @@ from ..models import (
     Assessment, Competency, Copy, CopyItem, DocumentPage, FileObject, Job,
     ResponseZone, SchoolClass, StudentLevel,
 )
-from . import distribution, exercise_gen
+from . import distribution, exercise_gen, forgetting
 from . import pdfgen
 from .runtime_settings import doc_templates
 from .security import sign_page
@@ -99,6 +109,9 @@ def generate_assessment_job(db: Session, assessment: Assessment,
         if assessment.personalization_mode == "individual":
             target_mix, level5 = distribution.apply_next_plan(student, target_mix, level5)
         priority = distribution.priority_competencies(db, student.id, ordered_ids)
+        due = forgetting.due_competencies(db, student.id)
+        lesson_targets = set(distribution.lesson_review_targets(
+            priority, student, due, level, assessment.type))
 
         copy = Copy(assessment_id=assessment.id, student_id=student.id, seed=seed)
         db.add(copy)
@@ -119,8 +132,9 @@ def generate_assessment_job(db: Session, assessment: Assessment,
                 warnings.append(f"{comp.code} ({student.llm_pseudonym}) : {e}")
                 return False
 
-            if (assessment.type == "training" and level <= 4
-                    and comp.id not in lessons_added and len(lessons_added) < 2):
+            lesson_snippet_id = None
+            if (comp.id in lesson_targets and comp.id not in lessons_added
+                    and len(lessons_added) < settings.max_lessons_per_copy):
                 try:
                     snippet = exercise_gen.ensure_lesson(db, comp, level)
                     render_items.append({"kind": "lesson", "title": snippet.title,
@@ -128,15 +142,17 @@ def generate_assessment_job(db: Session, assessment: Assessment,
                                          "content": snippet.content_latex,
                                          "example": snippet.example_latex})
                     lessons_added.add(comp.id)
+                    lesson_snippet_id = snippet.id
                 except Exception as e:
-                    warnings.append(f"Rappel {comp.code} indisponible : {e}")
+                    warnings.append(f"Rappel {comp.code} ({student.llm_pseudonym}) indisponible : {e}")
 
             choices = row.grading_json.get("choices", [])
             item = CopyItem(
                 copy_id=copy.id, catalog_id=catalog_refs[comp_id].id, sequence=seq,
                 difficulty=row.difficulty_level * 2, response_type=row.response_type,
                 statement=row.statement, correction=row.correction,
-                expected_json=row.expected_json, grading_json=row.grading_json)
+                expected_json=row.expected_json, grading_json=row.grading_json,
+                lesson_snippet_id=lesson_snippet_id)
             db.add(item)
             db.flush()
             render_items.append({"kind": "exercise", "item_id": item.id,

@@ -63,9 +63,20 @@ TITLE_RULE = HexColor("#37474F")
 DOT_ON = HexColor("#455A64")
 DOT_OFF = HexColor("#D3DCE3")
 
+# encarts typés d'un rappel de leçon (§ rendu rappels) : trois icônes/couleurs
+# fixes indépendantes du thème de la carte, pour rester reconnaissables quelle
+# que soit la couleur choisie par l'enseignant dans l'éditeur de gabarit.
+ADMONITION_GUTTER = 5.5 * mm
+_ADMONITION_COLORS = {
+    "conseil": {"border": HexColor("#2F9E8F"), "bg": HexColor("#E9F7F4"),
+                "text": HexColor("#0F5C52")},
+    "attention": {"border": HexColor("#D8531D"), "bg": HexColor("#FDECE4"),
+                  "text": HexColor("#7A2E10")},
+}
+
 CARD_PAD = 2.6 * mm
 STRIP_H = 6.5 * mm      # bande de correction (overlay)
-STRIP_GAP = 1.6 * mm    # espace blanc visible entre la carte et sa bande de correction
+STRIP_GAP = 0.4 * mm    # espace blanc visible entre la carte et sa bande de correction (rapproché)
 RADIUS = 2.2 * mm
 GAP = 3.5 * mm          # espace vertical entre deux cartes/rappels
 COL_W = (PAGE_W - 2 * MARGIN - COL_GAP) / 2
@@ -154,21 +165,51 @@ def _icon_pencil(c: canvas.Canvas, x: float, y: float, size: float = 3.2 * mm,
     c.restoreState()
 
 
-def _icon_book(c: canvas.Canvas, x: float, y: float, size: float = 3.4 * mm):
-    """Petit livre ouvert vectoriel."""
+def _icon_book(c: canvas.Canvas, x: float, y: float, size: float = 3.4 * mm,
+               color=LESSON_TEXT):
+    """Petit livre vectoriel (couverture pleine + reliure claire) — reste
+    lisible en petite taille dans la marge, icône "rappel de leçon"."""
     c.saveState()
-    c.setStrokeColor(LESSON_TEXT)
-    c.setLineWidth(0.8)
-    h = size * 0.7
-    c.line(x, y, x, y + h)                       # reliure
+    w, h = size * 0.9, size * 0.72
+    c.setFillColor(color)
+    c.roundRect(x - w / 2, y, w, h, size * 0.09, stroke=0, fill=1)
+    c.setStrokeColor(white)
+    c.setLineWidth(0.7)
+    c.line(x, y + size * 0.1, x, y + h - size * 0.1)
+    c.restoreState()
+
+
+def _icon_bulb(c: canvas.Canvas, x: float, y: float, size: float = 3.4 * mm,
+               color=DOT_ON):
+    """Petite ampoule vectorielle — icône "conseil"."""
+    c.saveState()
+    r = size * 0.34
+    cx, cy = x, y + size * 0.5
+    c.setFillColor(color)
+    c.circle(cx, cy, r, stroke=0, fill=1)
+    base_w, base_h = size * 0.32, size * 0.24
+    c.roundRect(cx - base_w / 2, cy - r - base_h + 0.3, base_w, base_h,
+               base_w * 0.25, stroke=0, fill=1)
+    c.restoreState()
+
+
+def _icon_warning(c: canvas.Canvas, x: float, y: float, size: float = 3.4 * mm,
+                  color=DOT_ON):
+    """Triangle d'alerte vectoriel — icône "attention"."""
+    c.saveState()
+    c.setStrokeColor(color)
+    c.setFillColor(color)
+    h = size * 0.92
     p = c.beginPath()
     p.moveTo(x, y + h)
-    p.curveTo(x - size * 0.55, y + h * 1.15, x - size * 0.55, y + h * 0.15, x, y)
+    p.lineTo(x - size * 0.52, y)
+    p.lineTo(x + size * 0.52, y)
+    p.close()
+    c.setLineWidth(0.9)
     c.drawPath(p, stroke=1, fill=0)
-    p = c.beginPath()
-    p.moveTo(x, y + h)
-    p.curveTo(x + size * 0.55, y + h * 1.15, x + size * 0.55, y + h * 0.15, x, y)
-    c.drawPath(p, stroke=1, fill=0)
+    c.setLineWidth(0.9)
+    c.line(x, y + h * 0.32, x, y + h * 0.64)
+    c.circle(x, y + h * 0.16, 0.35 * mm, stroke=0, fill=1)
     c.restoreState()
 
 
@@ -201,7 +242,6 @@ def _draw_header(c: canvas.Canvas, student_name: str, class_name: str, title: st
     tpl = tpl or DEFAULT_TEMPLATES["header"]
     accent = HexColor(tpl.get("accent", "#37474F"))
     name_fs = float(tpl.get("name_size", 14))
-    class_fs = float(tpl.get("class_size", 10))
     title_fs = float(tpl.get("title_size", 8))
     y_top = PAGE_H - MARGIN
     header_bottom = y_top - HEADER_H
@@ -211,14 +251,12 @@ def _draw_header(c: canvas.Canvas, student_name: str, class_name: str, title: st
     # --- zone Note (23mm, contrôle uniquement) ---
     if geo["note"]["visible"]:
         nx, ny, nw, nh = geo["note"]["x"], geo["note"]["y"], geo["note"]["w"], geo["note"]["h"]
-        box_h = 15 * mm
-        box_y = ny + nh - box_h - 3 * mm
         _dotted(c)
-        c.roundRect(nx + 1.5 * mm, box_y, nw - 3 * mm, box_h, 2 * mm)
+        c.roundRect(nx + 1.5 * mm, ny + 1.5 * mm, nw - 3 * mm, nh - 3 * mm, 2 * mm)
         _solid(c)
         c.setFillColor(DOTTED_GRAY)
         c.setFont("Helvetica", 6.5)
-        c.drawCentredString(nx + nw / 2, box_y + box_h + 1.2 * mm, "NOTE")
+        c.drawCentredString(nx + nw / 2, ny + nh - 5 * mm, "NOTE")
         c.setFillColor(black)
 
     # --- zone Appréciation (absorbe la Note en mode entraînement) ---
@@ -235,16 +273,12 @@ def _draw_header(c: canvas.Canvas, student_name: str, class_name: str, title: st
 
     # --- zone Métadonnées, justifiée à droite (nom/prénom, classe, titre, date) ---
     mx, my, mw, mh = geo["meta"]["x"], geo["meta"]["y"], geo["meta"]["w"], geo["meta"]["h"]
-    meta_right = mx + mw - 2 * mm
+    meta_right = geo["qr"]["x"] - 2 * mm
     line_y = my + mh - name_fs
     c.setFillColor(black)
     c.setFont("Helvetica-Bold", name_fs)
-    c.drawRightString(meta_right, line_y, student_name)
+    c.drawRightString(meta_right, line_y, f"{student_name}  /  {class_name}")
     line_y -= name_fs * 0.55 + 2 * mm
-    c.setFont("Helvetica-Bold", class_fs)
-    c.setFillColor(HexColor("#455A64"))
-    c.drawRightString(meta_right, line_y, f"Classe {class_name}")
-    line_y -= class_fs * 0.65 + 2 * mm
     c.setFont("Helvetica-Bold", title_fs)
     c.setFillColor(accent)
     c.drawRightString(meta_right, line_y, title)
@@ -609,9 +643,6 @@ def _draw_exercise_card(c: canvas.Canvas, x: float, y_top: float, w: float,
     # bande de correction : HORS carte, collée (espace blanc visible, jamais
     # coupée par saut de colonne/page), cadre invisible sur le sujet imprimé —
     # la géométrie reste réservée pour l'overlay de correction.
-    c.setFillColor(DOTTED_GRAY)
-    c.setFont("Helvetica", 5)
-    c.drawRightString(x + w - CARD_PAD - 1 * mm, y + 1.8 * mm, "correction")
     c.setFillColor(black)
 
     zone_geo = {"x_pt": x, "y_pt": zone_y, "w_pt": w, "h_pt": zone_h}
@@ -620,10 +651,17 @@ def _draw_exercise_card(c: canvas.Canvas, x: float, y_top: float, w: float,
     return card_h, zone_geo, meta
 
 
+_ADMONITION_KINDS = ("rappel", "conseil", "attention")
+
+
 def _lesson_layout(blocks: dict, width: float, fs: float) -> dict:
-    """Met en page un rappel structuré v3. Retourne {parts, height}.
-    parts = liste de (type, layout|image, extra) empilés verticalement."""
+    """Met en page un rappel structuré v4. Retourne {parts, height}.
+    parts = liste de (type, layout|image|str, extra) empilés verticalement.
+    L'essentiel et les encarts (conseil/attention) sont mis en page en
+    admonitions à icône de marge (largeur réduite de ADMONITION_GUTTER) ;
+    méthode/exemple restent un flot pleine largeur avec sous-titre."""
     inner = width - 2 * CARD_PAD
+    admo_w = max(10 * mm, inner - ADMONITION_GUTTER)
     parts: list[tuple] = []
     height = 0.0
 
@@ -633,23 +671,48 @@ def _lesson_layout(blocks: dict, width: float, fs: float) -> dict:
         parts.append((kind, lay, indent, font_fs, gap))
         height += lay["height"] + gap
 
+    def _push_subtitle(text):
+        nonlocal height
+        parts.append(("subtitle", text, 0.0, fs, 0.7 * mm))
+        height += fs * 0.9 + 0.7 * mm
+
+    def _push_admonition(kind, text, gap=2.3 * mm):
+        nonlocal height
+        lay = _rich_layout(text, admo_w, fs)
+        parts.append((kind, lay, 0.0, fs, gap))
+        height += lay["height"] + gap
+
     if blocks.get("essentiel"):
-        _push("essentiel", blocks["essentiel"])
-    for i, step in enumerate(blocks.get("methode") or []):
-        _push("methode", f"{i + 1}. {step}", indent=1.5 * mm, gap=0.6 * mm)
+        _push_admonition("rappel", blocks["essentiel"])
+
+    methode = blocks.get("methode") or []
+    if methode:
+        _push_subtitle("Méthode")
+        for i, step in enumerate(methode):
+            _push("methode", f"{i + 1}. {step}", indent=1.5 * mm, gap=0.6 * mm)
+
     ex = blocks.get("exemple") or {}
     if ex.get("enonce"):
-        height += 1.6 * mm  # respiration avant l'encadré exemple
+        _push_subtitle("Exemple résolu")
+        height += 1.2 * mm  # respiration avant l'encadré exemple
         parts.append(("exemple_start", None, 0.0, fs, 0.0))
-        _push("exemple", "Exemple : " + ex["enonce"], indent=2 * mm)
+        _push("exemple", ex["enonce"], indent=2 * mm)
         for step in ex.get("etapes") or []:
             _push("exemple", step, indent=4 * mm, gap=0.6 * mm)
         if ex.get("resultat"):
             _push("exemple", ex["resultat"], indent=2 * mm)
         parts.append(("exemple_end", None, 0.0, fs, 0.0))
         height += 2.2 * mm
-    if blocks.get("astuce"):
-        _push("astuce", "Astuce : " + blocks["astuce"], gap=0.6 * mm)
+
+    encarts = blocks.get("encarts")
+    if not encarts and blocks.get("astuce"):  # compat rappels générés avant v4
+        encarts = [{"type": "conseil", "texte": blocks["astuce"]}]
+    for enc in (encarts or [])[:3]:
+        etype = enc.get("type") if enc.get("type") in ("conseil", "attention") else "conseil"
+        texte = str(enc.get("texte") or "").strip()
+        if texte:
+            _push_admonition(etype, texte)
+
     figure = _figure_image(blocks.get("figure"), min(inner, 55 * mm), 32 * mm)
     if figure:
         parts.append(("figure", figure, 0.0, fs, 1.5 * mm))
@@ -663,8 +726,10 @@ def _lesson_card_h(layout: dict, tpl: dict) -> float:
 
 def _draw_lesson_card(c: canvas.Canvas, x: float, y_top: float, w: float,
                       title: str, layout: dict, tpl: dict) -> float:
-    """Cadre rappel de leçon structuré : fond ambre, icône livre, l'essentiel,
-    méthode numérotée, exemple résolu encadré, astuce, figure éventuelle."""
+    """Cadre rappel de leçon structuré : fond ambre, icône livre, l'essentiel
+    en admonition (icône de marge), sous-titres Méthode/Exemple, méthode
+    numérotée, exemple résolu encadré, encarts conseil/attention à icône et
+    teinte dédiées, figure éventuelle."""
     fs = max(6, int(tpl.get("font_size", 8)))
     bg = HexColor(tpl.get("bg", "#FFF6DF"))
     border = HexColor(tpl.get("border", "#E4C46A"))
@@ -679,26 +744,33 @@ def _draw_lesson_card(c: canvas.Canvas, x: float, y_top: float, w: float,
     c.roundRect(x, y, w, card_h, RADIUS, stroke=1, fill=1)
 
     ty = y + card_h - head_h
-    _icon_book(c, x + CARD_PAD + 1.6 * mm, ty + 0.6 * mm)
+    _icon_book(c, x + CARD_PAD + 1.6 * mm, ty + 0.6 * mm, color=text_color)
     c.setFillColor(text_color)
     c.setFont("Helvetica-Bold", fs)
     c.drawString(x + CARD_PAD + 4.4 * mm, ty + 0.8 * mm, _pdf_safe(title)[:80])
 
     inner = w - 2 * CARD_PAD
+    gutter_x = x + CARD_PAD
     line_y = ty - 1.2 * mm
     example_top = None
     for kind, payload, indent, part_fs, part_gap in layout["parts"]:
+        if kind == "subtitle":
+            c.setFillColor(border)
+            c.setFont("Helvetica-Bold", max(6.5, part_fs - 0.5))
+            c.drawString(gutter_x, line_y - part_fs * 0.72, _pdf_safe(payload).upper())
+            line_y -= part_fs * 0.9 + part_gap
+            continue
         if kind == "exemple_start":
             line_y -= 1.6 * mm
             example_top = line_y
             continue
         if kind == "exemple_end":
             # encadré blanc translucide derrière l'exemple, redessiné dessous :
-            # on trace seulement un filet vertical discret à gauche
+            # on trace seulement un filet vertical discret à gauche (citation)
             c.setStrokeColor(border)
             c.setLineWidth(1.4)
-            c.line(x + CARD_PAD + 0.4 * mm, line_y + 0.6 * mm,
-                   x + CARD_PAD + 0.4 * mm, example_top - 0.4 * mm)
+            c.line(gutter_x + 0.4 * mm, line_y + 0.6 * mm,
+                   gutter_x + 0.4 * mm, example_top - 0.4 * mm)
             line_y -= 2.2 * mm
             example_top = None
             continue
@@ -708,9 +780,28 @@ def _draw_lesson_card(c: canvas.Canvas, x: float, y_top: float, w: float,
                         mask="auto", preserveAspectRatio=True)
             line_y -= fh + 1.5 * mm
             continue
-        font = "Helvetica-Oblique" if kind in ("essentiel", "astuce") else "Helvetica"
-        _draw_rich(c, x + CARD_PAD + indent, line_y, payload, part_fs,
-                   color=text_color, font=font)
+        if kind in _ADMONITION_KINDS:
+            block_h = payload["height"]
+            text_x = gutter_x + ADMONITION_GUTTER
+            icon_y = line_y - part_fs * 0.7
+            if kind == "rappel":
+                txt_color = text_color
+                _icon_book(c, gutter_x + 1.7 * mm, icon_y, size=3.2 * mm, color=text_color)
+            else:
+                style = _ADMONITION_COLORS[kind]
+                pad_v = 0.9 * mm
+                c.setFillColor(style["bg"])
+                c.roundRect(gutter_x, line_y - block_h - pad_v,
+                           inner, block_h + 2 * pad_v, 1.3 * mm, stroke=0, fill=1)
+                icon_fn = _icon_bulb if kind == "conseil" else _icon_warning
+                icon_fn(c, gutter_x + 1.7 * mm, icon_y, size=3.2 * mm, color=style["border"])
+                txt_color = style["text"]
+            font = "Helvetica-Oblique" if kind == "rappel" else "Helvetica"
+            _draw_rich(c, text_x, line_y, payload, part_fs, color=txt_color, font=font)
+            line_y -= block_h + part_gap
+            continue
+        _draw_rich(c, gutter_x + indent, line_y, payload, part_fs,
+                   color=text_color, font="Helvetica")
         line_y -= payload["height"] + part_gap
     c.setFillColor(black)
     return card_h

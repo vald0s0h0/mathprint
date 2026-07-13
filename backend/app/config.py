@@ -49,6 +49,8 @@ class Settings(BaseSettings):
     level_max_auto_delta: int = 1        # variation auto max du niveau 1-10 par cycle
     exercise_kind_mix: dict = {"application": 0.55, "probleme": 0.35, "qcm": 0.10}
     next_plan_max_age_days: int = 60     # au-delà, le plan post-correction stocké est ignoré
+    lesson_review_mastery_threshold: float = 0.5  # maîtrise sous ce seuil = lacune -> rappel de leçon
+    max_lessons_per_copy: int = 2        # rappels de leçon max insérés dans une même copie
 
     # --- MathALÉA (service Node headless, conteneur "mathalea" §11.1) ---
     mathalea_url: str = "http://localhost:8123"

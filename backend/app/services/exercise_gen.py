@@ -675,13 +675,17 @@ _LESSON_SYSTEM = (
     "tutoiement, aucun jargon non défini ;\n"
     "- structure stricte : l'essentiel (1-2 phrases : la définition ou la règle), "
     "la méthode (2 à 4 étapes numérotées, chacune une action concrète), un exemple "
-    "entièrement résolu étape par étape avec des nombres très simples, et une "
-    "astuce mémorable (moyen mnémotechnique, vérification rapide ou piège à éviter) ;\n"
+    "entièrement résolu étape par étape avec des nombres très simples ;\n"
+    "- encarts (0 à 3, chacun typé) : type \"conseil\" pour un moyen "
+    "mnémotechnique ou une vérification rapide ; type \"attention\" pour un "
+    "piège fréquent ou une erreur classique à ne pas commettre. Chaque encart "
+    "est court (une phrase, deux maximum) et autonome ;\n"
     "- si une figure aide à comprendre (géométrie, droite graduée), fournis-la ;\n"
     + _GEN_FORMAT_RULES + "\n"
     "Réponds en JSON strict : {\"title\": str (court), \"essentiel\": str, "
     "\"methode\": [str], \"exemple\": {\"enonce\": str, \"etapes\": [str], "
-    "\"resultat\": str}, \"astuce\": str, "
+    "\"resultat\": str}, "
+    "\"encarts\": [{\"type\": \"conseil\"|\"attention\", \"texte\": str}], "
     "\"figure\": {\"type\": ..., \"params\": {...}}?}"
 )
 
@@ -690,10 +694,13 @@ _LESSON_VERIFY_SYSTEM = (
     "(a) justesse mathématique de la règle ET de l'exemple (refais les calculs), "
     "(b) simplicité réelle (phrases courtes, pas de jargon), "
     "(c) la méthode est-elle applicable telle quelle par l'élève, "
-    "(d) l'exemple illustre-t-il exactement la compétence. "
+    "(d) l'exemple illustre-t-il exactement la compétence, "
+    "(e) les encarts \"attention\" pointent-ils un piège réel et pertinent. "
     "JSON strict : {\"valide\": bool, \"scores\": {\"justesse\": 0-5, "
     "\"simplicite\": 0-5, \"utilite\": 0-5}, \"problemes\": [str], \"reparable\": bool}."
 )
+
+_ENCART_TYPES = ("conseil", "attention")
 
 
 def _validate_lesson_blocks(data: dict) -> dict | None:
@@ -707,7 +714,6 @@ def _validate_lesson_blocks(data: dict) -> dict | None:
     enonce = str(exemple.get("enonce", "")).strip()
     etapes = [str(s).strip() for s in (exemple.get("etapes") or []) if str(s).strip()]
     resultat = str(exemple.get("resultat", "")).strip()
-    astuce = str(data.get("astuce", "")).strip()
 
     if not title or not _check_text(essentiel, 10, 500):
         return None
@@ -717,13 +723,24 @@ def _validate_lesson_blocks(data: dict) -> dict | None:
         return None
     if not (1 <= len(etapes) <= 5) or not all(_check_text(s, 3, 300) for s in etapes):
         return None
-    if astuce and not _check_text(astuce, 5, 300):
-        astuce = ""
+
+    # encarts typés (conseil / attention) — repli sur l'ancien champ "astuce"
+    raw_encarts = data.get("encarts")
+    if not raw_encarts and data.get("astuce"):
+        raw_encarts = [{"type": "conseil", "texte": data["astuce"]}]
+    encarts = []
+    for enc in (raw_encarts or [])[:3]:
+        if not isinstance(enc, dict):
+            continue
+        etype = enc.get("type") if enc.get("type") in _ENCART_TYPES else "conseil"
+        texte = str(enc.get("texte", "")).strip()
+        if _check_text(texte, 5, 300):
+            encarts.append({"type": etype, "texte": texte})
 
     figure = figures.validate_figure(data.get("figure"))
     return {"title": title, "essentiel": essentiel, "methode": methode,
             "exemple": {"enonce": enonce, "etapes": etapes, "resultat": resultat},
-            "astuce": astuce, "figure": figure}
+            "encarts": encarts, "figure": figure}
 
 
 def ensure_lesson(db: Session, competency: Competency, level: int) -> LessonSnippet:

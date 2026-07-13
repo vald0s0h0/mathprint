@@ -210,22 +210,12 @@ export default function Corrections() {
             Déposez le PDF scanné — le QR de chaque page l'associe au bon sujet.
           </Text>
         </div>
-        <Group>
-          {mockMode && (
-            <Button variant="light" color="grape" leftSection={<FlaskConical size={16} />}
-              onClick={() => setMockOpen(true)}>
-              Simuler un lot
-            </Button>
-          )}
-          <FileButton onChange={(f) => upload(f)}
-            accept="application/pdf,image/jpeg,image/png,image/heic,image/heif">
-            {(props) => (
-              <Button {...props} leftSection={<Upload size={16} />} loading={uploading}>
-                Déposer un scan
-              </Button>
-            )}
-          </FileButton>
-        </Group>
+        {mockMode && (
+          <Button variant="light" color="grape" leftSection={<FlaskConical size={16} />}
+            onClick={() => setMockOpen(true)}>
+            Simuler un lot
+          </Button>
+        )}
       </Group>
 
       <Card withBorder padding="md">

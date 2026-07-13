@@ -7,7 +7,7 @@ import {
   SegmentedControl, Select, Stack, Table, Tabs, Text, Title, Tooltip,
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
-import { BookOpen, Library, RefreshCw, Trash2 } from 'lucide-react'
+import { AlertTriangle, BookOpen, Lightbulb, Library, RefreshCw, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../api'
 import FigurePreview from '../components/FigurePreview'
@@ -32,6 +32,7 @@ type Lesson = {
   blocks: {
     essentiel?: string; methode?: string[]
     exemple?: { enonce: string; etapes: string[]; resultat: string }
+    encarts?: { type: 'conseil' | 'attention'; texte: string }[]
     astuce?: string; figure?: Record<string, any> | null
   } | null
   content: string; example: string; figure: Record<string, any> | null
@@ -95,6 +96,31 @@ function ExerciseCard({ ex, onRetire }: { ex: Exercise; onRetire: (id: string) =
   )
 }
 
+// Encarts typés d'un rappel de leçon : icône dans une marge dédiée, teinte
+// distincte selon le type — reconnaissables au premier coup d'œil quel que
+// soit le thème choisi pour la carte.
+const ADMONITION: Record<'rappel' | 'conseil' | 'attention',
+  { icon: typeof BookOpen; bg: string; border: string; text: string }> = {
+  rappel: { icon: BookOpen, bg: 'var(--mantine-color-yellow-0)',
+    border: 'var(--mantine-color-yellow-6)', text: 'var(--mantine-color-yellow-9)' },
+  conseil: { icon: Lightbulb, bg: 'var(--mantine-color-teal-0)',
+    border: 'var(--mantine-color-teal-6)', text: 'var(--mantine-color-teal-9)' },
+  attention: { icon: AlertTriangle, bg: 'var(--mantine-color-orange-0)',
+    border: 'var(--mantine-color-orange-7)', text: 'var(--mantine-color-orange-9)' },
+}
+
+function Admonition({ type, children }: { type: 'rappel' | 'conseil' | 'attention'; children: React.ReactNode }) {
+  const s = ADMONITION[type]
+  const Icon = s.icon
+  return (
+    <Group align="flex-start" gap={8} wrap="nowrap" p={7}
+      style={{ background: s.bg, borderLeft: `3px solid ${s.border}`, borderRadius: 5 }}>
+      <Icon size={15} color={s.border} style={{ flexShrink: 0, marginTop: 2 }} />
+      <Box style={{ flex: 1, minWidth: 0, color: s.text }}>{children}</Box>
+    </Group>
+  )
+}
+
 function LessonCard({ lesson, onRetire }: { lesson: Lesson; onRetire: (id: string) => void }) {
   const b = lesson.blocks
   return (
@@ -114,10 +140,11 @@ function LessonCard({ lesson, onRetire }: { lesson: Lesson; onRetire: (id: strin
         </Tooltip>
       </Group>
       {b ? (
-        <Stack gap={6}>
-          <MathText text={b.essentiel ?? ''} />
+        <Stack gap={8}>
+          {b.essentiel && <Admonition type="rappel"><MathText text={b.essentiel} /></Admonition>}
           {(b.methode ?? []).length > 0 && (
             <Stack gap={2}>
+              <Text size="xs" c="dimmed" fw={700} tt="uppercase">Méthode</Text>
               {b.methode!.map((m, i) => (
                 <Group key={i} gap={6} wrap="nowrap" align="flex-start">
                   <Text size="sm" fw={600} c="dimmed">{i + 1}.</Text>
@@ -127,8 +154,9 @@ function LessonCard({ lesson, onRetire }: { lesson: Lesson; onRetire: (id: strin
             </Stack>
           )}
           {b.exemple?.enonce && (
-            <Paper bg="var(--mantine-color-default-hover)" p={8} radius="sm">
-              <Text size="xs" c="dimmed" fw={600} mb={2}>Exemple résolu</Text>
+            <Paper bg="var(--mantine-color-default-hover)" p={8} radius="sm"
+              style={{ borderLeft: '3px solid var(--mantine-color-gray-5)' }}>
+              <Text size="xs" c="dimmed" fw={700} tt="uppercase" mb={2}>Exemple résolu</Text>
               <MathText text={b.exemple.enonce} size="sm" />
               {b.exemple.etapes.map((e, i) => (
                 <Box key={i} ml={10}><MathText text={e} size="sm" /></Box>
@@ -136,7 +164,12 @@ function LessonCard({ lesson, onRetire }: { lesson: Lesson; onRetire: (id: strin
               <MathText text={b.exemple.resultat} size="sm" />
             </Paper>
           )}
-          {b.astuce && <Text size="sm" fs="italic" c="dimmed">💡 <MathText text={b.astuce} size="sm" /></Text>}
+          {(b.encarts?.length ? b.encarts : b.astuce ? [{ type: 'conseil' as const, texte: b.astuce }] : [])
+            .map((enc, i) => (
+              <Admonition key={i} type={enc.type === 'attention' ? 'attention' : 'conseil'}>
+                <MathText text={enc.texte} size="sm" />
+              </Admonition>
+            ))}
           {(b.figure || lesson.figure) && <FigurePreview figureJson={b.figure ?? lesson.figure} />}
         </Stack>
       ) : (

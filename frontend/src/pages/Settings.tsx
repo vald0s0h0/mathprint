@@ -1,13 +1,13 @@
 // Paramètres (§9.6) : Mon compte, API, Imprimantes, Calibration, Pédagogie,
 // Documents (éditeur de templates), Système (dont mode démo désactivable).
 import {
-  Badge, Button, Card, ColorInput, FileButton, Group, PasswordInput, Stack,
-  Switch, Table, Tabs, Text, TextInput, Title,
+  ActionIcon, Alert, Badge, Button, Card, ColorInput, FileButton, Group, Modal,
+  PasswordInput, Stack, Switch, Table, Tabs, Text, TextInput, Title,
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
 import {
-  Database, FileText, FlaskConical, KeyRound, Printer, Ruler, Save,
-  SlidersHorizontal, UserRound,
+  AlertTriangle, Database, FileText, FlaskConical, KeyRound, Printer, Ruler,
+  Save, SlidersHorizontal, Trash2, UserRound,
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { api, getToken } from '../api'
@@ -21,6 +21,23 @@ type PrintersInfo = {
   network: { name: string; uri: string; status: string }[]
 }
 type Build = { sha: string; time: string }
+type ClassRow = {
+  id: string; name: string; grade_level: string; school_year: string | null
+  is_mock: boolean; archived: boolean; student_count: number; assessment_count: number
+}
+type StudentRow = {
+  id: string; first_name: string; last_name: string; class_name: string
+  active: boolean; copy_count: number
+}
+type AssessmentRow = {
+  id: string; title: string; type: string; status: string; class_name: string
+  created_at: string; copy_count: number; scan_batch_count: number
+}
+type CorrectionRow = {
+  id: string; assessment_title: string; class_name: string; status: string
+  page_count: number; created_at: string
+}
+type DeleteKind = 'classes' | 'students' | 'assessments' | 'corrections'
 type SystemStatus = {
   version: string; build?: Build
   database: { ok: boolean; url_scheme: string }
@@ -45,6 +62,12 @@ export default function SettingsPage() {
   const [netName, setNetName] = useState('')
   const [netUri, setNetUri] = useState('')
   const [webBuild, setWebBuild] = useState<Build | null>(null)
+  const [dataClasses, setDataClasses] = useState<ClassRow[]>([])
+  const [dataStudents, setDataStudents] = useState<StudentRow[]>([])
+  const [dataAssessments, setDataAssessments] = useState<AssessmentRow[]>([])
+  const [dataCorrections, setDataCorrections] = useState<CorrectionRow[]>([])
+  const [confirmTarget, setConfirmTarget] = useState<{ kind: DeleteKind; id: string; label: string } | null>(null)
+  const [deleting, setDeleting] = useState(false)
   const { refreshSystem } = useAppState()
 
   function refresh() {
@@ -60,6 +83,30 @@ export default function SettingsPage() {
       .catch(() => setWebBuild(null))
   }
   useEffect(refresh, [])
+
+  // onglet Données : réservé au rôle admin côté API — silencieux si 403
+  function refreshData() {
+    api.get<ClassRow[]>('/api/data/classes').then(setDataClasses).catch(() => {})
+    api.get<StudentRow[]>('/api/data/students').then(setDataStudents).catch(() => {})
+    api.get<AssessmentRow[]>('/api/data/assessments').then(setDataAssessments).catch(() => {})
+    api.get<CorrectionRow[]>('/api/data/corrections').then(setDataCorrections).catch(() => {})
+  }
+  useEffect(refreshData, [])
+
+  async function confirmDelete() {
+    if (!confirmTarget) return
+    setDeleting(true)
+    try {
+      await api.del(`/api/data/${confirmTarget.kind}/${confirmTarget.id}`)
+      notifications.show({ color: 'green', message: 'Supprimé définitivement' })
+      setConfirmTarget(null)
+      refreshData()
+    } catch (e) {
+      notifications.show({ color: 'red', message: (e as Error).message })
+    } finally {
+      setDeleting(false)
+    }
+  }
 
   async function changePassword() {
     if (newPwd.length < 8) {
@@ -175,6 +222,7 @@ export default function SettingsPage() {
           <Tabs.Tab value="pedagogie" leftSection={<SlidersHorizontal size={15} />}>Pédagogie</Tabs.Tab>
           <Tabs.Tab value="documents" leftSection={<FileText size={15} />}>Documents</Tabs.Tab>
           <Tabs.Tab value="systeme" leftSection={<Database size={15} />}>Système</Tabs.Tab>
+          <Tabs.Tab value="donnees" leftSection={<Trash2 size={15} />}>Données</Tabs.Tab>
         </Tabs.List>
 
         <Tabs.Panel value="compte" pt="md">
@@ -429,7 +477,149 @@ export default function SettingsPage() {
             </Card>
           </Stack>
         </Tabs.Panel>
+
+        <Tabs.Panel value="donnees" pt="md">
+          <Stack>
+            <Alert color="red" variant="light" icon={<AlertTriangle size={16} />}>
+              Suppression définitive et irréversible — aucune corbeille. Pour les classes et
+              sujets, tout ce qui en dépend (élèves, copies, scans, PDF/images sur le disque)
+              disparaît avec.
+            </Alert>
+
+            <Card withBorder>
+              <Text fw={600} mb="xs">Classes ({dataClasses.length})</Text>
+              <Table striped>
+                <Table.Thead>
+                  <Table.Tr>
+                    <Table.Th>Nom</Table.Th><Table.Th>Cycle</Table.Th>
+                    <Table.Th>Élèves</Table.Th><Table.Th>Sujets</Table.Th><Table.Th /></Table.Tr>
+                </Table.Thead>
+                <Table.Tbody>
+                  {dataClasses.map((c) => (
+                    <Table.Tr key={c.id}>
+                      <Table.Td>{c.name} {c.archived && <Badge size="xs" ml={6} color="gray">archivée</Badge>}
+                        {c.is_mock && <Badge size="xs" ml={6} color="grape">démo</Badge>}</Table.Td>
+                      <Table.Td>{c.grade_level}</Table.Td>
+                      <Table.Td>{c.student_count}</Table.Td>
+                      <Table.Td>{c.assessment_count}</Table.Td>
+                      <Table.Td>
+                        <ActionIcon color="red" variant="subtle" onClick={() => setConfirmTarget({
+                          kind: 'classes', id: c.id,
+                          label: `la classe « ${c.name} » (${c.student_count} élève(s), ${c.assessment_count} sujet(s))`,
+                        })}>
+                          <Trash2 size={15} />
+                        </ActionIcon>
+                      </Table.Td>
+                    </Table.Tr>
+                  ))}
+                </Table.Tbody>
+              </Table>
+            </Card>
+
+            <Card withBorder>
+              <Text fw={600} mb="xs">Élèves ({dataStudents.length})</Text>
+              <Table striped>
+                <Table.Thead>
+                  <Table.Tr>
+                    <Table.Th>Nom</Table.Th><Table.Th>Classe</Table.Th>
+                    <Table.Th>Copies</Table.Th><Table.Th>Actif</Table.Th><Table.Th /></Table.Tr>
+                </Table.Thead>
+                <Table.Tbody>
+                  {dataStudents.map((s) => (
+                    <Table.Tr key={s.id}>
+                      <Table.Td>{s.last_name} {s.first_name}</Table.Td>
+                      <Table.Td>{s.class_name}</Table.Td>
+                      <Table.Td>{s.copy_count}</Table.Td>
+                      <Table.Td>{s.active
+                        ? <Badge size="xs" color="green" variant="light">oui</Badge>
+                        : <Badge size="xs" color="gray" variant="light">désactivé</Badge>}</Table.Td>
+                      <Table.Td>
+                        <ActionIcon color="red" variant="subtle" onClick={() => setConfirmTarget({
+                          kind: 'students', id: s.id,
+                          label: `l'élève « ${s.last_name} ${s.first_name} » (${s.copy_count} copie(s))`,
+                        })}>
+                          <Trash2 size={15} />
+                        </ActionIcon>
+                      </Table.Td>
+                    </Table.Tr>
+                  ))}
+                </Table.Tbody>
+              </Table>
+            </Card>
+
+            <Card withBorder>
+              <Text fw={600} mb="xs">Sujets ({dataAssessments.length})</Text>
+              <Table striped>
+                <Table.Thead>
+                  <Table.Tr>
+                    <Table.Th>Titre</Table.Th><Table.Th>Classe</Table.Th><Table.Th>Statut</Table.Th>
+                    <Table.Th>Copies</Table.Th><Table.Th>Lots scannés</Table.Th><Table.Th /></Table.Tr>
+                </Table.Thead>
+                <Table.Tbody>
+                  {dataAssessments.map((a) => (
+                    <Table.Tr key={a.id}>
+                      <Table.Td>{a.title}</Table.Td>
+                      <Table.Td>{a.class_name}</Table.Td>
+                      <Table.Td><Badge size="xs" variant="light">{a.status}</Badge></Table.Td>
+                      <Table.Td>{a.copy_count}</Table.Td>
+                      <Table.Td>{a.scan_batch_count}</Table.Td>
+                      <Table.Td>
+                        <ActionIcon color="red" variant="subtle" onClick={() => setConfirmTarget({
+                          kind: 'assessments', id: a.id,
+                          label: `le sujet « ${a.title} » (${a.copy_count} copie(s), ${a.scan_batch_count} lot(s) scanné(s))`,
+                        })}>
+                          <Trash2 size={15} />
+                        </ActionIcon>
+                      </Table.Td>
+                    </Table.Tr>
+                  ))}
+                </Table.Tbody>
+              </Table>
+            </Card>
+
+            <Card withBorder>
+              <Text fw={600} mb="xs">Corrections ({dataCorrections.length})</Text>
+              <Table striped>
+                <Table.Thead>
+                  <Table.Tr>
+                    <Table.Th>Sujet</Table.Th><Table.Th>Classe</Table.Th><Table.Th>Statut</Table.Th>
+                    <Table.Th>Pages</Table.Th><Table.Th /></Table.Tr>
+                </Table.Thead>
+                <Table.Tbody>
+                  {dataCorrections.map((b) => (
+                    <Table.Tr key={b.id}>
+                      <Table.Td>{b.assessment_title}</Table.Td>
+                      <Table.Td>{b.class_name}</Table.Td>
+                      <Table.Td><Badge size="xs" variant="light">{b.status}</Badge></Table.Td>
+                      <Table.Td>{b.page_count}</Table.Td>
+                      <Table.Td>
+                        <ActionIcon color="red" variant="subtle" onClick={() => setConfirmTarget({
+                          kind: 'corrections', id: b.id,
+                          label: `la correction du sujet « ${b.assessment_title} » (${b.page_count} page(s) scannée(s))`,
+                        })}>
+                          <Trash2 size={15} />
+                        </ActionIcon>
+                      </Table.Td>
+                    </Table.Tr>
+                  ))}
+                </Table.Tbody>
+              </Table>
+            </Card>
+          </Stack>
+        </Tabs.Panel>
       </Tabs>
+
+      <Modal opened={!!confirmTarget} onClose={() => setConfirmTarget(null)}
+        title={<Text fw={650}>Confirmer la suppression</Text>}>
+        <Stack>
+          <Text size="sm">Supprimer définitivement {confirmTarget?.label} ?</Text>
+          <Text size="xs" c="dimmed">Cette action est irréversible, y compris les fichiers stockés.</Text>
+          <Group justify="flex-end">
+            <Button variant="subtle" onClick={() => setConfirmTarget(null)}>Annuler</Button>
+            <Button color="red" loading={deleting} onClick={confirmDelete}>Supprimer définitivement</Button>
+          </Group>
+        </Stack>
+      </Modal>
     </Stack>
   )
 }

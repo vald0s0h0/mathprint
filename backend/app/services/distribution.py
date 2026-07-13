@@ -5,6 +5,11 @@ copie. Remplace les anciennes heuristiques fixes (suggestion 60/30/10,
 remplissage par répétition sans diversité) — la sélection concrète des
 exercices en banque reste celle de exercise_gen (ensure_bank/bank_rows_near_level),
 jamais réinventée ici.
+
+Inclut aussi `lesson_review_targets` : quelles compétences doivent recevoir
+un rappel de leçon dans la copie d'un élève, pilotée par le même plan
+post-correction (lacunes/courbe d'oubli) que apply_next_plan — cf.
+services.generation pour l'insertion effective des rappels.
 """
 from datetime import datetime, timezone
 
@@ -92,6 +97,18 @@ def pick_balanced_exercise(rows: list[GeneratedExercise], counts: dict[str, int]
     return row
 
 
+def _fresh_plan(student: Student) -> dict | None:
+    """Plan post-correction (services.appreciation) si présent et pas plus
+    vieux que next_plan_max_age_days, sinon None."""
+    plan = student.next_plan_json
+    if not plan or not student.next_plan_updated_at:
+        return None
+    age_days = (datetime.now(timezone.utc) - _utc(student.next_plan_updated_at)).days
+    if age_days > settings.next_plan_max_age_days:
+        return None
+    return plan
+
+
 def apply_next_plan(student: Student, target_mix: dict[str, float],
                     level5: int) -> tuple[dict[str, float], int]:
     """En mode "individuel", affine (sans jamais remplacer) le mix de types
@@ -100,13 +117,54 @@ def apply_next_plan(student: Student, target_mix: dict[str, float],
     sujet. Ignoré si absent ou plus vieux que settings.next_plan_max_age_days ;
     le périmètre de compétences coché par le professeur n'est jamais modifié
     par cette fonction."""
-    plan = student.next_plan_json
-    if not plan or not student.next_plan_updated_at:
-        return target_mix, level5
-    age_days = (datetime.now(timezone.utc) - _utc(student.next_plan_updated_at)).days
-    if age_days > settings.next_plan_max_age_days:
+    plan = _fresh_plan(student)
+    if not plan:
         return target_mix, level5
     mix = plan.get("kind_mix") or target_mix
     plan_level = plan.get("difficulty_level")
     level = plan_level if isinstance(plan_level, int) and 1 <= plan_level <= 5 else level5
     return mix, level
+
+
+def lesson_review_targets(candidate_ids: list[str], student: Student, due: list[dict],
+                          level: int, assessment_type: str) -> list[str]:
+    """Compétences (parmi `candidate_ids`, cochées pour ce sujet) devant
+    recevoir un rappel de leçon dans cette copie — jamais en contrôle, jamais
+    plus de `settings.max_lessons_per_copy`. Un rappel de leçon peut se
+    répéter d'un sujet à l'autre pour le même élève (voulu, cf. accompagnement
+    personnalisé) ; ne jamais l'inclure deux fois DANS la même copie reste à
+    la charge de l'appelant (dédoublonnage sur competency_id).
+
+    Priorité, jamais cumulée :
+      1. le plan post-correction personnalisé (`Student.next_plan_json
+         ["lesson_competency_ids"]`, cf. services.appreciation) — lacunes
+         identifiées par le LLM à partir de la courbe d'oubli lors de la
+         dernière correction ;
+      2. à défaut (plan absent/périmé/vide), repli déterministe : compétences
+         de `due` (services.forgetting.due_competencies) dont la maîtrise
+         est sous `lesson_review_mastery_threshold` — une vraie lacune, pas
+         simplement "due" par le temps ;
+      3. filet de sécurité historique pour un élève sans aucune preuve
+         encore : niveau global <= 4 -> 1re compétence du sujet.
+    """
+    if assessment_type != "training" or not candidate_ids:
+        return []
+    candidates = set(candidate_ids)
+    cap = settings.max_lessons_per_copy
+
+    plan = _fresh_plan(student)
+    if plan:
+        planned = [cid for cid in (plan.get("lesson_competency_ids") or [])
+                  if cid in candidates]
+        if planned:
+            return planned[:cap]
+
+    weak = [d["competency_id"] for d in due
+            if d["competency_id"] in candidates
+            and d.get("mastery", 1.0) < settings.lesson_review_mastery_threshold]
+    if weak:
+        return weak[:cap]
+
+    if level <= 4:
+        return candidate_ids[:1]
+    return []
