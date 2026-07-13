@@ -9,7 +9,11 @@ Règles appliquées ici :
 """
 import hashlib
 import json
+import logging
 import re
+import time
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as _FutureTimeout
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -18,9 +22,45 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..models import ApiUsageEvent, ProviderConfig
 
+logger = logging.getLogger(__name__)
+
 
 class BudgetExceeded(Exception):
     pass
+
+
+class LLMTimeout(Exception):
+    """Appel LLM sans réponse complète dans le délai total imparti."""
+
+
+# Les appels LLM passent par ce petit pool pour pouvoir imposer un délai
+# TOTAL (settings.llm_call_timeout_s). Le timeout httpx (par lecture socket)
+# ne protège pas d'un serveur qui maintient la connexion en envoyant des
+# octets au compte-gouttes — cause observée d'un worker bloqué des heures
+# sur api.deepseek.com. Un appel abandonné laisse son thread se terminer
+# seul (ReadTimeout httpx ou fin de réponse) ; le pool borne l'accumulation.
+_HTTP_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="llm-http")
+
+
+def _post_with_deadline(url: str, *, headers: dict, json_body: dict,
+                        timeout: float, provider: str) -> httpx.Response:
+    total = settings.llm_call_timeout_s
+    started = time.monotonic()
+    future = _HTTP_POOL.submit(httpx.post, url, headers=headers,
+                               json=json_body, timeout=timeout)
+    try:
+        resp = future.result(timeout=total)
+    except _FutureTimeout:
+        future.cancel()
+        logger.warning("%s : aucune réponse complète après %ss — appel abandonné",
+                       provider, total)
+        raise LLMTimeout(
+            f"{provider} : pas de réponse complète après {total}s "
+            f"(appel abandonné, il sera retenté)") from None
+    elapsed = time.monotonic() - started
+    if elapsed > 30:
+        logger.info("%s : réponse en %.0fs", provider, elapsed)
+    return resp
 
 
 # premier objet {...} d'un texte (extraction tolérante de JSON)
@@ -71,15 +111,15 @@ def mathpix_ocr(db: Session, image_bytes: bytes, correlation_id: str,
         return {"latex": text, "text": text, "confidence": conf, "raw": {"mock": True}}
 
     app_id, app_key = (cfg.encrypted_secret.split(":", 1) + [""])[:2]
-    r = httpx.post(
+    r = _post_with_deadline(
         "https://api.mathpix.com/v3/text",
         headers={"app_id": app_id, "app_key": app_key},
-        json={
+        json_body={
             "src": "data:image/png;base64," + __import__("base64").b64encode(image_bytes).decode(),
             "formats": ["text", "latex_styled"],
             "metadata": {"improve_mathpix": False},  # confidentialité (§6.3)
         },
-        timeout=30,
+        timeout=30, provider="Mathpix",
     )
     r.raise_for_status()
     data = r.json()
@@ -119,9 +159,9 @@ def deepseek_json(db: Session, operation: str, system: str, user_payload: dict,
         "max_tokens": max_tokens,
     }
     for attempt in range(2):  # un seul retry correctif
-        r = httpx.post("https://api.deepseek.com/chat/completions",
-                       headers={"Authorization": f"Bearer {cfg.encrypted_secret}"},
-                       json=body, timeout=60)
+        r = _post_with_deadline("https://api.deepseek.com/chat/completions",
+                                headers={"Authorization": f"Bearer {cfg.encrypted_secret}"},
+                                json_body=body, timeout=60, provider="DeepSeek")
         r.raise_for_status()
         data = r.json()
         usage = data.get("usage", {})
@@ -264,16 +304,16 @@ def claude_text(db: Session, operation: str, system: str, user_text: str,
                 "nettement. Continue à détailler tes étapes pour les équations ; "
                 "une petite révision des fractions est prévue la semaine prochaine.")
 
-    r = httpx.post(
+    r = _post_with_deadline(
         "https://api.anthropic.com/v1/messages",
         headers={"x-api-key": cfg.encrypted_secret, "anthropic-version": "2023-06-01"},
-        json={
+        json_body={
             "model": model,
             "max_tokens": max_tokens,
             "system": [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
             "messages": [{"role": "user", "content": user_text}],
         },
-        timeout=60,
+        timeout=60, provider="Claude",
     )
     r.raise_for_status()
     data = r.json()
@@ -320,10 +360,10 @@ def claude_json(db: Session, operation: str, system: str, payload: dict,
                         "pacing_days": 7, "lesson_competency_ids": weak[:2]}}
         return {}
 
-    r = httpx.post(
+    r = _post_with_deadline(
         "https://api.anthropic.com/v1/messages",
         headers={"x-api-key": cfg.encrypted_secret, "anthropic-version": "2023-06-01"},
-        json={
+        json_body={
             "model": model,
             "max_tokens": max_tokens,
             "system": [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
@@ -332,7 +372,7 @@ def claude_json(db: Session, operation: str, system: str, payload: dict,
             "messages": [{"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
                          {"role": "assistant", "content": "{"}],
         },
-        timeout=60,
+        timeout=60, provider="Claude",
     )
     r.raise_for_status()
     data = r.json()

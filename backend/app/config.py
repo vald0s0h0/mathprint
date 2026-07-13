@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     mathpix_concurrency: int = 3
     mathpix_daily_limit: int = 500
     llm_daily_cost_limit_eur: float = 2.0
+    # délai TOTAL maximal d'un appel LLM (connexion + réponse complète) :
+    # le read-timeout httpx est par lecture socket, pas global — un serveur
+    # qui répond au compte-gouttes peut sinon bloquer le worker indéfiniment
+    llm_call_timeout_s: int = 180
 
     # --- Pédagogie ---
     forgetting_threshold: float = 0.80   # probabilité de rappel sous laquelle une compétence est "due"
