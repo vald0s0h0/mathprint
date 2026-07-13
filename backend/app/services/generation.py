@@ -180,7 +180,8 @@ def generate_assessment_job(db: Session, assessment: Assessment,
                         if not ri["response_type"].startswith("qcm"):
                             total_non_qcm -= 1
                         if ri.get("_bucket"):
-                            kind_counts[ri["_bucket"]] = max(0, kind_counts.get(ri["_bucket"], 1) - 1)
+                            kind_counts[ri["_bucket"]] = max(0, kind_counts.get(ri["_bucket"], 0) - 1)
+                db.flush()
                 del render_items[before:]
                 fill_seq += 1
                 continue  # cet item ne rentre pas : on tente une autre compétence

@@ -91,7 +91,12 @@ def _drain() -> None:
                    .order_by(Job.created_at).first())
             if not job or not _claim(db, job):
                 break
-            _run_job(db, job)
+            try:
+                _run_job(db, job)
+            except Exception:
+                logger.exception("Exception non capturée dans _run_job")
+                db.rollback()
+            db.expunge_all()
     finally:
         db.close()
 
