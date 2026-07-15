@@ -20,7 +20,7 @@ import fitz  # noqa: E402
 
 from app.services import sesamaths_pdf  # noqa: E402
 
-PDF = Path(__file__).resolve().parents[2] / "context" / "5.pdf"
+PDF = Path(__file__).resolve().parents[1] / "app" / "data" / "manuals" / "5.pdf"
 OUT = Path(__file__).resolve().parents[1] / "app" / "data" / "sesamaths_5e_map.json"
 
 

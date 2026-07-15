@@ -822,7 +822,15 @@ def bank_rows_near_level(db: Session, competency: Competency, level: int,
     for candidate in sorted(range(1, 6), key=lambda l: abs(l - level)):
         try:
             rows = ensure_bank(db, competency, candidate, source=source)
-        except Exception:
+        except Exception as e:
+            # Manuel Sésamath introuvable / extraction impossible : message clair
+            # et actionnable — inutile d'essayer les autres niveaux (le PDF manque
+            # quel que soit le niveau) et surtout PAS de repli silencieux sur une
+            # banque inventée. On remonte l'erreur telle quelle.
+            if source == "sesamaths":
+                from .sesamaths import SesamathsExtractionError
+                if isinstance(e, SesamathsExtractionError):
+                    raise
             q = db.query(GeneratedExercise).filter_by(
                 competency_id=competency.id, difficulty_level=candidate, status="active")
             if source == "sesamaths":

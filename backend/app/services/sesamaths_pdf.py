@@ -96,6 +96,30 @@ def parse_toc(doc: "fitz.Document") -> dict:
     raise ValueError("Page Sommaire introuvable ou vide")
 
 
+def _resolve_manual_path(path_str: str) -> Path | None:
+    """Localise le PDF du manuel de façon robuste (dev ET conteneur Docker).
+    Essaie le chemin configuré tel quel, puis, à défaut, cherche le même nom de
+    fichier dans des racines candidates connues — évite qu'un chemin absolu
+    « figé » (ex. « /context/5.pdf » dans l'image, où _REPO_ROOT vaut « / »)
+    fasse échouer une extraction alors que le fichier est bien livré."""
+    p = Path(path_str)
+    if p.exists():
+        return p
+    from ..config import _APP_DIR, _REPO_ROOT
+    candidates = [
+        _APP_DIR / "data" / "manuals" / p.name,   # livré avec le code (Docker)
+        _REPO_ROOT / "context" / p.name,          # emplacement historique (dev)
+        Path.cwd() / "context" / p.name,
+        settings.data_dir / "manuals" / p.name,   # dépôt manuel sur le volume
+    ]
+    for cand in candidates:
+        if cand.exists():
+            logger.info("Sésamaths : manuel résolu sur %s (chemin configuré %s absent)",
+                        cand, p)
+            return cand
+    return None
+
+
 def open_manual(db: Session, grade_level: str) -> tuple["fitz.Document | None", SesamathsManual]:
     """Ouvre le manuel PDF du niveau demandé. Si absent/illisible : journalise
     l'erreur, marque `SesamathsManual.status`, retourne (None, manual) —
@@ -110,10 +134,12 @@ def open_manual(db: Session, grade_level: str) -> tuple["fitz.Document | None", 
         db.commit()
         return None, manual
 
-    path = Path(path_str)
-    if not path.exists():
+    path = _resolve_manual_path(path_str)
+    if path is None:
         manual.status = "missing"
-        manual.error_message = f"Fichier manuel introuvable : {path}"
+        manual.error_message = (
+            f"PDF du manuel Sésamath {grade_level} introuvable (configuré : "
+            f"{path_str}). Les exercices n'ont pas pu être extraits.")
         logger.error("Sésamaths : %s", manual.error_message)
         db.commit()
         return None, manual

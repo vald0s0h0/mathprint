@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..db import get_db
 from ..deps import current_user, require_role
+from ..version import __version__
 from ..models import (
     ApiUsageEvent, Assessment, Competency, CompetencyFramework, ManualReview,
     ProviderConfig, ScanBatch, SchoolClass, Student, StudentCompetencyState,
@@ -248,5 +249,5 @@ def dashboard(db: Session = Depends(get_db)):
         "classes": classes,
         "assessments_draft": db.query(Assessment).filter_by(status="draft").count(),
         "system": {"mock_mode": mock_enabled(db), "data_dir": str(settings.data_dir),
-                   "version": "0.9.0", "build_sha": settings.build_sha},
+                   "version": __version__, "build_sha": settings.build_sha},
     }

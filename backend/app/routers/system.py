@@ -13,6 +13,7 @@ from ..config import settings
 from ..db import get_db
 from ..deps import current_user, require_role
 from ..models import CalibrationProfile, Job, User
+from ..version import __version__
 from ..services.runtime_settings import mock_enabled
 
 router = APIRouter(prefix="/api/system", tags=["system"],
@@ -37,7 +38,7 @@ def status(db: Session = Depends(get_db)):
     backups = sorted((settings.data_dir / BACKUP_DIR_KEY).glob("*"), reverse=True) \
         if (settings.data_dir / BACKUP_DIR_KEY).exists() else []
     return {
-        "version": "0.9.0",
+        "version": __version__,
         "build": {"sha": settings.build_sha, "time": settings.build_time},
         "database": {"ok": db_ok, "url_scheme": settings.database_url.split(":")[0]},
         "mathalea": mathalea or {"status": "unreachable"},

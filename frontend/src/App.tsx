@@ -9,6 +9,7 @@ import {
 import { useEffect, useState } from 'react'
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { api, getToken, setToken } from './api'
+import { APP_VERSION } from './version'
 import Competencies from './pages/Competencies'
 import Corrections from './pages/Corrections'
 import Dashboard from './pages/Dashboard'
@@ -126,7 +127,7 @@ export default function App() {
             style={{ borderRadius: 8 }} fw={500} mb={2}
             onClick={() => navigate(n.to)} />
         ))}
-        <Text size="xs" c="dimmed" mt="auto" px="sm" pb={4}>MathPrint v0.9</Text>
+        <Text size="xs" c="dimmed" mt="auto" px="sm" pb={4}>MathPrint v{APP_VERSION}</Text>
       </AppShell.Navbar>
 
       <AppShell.Main>

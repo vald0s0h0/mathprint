@@ -52,6 +52,14 @@ PROMPT_VERSION = "sesamaths-2-vision"
 SOURCE_POOL = ("sesamaths", "sesamaths_deepseek")
 
 
+class SesamathsExtractionError(RuntimeError):
+    """L'extraction Sésamath n'a pas pu fournir d'exercices RÉELS du manuel
+    (PDF introuvable, chapitre inconnu, extraction vision incomplète…). On la
+    lève au lieu de retomber silencieusement sur une invention DeepSeek : le
+    complément DeepSeek n'est autorisé QUE lorsque le chapitre a été
+    entièrement extrait et qu'il faut ajuster le niveau (cf. ensure_bank)."""
+
+
 # ================================================================ cache LLM
 
 def _cache_key(*parts) -> str:
@@ -173,11 +181,15 @@ def _extract_page(db: Session, doc, manual, chapter_code: str, page_meta: dict,
             logger.warning("Sésamaths : extraction vision page %s (%s) échouée : %s",
                            idx, model, e)
             continue
+        raw_list = data.get("exercises") or []
         cands: list[dict] = []
-        for raw in (data.get("exercises") or []):
+        for raw in raw_list:
             c = _to_candidate(raw, doc, idx, competency, db, existing_norms, out_dir)
             if c is not None:
                 cands.append(c)
+        logger.info("Sésamaths : page %s (série %s) — modèle %s : %s exercice(s) "
+                    "renvoyé(s), %s validé(s)", idx, page_meta.get("series_number"),
+                    model, len(raw_list), len(cands))
         if cands:
             return cands
         if model == settings.claude_vision_fallback_model:
@@ -233,6 +245,10 @@ def ensure_chapter_pool(db: Session, doc, manual, chapter_code: str, competency
             pages = sesamaths_pdf.chapter_exercise_pages(doc, manual.toc_json, chapter_code)
             row.page_range_json = {"pages": pages, "done_pages": []}
             row.step = "pages_located"
+            logger.info("Sésamaths : chapitre %s « %s » — %s page(s) d'exercices "
+                        "localisée(s) via la table des matières : %s",
+                        chapter_code, competency.chapter_name, len(pages),
+                        [p["index"] for p in pages])
             db.commit()
 
         if row.step == "pages_located":
@@ -241,6 +257,10 @@ def ensure_chapter_pool(db: Session, doc, manual, chapter_code: str, competency
             pool = list(row.validated_json or [])
             existing_norms = {exercise_gen._normalize_statement_for_dedup(c["statement"])
                               for c in pool}
+            todo = [p for p in pages if p["index"] not in done]
+            logger.info("Sésamaths : chapitre %s — extraction vision de %s page(s) "
+                        "restante(s) (%s déjà faite(s), %s exercice(s) en pool)",
+                        chapter_code, len(todo), len(done), len(pool))
             failed: list[int] = []
             for pg in pages:
                 if pg["index"] in done:
@@ -260,6 +280,10 @@ def ensure_chapter_pool(db: Session, doc, manual, chapter_code: str, competency
             row.failed_series_json = failed
             row.step = "done" if not failed else "pages_located"
             row.error_message = "" if pool else "Aucun exercice validé pour ce chapitre"
+            logger.info("Sésamaths : chapitre %s — extraction %s : %s exercice(s) "
+                        "réel(s) au total, %s page(s) en échec %s",
+                        chapter_code, "terminée" if not failed else "PARTIELLE",
+                        len(pool), len(failed), failed or "")
             db.commit()
     except Exception as e:
         row.error_message = str(e)[:2000]
@@ -271,21 +295,46 @@ def ensure_chapter_pool(db: Session, doc, manual, chapter_code: str, competency
 
 
 def chapter_pool(db: Session, competency) -> list[dict]:
+    """Pool d'exercices RÉELS extraits du chapitre (best-effort, jamais
+    d'exception). Pour la génération de banque, préférer `_extracted_chapter`
+    qui distingue « manuel introuvable » de « extraction complète »."""
     doc, manual, chapter_code = _resolve_chapter(db, competency)
     if doc is None or chapter_code is None:
         return []
     return ensure_chapter_pool(db, doc, manual, chapter_code, competency)
 
 
+def _extracted_chapter(db: Session, competency) -> tuple[list[dict], bool]:
+    """Extrait (ou récupère) le pool d'exercices RÉELS du chapitre et indique
+    si l'extraction est COMPLÈTE (toutes les pages traitées, aucune en échec).
+
+    Lève SesamathsExtractionError si le manuel est introuvable ou le chapitre
+    absent : dans ce cas on NE retombe PAS sur une invention DeepSeek, on
+    remonte un message clair à l'appelant."""
+    doc, manual, chapter_code = _resolve_chapter(db, competency)
+    if doc is None or chapter_code is None:
+        detail = (manual.error_message if manual and manual.error_message
+                  else f"chapitre {competency.chapter_code} absent du manuel")
+        raise SesamathsExtractionError(
+            f"Le PDF du manuel Sésamath est introuvable (ou le chapitre "
+            f"{competency.chapter_code} en est absent) — les exercices n'ont "
+            f"pas pu être extraits. Détail : {detail}")
+    pool = ensure_chapter_pool(db, doc, manual, chapter_code, competency)
+    row = (db.query(SesamathsChapterExtraction)
+           .filter_by(manual_id=manual.id, chapter_code=chapter_code).first())
+    fully_done = bool(row and row.step == "done" and not (row.failed_series_json or []))
+    return pool, fully_done
+
+
 def harvest(db: Session, competency, level: int, need: int,
-           existing_norms: set[str]) -> list[dict]:
+           existing_norms: set[str], pool: list[dict]) -> list[dict]:
     """Moisson des exercices Sésamaths déjà extraits du chapitre de
     `competency`, filtrés au niveau demandé — point d'entrée analogue à
     exercise_gen._harvest_mathalea."""
     if need <= 0:
         return []
     out = []
-    for cand in chapter_pool(db, competency):
+    for cand in pool:
         if len(out) >= need:
             break
         if cand.get("difficulty") != level:
@@ -375,8 +424,15 @@ def ensure_bank(db: Session, competency, level: int,
     missing = min_variants - len(rows)
     if missing <= 0:
         return rows
-    logger.info("Sésamaths : banque %s niveau %s : %s variante(s) en stock, %s à créer",
-               competency.code, level, len(rows), missing)
+
+    # Extraction RÉELLE d'abord. Lève SesamathsExtractionError (message clair,
+    # non bloquant en amont) si le manuel est introuvable — AUCUNE invention
+    # DeepSeek à la place d'exercices qu'on n'a pas su extraire.
+    pool, fully_done = _extracted_chapter(db, competency)
+    logger.info("Sésamaths : banque %s niveau %s — %s variante(s) en stock, %s à "
+                "produire ; %s exercice(s) réel(s) extrait(s) du chapitre "
+                "(extraction %s)", competency.code, level, len(rows), missing,
+                len(pool), "complète" if fully_done else "INCOMPLÈTE")
 
     existing_norms = {
         exercise_gen._normalize_statement_for_dedup(ex.statement)
@@ -406,29 +462,43 @@ def ensure_bank(db: Session, competency, level: int,
         added.append(row)
         next_variant += 1
 
-    try:
-        for cand in harvest(db, competency, level, missing, existing_norms):
-            _store(cand, "sesamaths", cand.get("_verdict", {}))
-    except Exception as e:
-        logger.warning("Sésamaths : moisson %s niveau %s impossible : %s",
-                       competency.code, level, e)
+    for cand in harvest(db, competency, level, missing, existing_norms, pool):
+        _store(cand, "sesamaths", cand.get("_verdict", {}))
+    n_real = len(added)
     missing = min_variants - len(rows) - len(added)
 
-    if missing > 0:
+    # Complément DeepSeek Pro : autorisé UNIQUEMENT si le chapitre a été
+    # ENTIÈREMENT extrait (tous les exercices réels sont présents) et qu'il
+    # faut encore ajuster le niveau. Si l'extraction est incomplète, on ne
+    # comble pas par de l'invention — on préfère un pool partiel mais RÉEL.
+    if missing > 0 and fully_done:
+        logger.info("Sésamaths : %s exercice(s) réel(s) au niveau %s pour %s, "
+                    "%s complément(s) DeepSeek Pro (ajustement de niveau, inspiré "
+                    "du chapitre)", n_real, level, competency.code, missing)
         try:
-            pool = chapter_pool(db, competency)
             for cand in top_up_with_deepseek_pro(db, competency, level, missing,
                                                  pool, existing_norms):
                 _store(cand, "sesamaths_deepseek", cand.get("_verdict", {}))
         except Exception as e:
             logger.warning("Sésamaths : top-up DeepSeek Pro %s niveau %s impossible : %s",
                            competency.code, level, e)
+    elif missing > 0:
+        logger.warning("Sésamaths : extraction INCOMPLÈTE de %s — pas de complément "
+                       "DeepSeek (on ne comble pas par de l'invention). %s variante(s) "
+                       "réelle(s) fournie(s) au niveau %s", competency.code, n_real, level)
 
     db.flush()
     if not rows and not added:
+        if not fully_done:
+            raise SesamathsExtractionError(
+                f"Extraction Sésamath incomplète pour {competency.code} "
+                f"(chapitre {competency.chapter_code}) : aucun exercice réel "
+                f"disponible au niveau {level}. Les exercices n'ont pas pu être "
+                f"extraits — réessayez, l'extraction reprendra les pages en échec.")
         raise ValueError(
             f"Aucun exercice Sésamaths n'a passé les contrôles qualité pour "
             f"{competency.code} niveau {level}")
-    logger.info("Sésamaths : banque %s niveau %s prête : %s variante(s)",
-               competency.code, level, len(rows) + len(added))
+    logger.info("Sésamaths : banque %s niveau %s prête : %s variante(s) "
+                "(%s réelle(s) + %s complément(s))", competency.code, level,
+                len(rows) + len(added), n_real, len(added) - n_real)
     return rows + added

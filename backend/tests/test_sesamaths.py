@@ -21,7 +21,7 @@ from app.db import Base
 from app.models import Competency, CompetencyFramework, GeneratedExercise
 from app.services import figures, sesamaths, sesamaths_pdf
 
-MANUAL_PATH = Path(__file__).resolve().parents[2] / "context" / "5.pdf"
+MANUAL_PATH = Path(__file__).resolve().parents[1] / "app" / "data" / "manuals" / "5.pdf"
 COMPETENCIES_JSON = Path(__file__).resolve().parents[1] / "app" / "data" / "competencies_fr.json"
 
 pytestmark = pytest.mark.skipif(not MANUAL_PATH.exists(), reason="manuel 5.pdf absent")
@@ -188,11 +188,25 @@ def test_to_candidate_crops_figure_from_bbox(db_session, manual_doc):
     assert Path(fig["params"]["path"]).exists()
 
 
-def test_ensure_bank_sesamaths_missing_manual_falls_back_to_deepseek(db_session, monkeypatch):
+def test_ensure_bank_sesamaths_missing_manual_raises_clear_error(db_session, monkeypatch):
     from app.config import settings
     monkeypatch.setattr(settings, "sesamaths_manuals", {})
     comp = _seed_competency(db_session, "A1", "Opérations", "Effectuer un calcul")
-    rows = sesamaths.ensure_bank(db_session, comp, level=3, min_variants=1)
-    # manuel absent -> harvest() renvoie [], le complément DeepSeek Pro seul
-    # doit suffire (jamais d'exception bloquante, juste un log d'erreur)
-    assert all(r.source == "sesamaths_deepseek" for r in rows)
+    # PDF introuvable -> erreur CLAIRE, JAMAIS d'invention DeepSeek à la place
+    # d'exercices qu'on n'a pas su extraire (exigence explicite).
+    with pytest.raises(sesamaths.SesamathsExtractionError) as exc:
+        sesamaths.ensure_bank(db_session, comp, level=3, min_variants=1)
+    assert "introuvable" in str(exc.value).lower()
+    # aucune ligne inventée n'a été stockée
+    assert db_session.query(GeneratedExercise).filter_by(competency_id=comp.id).count() == 0
+
+
+def test_bank_rows_near_level_propagates_missing_manual(db_session, monkeypatch):
+    # bank_rows_near_level ne doit PAS avaler l'erreur ni retomber sur une
+    # banque vide/inventée : le message clair remonte tel quel à la génération.
+    from app.config import settings
+    from app.services import exercise_gen
+    monkeypatch.setattr(settings, "sesamaths_manuals", {})
+    comp = _seed_competency(db_session, "A1", "Opérations", "Effectuer un calcul")
+    with pytest.raises(sesamaths.SesamathsExtractionError):
+        exercise_gen.bank_rows_near_level(db_session, comp, level=3, source="sesamaths")

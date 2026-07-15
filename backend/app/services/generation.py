@@ -91,7 +91,8 @@ def generate_assessment_job(db: Session, assessment: Assessment,
         raise ValueError("Aucune compétence sélectionnée")
     catalog_refs = {cid: exercise_gen.ensure_catalog_ref(db, competencies[cid])
                     for cid in ordered_ids}
-    logger.info("%s élève(s), %s compétence(s) : %s",
+    logger.info("Génération sujet %s — source d'exercices : %s | %s élève(s), "
+                "%s compétence(s) : %s", assessment.id, exercise_source,
                 len(students), len(ordered_ids),
                 ", ".join(competencies[cid].code for cid in ordered_ids))
 
@@ -276,8 +277,10 @@ def generate_assessment_job(db: Session, assessment: Assessment,
     _set_progress(db, job, 96, "Assemblage du PDF…")
     c.save()
     pdfgen.write_manifest(str(out_dir / "copy_manifest.json"), manifest)
+    # dédup en préservant l'ordre : un manuel Sésamath manquant produit sinon le
+    # même message pour chaque élève × compétence × tentative de remplissage.
     report = {"copies": len(students), "competencies": len(ordered_ids),
-              "pages_target": max_pages, "warnings": warnings,
+              "pages_target": max_pages, "warnings": list(dict.fromkeys(warnings)),
               "estimated_mathpix_calls": total_non_qcm}
     pdfgen.write_manifest(str(out_dir / "generation_report.json"), report)
 
