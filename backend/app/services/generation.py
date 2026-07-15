@@ -103,7 +103,11 @@ def generate_assessment_job(db: Session, assessment: Assessment,
     manifest = {"assessment_id": assessment.id, "protocol": "MP1", "copies": []}
     warnings: list[str] = []
 
-    base_seed = int(hashlib.sha256(assessment.id.encode()).hexdigest()[:8], 16)
+    # modulo : les 8 hex (32 bits) du hash dépassent une fois sur deux
+    # l'INTEGER Postgres signé (max 2^31-1) où Copy.seed est stocké — vu en
+    # prod (psycopg2.errors.NumericValueOutOfRange). Marge sous 2^31-1 pour
+    # absorber le + student_index de distribution.variant_seed.
+    base_seed = int(hashlib.sha256(assessment.id.encode()).hexdigest()[:8], 16) % 2_000_000_000
     max_pages = max(1, min(6, assessment.pages_target or 1))
     assessment.duplex = max_pages >= 2
     ex_tpl_font_size = int(tpl["exercise"].get("font_size", font_size))
