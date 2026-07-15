@@ -70,23 +70,51 @@ def test_chapter_page_range_b4_two_page_lesson_recap(manual_doc, toc):
     assert (s, e) == (96, 109)
 
 
-def test_extract_chapter_raw_smallest_chapter(manual_doc, toc, tmp_path, monkeypatch):
-    from app.config import settings
-    monkeypatch.setattr(settings, "data_dir", tmp_path)
-    engine = create_engine("sqlite:///:memory:")
-    Base.metadata.create_all(engine)
-    db = sessionmaker(bind=engine)()
+def test_toc_captures_series_and_excludes_culture(manual_doc, toc):
+    # A1 « Opérations » a 8 Séries dans la ToC dont « Série 8 Culture … » :
+    # la carte capture les 8 mais series_page_ranges n'en garde que 7 (Culture exclue).
+    a1_series = toc["A1"]["series"]
+    assert [s["number"] for s in a1_series] == [1, 2, 3, 4, 5, 6, 7, 8]
+    assert a1_series[-1]["is_culture"] is True
+    ranges = sesamaths_pdf.series_page_ranges(manual_doc, toc, "A1")
+    assert len(ranges) == 7                       # Culture (Série 8) exclue
+    assert all(not s.get("is_culture") for s in ranges)
+    # Série 1 « Automatismes » : page imprimée 4 -> page fichier index 5
+    assert ranges[0]["number"] == 1 and ranges[0]["start_index"] == 5
+    # pages d'exercices ordonnées, dédupliquées, chacune annotée de sa Série
+    pages = sesamaths_pdf.chapter_exercise_pages(manual_doc, toc, "A1")
+    idxs = [p["index"] for p in pages]
+    assert idxs == sorted(set(idxs))
+    assert pages[0]["index"] == 5 and pages[0]["series_number"] == 1
 
-    manual = sesamaths_pdf.get_or_create_manual(db, "5e")
-    manual.sha256, manual.toc_json = "test", toc
-    db.commit()
 
-    start, end = sesamaths_pdf.chapter_page_range(manual_doc, toc, "B1")
-    raw = sesamaths_pdf.extract_chapter_raw(db, manual_doc, manual, "B1", start, end)
-    assert len(raw["pages"]) == end - start + 1
-    assert any(p["text"] for p in raw["pages"])
-    assert any(p["figures"] for p in raw["pages"])
-    assert raw["master_pdf_file_object_id"]
+def test_frozen_map_matches_live_parse(manual_doc, toc):
+    # La maquette gelée (app/data/sesamaths_5e_map.json) doit rester alignée sur
+    # le parsing live du 5.pdf (régénérer via scripts/build_sesamaths_map.py).
+    map_path = (Path(__file__).resolve().parents[1] / "app" / "data"
+                / "sesamaths_5e_map.json")
+    if not map_path.exists():
+        pytest.skip("carte gelée absente")
+    frozen = json.loads(map_path.read_text(encoding="utf-8"))["chapters"]
+    for code in toc:
+        live_pages = [p["index"]
+                      for p in sesamaths_pdf.chapter_exercise_pages(manual_doc, toc, code)]
+        assert frozen[code]["exercise_pages"] == live_pages, code
+
+
+def test_render_page_png_is_png(manual_doc):
+    png = sesamaths_pdf.render_page_png(manual_doc, 5, dpi=100)
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_crop_bbox_png_roundtrip_and_rejects_degenerate(manual_doc, tmp_path):
+    ok = sesamaths_pdf.crop_bbox_png(manual_doc, 5, [0.1, 0.1, 0.5, 0.5],
+                                     tmp_path / "fig.png", dpi=100)
+    assert ok and (tmp_path / "fig.png").exists()
+    # bbox dégénérée (aire quasi nulle) -> refus, pas de fichier
+    assert sesamaths_pdf.crop_bbox_png(manual_doc, 5, [0.1, 0.1, 0.105, 0.105],
+                                       tmp_path / "bad.png", dpi=100) is False
+    assert not (tmp_path / "bad.png").exists()
 
 
 def test_figure_image_type_roundtrip(tmp_path):
@@ -127,12 +155,37 @@ def _seed_competency(db, chapter_code: str, chapter_name: str, label: str) -> Co
 
 
 def test_ensure_bank_sesamaths_end_to_end_mock(db_session):
-    comp = _seed_competency(db_session, "B1", "Repérages", "Se repérer sur un axe gradué")
-    rows = sesamaths.ensure_bank(db_session, comp, level=3, min_variants=1)
+    comp = _seed_competency(db_session, "A1", "Opérations", "Effectuer une division euclidienne")
+    rows = sesamaths.ensure_bank(db_session, comp, level=2, min_variants=3)
     assert len(rows) >= 1
     assert all(r.source in sesamaths.SOURCE_POOL for r in rows)
     stored = db_session.query(GeneratedExercise).filter_by(competency_id=comp.id).all()
     assert len(stored) == len(rows)
+    # l'extraction vision (mock) alimente bien la source "sesamaths" (vrais
+    # exercices du manuel), avec au moins un tableau reconstruit (table_fill)
+    assert any(r.source == "sesamaths" for r in stored)
+    assert any(r.response_type == "table_fill" for r in stored)
+
+
+def test_to_candidate_crops_figure_from_bbox(db_session, manual_doc):
+    # Un exercice qui référence une figure par bbox doit voir cette zone recadrée
+    # du PDF et attachée en figure "image" (extraction des formes géométriques).
+    from app.config import settings
+    comp = _seed_competency(db_session, "B4", "Triangles", "Calculer un angle")
+    out_dir = settings.data_dir / "figs"
+    raw = {"kind": "application",
+           "statement": "On considère le triangle $ABC$ ci-contre. Que vaut l'angle "
+                        "$\\widehat{BAC}$ si $\\widehat{ABC} = 50$ et $\\widehat{ACB} = 60$ ?",
+           "correction": "La somme des angles vaut $180$ : $180 - 50 - 60 = 70$.",
+           "response_type": "short_text",
+           "answer": {"type": "integer", "value": 70},
+           "figure_ref": {"bbox_pct": [0.55, 0.2, 0.9, 0.45]},
+           "difficulty": 3}
+    cand = sesamaths._to_candidate(raw, manual_doc, 98, comp, db_session, set(), out_dir)
+    assert cand is not None
+    fig = cand["figure_json"]
+    assert fig and fig["type"] == "image"
+    assert Path(fig["params"]["path"]).exists()
 
 
 def test_ensure_bank_sesamaths_missing_manual_falls_back_to_deepseek(db_session, monkeypatch):

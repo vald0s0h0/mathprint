@@ -73,15 +73,24 @@ def exercise_bucket(row: GeneratedExercise) -> str:
 
 
 def pick_balanced_exercise(rows: list[GeneratedExercise], counts: dict[str, int],
-                           target_mix: dict[str, float], seed: int) -> GeneratedExercise:
+                           target_mix: dict[str, float], seed: int,
+                           exclude_ids: set[str] | None = None) -> GeneratedExercise:
     """Choisit, dans une banque déjà chargée pour une compétence × niveau,
     l'exercice du type le moins représenté par rapport au mix cible de la
     copie en cours ; sélection déterministe (seed) à l'intérieur du type
     retenu. Le compteur `counts` est mis à jour — à décrémenter par
     l'appelant (via exercise_bucket) si l'item est finalement retiré (ex.
-    dépassement de la capacité de page)."""
+    dépassement de la capacité de page).
+
+    `exclude_ids` : identifiants déjà utilisés dans la copie en cours — jamais
+    re-piochés tant qu'il reste des exercices non utilisés (pas deux fois le
+    même exercice dans un même sujet d'un élève). Repli sur l'ensemble complet
+    si tous les exercices disponibles sont déjà exclus."""
     if not rows:
         raise ValueError("banque vide")
+    if exclude_ids:
+        available = [r for r in rows if r.id not in exclude_ids]
+        rows = available or rows
     by_bucket: dict[str, list[GeneratedExercise]] = {}
     for r in rows:
         by_bucket.setdefault(exercise_bucket(r), []).append(r)

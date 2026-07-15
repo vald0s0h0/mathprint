@@ -54,7 +54,9 @@ export default function Subjects() {
   // étape 2 : compétences cochées + source des exercices (§ Sésamaths)
   const [competencyIds, setCompetencyIds] = useState<string[]>([])
   const [suggestReason, setSuggestReason] = useState('')
-  const [exerciseSource, setExerciseSource] = useState('auto')
+  // Sésamaths activé par défaut (extraction du manuel 5e) ; l'utilisateur peut
+  // repasser en Automatique/MathALÉA dans l'assistant
+  const [exerciseSource, setExerciseSource] = useState('sesamaths')
   // étape 3 : adaptation
   const [mode, setMode] = useState('common')
   // étape 4

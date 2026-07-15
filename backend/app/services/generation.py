@@ -134,6 +134,7 @@ def generate_assessment_job(db: Session, assessment: Assessment,
         render_items: list[dict] = []
         lessons_added: set[str] = set()
         kind_counts: dict[str, int] = {}
+        picked_ids: set[str] = set()  # exercices déjà utilisés dans CETTE copie
 
         def _add_item(seq: int, comp_id: str, item_seed: int) -> bool:
             nonlocal total_non_qcm
@@ -142,7 +143,7 @@ def generate_assessment_job(db: Session, assessment: Assessment,
                 bank, _ = exercise_gen.bank_rows_near_level(
                     db, comp, level5, source=exercise_source)
                 row = distribution.pick_balanced_exercise(
-                    bank, kind_counts, target_mix, item_seed)
+                    bank, kind_counts, target_mix, item_seed, exclude_ids=picked_ids)
             except Exception as e:
                 logger.warning("%s (%s) : %s", comp.code, student.llm_pseudonym, e)
                 warnings.append(f"{comp.code} ({student.llm_pseudonym}) : {e}")
@@ -162,6 +163,7 @@ def generate_assessment_job(db: Session, assessment: Assessment,
                 except Exception as e:
                     warnings.append(f"Rappel {comp.code} ({student.llm_pseudonym}) indisponible : {e}")
 
+            picked_ids.add(row.id)
             choices = row.grading_json.get("choices", [])
             item = CopyItem(
                 copy_id=copy.id, catalog_id=catalog_refs[comp_id].id, sequence=seq,
@@ -178,6 +180,7 @@ def generate_assessment_job(db: Session, assessment: Assessment,
                                  "figure": row.figure_json,
                                  "grading": row.grading_json,
                                  "inline": bool((row.expected_json or {}).get("inline")),
+                                 "_exercise_id": row.id,
                                  "_bucket": distribution.exercise_bucket(row)})
             if not row.response_type.startswith("qcm"):
                 total_non_qcm += 1
@@ -215,6 +218,7 @@ def generate_assessment_job(db: Session, assessment: Assessment,
                             total_non_qcm -= 1
                         if ri.get("_bucket"):
                             kind_counts[ri["_bucket"]] = max(0, kind_counts.get(ri["_bucket"], 0) - 1)
+                        picked_ids.discard(ri.get("_exercise_id"))
                 db.flush()
                 del render_items[before:]
                 fill_seq += 1

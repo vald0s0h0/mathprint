@@ -1,0 +1,688 @@
+{
+  "grade": "5e",
+  "page_offset": 2,
+  "source_pdf": "5.pdf",
+  "chapters": {
+    "A1": {
+      "name": "Opérations",
+      "start_index": 4,
+      "end_index": 23,
+      "series": [
+        {
+          "number": 1,
+          "name": "Automatismes",
+          "start_index": 5,
+          "end_index": 6
+        },
+        {
+          "number": 2,
+          "name": "Calculer pour résoudre",
+          "start_index": 7,
+          "end_index": 9
+        },
+        {
+          "number": 3,
+          "name": "Diviser par un nombre décimal",
+          "start_index": 10,
+          "end_index": 11
+        },
+        {
+          "number": 4,
+          "name": "Prioriser les opérations",
+          "start_index": 12,
+          "end_index": 13
+        },
+        {
+          "number": 5,
+          "name": "Distributivité numérique",
+          "start_index": 14,
+          "end_index": 16
+        },
+        {
+          "number": 6,
+          "name": "Multiples et diviseurs",
+          "start_index": 17,
+          "end_index": 19
+        },
+        {
+          "number": 7,
+          "name": "Algorithmes de calcul",
+          "start_index": 20,
+          "end_index": 21
+        }
+      ],
+      "exercise_pages": [
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21
+      ]
+    },
+    "A2": {
+      "name": "Nombres relatifs",
+      "start_index": 24,
+      "end_index": 41,
+      "series": [
+        {
+          "number": 1,
+          "name": "Automatismes",
+          "start_index": 26,
+          "end_index": 27
+        },
+        {
+          "number": 2,
+          "name": "Nombres relatifs (définition)",
+          "start_index": 28,
+          "end_index": 29
+        },
+        {
+          "number": 3,
+          "name": "Nombres relatifs et droites graduées",
+          "start_index": 30,
+          "end_index": 30
+        },
+        {
+          "number": 4,
+          "name": "Comparer des nombres relatifs",
+          "start_index": 31,
+          "end_index": 33
+        },
+        {
+          "number": 5,
+          "name": "Additionner des nombres relatifs",
+          "start_index": 34,
+          "end_index": 35
+        },
+        {
+          "number": 6,
+          "name": "Soustraire des nombres relatifs",
+          "start_index": 36,
+          "end_index": 37
+        },
+        {
+          "number": 7,
+          "name": "Enchaîner additions et soustractions",
+          "start_index": 38,
+          "end_index": 39
+        }
+      ],
+      "exercise_pages": [
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32,
+        33,
+        34,
+        35,
+        36,
+        37,
+        38,
+        39
+      ]
+    },
+    "A3": {
+      "name": "Fractions",
+      "start_index": 42,
+      "end_index": 51,
+      "series": [
+        {
+          "number": 1,
+          "name": "Automatismes",
+          "start_index": 44,
+          "end_index": 45
+        },
+        {
+          "number": 2,
+          "name": "Comparer des fractions",
+          "start_index": 46,
+          "end_index": 47
+        },
+        {
+          "number": 3,
+          "name": "Additionner et soustraire des fractions",
+          "start_index": 48,
+          "end_index": 49
+        },
+        {
+          "number": 4,
+          "name": "Problèmes",
+          "start_index": 50,
+          "end_index": 51
+        }
+      ],
+      "exercise_pages": [
+        44,
+        45,
+        46,
+        47,
+        48,
+        49,
+        50,
+        51
+      ]
+    },
+    "A4": {
+      "name": "Puissances",
+      "start_index": 52,
+      "end_index": 59,
+      "series": [
+        {
+          "number": 1,
+          "name": "Automatismes",
+          "start_index": 53,
+          "end_index": 53
+        },
+        {
+          "number": 2,
+          "name": "Notation puissance",
+          "start_index": 54,
+          "end_index": 55
+        },
+        {
+          "number": 3,
+          "name": "Puissances : calculs",
+          "start_index": 56,
+          "end_index": 57
+        },
+        {
+          "number": 4,
+          "name": "Valeur d’une expression",
+          "start_index": 58,
+          "end_index": 59
+        }
+      ],
+      "exercise_pages": [
+        53,
+        54,
+        55,
+        56,
+        57,
+        58,
+        59
+      ]
+    },
+    "A5": {
+      "name": "Calcul littéral",
+      "start_index": 60,
+      "end_index": 75,
+      "series": [
+        {
+          "number": 1,
+          "name": "Automatismes",
+          "start_index": 62,
+          "end_index": 63
+        },
+        {
+          "number": 2,
+          "name": "Traduire en formule",
+          "start_index": 64,
+          "end_index": 66
+        },
+        {
+          "number": 3,
+          "name": "Tester une égalité",
+          "start_index": 67,
+          "end_index": 67
+        },
+        {
+          "number": 4,
+          "name": "Distributivité littérale",
+          "start_index": 68,
+          "end_index": 70
+        },
+        {
+          "number": 5,
+          "name": "Démontrer une égalité",
+          "start_index": 71,
+          "end_index": 71
+        },
+        {
+          "number": 6,
+          "name": "Résoudre une équation",
+          "start_index": 72,
+          "end_index": 73
+        }
+      ],
+      "exercise_pages": [
+        62,
+        63,
+        64,
+        65,
+        66,
+        67,
+        68,
+        69,
+        70,
+        71,
+        72,
+        73
+      ]
+    },
+    "B1": {
+      "name": "Repérages",
+      "start_index": 76,
+      "end_index": 79,
+      "series": [
+        {
+          "number": 1,
+          "name": "Automatismes",
+          "start_index": 77,
+          "end_index": 77
+        },
+        {
+          "number": 2,
+          "name": "Repérage",
+          "start_index": 78,
+          "end_index": 79
+        }
+      ],
+      "exercise_pages": [
+        77,
+        78,
+        79
+      ]
+    },
+    "B2": {
+      "name": "Transformations géométriques",
+      "start_index": 80,
+      "end_index": 89,
+      "series": [
+        {
+          "number": 1,
+          "name": "Automatismes",
+          "start_index": 81,
+          "end_index": 82
+        },
+        {
+          "number": 2,
+          "name": "Demi-tour",
+          "start_index": 83,
+          "end_index": 87
+        },
+        {
+          "number": 3,
+          "name": "Rosaces",
+          "start_index": 88,
+          "end_index": 89
+        }
+      ],
+      "exercise_pages": [
+        81,
+        82,
+        83,
+        84,
+        85,
+        86,
+        87,
+        88,
+        89
+      ]
+    },
+    "B3": {
+      "name": "Angles",
+      "start_index": 90,
+      "end_index": 95,
+      "series": [
+        {
+          "number": 1,
+          "name": "Automatismes",
+          "start_index": 91,
+          "end_index": 91
+        },
+        {
+          "number": 2,
+          "name": "Angles alternes-internes et correspondants",
+          "start_index": 92,
+          "end_index": 94
+        }
+      ],
+      "exercise_pages": [
+        91,
+        92,
+        93,
+        94
+      ]
+    },
+    "B4": {
+      "name": "Triangles",
+      "start_index": 96,
+      "end_index": 109,
+      "series": [
+        {
+          "number": 1,
+          "name": "Automatismes",
+          "start_index": 98,
+          "end_index": 99
+        },
+        {
+          "number": 2,
+          "name": "Somme des angles dans un triangle",
+          "start_index": 100,
+          "end_index": 102
+        },
+        {
+          "number": 3,
+          "name": "Médiatrices",
+          "start_index": 103,
+          "end_index": 103
+        },
+        {
+          "number": 4,
+          "name": "Hauteurs et aires",
+          "start_index": 104,
+          "end_index": 105
+        },
+        {
+          "number": 5,
+          "name": "Médianes",
+          "start_index": 106,
+          "end_index": 107
+        },
+        {
+          "number": 6,
+          "name": "Triangles : synthèse",
+          "start_index": 108,
+          "end_index": 108
+        }
+      ],
+      "exercise_pages": [
+        98,
+        99,
+        100,
+        101,
+        102,
+        103,
+        104,
+        105,
+        106,
+        107,
+        108
+      ]
+    },
+    "B5": {
+      "name": "Parallélogrammes",
+      "start_index": 110,
+      "end_index": 119,
+      "series": [
+        {
+          "number": 1,
+          "name": "Automatismes",
+          "start_index": 112,
+          "end_index": 113
+        },
+        {
+          "number": 2,
+          "name": "Construction, propriétés",
+          "start_index": 114,
+          "end_index": 116
+        },
+        {
+          "number": 3,
+          "name": "Parallélogrammes particuliers",
+          "start_index": 117,
+          "end_index": 117
+        },
+        {
+          "number": 4,
+          "name": "Aires",
+          "start_index": 118,
+          "end_index": 119
+        }
+      ],
+      "exercise_pages": [
+        112,
+        113,
+        114,
+        115,
+        116,
+        117,
+        118,
+        119
+      ]
+    },
+    "B6": {
+      "name": "Représentation de l’espace",
+      "start_index": 120,
+      "end_index": 131,
+      "series": [
+        {
+          "number": 1,
+          "name": "Automatismes",
+          "start_index": 122,
+          "end_index": 123
+        },
+        {
+          "number": 2,
+          "name": "Construction de solides",
+          "start_index": 124,
+          "end_index": 125
+        },
+        {
+          "number": 3,
+          "name": "Volumes et capacités",
+          "start_index": 126,
+          "end_index": 127
+        },
+        {
+          "number": 4,
+          "name": "Disque et cylindre de révolution",
+          "start_index": 128,
+          "end_index": 129
+        }
+      ],
+      "exercise_pages": [
+        122,
+        123,
+        124,
+        125,
+        126,
+        127,
+        128,
+        129
+      ]
+    },
+    "C1": {
+      "name": "Statistiques",
+      "start_index": 132,
+      "end_index": 141,
+      "series": [
+        {
+          "number": 1,
+          "name": "Recueillir, organiser",
+          "start_index": 134,
+          "end_index": 135
+        },
+        {
+          "number": 2,
+          "name": "Lire, interpréter",
+          "start_index": 136,
+          "end_index": 137
+        },
+        {
+          "number": 3,
+          "name": "Représenter",
+          "start_index": 138,
+          "end_index": 139
+        },
+        {
+          "number": 4,
+          "name": "Moyenne",
+          "start_index": 140,
+          "end_index": 141
+        }
+      ],
+      "exercise_pages": [
+        134,
+        135,
+        136,
+        137,
+        138,
+        139,
+        140,
+        141
+      ]
+    },
+    "C2": {
+      "name": "Probabilités",
+      "start_index": 142,
+      "end_index": 149,
+      "series": [
+        {
+          "number": 1,
+          "name": "Automatismes",
+          "start_index": 143,
+          "end_index": 144
+        },
+        {
+          "number": 2,
+          "name": "Probabilités",
+          "start_index": 145,
+          "end_index": 146
+        },
+        {
+          "number": 3,
+          "name": "Expérimentations",
+          "start_index": 147,
+          "end_index": 149
+        }
+      ],
+      "exercise_pages": [
+        143,
+        144,
+        145,
+        146,
+        147,
+        148,
+        149
+      ]
+    },
+    "D1": {
+      "name": "Proportionnalité",
+      "start_index": 150,
+      "end_index": 161,
+      "series": [
+        {
+          "number": 1,
+          "name": "Automatismes",
+          "start_index": 152,
+          "end_index": 153
+        },
+        {
+          "number": 2,
+          "name": "Proportions et pourcentages",
+          "start_index": 154,
+          "end_index": 155
+        },
+        {
+          "number": 3,
+          "name": "Identifier des situations",
+          "start_index": 156,
+          "end_index": 157
+        },
+        {
+          "number": 4,
+          "name": "Coefficient de proportionnalité",
+          "start_index": 158,
+          "end_index": 159
+        },
+        {
+          "number": 5,
+          "name": "Tableaux et graphiques",
+          "start_index": 160,
+          "end_index": 161
+        }
+      ],
+      "exercise_pages": [
+        152,
+        153,
+        154,
+        155,
+        156,
+        157,
+        158,
+        159,
+        160,
+        161
+      ]
+    },
+    "D2": {
+      "name": "Fonctions",
+      "start_index": 162,
+      "end_index": 167,
+      "series": [
+        {
+          "number": 1,
+          "name": "En fonction de",
+          "start_index": 163,
+          "end_index": 165
+        },
+        {
+          "number": 2,
+          "name": "Relation de dépendance",
+          "start_index": 166,
+          "end_index": 167
+        }
+      ],
+      "exercise_pages": [
+        163,
+        164,
+        165,
+        166,
+        167
+      ]
+    },
+    "E1": {
+      "name": "La pensée informatique",
+      "start_index": 168,
+      "end_index": 179,
+      "series": [
+        {
+          "number": 1,
+          "name": "Instructions simples",
+          "start_index": 170,
+          "end_index": 173
+        },
+        {
+          "number": 2,
+          "name": "Traduire des formules",
+          "start_index": 174,
+          "end_index": 175
+        },
+        {
+          "number": 3,
+          "name": "Boucles, analyse de programmes",
+          "start_index": 176,
+          "end_index": 179
+        }
+      ],
+      "exercise_pages": [
+        170,
+        171,
+        172,
+        173,
+        174,
+        175,
+        176,
+        177,
+        178,
+        179
+      ]
+    }
+  }
+}

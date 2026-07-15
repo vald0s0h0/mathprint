@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     deepseek_pro_model: str = "deepseek-v4-pro"
     exercise_variants_per_level: int = 3   # taille de banque par compétence × niveau
     claude_model: str = "claude-haiku-4-5-20251001"
+    # extraction vision des pages de manuel Sésamath (multimodal) : Haiku par
+    # défaut, repli Opus 4.8 sur les pages denses qu'Haiku n'arrive pas à extraire
+    claude_vision_model: str = "claude-haiku-4-5"
+    claude_vision_fallback_model: str = "claude-opus-4-8"
 
     # --- Budgets / quotas par défaut ---
     mathpix_concurrency: int = 3
@@ -70,7 +74,7 @@ class Settings(BaseSettings):
     # les autres cycles viendront plus tard (manuel absent -> journalisé,
     # jamais bloquant, cf. services/sesamaths_pdf.load_manual)
     sesamaths_manuals: dict[str, str] = {"5e": str(_REPO_ROOT / "context" / "5.pdf")}
-    sesamaths_schema_version: str = "1"
+    sesamaths_schema_version: str = "2"   # bump -> invalide l'ancien cache (texte)
 
     # --- Impression (CUPS local ou IPP réseau, §11.5) ---
     printing_enabled: bool = True

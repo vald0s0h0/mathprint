@@ -1,36 +1,44 @@
-"""Pipeline Sésamaths : extraction d'exercices depuis les manuels scolaires
-PDF (collection Sésamath), en complément de la moisson MathALÉA existante.
+"""Pipeline Sésamaths (refonte VISION) : extraction d'exercices depuis les
+manuels scolaires PDF (collection Sésamath), en complément de la moisson
+MathALÉA/DeepSeek existante.
+
+Pourquoi la vision. Les pages du manuel sont à deux colonnes denses (badges de
+nombres, tableaux à compléter, figures géométriques). L'extraction TEXTE
+(PyMuPDF) entrelace ces éléments et détruit la structure ; les figures sont par
+nature illisibles en texte. On rend donc CHAQUE page en image et on l'extrait
+avec un LLM multimodal, UN appel par page.
 
 Architecture (mêmes barrières que exgen-3, réutilisées telles quelles) :
-  1. PDF (services.sesamaths_pdf, PyMuPDF) : repère le chapitre demandé dans
-     le manuel du niveau de la compétence, extrait son texte (ordre de
-     lecture) et ses figures — jamais le manuel entier.
-  2. STRUCTURATION (DeepSeek flash, une fois par Série du chapitre, mise en
-     cache par hash pdf+chapitre+modèle+prompt+schéma) : segmente le texte
-     brut en exercices distincts, au contrat JSON exgen-3 EXACT
-     (exercise_gen._RESPONSE_FORMAT_BLOCK), + une difficulté 1-5.
-  3. VALIDATION DÉTERMINISTE : chaque candidat repasse par
-     exercise_gen._validate_exercise (LaTeX, types de réponse, auto-vérif
-     par grading.grade) — reformulation vers un type de réponse compatible
-     comprise gratuitement, aucune duplication de logique.
-  4. COMPLÉMENT si le chapitre ne fournit pas assez d'exercices au niveau
-     demandé : génération DeepSeek Pro inspirée des exercices Sésamaths
-     validés du même chapitre, vérifiée par Claude Haiku (langage naturel) —
-     seul usage de Claude dans cette pipeline, réservé à cette voie générée.
-  5. BANQUE : stockage dans GeneratedExercise avec source="sesamaths"
-     (extrait) ou "sesamaths_deepseek" (complément), un pool STRICTEMENT
-     séparé de la banque MathALÉA/DeepSeek par défaut (source in
-     ("deepseek","mathalea")) — ne la remplace ni ne l'altère jamais.
+  1. CARTE (services.sesamaths_pdf) : la table des matières donne la page
+     imprimée de chaque Série ; on en déduit la plage de pages fichier de
+     chaque Série (hors « Culture »), sans jamais parcourir le manuel entier.
+  2. EXTRACTION VISION (Claude Haiku 4.5, une fois par page, mise en cache par
+     hash pdf+page+prompt+modèle+schéma) : lit l'IMAGE de la page et restitue
+     TOUS ses exercices au contrat exgen-3 EXACT (statement/correction/
+     response_type/answer/figure + difficulty), énoncés à l'identique, maths en
+     LaTeX, tableaux reconstruits, badges de nombres inclus, questions
+     reformulées vers un type de réponse de l'UI. Repli Opus 4.8 sur les pages
+     denses qu'Haiku n'arrive pas à extraire.
+  3. FIGURES : quand un exercice s'appuie sur une figure, le LLM renvoie sa
+     zone (bbox relative) ; on la recadre du PDF en PNG (figure "image"), jamais
+     devinée.
+  4. VALIDATION DÉTERMINISTE : chaque candidat repasse par
+     exercise_gen._validate_exercise (LaTeX, types de réponse, auto-vérif) —
+     aucune duplication de logique.
+  5. COMPLÉMENT si le chapitre ne fournit pas assez d'exercices : génération
+     DeepSeek Pro inspirée des exercices Sésamaths réellement extraits du même
+     chapitre, vérifiée par Claude — seul usage « génératif » de la pipeline.
+  6. BANQUE : GeneratedExercise avec source="sesamaths" (extrait) ou
+     "sesamaths_deepseek" (complément), pool STRICTEMENT séparé de la banque
+     par défaut.
 
-Reprise sur erreur : l'état d'extraction d'un chapitre est une machine à
-états persistante (SesamathsChapterExtraction.step), reprise au dernier step
-réussi à chaque appel — pas de nouvelle file d'attente, la pipeline tourne en
-synchrone à la demande (comme MathALÉA aujourd'hui).
+Reprise sur erreur : l'état d'extraction d'un chapitre est persistant
+(SesamathsChapterExtraction), machine à états PAR PAGE — seules les pages en
+échec sont retentées au prochain appel.
 """
 import hashlib
 import json
 import logging
-import re
 
 from sqlalchemy.orm import Session
 
@@ -40,11 +48,8 @@ from . import exercise_gen, mathrender, providers, sesamaths_pdf
 
 logger = logging.getLogger(__name__)
 
-PROMPT_VERSION = "sesamaths-1"
+PROMPT_VERSION = "sesamaths-2-vision"
 SOURCE_POOL = ("sesamaths", "sesamaths_deepseek")
-
-_SERIES_RE = re.compile(r"Série\s*(\d+)")
-_MAX_SERIES_TEXT_CHARS = 8000
 
 
 # ================================================================ cache LLM
@@ -56,90 +61,80 @@ def _cache_key(*parts) -> str:
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
-def _cached_deepseek_json(db: Session, cache_key: str, operation: str, system: str,
-                          payload: dict, max_tokens: int) -> dict:
+def _cached_vision(db: Session, cache_key: str, model: str, system: str,
+                   user_text: str, image_png: bytes, correlation_id: str) -> dict:
     cached = db.query(SesamathsLlmCache).filter_by(cache_key=cache_key).first()
     if cached:
         return cached.response_json
-    data = providers.deepseek_json(db, operation, system, payload, max_tokens=max_tokens,
-                                   model=settings.deepseek_model,
-                                   correlation_id=f"sesamaths-{cache_key[:12]}")
+    data = providers.claude_vision_json(
+        db, "sesamaths_vision_extract", system, user_text, image_png,
+        max_tokens=6000, model=model, correlation_id=correlation_id)
     db.add(SesamathsLlmCache(cache_key=cache_key, response_json=data))
     db.commit()
     return data
 
 
-# ============================================================ structuration
+# ============================================================ prompt vision
 
-def _bundle_series(pages: list[dict]) -> dict[int, dict]:
-    """Regroupe les pages d'un chapitre par numéro de Série — chaque page
-    d'exercice porte son numéro en pied de page ; les pages de rappel de
-    leçon n'en portent aucun et sont ignorées (extraction limitée aux
-    exercices, cf. contraintes Sésamaths)."""
-    bundles: dict[int, dict] = {}
-    for p in pages:
-        m = _SERIES_RE.search(p["text"])
-        if not m:
-            continue
-        n = int(m.group(1))
-        b = bundles.setdefault(n, {"text": "", "figures": []})
-        b["text"] += ("\n\n" if b["text"] else "") + p["text"]
-        b["figures"].extend(p["figures"])
-    return bundles
+_VISION_EXTRACT_INTRO = (
+    "Tu es un professeur agrégé de mathématiques. On te fournit l'IMAGE d'une "
+    "page d'un manuel de §GRADE§ (collection Sésamath), Série §SERIES_NUMBER§ "
+    "« §SERIES_NAME§ » du chapitre « §CHAPTER_NAME§ ». Extrais CHAQUE exercice "
+    "numéroté de cette page, SANS EN OUBLIER, SANS en inventer.\n\n"
+    "RÈGLES D'EXTRACTION :\n"
+    "- Restitue l'énoncé À L'IDENTIQUE (mêmes valeurs, même intention) ; corrige "
+    "seulement les artefacts de mise en page.\n"
+    "- Toute expression mathématique est balisée en LaTeX $...$ (cf. règles de "
+    "format ci-dessous).\n"
+    "- Une LISTE DE NOMBRES fournie dans des badges/encadrés fait partie de "
+    "l'énoncé : recopie-la intégralement dans \"statement\".\n"
+    "- Un TABLEAU à compléter doit être reconstruit en \"table_fill\" (l'élève y "
+    "écrit ses réponses) : reprends libellés de lignes/colonnes et calcule les "
+    "cellules attendues.\n"
+    "- REFORMULE si besoin la consigne pour qu'elle rentre dans l'un des types de "
+    "réponse ci-dessous (ex. « quels nombres sont divisibles par 2 ? » -> QCM à "
+    "choix multiples listant les nombres de l'énoncé).\n"
+    "- IGNORE : les rubriques « Culture », les rappels de leçon (« À RETENIR »), "
+    "les QR codes, en-têtes et pieds de page.\n"
+    "- Si un exercice s'appuie sur une FIGURE (géométrie, droite graduée, repère, "
+    "schéma) présente sur la page, n'essaie pas de la décrire : ajoute "
+    "\"figure_ref\": {\"bbox_pct\": [x0, y0, x1, y1]} où (x0,y0)=coin haut-gauche "
+    "et (x1,y1)=coin bas-droit de la figure, en fractions 0-1 de la page "
+    "(x=largeur, y=hauteur).\n"
+    "- Ajoute à chaque exercice \"difficulty\": entier 1 (découverte) à 5 (défi), "
+    "relatif au niveau §GRADE§.\n\n"
+)
 
 
-def _structure_series(db: Session, manual_sha256: str, grade_level: str, chapter_code: str,
-                      chapter_name: str, series_number: int, series_text: str,
-                      n_figures: int, is_geometry: bool) -> list[dict]:
-    """Un appel DeepSeek flash pour segmenter une Série en exercices, au
-    contrat exgen-3 (statement/correction/response_type/answer/figure/kind +
-    difficulty), mis en cache par (pdf, chapitre, série, modèle, prompt, schéma)."""
+def _vision_system(grade: str, chapter_name: str, series_number, series_name: str,
+                   is_geometry: bool) -> str:
     format_block = exercise_gen._RESPONSE_FORMAT_BLOCK.replace(
         "{geometry_rules}", exercise_gen._GEOMETRY_RULES if is_geometry else "")
-    system = (
-        "Tu es un professeur agrégé de mathématiques. On te donne le texte BRUT "
-        f"(extraction PDF, ordre de lecture approximatif) de la Série {series_number} "
-        f"du chapitre « {chapter_name} » ({chapter_code}) d'un manuel de {grade_level}. "
-        "Identifie CHAQUE exercice distinct de ce texte et restitue-le structuré, SANS "
-        "en inventer, SANS changer les valeurs numériques ni l'intention pédagogique — "
-        "corrige uniquement les défauts d'extraction (numérotation, texte tronqué ou "
-        "mal ordonné, artefacts). La \"correction\" est un corrigé TRÈS SIMPLE, sans "
-        "justification ni rédaction, réutilisable par une correction déterministe "
-        "(juste le résultat attendu). Ajoute à chaque exercice \"difficulty\": entier "
-        f"1 (découverte) à 5 (défi), relative au niveau {grade_level}.\n\n"
-        + (f"{n_figures} figure(s) ont été extraites séparément de cette Série, "
-           "identifiants \"fig:0\" à "
-           f"\"fig:{max(0, n_figures - 1)}\" : si un exercice s'appuie sur l'une "
-           "d'elles, référence-la par \"figure_ref\":\"fig:N\" au lieu de la décrire ; "
-           "sinon omets ce champ.\n\n" if n_figures else "")
-        + format_block
-    )
-    payload = {
-        "grade": grade_level, "chapter_code": chapter_code, "chapter_name": chapter_name,
-        "series_number": series_number,
-        "texte_brut": series_text[:_MAX_SERIES_TEXT_CHARS],
-    }
-    cache_key = _cache_key(manual_sha256, chapter_code, str(series_number),
-                          settings.deepseek_model, PROMPT_VERSION,
-                          settings.sesamaths_schema_version, payload)
-    data = _cached_deepseek_json(db, cache_key, "sesamaths_structure", system, payload,
-                                 max_tokens=4000)
-    return data.get("exercises") or []
+    # .replace (et non .format) : le prompt contient des accolades JSON littérales
+    intro = (_VISION_EXTRACT_INTRO
+             .replace("§GRADE§", grade)
+             .replace("§CHAPTER_NAME§", chapter_name)
+             .replace("§SERIES_NUMBER§", str(series_number))
+             .replace("§SERIES_NAME§", series_name))
+    return intro + format_block
 
 
-def _to_candidate(raw: dict, figures: list[dict], competency, db: Session,
-                  existing_norms: set[str]) -> dict | None:
+# ================================================================ candidats
+
+def _to_candidate(raw: dict, doc, page_idx: int, competency, db: Session,
+                  existing_norms: set[str], out_dir) -> dict | None:
     if not isinstance(raw, dict):
         return None
     raw = dict(raw)
     figure_ref = raw.pop("figure_ref", None)
     if figure_ref and not raw.get("figure"):
-        try:
-            fi = int(str(figure_ref).split(":", 1)[1])
-        except (ValueError, IndexError):
-            fi = -1
-        if 0 <= fi < len(figures):
-            raw["figure"] = {"type": "image", "params": {"path": figures[fi]["png_path"]}}
+        bbox = figure_ref.get("bbox_pct") if isinstance(figure_ref, dict) else None
+        if bbox:
+            fname = hashlib.sha256(
+                f"{page_idx}|{raw.get('statement', '')}".encode()).hexdigest()[:16]
+            fig_path = out_dir / f"p{page_idx}_{fname}.png"
+            if sesamaths_pdf.crop_bbox_png(doc, page_idx, bbox, fig_path):
+                raw["figure"] = {"type": "image", "params": {"path": str(fig_path)}}
     try:
         difficulty = max(1, min(5, int(raw.pop("difficulty", 3))))
     except (TypeError, ValueError):
@@ -150,6 +145,46 @@ def _to_candidate(raw: dict, figures: list[dict], competency, db: Session,
         return None
     valid["difficulty"] = difficulty
     return valid
+
+
+def _extract_page(db: Session, doc, manual, chapter_code: str, page_meta: dict,
+                  is_geometry: bool, competency, existing_norms: set[str],
+                  out_dir) -> list[dict]:
+    """Extrait les exercices d'UNE page via vision. Essaie Haiku puis, si aucun
+    exercice valide, repli Opus 4.8 (page dense). Cache par (pdf, page, prompt,
+    modèle, schéma) : une page extraite n'est jamais re-payée."""
+    idx = page_meta["index"]
+    grade = manual.grade_level
+    system = _vision_system(grade, competency.chapter_name,
+                            page_meta.get("series_number"), page_meta.get("series_name", ""),
+                            is_geometry)
+    user_text = ("Extrais TOUS les exercices de cette page au format JSON demandé. "
+                 "N'oublie aucun exercice numéroté ; ignore les rubriques Culture "
+                 "et les rappels de leçon.")
+    png = sesamaths_pdf.render_page_png(doc, idx)
+
+    for model in (settings.claude_vision_model, settings.claude_vision_fallback_model):
+        cache_key = _cache_key(manual.sha256, "page", str(idx), PROMPT_VERSION,
+                              model, settings.sesamaths_schema_version)
+        try:
+            data = _cached_vision(db, cache_key, model, system, user_text, png,
+                                  correlation_id=f"sesa-vis-{chapter_code}-p{idx}")
+        except Exception as e:
+            logger.warning("Sésamaths : extraction vision page %s (%s) échouée : %s",
+                           idx, model, e)
+            continue
+        cands: list[dict] = []
+        for raw in (data.get("exercises") or []):
+            c = _to_candidate(raw, doc, idx, competency, db, existing_norms, out_dir)
+            if c is not None:
+                cands.append(c)
+        if cands:
+            return cands
+        if model == settings.claude_vision_fallback_model:
+            return []
+        logger.info("Sésamaths : page %s sans exercice valide en %s, repli %s",
+                    idx, model, settings.claude_vision_fallback_model)
+    return []
 
 
 # ================================================================ chapitre
@@ -174,10 +209,9 @@ def _resolve_chapter(db: Session, competency):
 
 def ensure_chapter_pool(db: Session, doc, manual, chapter_code: str, competency
                        ) -> list[dict]:
-    """État persistant par chapitre — reprend au dernier step réussi. Ne
-    lève jamais : toute erreur est journalisée, le pool renvoyé peut être
-    partiel voire vide (reprise ciblée : seules les Séries en échec sont
-    retentées au prochain appel, cf. failed_series_json)."""
+    """État persistant par chapitre — machine à états PAR PAGE. Ne lève jamais :
+    toute erreur est journalisée, le pool renvoyé peut être partiel (reprise
+    ciblée : seules les pages en échec sont retentées au prochain appel)."""
     row = (db.query(SesamathsChapterExtraction)
            .filter_by(manual_id=manual.id, chapter_code=chapter_code).first())
     if row is None:
@@ -189,55 +223,43 @@ def ensure_chapter_pool(db: Session, doc, manual, chapter_code: str, competency
         return row.validated_json or []
 
     row.attempts += 1
-    is_geometry = chapter_code[:1] in exercise_gen.GEOMETRY_DOMAINS
+    # géométrie : chapitres du domaine B (5e) ou compétence en domaine EG/GM
+    is_geometry = (competency.domain_code in exercise_gen.GEOMETRY_DOMAINS
+                   or chapter_code[:1] == "B")
+    out_dir = settings.data_dir / "sesamaths" / manual.grade_level / chapter_code
 
     try:
         if row.step == "pending":
-            start_idx, end_idx = sesamaths_pdf.chapter_page_range(
-                doc, manual.toc_json, chapter_code)
-            row.page_range_json = {"start_index": start_idx, "end_index": end_idx}
+            pages = sesamaths_pdf.chapter_exercise_pages(doc, manual.toc_json, chapter_code)
+            row.page_range_json = {"pages": pages, "done_pages": []}
             row.step = "pages_located"
             db.commit()
 
         if row.step == "pages_located":
-            start_idx = row.page_range_json["start_index"]
-            end_idx = row.page_range_json["end_index"]
-            row.raw_json = sesamaths_pdf.extract_chapter_raw(
-                db, doc, manual, chapter_code, start_idx, end_idx)
-            row.step = "raw_extracted"
-            db.commit()
-
-        if row.step == "raw_extracted":
-            bundles = _bundle_series(row.raw_json.get("pages", []))
-            validated = list(row.validated_json or [])
-            failed = set(row.failed_series_json or [])
+            pages = row.page_range_json.get("pages", [])
+            done = set(row.page_range_json.get("done_pages", []))
+            pool = list(row.validated_json or [])
             existing_norms = {exercise_gen._normalize_statement_for_dedup(c["statement"])
-                              for c in validated}
-            for series_number, bundle in sorted(bundles.items()):
-                if series_number in failed:
+                              for c in pool}
+            failed: list[int] = []
+            for pg in pages:
+                if pg["index"] in done:
                     continue
                 try:
-                    raws = _structure_series(
-                        db, manual.sha256, manual.grade_level, chapter_code,
-                        competency.chapter_name, series_number, bundle["text"],
-                        len(bundle["figures"]), is_geometry)
+                    cands = _extract_page(db, doc, manual, chapter_code, pg,
+                                          is_geometry, competency, existing_norms, out_dir)
                 except Exception as e:
-                    logger.warning("Sésamaths : structuration Série %s (%s) échouée : %s",
-                                   series_number, chapter_code, e)
-                    failed.add(series_number)
+                    logger.warning("Sésamaths : page %s (%s) en échec : %s",
+                                   pg["index"], chapter_code, e)
+                    failed.append(pg["index"])
                     continue
-                for raw in raws:
-                    candidate = _to_candidate(raw, bundle["figures"], competency, db,
-                                              existing_norms)
-                    if candidate is None:
-                        continue
-                    existing_norms.add(
-                        exercise_gen._normalize_statement_for_dedup(candidate["statement"]))
-                    validated.append(candidate)
-            row.validated_json = validated
-            row.failed_series_json = sorted(failed)
-            row.step = "done"
-            row.error_message = "" if validated else "Aucun exercice validé pour ce chapitre"
+                pool.extend(cands)
+                done.add(pg["index"])
+            row.validated_json = pool
+            row.page_range_json = {"pages": pages, "done_pages": sorted(done)}
+            row.failed_series_json = failed
+            row.step = "done" if not failed else "pages_located"
+            row.error_message = "" if pool else "Aucun exercice validé pour ce chapitre"
             db.commit()
     except Exception as e:
         row.error_message = str(e)[:2000]
@@ -257,7 +279,7 @@ def chapter_pool(db: Session, competency) -> list[dict]:
 
 def harvest(db: Session, competency, level: int, need: int,
            existing_norms: set[str]) -> list[dict]:
-    """Moisson des exercices Sésamaths déjà validés du chapitre de
+    """Moisson des exercices Sésamaths déjà extraits du chapitre de
     `competency`, filtrés au niveau demandé — point d'entrée analogue à
     exercise_gen._harvest_mathalea."""
     if need <= 0:
@@ -280,9 +302,9 @@ def harvest(db: Session, competency, level: int, need: int,
 
 def top_up_with_deepseek_pro(db: Session, competency, level: int, need: int,
                              pool: list[dict], existing_norms: set[str]) -> list[dict]:
-    """Complément DeepSeek Pro inspiré des exercices Sésamaths validés du
-    même chapitre, vérifié par Claude Haiku (langage naturel) — seul usage
-    de Claude dans cette pipeline, réservé à cette voie générée."""
+    """Complément DeepSeek Pro inspiré des exercices Sésamaths réellement
+    extraits du même chapitre, vérifié par Claude Haiku (langage naturel) —
+    seul usage « génératif » de cette pipeline, réservé au comblement."""
     if need <= 0:
         return []
     examples = [c["statement"] for c in pool[:3]]
@@ -373,7 +395,7 @@ def ensure_bank(db: Session, competency, level: int,
             statement=candidate["statement"], correction=candidate["correction"],
             response_type=candidate["response_type"],
             expected_json=candidate["expected"], grading_json=candidate["grading"],
-            model=(settings.deepseek_model if source == "sesamaths"
+            model=(settings.claude_vision_model if source == "sesamaths"
                   else settings.deepseek_pro_model),
             prompt_version=PROMPT_VERSION, status="active",
             verifier_model=settings.claude_model if source == "sesamaths_deepseek" else "",

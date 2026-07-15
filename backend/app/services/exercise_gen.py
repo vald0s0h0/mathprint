@@ -246,7 +246,9 @@ def _validate_exercise(raw: dict, competency: Competency, db: Session,
                   "cells": validated_cells,
                   "col_labels": [str(c) for c in col_labels] if col_labels else None,
                   "row_labels": [str(r) for r in row_labels] if row_labels else None}
-        reference = [[_cell_reference_text(c) for c in r] for r in validated_cells]
+        # grade(table_cells) attend un cell_texts À PLAT (une entrée par cellule,
+        # dans l'ordre ligne par ligne) — cf. grading._grade table_cells
+        reference = [_cell_reference_text(c) for r in validated_cells for c in r]
         verdict = grading.grade(expected, gpolicy, "", 0.99, cell_texts=reference)
         if verdict["score"] < gpolicy["max_score"]:
             return None
