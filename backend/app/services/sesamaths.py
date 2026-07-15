@@ -96,7 +96,7 @@ def _cached_vision(db: Session, cache_key: str, model: str, system: str,
         try:
             data = providers.claude_vision_json(
                 db, "sesamaths_vision_extract", system, user_text, image_png,
-                max_tokens=6000, model=model, correlation_id=correlation_id)
+                max_tokens=16000, model=model, correlation_id=correlation_id)
             break
         except Exception as e:
             if not _is_rate_limited(e) or attempt == 2:
@@ -138,7 +138,10 @@ _VISION_EXTRACT_INTRO = (
     "et (x1,y1)=coin bas-droit de la figure, en fractions 0-1 de la page "
     "(x=largeur, y=hauteur).\n"
     "- Ajoute à chaque exercice \"difficulty\": entier 1 (découverte) à 5 (défi), "
-    "relatif au niveau §GRADE§.\n\n"
+    "relatif au niveau §GRADE§.\n"
+    "- OBLIGATOIRE : \"correction\" ne doit JAMAIS être vide. Rédige la "
+    "résolution complète (au moins une phrase, calcul détaillé puis résultat). "
+    "Un exercice sans correction est REJETÉ.\n\n"
 )
 
 
@@ -253,6 +256,14 @@ def series_number_for(competency) -> int | None:
     return int(m.group(1)) if m else None
 
 
+def _extraction_key(competency, chapter_code: str) -> str:
+    """Clé de l'état d'extraction : le code COMPÉTENCE (= une Série du manuel),
+    pas le chapitre. UNE SEULE définition : lecture et écriture doivent utiliser
+    la même, sinon on relit la ligne d'un autre périmètre (une extraction
+    partielle peut alors passer pour complète et rouvrir l'invention DeepSeek)."""
+    return getattr(competency, "code", "") or chapter_code
+
+
 def _resolve_chapter(db: Session, competency):
     """(doc, manual, chapter_code) — chapter_code est None si indisponible
     (manuel absent/chapitre inconnu, déjà journalisé). Jamais d'exception."""
@@ -279,7 +290,7 @@ def ensure_chapter_pool(db: Session, doc, manual, chapter_code: str, competency
     # L'état est persisté PAR COMPÉTENCE (= par Série du manuel), pas par
     # chapitre : on n'extrait que les pages de la Série demandée, donc une
     # poignée de pages au lieu des ~17 du chapitre.
-    extraction_key = getattr(competency, "code", "") or chapter_code
+    extraction_key = _extraction_key(competency, chapter_code)
     row = (db.query(SesamathsChapterExtraction)
            .filter_by(manual_id=manual.id, chapter_code=extraction_key).first())
     if row is None:
@@ -387,7 +398,8 @@ def _extracted_chapter(db: Session, competency) -> tuple[list[dict], bool]:
             f"pas pu être extraits. Détail : {detail}")
     pool = ensure_chapter_pool(db, doc, manual, chapter_code, competency)
     row = (db.query(SesamathsChapterExtraction)
-           .filter_by(manual_id=manual.id, chapter_code=chapter_code).first())
+           .filter_by(manual_id=manual.id,
+                      chapter_code=_extraction_key(competency, chapter_code)).first())
     fully_done = bool(row and row.step == "done" and not (row.failed_series_json or []))
     return pool, fully_done
 

@@ -506,6 +506,13 @@ def claude_vision_json(db: Session, operation: str, system: str, user_text: str,
             cost=usage.get("input_tokens", 0) * in_rate + usage.get("output_tokens", 0) * out_rate,
             correlation_id=correlation_id)
 
+    # Sortie coupée par max_tokens : le JSON est tronqué en plein milieu, donc
+    # illisible. On le dit clairement au lieu de « hors schéma JSON », qui
+    # laissait croire à un modèle fautif (cf. page 6 perdue sur les 2 modèles).
+    if data.get("stop_reason") == "max_tokens":
+        raise ValueError(
+            f"Réponse Claude vision TRONQUÉE ({model}) : la page dépasse "
+            f"max_tokens={max_tokens}. Augmente max_tokens pour cette page.")
     body = "".join(b.get("text", "") for b in data.get("content", []))
     content_text = ("{" + body) if prefill_ok else body
     try:
