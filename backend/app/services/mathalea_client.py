@@ -5,11 +5,18 @@
 La version MathALÉA est épinglée (clone versionné) ; chaque instantané stocke
 la seed et la version exacte (RM-014).
 """
+import hashlib
+import logging
 import re
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as _FutureTimeout
 
 import httpx
+from sqlalchemy.orm import Session
 
 from ..config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class MathaleaUnavailable(Exception):
@@ -20,9 +27,53 @@ def _base_url() -> str:
     return settings.mathalea_url
 
 
+def _mock_enabled(db: Session | None) -> bool:
+    if db is None:
+        return False
+    from .runtime_settings import mock_enabled
+    return mock_enabled(db)
+
+
+# Même garde-fou que providers._post_with_deadline : le timeout httpx est par
+# lecture socket, pas global — un service qui répond au compte-gouttes ou
+# tarde à démarrer (cold start du process Node à la première requête) peut
+# sinon bloquer le worker de génération indéfiniment (incident observé : job
+# figé après "Copie 1/N", plus aucun log, worker mono-thread sans watchdog).
+_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="mathalea-http")
+
+
+def _with_deadline(fn, *args, **kwargs):
+    total = settings.mathalea_call_timeout_s
+    future = _POOL.submit(fn, *args, **kwargs)
+    try:
+        return future.result(timeout=total)
+    except _FutureTimeout:
+        future.cancel()
+        logger.warning("MathALÉA : aucune réponse complète après %ss — appel abandonné", total)
+        raise MathaleaUnavailable(
+            f"Service MathALÉA : pas de réponse après {total}s (appel abandonné)") from None
+
+
+def _mock_generate(ref: str, seed: int) -> dict:
+    """Exercice déterministe simulé — utilisé quand le mode mock est actif,
+    pour ne jamais dépendre du service MathALÉA réel en dev/test (comme tous
+    les autres fournisseurs, cf. providers._mock_enabled)."""
+    h = int(hashlib.sha256(f"{ref}-{seed}".encode()).hexdigest(), 16)
+    a, b = 2 + h % 20, 2 + (h // 20) % 20
+    return {
+        "statement": f"(mock MathALÉA {ref}) Calculer : ${a} + {b}$",
+        "correction": f"${a} + {b} = {a + b}$",
+        "expected": {"type": "integer", "value": a + b},
+        "grading": {"max_score": 1, "comparator": "numeric", "tolerance": 0},
+        "response_type": "short_text",
+        "provider_version": "mock",
+        "titre": ref,
+    }
+
+
 def health() -> dict | None:
     try:
-        return httpx.get(f"{_base_url()}/health", timeout=5).json()
+        return _with_deadline(httpx.get, f"{_base_url()}/health", timeout=5).json()
     except Exception:
         return None
 
@@ -30,9 +81,11 @@ def health() -> dict | None:
 def catalog(grade: str | None = None) -> list[dict]:
     try:
         params = {"grade": grade} if grade else {}
-        r = httpx.get(f"{_base_url()}/catalog", params=params, timeout=15)
+        r = _with_deadline(httpx.get, f"{_base_url()}/catalog", params=params, timeout=15)
         r.raise_for_status()
         return r.json()
+    except MathaleaUnavailable:
+        raise
     except Exception as e:
         raise MathaleaUnavailable(f"Service MathALÉA injoignable : {e}")
 
@@ -122,15 +175,21 @@ def _expected_from_mathalea(exp: dict | None) -> tuple[dict, dict]:
             {"max_score": 1, "comparator": "text_equal"})
 
 
-def generate(ref: str, seed: int, nb_questions: int = 1) -> dict:
+def generate(ref: str, seed: int, nb_questions: int = 1, *,
+            db: Session | None = None) -> dict:
     """Génère un exercice. Retourne le contrat interne :
-    {statement, correction, expected, grading, response_type, version}."""
+    {statement, correction, expected, grading, response_type, version}.
+    En mode mock (db fourni), ne contacte jamais le service réel."""
+    if _mock_enabled(db):
+        return _mock_generate(ref, seed)
     try:
-        r = httpx.post(f"{_base_url()}/generate",
-                       json={"ref": ref, "seed": seed, "nbQuestions": nb_questions},
-                       timeout=30)
+        r = _with_deadline(httpx.post, f"{_base_url()}/generate",
+                           json={"ref": ref, "seed": seed, "nbQuestions": nb_questions},
+                           timeout=30)
         r.raise_for_status()
         data = r.json()
+    except MathaleaUnavailable:
+        raise
     except httpx.HTTPStatusError as e:
         raise MathaleaUnavailable(f"Génération {ref} en échec : {e.response.text[:200]}")
     except Exception as e:

@@ -59,6 +59,11 @@ class Settings(BaseSettings):
 
     # --- MathALÉA (service Node headless, conteneur "mathalea" §11.1) ---
     mathalea_url: str = "http://localhost:8123"
+    # délai TOTAL maximal d'un appel MathALÉA (cold start possible du service
+    # Node à la première requête) — même logique que llm_call_timeout_s :
+    # le timeout httpx est par lecture socket, pas global (RM- incident worker
+    # bloqué indéfiniment sur un service qui répond au compte-gouttes/tarde)
+    mathalea_call_timeout_s: int = 30
 
     # --- Sésamaths (extraction de manuels PDF Sésamath, à la demande) ---
     # niveau -> chemin du manuel ; seule la 5e est couverte pour l'instant,

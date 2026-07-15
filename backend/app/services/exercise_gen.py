@@ -654,7 +654,7 @@ def _harvest_mathalea(db: Session, competency: Competency, level: int,
         if len(out) >= need:
             break
         try:
-            gen = mathalea_client.generate(ref, seed=1000 * level + i)
+            gen = mathalea_client.generate(ref, seed=1000 * level + i, db=db)
         except mathalea_client.MathaleaUnavailable:
             continue
         if gen["grading"].get("comparator") == "manual":

@@ -1,13 +1,66 @@
 """Tests : conversion MathALÉA -> contrat interne, nettoyage LaTeX, filtre CV."""
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
+import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.services.mathalea_client import _expected_from_mathalea, latex_to_text
+from app import models as _models  # noqa: F401 (enregistre toutes les tables sur Base)
+from app.db import Base
+from app.services import mathalea_client
+from app.services.mathalea_client import MathaleaUnavailable, _expected_from_mathalea, latex_to_text
 from app.services.grading import grade
+
+
+@pytest.fixture
+def mock_db():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    yield session
+    session.close()
+
+
+def test_generate_mock_mode_never_hits_network(mock_db):
+    # settings.mock_mode par défaut = True et aucune ProviderConfig en base
+    # -> mode mock actif ; ne doit jamais tenter de vraie requête HTTP
+    data = mathalea_client.generate("builtin:x", seed=1, db=mock_db)
+    assert data["provider_version"] == "mock"
+    assert data["grading"]["comparator"] == "numeric"
+
+
+def test_generate_without_db_param_uses_real_path_not_mock(monkeypatch):
+    # generate() sans `db` (comme avant le correctif) ne doit PAS basculer
+    # silencieusement en mock — seul un `db` explicite active le mock
+    called = {}
+
+    def fake_with_deadline(fn, *a, **kw):
+        called["hit"] = True
+        raise MathaleaUnavailable("simulé : service injoignable")
+
+    monkeypatch.setattr(mathalea_client, "_with_deadline", fake_with_deadline)
+    with pytest.raises(MathaleaUnavailable):
+        mathalea_client.generate("builtin:x", seed=1)
+    assert called.get("hit")
+
+
+def test_with_deadline_gives_up_after_configured_timeout(monkeypatch):
+    from app.config import settings
+    monkeypatch.setattr(settings, "mathalea_call_timeout_s", 0.2)
+
+    def hangs_forever(*a, **kw):
+        time.sleep(10)
+
+    started = time.monotonic()
+    with pytest.raises(MathaleaUnavailable):
+        mathalea_client._with_deadline(hangs_forever)
+    # doit abandonner après ~0.2s, jamais attendre les 10s de l'appel simulé
+    assert time.monotonic() - started < 2.0
 
 
 def test_latex_cleanup():
