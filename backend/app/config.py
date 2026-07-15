@@ -57,6 +57,11 @@ class Settings(BaseSettings):
     # le read-timeout httpx est par lecture socket, pas global — un serveur
     # qui répond au compte-gouttes peut sinon bloquer le worker indéfiniment
     llm_call_timeout_s: int = 180
+    # délai TOTAL maximal d'un job de génération de sujet : filet de sécurité
+    # au-dessus de llm_call_timeout_s — protège contre un blocage hors appel
+    # LLM (verrou DB, appel sans garde-fou) qui laisserait le job "running"
+    # indéfiniment, invisible dans les logs (cf. incidents Sésamaths)
+    job_generation_timeout_s: int = 900
 
     # --- Pédagogie ---
     forgetting_threshold: float = 0.80   # probabilité de rappel sous laquelle une compétence est "due"

@@ -10,15 +10,25 @@ draine. `resume_stuck_jobs` remet en file, au redémarrage, tout job resté
 survit pas à un crash, contrairement à cette table)."""
 import logging
 import threading
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as _FutureTimeout
 from datetime import datetime, timezone
 
 from sqlalchemy import update
 from sqlalchemy.orm import Session
 
+from ..config import settings
 from ..db import SessionLocal
 from ..models import Assessment, Job
 
 logger = logging.getLogger(__name__)
+
+# Filet de sécurité au-dessus de settings.llm_call_timeout_s : ce dernier ne
+# protège qu'un appel LLM individuel, pas un blocage ailleurs (verrou DB,
+# appel réseau sans garde-fou type MathALéA/PDF). On exécute la génération
+# dans ce pool avec un délai TOTAL ; au-delà, le job est marqué en échec et
+# le thread abandonné termine seul (même logique que providers._HTTP_POOL).
+_GENERATION_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="job-generation")
 
 _TYPE = "assessment_generation"
 _wake = threading.Event()
@@ -92,9 +102,47 @@ def _claim(db: Session, job: Job) -> bool:
     return n == 1
 
 
-def _run_job(db: Session, job: Job) -> None:
-    from . import generation  # import tardif : évite un cycle au chargement du module
+def _generate_isolated(assessment_id: str, job_id: str, font_size: int) -> None:
+    """Exécuté dans `_GENERATION_POOL`, avec sa PROPRE session DB : si le
+    thread appelant (`_run_job`) abandonne au bout du délai global, cette
+    fonction continue seule sur sa session — jamais partagée avec le thread
+    qui a lâché l'affaire (même principe que providers._HTTP_POOL)."""
+    from . import generation
 
+    db = SessionLocal()
+    try:
+        assessment = db.get(Assessment, assessment_id)
+        job = db.get(Job, job_id)
+        if assessment is None or job is None:
+            return  # sujet supprimé entre-temps (Paramètres > Données) : rien à faire
+        logger.info("Génération du sujet « %s » (tentative %s)",
+                    assessment.title, job.attempts)
+        generation.generate_assessment_job(db, assessment, job, font_size)
+        job.status = "done"
+        job.progress = 100
+        assessment.status = "ready"
+        logger.info("Sujet « %s » prêt", assessment.title)
+        job.updated_at = datetime.now(timezone.utc)
+        db.commit()
+    except Exception as e:
+        logger.exception("Échec génération sujet %s", assessment_id)
+        db.rollback()
+        job = db.get(Job, job_id)
+        if job is None:
+            return  # supprimé entre-temps : la suppression a déjà tout nettoyé
+        assessment = db.get(Assessment, job.assessment_id)
+        job.status = "failed"
+        job.error_code = str(e)[:400]
+        if assessment is not None:
+            assessment.status = "error"
+            assessment.error_message = str(e)[:400]
+        job.updated_at = datetime.now(timezone.utc)
+        db.commit()
+    finally:
+        db.close()
+
+
+def _run_job(db: Session, job: Job) -> None:
     assessment = db.get(Assessment, job.assessment_id)
     if assessment is None:
         job.status = "failed"
@@ -105,32 +153,40 @@ def _run_job(db: Session, job: Job) -> None:
     assessment.status = "generating"
     db.commit()
     # tout ce que les services app.* loguent (INFO+) pendant ce job est
-    # recopié dans jobs.log_text, consultable depuis l'écran Sujets
+    # recopié dans jobs.log_text, consultable depuis l'écran Sujets — la
+    # génération tourne dans un thread séparé (délai global ci-dessous) mais
+    # passe par le même logger "app", donc ce handler la capte quand même
     handler = _JobLogHandler(job.id)
     app_logger = logging.getLogger("app")
     app_logger.addHandler(handler)
+    font_size = (job.payload_json or {}).get("font_size", 10)
+    job_id, assessment_id = job.id, job.assessment_id
     try:
-        logger.info("Génération du sujet « %s » (tentative %s)",
-                    assessment.title, job.attempts)
-        font_size = (job.payload_json or {}).get("font_size", 10)
-        generation.generate_assessment_job(db, assessment, job, font_size)
-        job.status = "done"
-        job.progress = 100
-        assessment.status = "ready"
-        logger.info("Sujet « %s » prêt", assessment.title)
-    except Exception as e:
-        logger.exception("Échec génération sujet %s", assessment.id)
+        future = _GENERATION_POOL.submit(_generate_isolated, assessment_id, job_id, font_size)
+        future.result(timeout=settings.job_generation_timeout_s)
+    except _FutureTimeout:
+        logger.error(
+            "Sujet %s : délai global de %ss dépassé — job marqué en échec pour "
+            "libérer l'interface (le thread abandonné termine seul en tâche de "
+            "fond, son résultat éventuel sera écrasé au prochain essai)",
+            assessment_id, settings.job_generation_timeout_s)
         db.rollback()
-        job = db.get(Job, job.id)
-        assessment = db.get(Assessment, job.assessment_id)
-        job.status = "failed"
-        job.error_code = str(e)[:400]
-        assessment.status = "error"
-        assessment.error_message = str(e)[:400]
+        stuck_job = db.get(Job, job_id)
+        if stuck_job is not None:
+            stuck_job.status = "failed"
+            stuck_job.error_code = f"délai global dépassé ({settings.job_generation_timeout_s}s)"
+            stuck_assessment = db.get(Assessment, assessment_id)
+            if stuck_assessment is not None:
+                stuck_assessment.status = "error"
+                stuck_assessment.error_message = stuck_job.error_code
+            stuck_job.updated_at = datetime.now(timezone.utc)
+            db.commit()
+    except Exception:
+        # _generate_isolated capture déjà ses propres erreurs ; ce cas ne
+        # devrait pas arriver, mais la boucle du worker ne doit jamais planter
+        logger.exception("Erreur inattendue en supervisant la génération de %s", assessment_id)
     finally:
         app_logger.removeHandler(handler)
-    job.updated_at = datetime.now(timezone.utc)
-    db.commit()
 
 
 def _drain() -> None:
