@@ -188,6 +188,33 @@ def test_to_candidate_crops_figure_from_bbox(db_session, manual_doc):
     assert Path(fig["params"]["path"]).exists()
 
 
+def test_multi_field_exercise_stays_one_table_fill(db_session):
+    # Manuel, exercice 12 « Calcule chacun des produits suivants » : UN badge
+    # numéroté, 10 sous-questions a. à j. => UN exercice table_fill à 10 lignes,
+    # pas 10 exercices. La borne historique (6 lignes) le recalait.
+    from app.services import exercise_gen
+    comp = _seed_competency(db_session, "A1", "Opérations", "Calculer")
+    rows = [["$0,4 \\times 7$", "$2,8$"], ["$8 \\times 0,09$", "$0,72$"],
+            ["$0,7 \\times 6$", "$4,2$"], ["$0,5 \\times 0,3$", "$0,15$"],
+            ["$0,4 \\times 0,06$", "$0,024$"], ["$300 \\times 9$", "$2700$"],
+            ["$50 \\times 0,7$", "$35$"], ["$0,02 \\times 9$", "$0,18$"],
+            ["$30 \\times 0,06$", "$1,8$"], ["$900 \\times 0,05$", "$45$"]]
+    raw = {"kind": "application",
+           "statement": "Calcule chacun des produits suivants.",
+           "correction": "On multiplie sans la virgule, puis on place la virgule "
+                         "selon le nombre de décimales : $0,4 \\times 7 = 2,8$.",
+           "response_type": "table_fill",
+           "answer": {"type": "table", "rows": 10, "cols": 2,
+                      "col_labels": ["Calcul", "Résultat"],
+                      "row_labels": [f"{c}." for c in "abcdefghij"],
+                      "cells": [[{"type": "text", "value": calc},
+                                 {"type": "text", "value": res}] for calc, res in rows]}}
+    valid = exercise_gen._validate_exercise(raw, comp, db_session, set())
+    assert valid is not None, exercise_gen.diagnose_rejection(raw, comp)
+    assert valid["response_type"] == "table_fill"
+    assert valid["expected"]["rows"] == 10          # les 10 sous-questions préservées
+
+
 def test_series_scoped_to_competency(db_session, manual_doc, toc):
     # Dans le manuel, une « Série » EST une compétence (A1.1 « Automatismes » =
     # Série 1). L'extraction ne doit lire que les pages de CETTE Série, pas les

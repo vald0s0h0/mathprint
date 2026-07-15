@@ -266,7 +266,9 @@ def _validate_exercise(raw: dict, competency: Competency, db: Session,
             rows, cols = int(answer.get("rows")), int(answer.get("cols"))
         except (TypeError, ValueError):
             return None
-        if not (2 <= rows <= 6 and 2 <= cols <= 6):
+        # jusqu'à 12 lignes : un exercice de manuel a couramment 10 sous-questions
+        # (a. à j.) qui doivent rester UN seul exercice, une ligne par question.
+        if not (2 <= rows <= 12 and 2 <= cols <= 6):
             return None
         cells = answer.get("cells")
         if not (isinstance(cells, list) and len(cells) == rows

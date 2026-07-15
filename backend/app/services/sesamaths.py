@@ -50,7 +50,10 @@ from . import exercise_gen, mathrender, providers, sesamaths_pdf
 
 logger = logging.getLogger(__name__)
 
-PROMPT_VERSION = "sesamaths-2-vision"
+# Entre dans la clé du cache LLM : TOUJOURS le bumper en même temps qu'une
+# modification de _VISION_EXTRACT_INTRO, sinon les réponses mises en cache par
+# l'ANCIEN prompt sont resservies et le nouveau prompt reste sans effet.
+PROMPT_VERSION = "sesamaths-3-vision-structure"
 SOURCE_POOL = ("sesamaths", "sesamaths_deepseek")
 
 
@@ -117,6 +120,27 @@ _VISION_EXTRACT_INTRO = (
     "page d'un manuel de §GRADE§ (collection Sésamath), Série §SERIES_NUMBER§ "
     "« §SERIES_NAME§ » du chapitre « §CHAPTER_NAME§ ». Extrais CHAQUE exercice "
     "numéroté de cette page, SANS EN OUBLIER, SANS en inventer.\n\n"
+    "CE QU'EST UN EXERCICE (règle la plus importante) :\n"
+    "- UN exercice = UN badge numéroté (chiffre BLANC dans un petit carré de "
+    "couleur), avec le titre qui le suit éventuellement. Le badge est le SEUL "
+    "séparateur d'exercices.\n"
+    "- Les sous-questions « a. », « b. », « c. »… d'un même badge NE SONT PAS des "
+    "exercices : ce sont les CHAMPS DE RÉPONSE d'un seul et même exercice. Ne les "
+    "sépare JAMAIS en plusieurs exercices, ne répète JAMAIS le même exercice.\n"
+    "- Exemple : un badge « 4 Quotients et restes » avec « a. … » et « b. … » "
+    "produit UN exercice, pas deux. Un badge « 12 Calcule chacun des produits » "
+    "avec « a. » à « j. » produit UN exercice à 10 réponses, pas dix.\n"
+    "- Le nombre d'exercices que tu renvoies doit être EXACTEMENT le nombre de "
+    "badges numérotés de la page.\n\n"
+    "STRUCTURE DES RÉPONSES (à respecter fidèlement) :\n"
+    "- PLUSIEURS champs de réponse (a., b., c.…) -> UN exercice \"table_fill\" "
+    "avec UNE LIGNE PAR SOUS-QUESTION : \"row_labels\" = [\"a.\", \"b.\", …] (ou "
+    "l'énoncé court de chaque sous-question), et une COLONNE PAR VALEUR attendue "
+    "(ex. « quotient » et « reste » -> 2 colonnes ; un seul résultat -> "
+    "col_labels = [\"Calcul\", \"Résultat\"]). Chaque ligne garde son énoncé "
+    "propre dans row_labels ; \"statement\" ne porte que la consigne commune.\n"
+    "- UN SEUL champ de réponse -> \"short_text\".\n"
+    "- Conserve l'ORDRE et le LIBELLÉ d'origine des sous-questions.\n\n"
     "RÈGLES D'EXTRACTION :\n"
     "- Restitue l'énoncé À L'IDENTIQUE (mêmes valeurs, même intention) ; corrige "
     "seulement les artefacts de mise en page.\n"
