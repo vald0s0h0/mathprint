@@ -15,8 +15,9 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 _DATA_DIR = Path(os.environ.get(
-    "MATHPRINT_DATA_DIR", str(Path(__file__).resolve().parents[2] / "data")))
+    "MATHPRINT_DATA_DIR", str(_REPO_ROOT / "data")))
 _RUNTIME_ENV_FILE = _DATA_DIR / "runtime_secrets.env"
 
 
@@ -58,6 +59,13 @@ class Settings(BaseSettings):
 
     # --- MathALÉA (service Node headless, conteneur "mathalea" §11.1) ---
     mathalea_url: str = "http://localhost:8123"
+
+    # --- Sésamaths (extraction de manuels PDF Sésamath, à la demande) ---
+    # niveau -> chemin du manuel ; seule la 5e est couverte pour l'instant,
+    # les autres cycles viendront plus tard (manuel absent -> journalisé,
+    # jamais bloquant, cf. services/sesamaths_pdf.load_manual)
+    sesamaths_manuals: dict[str, str] = {"5e": str(_REPO_ROOT / "context" / "5.pdf")}
+    sesamaths_schema_version: str = "1"
 
     # --- Impression (CUPS local ou IPP réseau, §11.5) ---
     printing_enabled: bool = True

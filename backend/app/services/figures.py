@@ -23,7 +23,8 @@ import numpy as np
 from ..config import settings
 
 
-FIGURE_TYPES = {"rectangle", "triangle", "circle", "angle", "number_line", "coordinate_plane"}
+FIGURE_TYPES = {"rectangle", "triangle", "circle", "angle", "number_line",
+                "coordinate_plane", "image"}
 
 
 def _fmt(v: float) -> str:
@@ -60,6 +61,11 @@ def validate_figure(figure_json) -> dict | None:
     if ftype not in FIGURE_TYPES or not isinstance(params, (dict, type(None))):
         return None
     params = dict(params or {})
+    if ftype == "image":
+        # figure extraite d'un manuel (Sésamaths) : chemin de fichier direct,
+        # pas de rendu procédural — confiance interne (jamais fourni par un LLM)
+        if not isinstance(params.get("path"), str) or not params["path"]:
+            return None
     # bornes de listes : jamais plus de 8 points annotés
     for key in ("points",):
         if key in params:
@@ -302,6 +308,14 @@ def render_figure(figure_json: dict) -> bytes:
 
     fig_type = figure_json['type']
     params = figure_json.get('params', {})
+
+    if fig_type == "image":
+        # figure extraite d'un manuel (Sésamaths) : pas de rendu procédural,
+        # pas de cache disque (le fichier référencé est déjà le cache)
+        path = params.get("path")
+        if not path or not Path(path).exists():
+            raise ValueError(f"Image figure introuvable : {path!r}")
+        return Path(path).read_bytes()
 
     # Clé de cache
     import json as _json

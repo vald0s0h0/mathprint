@@ -78,6 +78,10 @@ def generate_assessment_job(db: Session, assessment: Assessment,
     rapport de génération. Appelé par le worker de fond (job_worker)."""
     school_class = db.get(SchoolClass, assessment.class_id)
     students = [s for s in school_class.students if s.active]
+    # source des exercices choisie dans l'assistant (§ Sésamaths) : "auto"
+    # préserve le comportement historique (MathALÉA + DeepSeek), inchangé
+    # par défaut pour tout sujet existant sans ce champ
+    exercise_source = (assessment.blueprint_json or {}).get("exercise_source", "auto")
     competency_ids = list(dict.fromkeys(
         (assessment.blueprint_json or {}).get("competency_ids") or []))
     competencies = {c.id: c for c in db.query(Competency).filter(
@@ -135,7 +139,8 @@ def generate_assessment_job(db: Session, assessment: Assessment,
             nonlocal total_non_qcm
             comp = competencies[comp_id]
             try:
-                bank, _ = exercise_gen.bank_rows_near_level(db, comp, level5)
+                bank, _ = exercise_gen.bank_rows_near_level(
+                    db, comp, level5, source=exercise_source)
                 row = distribution.pick_balanced_exercise(
                     bank, kind_counts, target_mix, item_seed)
             except Exception as e:
@@ -171,6 +176,8 @@ def generate_assessment_job(db: Session, assessment: Assessment,
                                  "response_type": row.response_type,
                                  "choices": choices, "level5": row.difficulty_level,
                                  "figure": row.figure_json,
+                                 "grading": row.grading_json,
+                                 "inline": bool((row.expected_json or {}).get("inline")),
                                  "_bucket": distribution.exercise_bucket(row)})
             if not row.response_type.startswith("qcm"):
                 total_non_qcm += 1

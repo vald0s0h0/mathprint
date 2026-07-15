@@ -54,12 +54,62 @@ def _extract_answer_side(s: str, variable: str | None) -> str:
 
 
 def grade(expected: dict, grading: dict, ocr_text: str, ocr_confidence: float,
-          selected_choices: list[int] | None = None) -> dict:
+          selected_choices: list[int] | None = None,
+          cell_texts: list[str] | None = None,
+          selected_pairs: list[list[int]] | None = None) -> dict:
     """Décision déterministe. Ne choisit jamais en cas d'ambiguïté (RM-005)."""
     max_score = float(grading.get("max_score", 1))
     comparator = grading.get("comparator", "numeric")
     result = {"max_score": max_score, "score": 0.0, "tier": "D",
               "confidence": ocr_confidence, "reason_code": "unresolved"}
+
+    # --- sans réponse structurée (manual_drawing, tracé/dessin) : toujours
+    # revue professeur, même vide — jamais de score deviné sur une planche
+    # blanche (§ tracés géométriques, correction humaine obligatoire) ---
+    if comparator == "manual":
+        result.update(tier="D", reason_code="no_structured_answer")
+        return result
+
+    # --- points à relier : détection CV du trait, jamais de choix deviné ---
+    if comparator == "matching":
+        expected_pairs = {tuple(p) for p in expected.get("pairs", [])}
+        if selected_pairs is None:
+            result.update(tier="D", reason_code="matching_unreadable")
+            return result
+        got_pairs = [tuple(p) for p in selected_pairs]
+        if len(set(got_pairs)) != len(got_pairs):
+            result.update(tier="D", reason_code="matching_ambiguous")
+            return result
+        got_set = set(got_pairs)
+        score = float(len(got_set & expected_pairs))
+        ok = got_set == expected_pairs
+        result.update(tier="B", score=score, confidence=1.0,
+                      reason_code="matching_match" if ok else "matching_partial")
+        return result
+
+    # --- tableau à remplir : une comparaison numérique/texte par cellule ---
+    if comparator == "table_cells":
+        flat_expected = [cell for row in (grading.get("cells") or []) for cell in row]
+        if cell_texts is None or len(cell_texts) != len(flat_expected):
+            result.update(tier="D", reason_code="table_unreadable")
+            return result
+        score = 0.0
+        for exp_cell, raw_cell in zip(flat_expected, cell_texts):
+            norm = normalize(raw_cell or "")
+            if exp_cell["type"] == "text":
+                ok = norm.casefold() == normalize(str(exp_cell["value"])).casefold()
+            else:
+                got = _parse_number(norm)
+                if got is None:
+                    result.update(tier="D", reason_code="table_cell_unreadable")
+                    return result
+                ok = got == Fraction(str(exp_cell["value"]))
+            score += 1.0 if ok else 0.0
+        tier = "A" if score == len(flat_expected) else "B"
+        result.update(tier=tier, score=score, confidence=1.0,
+                      reason_code="table_match" if score == len(flat_expected)
+                      else "table_mismatch")
+        return result
 
     # --- QCM : purement déterministe (CV local, pas de LLM) ---
     if comparator == "qcm":
@@ -90,10 +140,6 @@ def grade(expected: dict, grading: dict, ocr_text: str, ocr_confidence: float,
     norm = normalize(ocr_text)
     norm = _extract_answer_side(norm, expected.get("variable"))
     etype = expected.get("type")
-
-    if comparator == "manual":
-        result.update(tier="D", reason_code="no_structured_answer")
-        return result
 
     if comparator == "text_equal" or etype == "text":
         want_txt = normalize(str(expected.get("value") or ""))

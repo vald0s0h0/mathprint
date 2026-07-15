@@ -51,9 +51,10 @@ export default function Subjects() {
   const [type, setType] = useState('training')
   const [title, setTitle] = useState('')
   const [pages, setPages] = useState(1)
-  // étape 2 : compétences cochées
+  // étape 2 : compétences cochées + source des exercices (§ Sésamaths)
   const [competencyIds, setCompetencyIds] = useState<string[]>([])
   const [suggestReason, setSuggestReason] = useState('')
+  const [exerciseSource, setExerciseSource] = useState('auto')
   // étape 3 : adaptation
   const [mode, setMode] = useState('common')
   // étape 4
@@ -109,7 +110,8 @@ export default function Subjects() {
 
   async function confirmCompetencies() {
     if (!assessmentId) return
-    await api.patch(`/api/assessments/${assessmentId}`, { competency_ids: competencyIds })
+    await api.patch(`/api/assessments/${assessmentId}`,
+      { competency_ids: competencyIds, exercise_source: exerciseSource })
     setStep(2)
   }
 
@@ -147,7 +149,7 @@ export default function Subjects() {
   function reset() {
     setOpen(false); setStep(0); setAssessmentId(null)
     setCompetencyIds([]); setTitle(''); setSuggestReason('')
-    setMode('common'); setType('training'); setPages(1)
+    setMode('common'); setType('training'); setPages(1); setExerciseSource('auto')
   }
 
   return (
@@ -275,7 +277,8 @@ export default function Subjects() {
             <Stack mt="md" gap="xs">
               {suggestReason && <Alert color="blue" p="xs">{suggestReason}</Alert>}
               <CompetencyMatrixStep gradeLevel={grade} selected={competencyIds}
-                onChange={setCompetencyIds} />
+                onChange={setCompetencyIds} source={exerciseSource}
+                onSourceChange={setExerciseSource} />
               <Button onClick={confirmCompetencies} disabled={!competencyIds.length}>
                 Continuer
               </Button>

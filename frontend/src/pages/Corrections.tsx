@@ -48,6 +48,7 @@ const STATUS_LABEL: Record<string, string> = {
 const CATEGORY_LABELS: Record<string, string> = {
   rature: 'Rature', double_coche: 'Double coche', ocr_ambigu: 'OCR ambigu',
   scan_faible: 'Scan faible', bareme: 'Barème',
+  trace_dessin: 'Tracé / dessin', points_a_relier: 'Points à relier',
 }
 
 function SegmentBar({ segments }: { segments: Segment[] }) {

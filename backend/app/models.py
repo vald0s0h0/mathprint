@@ -79,9 +79,16 @@ class Student(Base):
 # ------------------------------------------------------- référentiel pédagogique
 
 class CompetencyFramework(Base):
+    """Un référentiel = un niveau (`grade_level`, ex. "5e") pour un programme
+    donné. `cycle` est le cycle du programme (3 ou 4), `program_year` l'année
+    de programme officielle (l'Éducation nationale peut en changer tous les
+    ~10 ans, ex. 2026) — à distinguer de `SchoolYear` qui est l'année
+    scolaire d'une classe."""
     __tablename__ = "competency_frameworks"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
     grade_level: Mapped[str] = mapped_column(String)
+    cycle: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    program_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
     name: Mapped[str] = mapped_column(String)
     version: Mapped[str] = mapped_column(String, default="1.0")
     status: Mapped[str] = mapped_column(String, default="draft")  # draft | published | archived
@@ -89,19 +96,29 @@ class CompetencyFramework(Base):
 
 
 class Competency(Base):
+    """Une compétence est une feuille de la hiérarchie à 3 niveaux du
+    référentiel :
+      - H1 = domaine (`domain_code`/`domain_name`, ex. "A" / "Nombres et calculs")
+      - H2 = chapitre (`chapter_code`/`chapter_name`, ex. "A1" / "Opérations")
+      - H3 = la compétence elle-même (`label`, ex. "Automatismes")
+    `short_id` reprend la numérotation du sommaire (ex. "A1.1"), affiché
+    partout dans la plateforme accompagné d'au moins le chapitre (H2) : un
+    libellé de compétence isolé (ex. "Automatismes") ne suffit pas à savoir
+    de quoi il s'agit. `code` reste l'identifiant technique legacy (verbeux,
+    non affiché) pour les niveaux pas encore migrés vers ce modèle."""
     __tablename__ = "competencies"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
     framework_id: Mapped[str] = mapped_column(ForeignKey("competency_frameworks.id"))
     code: Mapped[str] = mapped_column(String)
+    short_id: Mapped[str] = mapped_column(String, default="")
     label: Mapped[str] = mapped_column(String)
     description: Mapped[str] = mapped_column(Text, default="")
     parent_id: Mapped[str | None] = mapped_column(String, nullable=True)
     order_index: Mapped[int] = mapped_column(Integer, default=0)
-    # hiérarchie du programme officiel : domaine > thème > objectif
     domain_code: Mapped[str] = mapped_column(String, default="")
     domain_name: Mapped[str] = mapped_column(String, default="")
-    theme_code: Mapped[str] = mapped_column(String, default="")
-    theme_name: Mapped[str] = mapped_column(String, default="")
+    chapter_code: Mapped[str] = mapped_column(String, default="")
+    chapter_name: Mapped[str] = mapped_column(String, default="")
 
 
 class LessonSnippet(Base):
@@ -134,7 +151,7 @@ class ExerciseCatalog(Base):
     title: Mapped[str] = mapped_column(String)
     grade_level: Mapped[str] = mapped_column(String)
     difficulty: Mapped[int] = mapped_column(Integer, default=5)  # 1-10
-    response_type: Mapped[str] = mapped_column(String)  # qcm_single | qcm_multiple | short_text | multiline_text
+    response_type: Mapped[str] = mapped_column(String)  # qcm_single | qcm_multiple | short_text | multiline_text | table_fill | matching | manual_drawing
     expected_schema: Mapped[str] = mapped_column(String, default="integer")  # integer|rational|expression|text|steps
     automation_tier: Mapped[str] = mapped_column(String, default="auto")  # auto|auto_with_llm|review_required|manual
     params_json: Mapped[dict] = mapped_column(JSON, default=dict)
@@ -151,6 +168,7 @@ class GeneratedExercise(Base):
     statement: Mapped[str] = mapped_column(Text)
     correction: Mapped[str] = mapped_column(Text, default="")
     response_type: Mapped[str] = mapped_column(String, default="short_text")
+    # qcm_single | qcm_multiple | short_text | multiline_text | table_fill | matching | manual_drawing
     expected_json: Mapped[dict] = mapped_column(JSON, default=dict)
     grading_json: Mapped[dict] = mapped_column(JSON, default=dict)
     model: Mapped[str] = mapped_column(String, default="")
@@ -222,6 +240,7 @@ class CopyItem(Base):
     sequence: Mapped[int] = mapped_column(Integer)
     difficulty: Mapped[int] = mapped_column(Integer, default=5)
     response_type: Mapped[str] = mapped_column(String)
+    # qcm_single | qcm_multiple | short_text | multiline_text | table_fill | matching | manual_drawing
     statement: Mapped[str] = mapped_column(Text)        # instantané énoncé (RM-014)
     correction: Mapped[str] = mapped_column(Text)       # instantané correction
     expected_json: Mapped[dict] = mapped_column(JSON, default=dict)   # réponse(s) attendue(s)
@@ -268,6 +287,53 @@ class FileObject(Base):
     sha256: Mapped[str] = mapped_column(String, default="")
     mime: Mapped[str] = mapped_column(String, default="application/pdf")
     size: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
+# --------------------------------------------------- Sésamaths (extraction manuels PDF)
+
+class SesamathsManual(Base):
+    """Un manuel scolaire enregistré (un par `grade_level`, ex. "5e"). La
+    table des matières est parsée une fois puis mise en cache dans `toc_json`
+    (chapitre -> nom + page imprimée de départ, cf. services.sesamaths_pdf)."""
+    __tablename__ = "sesamaths_manuals"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
+    grade_level: Mapped[str] = mapped_column(String, unique=True)
+    file_object_id: Mapped[str | None] = mapped_column(ForeignKey("file_objects.id"), nullable=True)
+    sha256: Mapped[str] = mapped_column(String, default="")
+    status: Mapped[str] = mapped_column(String, default="missing")  # missing | ready | error
+    toc_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    error_message: Mapped[str] = mapped_column(Text, default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
+class SesamathsChapterExtraction(Base):
+    """État d'extraction d'un chapitre d'un manuel — une ligne par
+    (manual_id, chapter_code). `step` porte la machine à états
+    (pending|pages_located|raw_extracted|structured|done|failed) : une reprise
+    après erreur repart du dernier step réussi (§ Sésamaths, reprise ciblée)."""
+    __tablename__ = "sesamaths_chapter_extractions"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
+    manual_id: Mapped[str] = mapped_column(ForeignKey("sesamaths_manuals.id"))
+    chapter_code: Mapped[str] = mapped_column(String)  # ex. "A1"
+    step: Mapped[str] = mapped_column(String, default="pending")
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    error_message: Mapped[str] = mapped_column(Text, default="")
+    page_range_json: Mapped[dict] = mapped_column(JSON, default=dict)   # {start_index, end_index}
+    raw_json: Mapped[dict] = mapped_column(JSON, default=dict)          # texte/figures bruts par page
+    validated_json: Mapped[list] = mapped_column(JSON, default=list)    # candidats validés (pool du chapitre)
+    failed_series_json: Mapped[list] = mapped_column(JSON, default=list)  # séries à relancer
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
+class SesamathsLlmCache(Base):
+    """Cache des appels LLM Sésamaths, clé = sha256(pdf|chapitre|modèle|
+    prompt_version|schéma|payload) — évite de repayer un appel identique lors
+    d'une reprise sur erreur (§ Sésamaths)."""
+    __tablename__ = "sesamaths_llm_cache"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
+    cache_key: Mapped[str] = mapped_column(String, unique=True)
+    response_json: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
 
@@ -360,7 +426,7 @@ class ManualReview(Base):
     __tablename__ = "manual_reviews"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
     decision_id: Mapped[str] = mapped_column(ForeignKey("grading_decisions.id"))
-    category: Mapped[str] = mapped_column(String)  # rature|double_coche|ocr_ambigu|scan_faible|bareme
+    category: Mapped[str] = mapped_column(String)  # rature|double_coche|ocr_ambigu|scan_faible|bareme|trace_dessin|points_a_relier
     priority: Mapped[int] = mapped_column(Integer, default=5)
     resolution: Mapped[str | None] = mapped_column(String, nullable=True)
     note: Mapped[str] = mapped_column(Text, default="")
@@ -447,7 +513,7 @@ class StudentReport(Base):
 class ProviderConfig(Base):
     __tablename__ = "provider_configs"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
-    provider: Mapped[str] = mapped_column(String, unique=True)  # mathpix | deepseek | anthropic
+    provider: Mapped[str] = mapped_column(String, unique=True)  # mathpix | deepseek-flash | deepseek-pro | anthropic
     model: Mapped[str] = mapped_column(String, default="")
     encrypted_secret: Mapped[str] = mapped_column(String, default="")  # jamais renvoyé intégralement
     limits_json: Mapped[dict] = mapped_column(JSON, default=dict)

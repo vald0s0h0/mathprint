@@ -207,7 +207,10 @@ export default function SettingsPage() {
   }
 
   const defaults: Record<string, string> = {
-    mathpix: 'v3/text', deepseek: 'deepseek-v4-flash', anthropic: 'claude-haiku-4-5-20251001',
+    mathpix: 'v3/text',
+    'deepseek-flash': 'deepseek-v4-flash',
+    'deepseek-pro': 'deepseek-v4-pro',
+    anthropic: 'claude-haiku-4-5-20251001',
   }
 
   return (
@@ -260,13 +263,17 @@ export default function SettingsPage() {
               Sans clé, un service reste en mode simulé. Les clés sont chiffrées au repos
               et jamais renvoyées intégralement.
             </Text>
-            {(['mathpix', 'deepseek', 'anthropic'] as const).map((p) => {
+            {(['mathpix', 'deepseek-flash', 'deepseek-pro', 'anthropic'] as const).map((p) => {
               const row = providers.find((x) => x.provider === p)
+              const labels: Record<string, string> = {
+                'deepseek-flash': 'DeepSeek Flash',
+                'deepseek-pro': 'DeepSeek Pro',
+              }
               return (
                 <Card key={p} withBorder>
                   <Group justify="space-between">
                     <Group>
-                      <Text fw={600} tt="capitalize">{p}</Text>
+                      <Text fw={600}>{labels[p] ?? p}</Text>
                       {row?.active && row.secret_preview
                         ? <Badge variant="light" color="green">configuré {row.secret_preview}</Badge>
                         : <Badge variant="light" color="gray"

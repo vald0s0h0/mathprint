@@ -58,6 +58,23 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
     "copy_items": [
         ("lesson_snippet_id", "TEXT"),
     ],
+    "competency_frameworks": [
+        ("cycle", "INTEGER"),
+        ("program_year", "INTEGER"),
+    ],
+    "competencies": [
+        ("short_id", "TEXT"),
+    ],
+}
+
+# renommages de colonnes (hiérarchie H1/H2 documentée sur `Competency` :
+# l'ancien "thème" du programme officiel devient "chapitre", cf. modèle) :
+# {table: [(ancien_nom, nouveau_nom), ...]}
+_RENAMED_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    "competencies": [
+        ("theme_code", "chapter_code"),
+        ("theme_name", "chapter_name"),
+    ],
 }
 
 
@@ -65,6 +82,14 @@ def run_migrations():
     insp = inspect(engine)
     tables = set(insp.get_table_names())
     with engine.begin() as conn:
+        for table, renames in _RENAMED_COLUMNS.items():
+            if table not in tables:
+                continue
+            existing = {c["name"] for c in insp.get_columns(table)}
+            for old_name, new_name in renames:
+                if old_name in existing and new_name not in existing:
+                    conn.execute(text(
+                        f"ALTER TABLE {table} RENAME COLUMN {old_name} TO {new_name}"))
         for table, columns in _ADDED_COLUMNS.items():
             if table not in tables:
                 continue

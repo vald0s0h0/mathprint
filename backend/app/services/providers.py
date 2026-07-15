@@ -91,6 +91,13 @@ def _mock_enabled(db: Session, cfg: ProviderConfig | None) -> bool:
     return mock_enabled(db) or cfg is None or not cfg.encrypted_secret
 
 
+def _provider_for_model(model: str) -> str:
+    """Retourne le provider DeepSeek approprié selon le modèle demandé."""
+    if model and "pro" in model:
+        return "deepseek-pro"
+    return "deepseek-flash"
+
+
 # ------------------------------------------------------------------- Mathpix
 
 def mathpix_ocr(db: Session, image_bytes: bytes, correlation_id: str,
@@ -137,14 +144,15 @@ def deepseek_json(db: Session, operation: str, system: str, user_payload: dict,
     """Appel DeepSeek en sortie JSON stricte. Une seule tentative corrective (§8.5).
     `model` permet d'imposer un modèle (ex : deepseek-v4-pro pour la création
     d'exercices) ; sinon registre configurable (RM-011)."""
-    cfg = _config(db, "deepseek")
-    if _today_cost(db, "deepseek") > settings.llm_daily_cost_limit_eur:
-        raise BudgetExceeded("Budget DeepSeek quotidien atteint")
-    model = model or (cfg.model if cfg and cfg.model else
-                      (settings.deepseek_reasoning_model if reasoning else settings.deepseek_model))
+    model = model or (settings.deepseek_reasoning_model if reasoning else settings.deepseek_model)
+    provider = _provider_for_model(model)
+    cfg = _config(db, provider)
+
+    if _today_cost(db, provider) > settings.llm_daily_cost_limit_eur:
+        raise BudgetExceeded(f"Budget {provider} quotidien atteint")
 
     if _mock_enabled(db, cfg):
-        _record(db, "deepseek", model, operation, input_tokens=200, output_tokens=80,
+        _record(db, provider, model, operation, input_tokens=200, output_tokens=80,
                 cost=0.0, correlation_id=correlation_id)
         return _deepseek_mock(operation, user_payload)
 
@@ -165,7 +173,7 @@ def deepseek_json(db: Session, operation: str, system: str, user_payload: dict,
         r.raise_for_status()
         data = r.json()
         usage = data.get("usage", {})
-        _record(db, "deepseek", model, operation,
+        _record(db, provider, model, operation,
                 input_tokens=usage.get("prompt_tokens", 0),
                 output_tokens=usage.get("completion_tokens", 0),
                 cost=usage.get("prompt_tokens", 0) * 3e-7 + usage.get("completion_tokens", 0) * 1e-6,
@@ -252,6 +260,37 @@ def _deepseek_mock(operation: str, payload: dict) -> dict:
                     "answer": {"type": "choice",
                                "correct": [choices.index(f"${good}$")]}})
         return {"exercises": exercises, "confidence": 0.9, "reason_code": "mock_generation"}
+    if operation == "sesamaths_structure":
+        # Structuration d'une Série de manuel : quelques exercices synthétiques
+        # au contrat exgen-3, seedés par chapitre+série pour rester déterministes.
+        import random
+        rng = random.Random(f"{payload.get('chapter_code')}-{payload.get('series_number')}")
+        n = rng.randint(1, 3)
+        exercises = []
+        for i in range(n):
+            a, b = rng.randint(2, 20), rng.randint(2, 20)
+            difficulty = rng.randint(1, 5)
+            if i % 2 == 0:
+                exercises.append({
+                    "kind": "application",
+                    "statement": f"Calculer : ${a} + {b}$",
+                    "correction": f"${a} + {b} = {a + b}$",
+                    "response_type": "short_text",
+                    "answer": {"type": "integer", "value": a + b},
+                    "difficulty": difficulty})
+            else:
+                good = a + b
+                choices = [f"${good}$", f"${good + 1}$", f"${good - 1}$"]
+                rng.shuffle(choices)
+                exercises.append({
+                    "kind": "application",
+                    "statement": f"Que vaut ${a} + {b}$ ?",
+                    "correction": f"${a} + {b} = {good}$",
+                    "response_type": "qcm_single",
+                    "choices": choices,
+                    "answer": {"type": "choice", "correct": [choices.index(f"${good}$")]},
+                    "difficulty": difficulty})
+        return {"exercises": exercises, "confidence": 0.9, "reason_code": "mock_structure"}
     if operation in ("lesson_snippet", "lesson_repair"):
         label = payload.get("competency_label", "la notion")
         return {

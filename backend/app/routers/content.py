@@ -26,8 +26,9 @@ def _exercise_out(ex: GeneratedExercise, comp: Competency | None) -> dict:
     return {
         "id": ex.id, "competency_id": ex.competency_id,
         "competency_code": comp.code if comp else "",
+        "competency_short_id": comp.short_id if comp else "",
         "competency_label": comp.label if comp else "",
-        "theme_name": comp.theme_name if comp else "",
+        "chapter_name": comp.chapter_name if comp else "",
         "level": ex.difficulty_level, "variant": ex.variant,
         "statement": ex.statement, "correction": ex.correction,
         "response_type": ex.response_type,
@@ -45,8 +46,9 @@ def _lesson_out(sn: LessonSnippet, comp: Competency | None) -> dict:
     return {
         "id": sn.id, "competency_id": sn.competency_id,
         "competency_code": comp.code if comp else "",
+        "competency_short_id": comp.short_id if comp else "",
         "competency_label": comp.label if comp else "",
-        "theme_name": comp.theme_name if comp else "",
+        "chapter_name": comp.chapter_name if comp else "",
         "level_min": sn.level_min, "level_max": sn.level_max,
         "title": sn.title, "blocks": sn.blocks_json or None,
         "content": sn.content_latex, "example": sn.example_latex,
@@ -86,9 +88,10 @@ def summary(grade_level: str | None = None, db: Session = Depends(get_db)):
         if not by_level and comp.id not in lessons:
             continue  # la banque s'agrandit à la demande : n'afficher que l'existant
         out.append({
-            "competency_id": comp.id, "code": comp.code, "label": comp.label,
+            "competency_id": comp.id, "code": comp.code, "short_id": comp.short_id,
+            "label": comp.label,
             "grade_level": grade, "domain_name": comp.domain_name,
-            "theme_name": comp.theme_name,
+            "chapter_name": comp.chapter_name,
             "by_level": {str(l): by_level.get(l, 0) for l in range(1, 6)},
             "total": sum(by_level.values()),
             "lessons": lessons.get(comp.id, []),

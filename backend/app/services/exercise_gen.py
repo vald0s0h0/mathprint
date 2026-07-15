@@ -21,10 +21,20 @@ Architecture (chaque contenu passe TOUTES les barrières avant stockage) :
   5. BANQUE INCRÉMENTALE : stockage par (compétence × niveau 1-5), généré à
      la demande — la base grandit avec les classes réellement utilisées.
 
-Formats de réponse (choisis selon la tâche, jamais de tracé élève) :
+Formats de réponse, choisis dans cet ordre de préférence (le plus automatisable
+d'abord — priorité au QCM, intervention humaine minimisée) :
   - qcm_single / qcm_multiple : reconnaissance, propriétés, géométrie ;
-  - short_text : résultat numérique, fraction ou expression (OCR Mathpix) ;
-  - multiline_text + rubric : raisonnement rédigé multi-étapes, problèmes.
+  - short_text : résultat numérique, fraction ou expression (OCR Mathpix),
+    éventuellement inséré en ligne dans l'énoncé (marqueur {{blank}}) ;
+  - table_fill : série de valeurs organisées en tableau (une cellule = un
+    short_text) ;
+  - multiline_text + rubric : raisonnement rédigé multi-étapes, problèmes,
+    nombre de lignes proportionné au nombre d'étapes ;
+  - matching : association deux colonnes (dernier recours avant le tracé —
+    correction par détection de trait manuscrit, jamais garantie 100% auto) ;
+  - manual_drawing : tracé/construction/schéma sur figure — SEUL format où
+    l'élève dessine ; toujours envoyé en correction manuelle, jamais noté par
+    la pipeline automatique.
 """
 
 import json
@@ -74,7 +84,8 @@ FORBIDDEN_GEOMETRY_VERBS = {
 # trop de faux positifs sinon ; on l'interdit aussi, l'élève écrit l'abscisse.
 FORBIDDEN_GEOMETRY_VERBS |= {"place", "placer", "placez", "placé", "placée"}
 
-VALID_RESPONSE_TYPES = {"qcm_single", "qcm_multiple", "short_text", "multiline_text"}
+VALID_RESPONSE_TYPES = {"qcm_single", "qcm_multiple", "short_text", "multiline_text",
+                        "table_fill", "matching", "manual_drawing"}
 
 _PROGRAM_CACHE: dict | None = None
 
@@ -87,14 +98,14 @@ def _program_data() -> dict:
     return _PROGRAM_CACHE
 
 
-def _theme_objectives(grade: str, theme_name: str) -> list[str]:
+def _chapter_objectives(grade: str, chapter_name: str) -> list[str]:
     for fw in _program_data()["frameworks"]:
         if fw["grade_level"] != grade:
             continue
         for dom in fw["domains"]:
-            for th in dom["themes"]:
-                if th["name"] == theme_name:
-                    return [c["label"] for c in th["competencies"]]
+            for chap in dom["chapters"]:
+                if chap["name"] == chapter_name:
+                    return [c["label"] for c in chap["competencies"]]
     return []
 
 
@@ -148,8 +159,14 @@ def _validate_exercise(raw: dict, competency: Competency, db: Session,
     if not _check_text(statement, 15, 1200) or not _check_text(correction, 5, 1500):
         return None
 
+    rtype = raw.get("response_type", "short_text")
+    if rtype not in VALID_RESPONSE_TYPES:
+        return None
+
     is_geometry = competency.domain_code in GEOMETRY_DOMAINS
-    if is_geometry and _is_geometry_verb(statement):
+    # seul manual_drawing autorise les verbes de construction (l'élève y
+    # dessine réellement) ; tout autre format géométrique doit s'en passer
+    if is_geometry and rtype != "manual_drawing" and _is_geometry_verb(statement):
         return None
 
     # anti-doublon (le set est maintenu par l'appelant pour couvrir le lot en cours)
@@ -162,9 +179,6 @@ def _validate_exercise(raw: dict, competency: Competency, db: Session,
     # figure optionnelle : validée par rendu à blanc, sinon abandonnée
     figure_json = figures.validate_figure(raw.get("figure"))
 
-    rtype = raw.get("response_type", "short_text")
-    if rtype not in VALID_RESPONSE_TYPES:
-        return None
     answer = raw.get("answer") or {}
     atype = answer.get("type")
 
@@ -178,7 +192,7 @@ def _validate_exercise(raw: dict, competency: Competency, db: Session,
     if rtype in ("qcm_single", "qcm_multiple"):
         choices = [str(c).strip() for c in (raw.get("choices") or [])]
         correct = answer.get("correct", [])
-        if not (3 <= len(choices) <= 5):
+        if not (3 <= len(choices) <= 8):
             return None
         if len({mathrender.strip_math(c).lower() for c in choices}) != len(choices):
             return None  # distracteurs dupliqués
@@ -196,7 +210,85 @@ def _validate_exercise(raw: dict, competency: Competency, db: Session,
         gpolicy = {"max_score": 1, "comparator": "qcm", "negative": 0, "choices": choices}
         return _contract(expected, gpolicy, rtype)
 
+    # ---------------- tableau à remplir ----------------
+    if rtype == "table_fill":
+        if atype != "table":
+            return None
+        try:
+            rows, cols = int(answer.get("rows")), int(answer.get("cols"))
+        except (TypeError, ValueError):
+            return None
+        if not (2 <= rows <= 6 and 2 <= cols <= 6):
+            return None
+        cells = answer.get("cells")
+        if not (isinstance(cells, list) and len(cells) == rows
+                and all(isinstance(r, list) and len(r) == cols for r in cells)):
+            return None
+        col_labels = answer.get("col_labels")
+        row_labels = answer.get("row_labels")
+        if col_labels is not None and (not isinstance(col_labels, list) or len(col_labels) != cols):
+            return None
+        if row_labels is not None and (not isinstance(row_labels, list) or len(row_labels) != rows):
+            return None
+        validated_cells = []
+        for row in cells:
+            vrow = []
+            for cell in row:
+                if not isinstance(cell, dict):
+                    return None
+                cval = _validate_cell(cell)
+                if cval is None:
+                    return None
+                vrow.append(cval)
+            validated_cells.append(vrow)
+        expected = {"type": "table", "rows": rows, "cols": cols, "cells": validated_cells}
+        gpolicy = {"max_score": rows * cols, "comparator": "table_cells",
+                  "cells": validated_cells,
+                  "col_labels": [str(c) for c in col_labels] if col_labels else None,
+                  "row_labels": [str(r) for r in row_labels] if row_labels else None}
+        reference = [[_cell_reference_text(c) for c in r] for r in validated_cells]
+        verdict = grading.grade(expected, gpolicy, "", 0.99, cell_texts=reference)
+        if verdict["score"] < gpolicy["max_score"]:
+            return None
+        return _contract(expected, gpolicy, rtype)
+
+    # ---------------- points à relier ----------------
+    if rtype == "matching":
+        if atype != "matching":
+            return None
+        left = [str(c).strip() for c in (answer.get("left") or [])]
+        right = [str(c).strip() for c in (answer.get("right") or [])]
+        pairs = answer.get("pairs")
+        if not (3 <= len(left) <= 6 and 3 <= len(right) <= 6):
+            return None
+        if not all(_check_text(c, 1, 80) for c in left + right):
+            return None
+        if not (isinstance(pairs, list) and pairs
+                and all(isinstance(p, (list, tuple)) and len(p) == 2
+                       and isinstance(p[0], int) and isinstance(p[1], int)
+                       and 0 <= p[0] < len(left) and 0 <= p[1] < len(right)
+                       for p in pairs)):
+            return None
+        pairs = [[int(p[0]), int(p[1])] for p in pairs]
+        if len({p[0] for p in pairs}) != len(pairs) or len({p[1] for p in pairs}) != len(pairs):
+            return None  # chaque item utilisé une seule fois
+        expected = {"type": "matching", "left": left, "right": right, "pairs": pairs}
+        gpolicy = {"max_score": len(pairs), "comparator": "matching",
+                  "left": left, "right": right, "pairs": pairs}
+        verdict = grading.grade(expected, gpolicy, "", 0.99, selected_pairs=pairs)
+        if verdict["score"] < gpolicy["max_score"]:
+            return None
+        return _contract(expected, gpolicy, rtype)
+
+    # ---------------- tracé / dessin (toujours correction manuelle) ----------------
+    if rtype == "manual_drawing":
+        expected = {"type": "manual"}
+        gpolicy = {"max_score": 1, "comparator": "manual"}
+        return _contract(expected, gpolicy, rtype)
+
     # ---------------- réponses construites ----------------
+    if rtype == "short_text" and statement.count("{{blank}}") > 1:
+        return None  # au plus un trou en ligne par énoncé
     if atype == "integer":
         try:
             expected = {"type": "integer", "value": int(answer["value"])}
@@ -255,12 +347,20 @@ def _validate_exercise(raw: dict, competency: Competency, db: Session,
             validated_steps.append({"description": desc,
                                     "expected_text": expected_text, "points": points})
         total = sum(s["points"] for s in validated_steps)
+        try:
+            lines = int(answer.get("lines", 0))
+        except (TypeError, ValueError):
+            lines = 0
+        lines = max(3, min(12, lines or len(validated_steps) * 2))
         expected = {"type": "rubric", "steps": validated_steps}
         gpolicy = {"max_score": total, "comparator": "rubric", "steps": validated_steps,
-                   "rubric": validated_steps}
+                   "rubric": validated_steps, "lines": lines}
         return _contract(expected, gpolicy, "multiline_text")
     else:
         return None
+
+    if rtype == "short_text" and "{{blank}}" in statement:
+        expected["inline"] = True
 
     # la réponse de référence doit passer le moteur de correction déterministe
     verdict = grading.grade(expected, gpolicy, _reference_text(expected), 0.99)
@@ -268,6 +368,32 @@ def _validate_exercise(raw: dict, competency: Competency, db: Session,
         return None
 
     return _contract(expected, gpolicy, rtype)
+
+
+def _validate_cell(cell: dict) -> dict | None:
+    """Valide une cellule de table_fill : {"type": "integer"|"decimal"|"text", "value": ...}."""
+    ctype = cell.get("type")
+    if ctype == "integer":
+        try:
+            return {"type": "integer", "value": int(cell["value"])}
+        except (KeyError, TypeError, ValueError):
+            return None
+    if ctype in ("decimal", "number"):
+        try:
+            return {"type": "decimal",
+                    "value": float(str(cell["value"]).replace(",", "."))}
+        except (KeyError, TypeError, ValueError):
+            return None
+    if ctype == "text":
+        val = str(cell.get("value", "")).strip()
+        if not val or len(val) > 40:
+            return None
+        return {"type": "text", "value": val}
+    return None
+
+
+def _cell_reference_text(cell: dict) -> str:
+    return str(cell["value"])
 
 
 def _reference_text(expected: dict) -> str:
@@ -326,7 +452,7 @@ def _verify_with_claude(db: Session, competency: Competency, level: int,
     payload = {
         "competency_code": competency.code,
         "competency_label": competency.label,
-        "theme": competency.theme_name,
+        "chapter": competency.chapter_name,
         "domain": competency.domain_name,
         "level": level,
         "level_description": LEVEL_SPECS[level][1],
@@ -391,29 +517,46 @@ _GEN_FORMAT_RULES = (
     "Les nombres simples isolés dans une phrase (« 3 crayons ») restent en texte."
 )
 
-_GEN_SYSTEM_TEMPLATE = (
-    "Tu es un professeur agrégé de mathématiques, auteur reconnu de manuels de "
-    "collège français. Tu crées des exercices IMPRIMÉS d'excellente qualité, "
-    "utilisables sans aucune relecture : données cohérentes, calculs faisables à la "
-    "main, résultats « propres » sauf si la compétence vise le contraire, énoncés "
-    "autoportants et sans ambiguïté, vocabulaire exact du programme.\n\n"
-    "VARIÉTÉ : les exercices demandés doivent porter sur des tâches DIFFÉRENTES de la "
-    "même compétence (pas la même consigne avec d'autres nombres). Si count ≥ 2 et "
-    "niveau ≥ 2, AU MOINS UN exercice est un problème contextualisé réaliste "
-    "(kind=\"probleme\") : situation concrète crédible (cuisine, sport, bricolage, "
-    "argent de poche...), données réalistes, question qui oblige à mobiliser la "
-    "compétence.\n\n"
-    "CHOIX DU FORMAT DE RÉPONSE selon la tâche :\n"
-    "- \"qcm_single\"/\"qcm_multiple\" : reconnaissance, propriété, lecture de figure. "
-    "3 à 5 choix, distracteurs = erreurs TYPIQUES d'élèves (erreur de signe, de "
+# Bloc partagé (choix du format de réponse + figures + contrat JSON) —
+# réutilisé tel quel par la génération DeepSeek (_GEN_SYSTEM_TEMPLATE) ET par
+# la structuration Sésamaths (services.sesamaths), pour que les deux
+# pipelines produisent EXACTEMENT le même contrat, consommé par
+# _validate_exercise sans distinction de provenance.
+_RESPONSE_FORMAT_BLOCK = (
+    "CHOIX DU FORMAT DE RÉPONSE — priorité au format le PLUS automatisable, "
+    "l'intervention humaine à la correction doit rester exceptionnelle. Reformule "
+    "la tâche si besoin pour qu'elle rentre dans l'un de ces formats, dans cet ordre "
+    "de préférence :\n"
+    "1. \"qcm_single\"/\"qcm_multiple\" : reconnaissance, propriété, lecture de figure. "
+    "3 à 8 choix, distracteurs = erreurs TYPIQUES d'élèves (erreur de signe, de "
     "priorité, confusion périmètre/aire...), une seule formulation possible de la "
-    "bonne réponse ;\n"
-    "- \"short_text\" : un résultat unique — answer.type parmi \"integer\", "
+    "bonne réponse ; PRÉFÈRE ce format à chaque fois qu'une tâche de "
+    "reconnaissance/classement le permet, quitte à transformer une question ouverte "
+    "en QCM à choix nombreux.\n"
+    "2. \"short_text\" : un résultat unique — answer.type parmi \"integer\", "
     "\"decimal\", \"rational\" (valeur [num, den]), \"expression\" (réduite, variable "
-    "précisée), \"text\" (mot exact attendu, ex. « isocèle ») ;\n"
-    "- \"multiline_text\" + answer.type=\"rubric\" : raisonnement rédigé (obligatoire "
+    "précisée), \"text\" (mot exact attendu, ex. « isocèle »). Si la réponse s'insère "
+    "naturellement au milieu de la phrase ou de l'équation (texte à trous), place le "
+    "marqueur littéral {{blank}} à cet endroit précis dans \"statement\" (au plus un "
+    "par exercice) ; sinon la case de réponse est ajoutée après l'énoncé.\n"
+    "3. \"table_fill\" : quand plusieurs résultats du même type forment naturellement "
+    "une grille (ex. compléter une table de valeurs, un tableau de proportionnalité) — "
+    "answer = {\"type\":\"table\",\"rows\":int (2-6),\"cols\":int (2-6),"
+    "\"col_labels\":[str]?,\"row_labels\":[str]?,\"cells\":[[{\"type\":\"integer\"|"
+    "\"decimal\"|\"text\",\"value\":...}]]} (une ligne = une liste de cellules).\n"
+    "4. \"multiline_text\" + answer.type=\"rubric\" : raisonnement rédigé (obligatoire "
     "pour les problèmes et le niveau 5) — 2 à 5 étapes {description, expected_text, "
-    "points 1-3}, expected_text = ce qu'on doit lire sur la copie, balisé $...$.\n\n"
+    "points 1-3}, expected_text = ce qu'on doit lire sur la copie, balisé $...$ ; "
+    "ajoute \"lines\": nombre de lignes de rédaction à prévoir (3-12, proportionné à "
+    "la longueur attendue de la réponse).\n"
+    "5. \"matching\" (DERNIER RECOURS avant le tracé, à n'utiliser que si aucun des "
+    "formats ci-dessus ne convient à une tâche d'association) : deux listes à relier — "
+    "answer = {\"type\":\"matching\",\"left\":[str] (3-6),\"right\":[str] (3-6),"
+    "\"pairs\":[[i,j]]} (indices 0-based, chaque élément utilisé une seule fois).\n"
+    "6. \"manual_drawing\" (INTERDIT sauf construction géométrique réellement "
+    "impossible à reformuler en QCM/texte — l'élève trace alors sur la copie et la "
+    "correction est TOUJOURS manuelle, jamais automatique) : aucune réponse "
+    "structurée requise, \"answer\" peut être omis.\n\n"
     "{geometry_rules}"
     "FIGURES : si une figure aide (géométrie, droite graduée, repère), ajoute "
     "\"figure\": {\"type\": \"rectangle\"|\"triangle\"|\"circle\"|\"angle\"|"
@@ -426,20 +569,41 @@ _GEN_SYSTEM_TEMPLATE = (
     "Réponds UNIQUEMENT en JSON strictement valide :\n"
     '{"exercises":[{"kind":"application"|"probleme","statement":str,"correction":str '
     "(rédigée comme au tableau, chaque étape justifiée),"
-    '"response_type":"short_text"|"qcm_single"|"qcm_multiple"|"multiline_text",'
+    '"response_type":"short_text"|"qcm_single"|"qcm_multiple"|"multiline_text"|'
+    '"table_fill"|"matching"|"manual_drawing",'
     '"choices":[str]?,"answer":{"type":"integer"|"decimal"|"rational"|"expression"|'
-    '"text"|"choice"|"rubric","value":...,"variable":str?,"correct":[int]?,'
-    '"steps":[{"description":str,"expected_text":str,"points":int}]?},'
+    '"text"|"choice"|"rubric"|"table"|"matching","value":...,"variable":str?,'
+    '"correct":[int]?,"steps":[{"description":str,"expected_text":str,"points":int}]?,'
+    '"lines":int?,"rows":int?,"cols":int?,"col_labels":[str]?,"row_labels":[str]?,'
+    '"cells":[[{"type":str,"value":...}]]?,"left":[str]?,"right":[str]?,'
+    '"pairs":[[int,int]]?},'
     '"figure":{...}?}]}'
 )
 
+_GEN_SYSTEM_TEMPLATE = (
+    "Tu es un professeur agrégé de mathématiques, auteur reconnu de manuels de "
+    "collège français. Tu crées des exercices IMPRIMÉS d'excellente qualité, "
+    "utilisables sans aucune relecture : données cohérentes, calculs faisables à la "
+    "main, résultats « propres » sauf si la compétence vise le contraire, énoncés "
+    "autoportants et sans ambiguïté, vocabulaire exact du programme.\n\n"
+    "VARIÉTÉ : les exercices demandés doivent porter sur des tâches DIFFÉRENTES de la "
+    "même compétence (pas la même consigne avec d'autres nombres). Si count ≥ 2 et "
+    "niveau ≥ 2, AU MOINS UN exercice est un problème contextualisé réaliste "
+    "(kind=\"probleme\") : situation concrète crédible (cuisine, sport, bricolage, "
+    "argent de poche...), données réalistes, question qui oblige à mobiliser la "
+    "compétence.\n\n"
+    + _RESPONSE_FORMAT_BLOCK
+)
+
 _GEOMETRY_RULES = (
-    "GÉOMÉTRIE (impératif absolu) : l'élève ne trace, ne construit, ne dessine et ne "
-    "place JAMAIS rien — sa copie est scannée, seuls du texte et des cases cochées "
-    "sont lus. Les tâches possibles : lire/exploiter une figure fournie, calculer "
-    "(longueur, aire, angle, périmètre), justifier une propriété en une ou deux "
-    "phrases, reconnaître (QCM). Toute donnée géométrique utile doit figurer dans "
-    "l'énoncé ET, si pertinent, sur la figure.\n\n"
+    "GÉOMÉTRIE (impératif absolu, sauf format \"manual_drawing\") : l'élève ne trace, "
+    "ne construit, ne dessine et ne place JAMAIS rien — sa copie est scannée, seuls du "
+    "texte et des cases cochées sont lus. Les tâches possibles : lire/exploiter une "
+    "figure fournie, calculer (longueur, aire, angle, périmètre), justifier une "
+    "propriété en une ou deux phrases, reconnaître (QCM). Toute donnée géométrique "
+    "utile doit figurer dans l'énoncé ET, si pertinent, sur la figure. N'utilise "
+    "\"manual_drawing\" qu'en dernier recours, pour une construction qu'aucune "
+    "reformulation en QCM/texte ne peut évaluer.\n\n"
 )
 
 
@@ -453,9 +617,9 @@ def _generation_payload(db: Session, competency: Competency, level: int,
         "grade": fw_grade,
         "competency_code": competency.code,
         "competency_label": competency.label,
-        "theme": competency.theme_name,
+        "chapter": competency.chapter_name,
         "domain": competency.domain_name,
-        "program_objectives": _theme_objectives(fw_grade, competency.theme_name)[:12],
+        "program_objectives": _chapter_objectives(fw_grade, competency.chapter_name)[:12],
         "difficulty_level": level,
         "difficulty_name": LEVEL_SPECS[level][0],
         "difficulty_description": LEVEL_SPECS[level][1],
@@ -520,10 +684,20 @@ def _harvest_mathalea(db: Session, competency: Competency, level: int,
 # ================================================================ banque
 
 def ensure_bank(db: Session, competency: Competency, level: int,
-                min_variants: int | None = None) -> list[GeneratedExercise]:
+                min_variants: int | None = None,
+                source: str = "auto") -> list[GeneratedExercise]:
     """Garantit min_variants exercices actifs pour (compétence, niveau).
     Mix : moisson MathALÉA puis génération DeepSeek, chaque exercice validé
-    déterministiquement puis vérifié par Claude (avec une passe de réparation)."""
+    déterministiquement puis vérifié par Claude (avec une passe de réparation).
+
+    `source="sesamaths"` délègue entièrement à services.sesamaths.ensure_bank
+    (pool séparé, extraction du manuel scolaire du niveau de la compétence) —
+    le reste de cette fonction (MathALÉA/DeepSeek, `source` "auto"/"mathalea")
+    n'est pas affecté."""
+    if source == "sesamaths":
+        from . import sesamaths
+        return sesamaths.ensure_bank(db, competency, level, min_variants)
+
     level = max(1, min(5, level))
     min_variants = min_variants or settings.exercise_variants_per_level
 
@@ -638,18 +812,21 @@ def ensure_bank(db: Session, competency: Competency, level: int,
     return rows + added
 
 
-def bank_rows_near_level(db: Session, competency: Competency,
-                         level: int) -> tuple[list[GeneratedExercise], int]:
+def bank_rows_near_level(db: Session, competency: Competency, level: int,
+                         source: str = "auto") -> tuple[list[GeneratedExercise], int]:
     """Comme pick_exercise, mais retourne toute la banque du niveau le plus
     proche disponible (pour une sélection en aval équilibrée par type de
-    réponse, cf. services.distribution)."""
+    réponse, cf. services.distribution). `source` : voir ensure_bank."""
     for candidate in sorted(range(1, 6), key=lambda l: abs(l - level)):
         try:
-            rows = ensure_bank(db, competency, candidate)
+            rows = ensure_bank(db, competency, candidate, source=source)
         except Exception:
-            rows = (db.query(GeneratedExercise)
-                    .filter_by(competency_id=competency.id,
-                               difficulty_level=candidate, status="active").all())
+            q = db.query(GeneratedExercise).filter_by(
+                competency_id=competency.id, difficulty_level=candidate, status="active")
+            if source == "sesamaths":
+                from .sesamaths import SOURCE_POOL
+                q = q.filter(GeneratedExercise.source.in_(SOURCE_POOL))
+            rows = q.all()
         if rows:
             return rows, candidate
     raise ValueError(f"Aucun exercice disponible pour {competency.code}")
@@ -777,7 +954,7 @@ def ensure_lesson(db: Session, competency: Competency, level: int) -> LessonSnip
     payload = {
         "competency_code": competency.code,
         "competency_label": competency.label,
-        "theme": competency.theme_name,
+        "chapter": competency.chapter_name,
         "grade": fw_grade,
         "level_range": f"{lo}-{hi}",
         "is_geometry": competency.domain_code in GEOMETRY_DOMAINS,

@@ -360,16 +360,35 @@ def _legacy_to_tagged(statement: str) -> str:
     return f"{head.strip()} : ${latex}$"
 
 
+BLANK_TOKEN = "{{blank}}"
+BLANK_W = 18 * mm
+
+
 def _rich_layout(text: str, width: float, fs: float, math_fs: float | None = None) -> dict:
     """Met en page un texte balisé $...$ : flot de mots et d'images maths.
     Retourne {lines: [{segs, asc, desc, h, w}], height} ; seg = ("word", str)
-    ou ("math", ImageReader, w, h, d)."""
+    ou ("math", ImageReader, w, h, d) ou ("blank", w, asc, desc) — case de
+    réponse courte insérée en ligne (marqueur BLANK_TOKEN)."""
     from . import mathrender
     math_fs = math_fs or fs
-    # seg = ("word", texte, glue) | ("math", img, w, h, d, glue) ; glue = collé
-    # au segment précédent SANS espace (ponctuation après une formule, etc.)
+    # seg = ("word", texte, glue) | ("math", img, w, h, d, glue) |
+    # ("blank", w, asc, desc, glue) ; glue = collé au segment précédent SANS
+    # espace (ponctuation après une formule, etc.)
     segs: list[tuple] = []
     prev_no_space = False  # le flux précédent se termine sans espace
+
+    def _emit_words(part: str) -> None:
+        nonlocal prev_no_space
+        words = _pdf_safe(part).split()
+        leading_ws = bool(part[:1].isspace())
+        for j, w in enumerate(words):
+            segs.append(("word", w,
+                         j == 0 and not leading_ws and prev_no_space and bool(segs)))
+        if words:
+            prev_no_space = not part[-1:].isspace()
+        elif part:
+            prev_no_space = False
+
     for content, is_math in mathrender.split_math_spans(text or ""):
         if is_math:
             im = _math_image(content, math_fs)
@@ -379,21 +398,24 @@ def _rich_layout(text: str, width: float, fs: float, math_fs: float | None = Non
                 for j, w in enumerate(_pdf_safe(mathrender.strip_math(f"${content}$")).split()):
                     segs.append(("word", w, j == 0 and prev_no_space and bool(segs)))
             prev_no_space = True
+        elif BLANK_TOKEN in content:
+            parts = content.split(BLANK_TOKEN)
+            for pi, part in enumerate(parts):
+                _emit_words(part)
+                if pi < len(parts) - 1:
+                    segs.append(("blank", BLANK_W, fs * 0.78, fs * 0.24, False))
+                    prev_no_space = False
         else:
-            words = _pdf_safe(content).split()
-            leading_ws = bool(content[:1].isspace())
-            for j, w in enumerate(words):
-                segs.append(("word", w,
-                             j == 0 and not leading_ws and prev_no_space and bool(segs)))
-            if words:
-                prev_no_space = not content[-1:].isspace()
-            elif content:
-                prev_no_space = False
+            _emit_words(content)
 
     space_w = stringWidth(" ", "Helvetica", fs)
 
     def _seg_w(seg: tuple) -> float:
-        return stringWidth(seg[1], "Helvetica", fs) if seg[0] == "word" else seg[2]
+        if seg[0] == "word":
+            return stringWidth(seg[1], "Helvetica", fs)
+        if seg[0] == "blank":
+            return seg[1]
+        return seg[2]
 
     def _seg_glue(seg: tuple) -> bool:
         return bool(seg[-1])
@@ -420,6 +442,9 @@ def _rich_layout(text: str, width: float, fs: float, math_fs: float | None = Non
             if seg[0] == "math":
                 asc = max(asc, seg[3] - seg[4])
                 desc = max(desc, seg[4])
+            elif seg[0] == "blank":
+                asc = max(asc, seg[2])
+                desc = max(desc, seg[3])
         lh = asc + desc + 2.2
         n_spaces = sum(1 for j, s in enumerate(line) if j > 0 and not _seg_glue(s))
         lines.append({"segs": line, "asc": asc, "desc": desc, "h": lh,
@@ -430,8 +455,10 @@ def _rich_layout(text: str, width: float, fs: float, math_fs: float | None = Non
 
 def _draw_rich(c: canvas.Canvas, x: float, y_top: float, layout: dict, fs: float,
                color=black, centered: bool = False, width: float | None = None,
-               font: str = "Helvetica") -> float:
-    """Dessine un layout _rich_layout. Retourne le y sous la dernière ligne."""
+               font: str = "Helvetica", blanks: list | None = None) -> float:
+    """Dessine un layout _rich_layout. Retourne le y sous la dernière ligne.
+    `blanks`, si fourni, reçoit la géométrie PDF absolue (x_pt/y_pt/w_pt/h_pt)
+    de chaque case de réponse courte insérée en ligne (BLANK_TOKEN)."""
     space_w = stringWidth(" ", font, fs)
     y = y_top
     for line in layout["lines"]:
@@ -445,6 +472,16 @@ def _draw_rich(c: canvas.Canvas, x: float, y_top: float, layout: dict, fs: float
                 c.setFillColor(color)
                 c.drawString(cx, y_base, seg[1])
                 cx += stringWidth(seg[1], font, fs)
+            elif seg[0] == "blank":
+                _, w, asc, desc, _glue = seg
+                c.setStrokeColor(DROPOUT)
+                c.setLineWidth(0.9)
+                c.roundRect(cx, y_base - desc, w, asc + desc, 0.8 * mm)
+                if blanks is not None:
+                    blanks.append({"x_pt": cx, "y_pt": y_base - desc,
+                                  "w_pt": w, "h_pt": asc + desc})
+                c.setFillColor(color)
+                cx += w
             else:
                 _, img, w, h, d, _glue = seg
                 c.drawImage(img, cx, y_base - d, width=w, height=h,
@@ -500,51 +537,177 @@ def _statement_layout(statement: str, width: float, font_size: int,
     return {"intro": intro, "display": display, "figure": figure, "height": height}
 
 
-def _qcm_layout(choices: list[str], width: float, font_size: int) -> tuple[list[dict], float]:
-    """Disposition compacte : cases en ligne, retour à la ligne auto. Les labels
-    sont mis en page en riche (formules rendues). Retourne (items, hauteur) ;
+def _qcm_layout(choices: list[str], width: float,
+                font_size: int) -> tuple[list[dict], float, int]:
+    """Disposition en colonnes (remplies colonne par colonne). Les labels sont
+    mis en page en riche (formules rendues). Retourne (items, hauteur, ncols) ;
     item = {index, dx, dy, lay, lw, box} en relatif (origine haut-gauche)."""
-    box = 4.0 * mm
-    gap_x, pad = 4.5 * mm, 1.6 * mm
-    x, row = 0.0, 0
-    items = []
-    row_heights: dict[int, float] = {}
-    for i, choice in enumerate(choices):
+    box = 2.0 * mm
+    gap_x, gap_y, pad = 6.0 * mm, 1.6 * mm, 1.6 * mm
+    lays = []
+    max_lw, max_h = 0.0, 6.0 * mm
+    for choice in choices:
         lay = _rich_layout(choice, max(width, 10 * mm), font_size)
         lw = max((ln["w"] for ln in lay["lines"]), default=0.0)
-        item_w = box + pad + lw + gap_x
-        if x + item_w > width and x > 0:
-            x, row = 0.0, row + 1
-        items.append({"index": i, "dx": x, "row": row, "lay": lay, "lw": lw,
-                      "box": box})
-        row_heights[row] = max(row_heights.get(row, 6.0 * mm),
-                               lay["height"] + 1.6 * mm)
-        x += item_w
-    offset, row_dy = 0.0, {}
-    for r in sorted(row_heights):
-        row_dy[r] = offset
-        offset += row_heights[r]
-    for it in items:
-        it["dy"] = row_dy[it["row"]]
-    return items, offset
+        lays.append((lay, lw))
+        max_lw = max(max_lw, lw)
+        max_h = max(max_h, lay["height"] + gap_y)
+    n = len(choices)
+    item_w = box + pad + max_lw + gap_x
+    ncols = max(1, min(3, n, int(width // item_w) if item_w > 0 else 1))
+    nrows = -(-n // ncols)  # ceil
+    items = []
+    for i, (lay, lw) in enumerate(lays):
+        col, row = divmod(i, nrows)
+        items.append({"index": i, "dx": col * item_w, "dy": row * max_h,
+                      "lay": lay, "lw": lw, "box": box})
+    return items, nrows * max_h, ncols
+
+
+_TABLE_HEAD_H = 6.0 * mm
+_TABLE_ROWLAB_W = 15.0 * mm
+_TABLE_ROW_H = 7.5 * mm
+_MATCHING_PASTILLE = 2.2 * mm
+_MATCHING_COL_GAP = 10.0 * mm
+_MANUAL_DRAWING_H = 60.0 * mm
+
+
+def _table_zone_height(rows: int, col_labels: list | None) -> float:
+    head_h = _TABLE_HEAD_H if col_labels else 0.0
+    return head_h + rows * _TABLE_ROW_H + 2 * mm
+
+
+def _matching_zone_height(left: list, right: list, font_size: int) -> float:
+    n = max(len(left), len(right), 1)
+    row_h = max(6.5 * mm, font_size + 4)
+    return n * row_h + 3 * mm
 
 
 def _zone_height(response_type: str, choices: list[str], width: float,
-                 font_size: int) -> float:
+                 font_size: int, grading: dict | None = None,
+                 inline: bool = False) -> float:
+    grading = grading or {}
     if response_type in ("qcm_single", "qcm_multiple"):
-        _items, total_h = _qcm_layout(choices, width - 2 * CARD_PAD, font_size)
+        _items, total_h, _ncols = _qcm_layout(choices, width - 2 * CARD_PAD, font_size)
         return total_h + 2.5 * mm
-    return {"short_text": 13 * mm, "multiline_text": 37 * mm}[response_type]
+    if response_type == "short_text":
+        return 0.0 if inline else 13 * mm
+    if response_type == "multiline_text":
+        lines = max(3, min(12, int(grading.get("lines", 5))))
+        return lines * 7 * mm + 4 * mm
+    if response_type == "table_fill":
+        cells = grading.get("cells") or [[]]
+        return _table_zone_height(len(cells), grading.get("col_labels"))
+    if response_type == "matching":
+        return _matching_zone_height(grading.get("left", []), grading.get("right", []),
+                                     font_size)
+    if response_type == "manual_drawing":
+        return _MANUAL_DRAWING_H
+    return 13 * mm
+
+
+def _draw_table_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float,
+                     col_labels: list | None, row_labels: list | None,
+                     cells: list[list[dict]], font_size: int) -> dict:
+    rows, cols = len(cells), len(cells[0]) if cells else 0
+    head_h = _TABLE_HEAD_H if col_labels else 0.0
+    rowlab_w = _TABLE_ROWLAB_W if row_labels else 0.0
+    grid_x = x + CARD_PAD + rowlab_w
+    grid_w = w - 2 * CARD_PAD - rowlab_w
+    grid_top = y + h - 1 * mm
+    grid_bottom = y + 1 * mm
+    row_h = (grid_top - head_h - grid_bottom) / max(1, rows)
+    col_w = grid_w / max(1, cols)
+
+    c.setStrokeColor(CARD_BORDER)
+    c.setLineWidth(0.7)
+    c.rect(grid_x, grid_bottom, grid_w, grid_top - head_h - grid_bottom, stroke=1, fill=0)
+    if col_labels:
+        c.setFillColor(black)
+        for j, label in enumerate(col_labels):
+            lay = _rich_layout(str(label), col_w - 2 * mm, max(6, font_size - 1))
+            _draw_rich(c, grid_x + j * col_w + 1 * mm, grid_top - 1.6 * mm, lay,
+                       max(6, font_size - 1), centered=True, width=col_w - 2 * mm)
+        c.line(grid_x, grid_top - head_h, grid_x + grid_w, grid_top - head_h)
+    if row_labels:
+        for i, label in enumerate(row_labels):
+            ry = grid_top - head_h - i * row_h - row_h / 2
+            lay = _rich_layout(str(label), rowlab_w - 3 * mm, max(6, font_size - 1))
+            _draw_rich(c, x + CARD_PAD, ry + lay["height"] / 2, lay, max(6, font_size - 1))
+
+    cells_meta = []
+    for i in range(rows):
+        row_meta = []
+        ry_top = grid_top - head_h - i * row_h
+        if i > 0:
+            c.setStrokeColor(CARD_BORDER)
+            c.setLineWidth(0.5)
+            c.line(grid_x, ry_top, grid_x + grid_w, ry_top)
+        for j in range(cols):
+            cx = grid_x + j * col_w
+            if j > 0:
+                c.setStrokeColor(CARD_BORDER)
+                c.setLineWidth(0.5)
+                c.line(cx, grid_bottom, cx, grid_top - head_h)
+            inset = 1.2 * mm
+            bx, by = cx + inset, ry_top - row_h + inset
+            bw, bh = col_w - 2 * inset, row_h - 2 * inset
+            c.setStrokeColor(DROPOUT)
+            c.setLineWidth(0.7)
+            c.roundRect(bx, by, bw, bh, 0.8 * mm)
+            row_meta.append({"x_pt": bx, "y_pt": by, "w_pt": bw, "h_pt": bh})
+        cells_meta.append(row_meta)
+    c.setStrokeColor(black)
+    c.setFillColor(black)
+    return {"cells": cells_meta}
+
+
+def _draw_matching_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float,
+                        left: list[str], right: list[str], font_size: int) -> dict:
+    n = max(len(left), len(right), 1)
+    row_h = (h - 3 * mm) / n
+    col_w = (w - 2 * CARD_PAD - _MATCHING_COL_GAP) / 2
+    p = _MATCHING_PASTILLE
+    top = y + h - 2 * mm
+
+    def _pastille(px: float, py: float) -> None:
+        c.setStrokeColor(DROPOUT)
+        c.setFillColor(white)
+        c.circle(px + p / 2, py + p / 2, p / 2, stroke=1, fill=1)
+        c.setFillColor(black)
+
+    left_pts, right_pts = [], []
+    for i, label in enumerate(left):
+        ly = top - i * row_h - row_h / 2
+        lay = _rich_layout(label, col_w - p - 3 * mm, font_size)
+        _draw_rich(c, x + CARD_PAD, ly + lay["height"] / 2, lay, font_size)
+        px, py = x + CARD_PAD + col_w - p - 1 * mm, ly - p / 2
+        _pastille(px, py)
+        left_pts.append({"index": i, "x_pt": px, "y_pt": py, "w_pt": p, "h_pt": p})
+    for i, label in enumerate(right):
+        ry = top - i * row_h - row_h / 2
+        px = x + CARD_PAD + col_w + _MATCHING_COL_GAP
+        py = ry - p / 2
+        _pastille(px, py)
+        lay = _rich_layout(label, col_w - p - 3 * mm, font_size)
+        _draw_rich(c, px + p + 2 * mm, ry + lay["height"] / 2, lay, font_size)
+        right_pts.append({"index": i, "x_pt": px, "y_pt": py, "w_pt": p, "h_pt": p})
+    c.setFillColor(black)
+    c.setStrokeColor(black)
+    return {"left_points": left_pts, "right_points": right_pts}
 
 
 def _draw_answer_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float,
-                      response_type: str, choices: list[str], font_size: int) -> dict:
-    """Zone de réponse ÉLÈVE en saumon (dropout). Retourne la méta QCM."""
+                      response_type: str, choices: list[str], font_size: int,
+                      grading: dict | None = None) -> dict:
+    """Zone de réponse ÉLÈVE en saumon (dropout). Retourne la méta (positions
+    des cases QCM, cellules de tableau, pastilles de points à relier…)."""
+    grading = grading or {}
     meta = {}
     c.setStrokeColor(DROPOUT)
     c.setLineWidth(0.9)
     if response_type in ("qcm_single", "qcm_multiple"):
-        items, _total_h = _qcm_layout(choices, w - 2 * CARD_PAD, font_size)
+        items, _total_h, _ncols = _qcm_layout(choices, w - 2 * CARD_PAD, font_size)
         boxes = []
         top = y + h - 2 * mm
         for it in items:
@@ -561,6 +724,15 @@ def _draw_answer_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float,
             boxes.append({"index": it["index"], "x_pt": bx + inner, "y_pt": by + inner,
                           "w_pt": it["box"] - 2 * inner, "h_pt": it["box"] - 2 * inner})
         meta["boxes"] = boxes
+    elif response_type == "table_fill":
+        meta = _draw_table_zone(c, x, y, w, h, grading.get("col_labels"),
+                                grading.get("row_labels"), grading.get("cells") or [],
+                                font_size)
+    elif response_type == "matching":
+        meta = _draw_matching_zone(c, x, y, w, h, grading.get("left", []),
+                                   grading.get("right", []), font_size)
+    elif response_type == "manual_drawing":
+        c.roundRect(x + CARD_PAD, y + 1 * mm, w - 2 * CARD_PAD, h - 2 * mm, 1.5 * mm)
     else:
         c.roundRect(x + CARD_PAD, y + 1 * mm, w - 2 * CARD_PAD, h - 2 * mm, 1.5 * mm)
         if response_type == "multiline_text":
@@ -588,7 +760,7 @@ def _exercise_card_h(layout: dict, zone_h: float, tpl: dict) -> float:
 def _draw_exercise_card(c: canvas.Canvas, x: float, y_top: float, w: float,
                         seq: int, layout: dict, zone_h: float,
                         level5: int, response_type: str, choices: list[str],
-                        tpl: dict) -> tuple[float, dict, dict]:
+                        tpl: dict, grading: dict | None = None) -> tuple[float, dict, dict]:
     """Carte exercice + bande de correction hors carte (§ correction). Retourne
     (hauteur totale, geo zone réponse, meta)."""
     font_size = int(tpl.get("font_size", 9))
@@ -623,8 +795,11 @@ def _draw_exercise_card(c: canvas.Canvas, x: float, y_top: float, w: float,
     c.line(x + CARD_PAD, ty - 0.6 * mm, x + w - CARD_PAD, ty - 0.6 * mm)
 
     # énoncé riche (texte + formules PNG), expression finale mise en valeur,
-    # figure paramétrée éventuelle
-    line_y = _draw_rich(c, x + CARD_PAD, ty - 1.2 * mm, layout["intro"], font_size)
+    # figure paramétrée éventuelle ; `blanks` récupère la géométrie d'une
+    # éventuelle case de réponse courte insérée en ligne (short_text inline)
+    inline_blanks: list = []
+    line_y = _draw_rich(c, x + CARD_PAD, ty - 1.2 * mm, layout["intro"], font_size,
+                        blanks=inline_blanks)
     if layout["display"]:
         img, dw, dh, _dd = layout["display"]
         c.drawImage(img, x + (w - dw) / 2, line_y - dh - 1 * mm, width=dw,
@@ -636,16 +811,23 @@ def _draw_exercise_card(c: canvas.Canvas, x: float, y_top: float, w: float,
                     height=fh, mask="auto", preserveAspectRatio=True)
     c.setFillColor(black)
 
-    # zone réponse élève (saumon)
+    # zone réponse élève (saumon) — sauf short_text inline : la case fait déjà
+    # partie de l'énoncé (inline_blanks), pas de zone dédiée sous le texte
     zone_y = card_bottom + CARD_PAD
-    meta = _draw_answer_zone(c, x, zone_y, w, zone_h, response_type, choices, font_size)
+    if response_type == "short_text" and inline_blanks:
+        b = inline_blanks[0]
+        zone_geo = {"x_pt": b["x_pt"], "y_pt": b["y_pt"], "w_pt": b["w_pt"], "h_pt": b["h_pt"]}
+        meta = {}
+    else:
+        meta = _draw_answer_zone(c, x, zone_y, w, zone_h, response_type, choices,
+                                 font_size, grading)
+        zone_geo = {"x_pt": x, "y_pt": zone_y, "w_pt": w, "h_pt": zone_h}
 
     # bande de correction : HORS carte, collée (espace blanc visible, jamais
     # coupée par saut de colonne/page), cadre invisible sur le sujet imprimé —
     # la géométrie reste réservée pour l'overlay de correction.
     c.setFillColor(black)
 
-    zone_geo = {"x_pt": x, "y_pt": zone_y, "w_pt": w, "h_pt": zone_h}
     meta["correction_strip"] = {"x_pt": x + CARD_PAD, "y_pt": y + 1.2 * mm,
                                 "w_pt": w - 2 * CARD_PAD, "h_pt": STRIP_H - 2 * mm}
     return card_h, zone_geo, meta
@@ -837,7 +1019,8 @@ def estimate_item_height(item: dict, font_size: int, math_fs: int,
     choices = item.get("choices", [])
     layout = _statement_layout(item["statement"], COL_W - 2 * CARD_PAD,
                                font_size, math_fs, item.get("figure"))
-    zone_h = _zone_height(item["response_type"], choices, COL_W, font_size)
+    zone_h = _zone_height(item["response_type"], choices, COL_W, font_size,
+                          item.get("grading"), item.get("inline", False))
     return _exercise_card_h(layout, zone_h, ex_tpl) + GAP
 
 
@@ -915,14 +1098,16 @@ def render_copy(pdf_canvas: canvas.Canvas, *, student_name: str, class_name: str
         choices = item.get("choices", [])
         layout = _statement_layout(item["statement"], col_w - 2 * CARD_PAD,
                                    font_size, math_fs, item.get("figure"))
-        zone_h = _zone_height(item["response_type"], choices, col_w, font_size)
+        zone_h = _zone_height(item["response_type"], choices, col_w, font_size,
+                              item.get("grading"), item.get("inline", False))
         card_h = _exercise_card_h(layout, zone_h, ex_tpl)
         place(card_h + gap)
         x = MARGIN + col * (col_w + COL_GAP)
 
         _, zone_geo, meta = _draw_exercise_card(
             pdf_canvas, x, y_cursor, col_w, seq, layout, zone_h,
-            item.get("level5", 3), item["response_type"], choices, ex_tpl)
+            item.get("level5", 3), item["response_type"], choices, ex_tpl,
+            item.get("grading"))
         zones.append({
             "item_id": item["item_id"], "page_index": page_idx,
             "page_id": pages_meta[page_idx]["page_id"],

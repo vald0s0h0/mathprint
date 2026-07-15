@@ -3,20 +3,23 @@
 // maîtrise moyenne par classe du niveau. Le professeur coche des
 // compétences, pas des exercices — l'application se charge de choisir/
 // générer les exercices correspondants une fois le sujet mis en file.
-import { Accordion, Badge, Checkbox, Group, Progress, ScrollArea, Stack, Table, Text } from '@mantine/core'
+import { Accordion, Badge, Checkbox, Group, Progress, ScrollArea, SegmentedControl, Stack, Table, Text } from '@mantine/core'
 import { Fragment, useEffect, useState } from 'react'
 import { api } from '../../api'
 import { masteryColor } from '../../utils/mastery'
 
 type ClassRef = { id: string; name: string }
-type CompRow = { id: string; code: string; label: string; mastery_by_class: Record<string, number | null> }
-type ThemeGroup = { code: string; name: string; competencies: CompRow[] }
-type DomainGroup = { code: string; name: string; themes: ThemeGroup[] }
+type CompRow = { id: string; code: string; short_id: string; label: string; mastery_by_class: Record<string, number | null> }
+type ChapterGroup = { code: string; name: string; competencies: CompRow[] }
+type DomainGroup = { code: string; name: string; chapters: ChapterGroup[] }
 type Matrix = { classes: ClassRef[]; domains: DomainGroup[] }
 
 export default function CompetencyMatrixStep({
-  gradeLevel, selected, onChange,
-}: { gradeLevel?: string; selected: string[]; onChange: (ids: string[]) => void }) {
+  gradeLevel, selected, onChange, source, onSourceChange,
+}: {
+  gradeLevel?: string; selected: string[]; onChange: (ids: string[]) => void
+  source: string; onSourceChange: (source: string) => void
+}) {
   const [matrix, setMatrix] = useState<Matrix>({ classes: [], domains: [] })
 
   useEffect(() => {
@@ -30,15 +33,25 @@ export default function CompetencyMatrixStep({
   }
 
   const total = matrix.domains.reduce(
-    (n, d) => n + d.themes.reduce((m, t) => m + t.competencies.length, 0), 0)
+    (n, d) => n + d.chapters.reduce((m, ch) => m + ch.competencies.length, 0), 0)
 
   return (
     <Stack gap="xs">
+      <Group justify="space-between" align="flex-end">
+        <Stack gap={2}>
+          <Text size="xs" c="dimmed" fw={600}>Source des exercices</Text>
+          <SegmentedControl size="xs" value={source} onChange={onSourceChange} data={[
+            { value: 'auto', label: 'Automatique' },
+            { value: 'mathalea', label: 'MathALÉA' },
+            { value: 'sesamaths', label: 'Sésamaths (5e)' },
+          ]} />
+        </Stack>
+        <Badge variant="light">{selected.length} sélectionnée(s)</Badge>
+      </Group>
       <Group justify="space-between">
         <Text size="xs" c="dimmed">
           {total} compétence(s) — {matrix.classes.length} classe(s) en {gradeLevel ?? '…'}
         </Text>
-        <Badge variant="light">{selected.length} sélectionnée(s)</Badge>
       </Group>
       <ScrollArea h={360}>
         <Accordion multiple variant="separated" radius="md"
@@ -63,18 +76,18 @@ export default function CompetencyMatrixStep({
                     </Table.Tr>
                   </Table.Thead>
                   <Table.Tbody>
-                    {d.themes.map((t) => (
-                      <Fragment key={t.code}>
+                    {d.chapters.map((ch) => (
+                      <Fragment key={ch.code}>
                         <Table.Tr>
                           <Table.Td colSpan={1 + matrix.classes.length} pt={10}>
-                            <Text size="xs" fw={700} c="dimmed" tt="uppercase">{t.name}</Text>
+                            <Text size="xs" fw={700} c="dimmed" tt="uppercase">{ch.code} {ch.name}</Text>
                           </Table.Td>
                         </Table.Tr>
-                        {t.competencies.map((c) => (
+                        {ch.competencies.map((c) => (
                           <Table.Tr key={c.id}>
                             <Table.Td>
                               <Checkbox size="xs" checked={sel.has(c.id)}
-                                label={<Text size="sm">{c.label}</Text>}
+                                label={<Text size="sm">{c.short_id && <Text span c="dimmed" mr={6}>{c.short_id}</Text>}{c.label}</Text>}
                                 onChange={(e) => toggle(c.id, e.target.checked)} />
                             </Table.Td>
                             {matrix.classes.map((cls) => {

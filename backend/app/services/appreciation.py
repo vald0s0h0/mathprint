@@ -78,7 +78,10 @@ def compute_competency_progress(db: Session, assessment_id: str, student_id: str
         comp = db.get(Competency, comp_id)
         if not comp:
             continue
-        out.append({"competency_name": comp.label, "pct_acquired": data["pct_acquired"],
+        # le libellé de compétence seul (ex. "Automatismes") ne dit rien sans
+        # son chapitre (H2) : ce compte rendu imprimé les affiche toujours ensemble
+        name = f"{comp.chapter_name} · {comp.label}" if comp.chapter_name else comp.label
+        out.append({"competency_name": name, "pct_acquired": data["pct_acquired"],
                     "delta": data["delta"]})
     out.sort(key=lambda p: p["delta"], reverse=True)
     return out[:MAX_COMPETENCIES]

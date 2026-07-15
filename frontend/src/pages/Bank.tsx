@@ -15,8 +15,8 @@ import MathText from '../components/MathText'
 import { useAppState } from '../state/AppState'
 
 type Summary = {
-  competency_id: string; code: string; label: string; grade_level: string
-  domain_name: string; theme_name: string
+  competency_id: string; code: string; short_id: string; label: string; grade_level: string
+  domain_name: string; chapter_name: string
   by_level: Record<string, number>; total: number
   lessons: { level_min: number; level_max: number; validated: boolean }[]
 }
@@ -43,6 +43,15 @@ type Comp = { id: string; code: string; label: string }
 const RESPONSE_LABELS: Record<string, string> = {
   short_text: 'réponse courte', multiline_text: 'raisonnement rédigé',
   qcm_single: 'QCM', qcm_multiple: 'QCM multiple',
+  table_fill: 'tableau à remplir', matching: 'points à relier',
+  manual_drawing: 'tracé / dessin (correction manuelle)',
+}
+
+const SOURCE_LABELS: Record<string, string> = {
+  mathalea: 'MathALÉA', sesamaths: 'Sésamaths', sesamaths_deepseek: 'Sésamaths (IA)',
+}
+const SOURCE_COLORS: Record<string, string> = {
+  mathalea: 'green', sesamaths: 'teal', sesamaths_deepseek: 'teal',
 }
 
 function QualityBadge({ quality }: { quality: Record<string, number> }) {
@@ -65,8 +74,8 @@ function ExerciseCard({ ex, onRetire }: { ex: Exercise; onRetire: (id: string) =
           <Badge size="xs" variant="filled" color="indigo">Niv. {ex.level}</Badge>
           {ex.kind === 'probleme' && <Badge size="xs" variant="light" color="orange">problème</Badge>}
           <Badge size="xs" variant="light" color="gray">{RESPONSE_LABELS[ex.response_type] ?? ex.response_type}</Badge>
-          <Badge size="xs" variant="light" color={ex.source === 'mathalea' ? 'green' : 'blue'}>
-            {ex.source === 'mathalea' ? 'MathALÉA' : 'IA vérifiée'}
+          <Badge size="xs" variant="light" color={SOURCE_COLORS[ex.source] ?? 'blue'}>
+            {SOURCE_LABELS[ex.source] ?? 'IA vérifiée'}
           </Badge>
           <QualityBadge quality={ex.quality} />
         </Group>
@@ -300,7 +309,7 @@ export default function Bank() {
                 <Table.Thead>
                   <Table.Tr>
                     <Table.Th>Compétence</Table.Th>
-                    {!selected && <Table.Th>Thème</Table.Th>}
+                    {!selected && <Table.Th>Chapitre</Table.Th>}
                     <Table.Th ta="center">Niv. 1-5</Table.Th>
                     <Table.Th ta="center">Rappels</Table.Th>
                   </Table.Tr>
@@ -312,9 +321,9 @@ export default function Bank() {
                       bg={selected?.competency_id === s.competency_id ? 'var(--mantine-color-default-hover)' : undefined}
                       onClick={() => loadDetail(s)}>
                       <Table.Td>
-                        <Text size="sm" fw={500} lineClamp={1}>{s.code} — {s.label}</Text>
+                        <Text size="sm" fw={500} lineClamp={1}>{s.short_id || s.code} — {s.label}</Text>
                       </Table.Td>
-                      {!selected && <Table.Td><Text size="xs" c="dimmed" lineClamp={1}>{s.theme_name}</Text></Table.Td>}
+                      {!selected && <Table.Td><Text size="xs" c="dimmed" lineClamp={1}>{s.chapter_name}</Text></Table.Td>}
                       <Table.Td ta="center">
                         <Group gap={3} justify="center" wrap="nowrap">
                           {[1, 2, 3, 4, 5].map((l) => (
@@ -344,8 +353,8 @@ export default function Bank() {
           <Paper withBorder radius="md" p="md" style={{ flex: 1, minWidth: 0 }}>
             <Group justify="space-between" mb="xs" wrap="nowrap">
               <Box>
-                <Text fw={600}>{selected.code} — {selected.label}</Text>
-                <Text size="xs" c="dimmed">{selected.grade_level} · {selected.domain_name} · {selected.theme_name}</Text>
+                <Text fw={600}>{selected.short_id || selected.code} — {selected.label}</Text>
+                <Text size="xs" c="dimmed">{selected.grade_level} · {selected.domain_name} · {selected.chapter_name}</Text>
               </Box>
               <Button size="compact-xs" variant="subtle" onClick={() => setSelected(null)}>Fermer</Button>
             </Group>

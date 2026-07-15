@@ -43,7 +43,9 @@ def _set_status(db: Session, batch: ScanBatch, status: str, **progress):
 
 def _decide_and_store(db: Session, *, item: CopyItem, zone: ResponseZone,
                       student: Student, ocr_text: str, conf: float,
-                      selected: list[int] | None, corr_id: str) -> bool:
+                      selected: list[int] | None, corr_id: str,
+                      cell_texts: list[str] | None = None,
+                      selected_pairs: list[list[int]] | None = None) -> bool:
     """Décision de correction pour une zone. Retourne True si revue créée."""
     expected, gpolicy = item.expected_json, item.grading_json
     resp = StudentResponse(copy_item_id=item.id, zone_id=zone.id,
@@ -51,7 +53,8 @@ def _decide_and_store(db: Session, *, item: CopyItem, zone: ResponseZone,
     db.add(resp)
     db.flush()
 
-    verdict = grader.grade(expected, gpolicy, ocr_text, conf, selected)
+    verdict = grader.grade(expected, gpolicy, ocr_text, conf, selected,
+                           cell_texts=cell_texts, selected_pairs=selected_pairs)
 
     # Tier C : rubrique DeepSeek (§6.4)
     if verdict["tier"] == "C" and gpolicy.get("rubric"):
@@ -87,6 +90,9 @@ def _decide_and_store(db: Session, *, item: CopyItem, zone: ResponseZone,
         cat = ("double_coche" if verdict["reason_code"] == "qcm_double_check"
                else "ocr_ambigu" if "ocr" in verdict["reason_code"]
                else "rature" if verdict["reason_code"] == "qcm_unreadable"
+               else "trace_dessin" if verdict["reason_code"] == "no_structured_answer"
+               else "points_a_relier" if verdict["reason_code"].startswith("matching_")
+               else "ocr_ambigu" if verdict["reason_code"].startswith("table_")
                else "bareme")
         db.add(ManualReview(decision_id=decision.id, category=cat))
         return True
@@ -183,6 +189,51 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
                 n_review += _decide_and_store(
                     db, item=item, zone=zone, student=student,
                     ocr_text="", conf=1.0, selected=selected, corr_id=corr_id)
+            elif item.response_type == "manual_drawing":
+                # tracé/dessin : jamais de correction automatique — aucun appel
+                # Mathpix inutile, décision « revue » immédiate (§ tracés géométriques)
+                db.add(OcrAttempt(zone_id=zone.id, provider="cv_local",
+                                  raw_json={"manual": True}, confidence=1.0))
+                n_review += _decide_and_store(
+                    db, item=item, zone=zone, student=student,
+                    ocr_text="", conf=1.0, selected=None, corr_id=corr_id)
+            elif item.response_type == "matching":
+                left_pts = (zone.meta_json or {}).get("left_points", [])
+                right_pts = (zone.meta_json or {}).get("right_points", [])
+                pairs, conf_m = worker_cv.detect_matching(res.warped, left_pts, right_pts)
+                db.add(OcrAttempt(zone_id=zone.id, provider="cv_local",
+                                  raw_json={"pairs": pairs}, confidence=conf_m))
+                n_review += _decide_and_store(
+                    db, item=item, zone=zone, student=student,
+                    ocr_text="", conf=conf_m, selected=None, corr_id=corr_id,
+                    selected_pairs=pairs)
+            elif item.response_type == "table_fill":
+                cells_meta = (zone.meta_json or {}).get("cells", [])
+                expected_cells = item.expected_json.get("cells", [])
+                cell_texts, confs = [], []
+                for ri, row in enumerate(cells_meta):
+                    for ci, cell in enumerate(row):
+                        ccrop = worker_cv.crop_zone(res.warped, cell["x_pt"], cell["y_pt"],
+                                                    cell["w_pt"], cell["h_pt"], padding_pt=0)
+                        cfiltered = worker_cv.dropout_filter(ccrop)
+                        if worker_cv.ink_ratio(cfiltered) < 0.01:
+                            cell_texts.append("")
+                            confs.append(1.0)
+                            continue
+                        hint = None
+                        if mock_enabled(db) and ri < len(expected_cells) and ci < len(expected_cells[ri]):
+                            hint = str(expected_cells[ri][ci]["value"])
+                        ocr_c = providers.mathpix_ocr(db, worker_cv.encode_png(cfiltered),
+                                                      f"{corr_id}-c{ri}-{ci}", expected_hint=hint)
+                        cell_texts.append(ocr_c["text"])
+                        confs.append(ocr_c["confidence"])
+                min_conf = min(confs) if confs else 1.0
+                db.add(OcrAttempt(zone_id=zone.id, provider="mathpix",
+                                  raw_json={"cells": cell_texts}, confidence=min_conf))
+                n_review += _decide_and_store(
+                    db, item=item, zone=zone, student=student,
+                    ocr_text="", conf=min_conf, selected=None, corr_id=corr_id,
+                    cell_texts=cell_texts)
             else:
                 ink = worker_cv.ink_ratio(filtered)
                 if ink < 0.003:  # zone vide : aucun appel Mathpix (§8.3)
@@ -257,6 +308,40 @@ def _process_mock(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
                 n_review += _decide_and_store(db, item=item, zone=zone, student=student,
                                               ocr_text="", conf=1.0, selected=selected,
                                               corr_id=corr_id)
+            elif item.response_type == "manual_drawing":
+                db.add(OcrAttempt(zone_id=zone.id, provider="mock",
+                                  raw_json={"manual": True}, confidence=1.0))
+                n_review += _decide_and_store(db, item=item, zone=zone, student=student,
+                                              ocr_text="", conf=1.0, selected=None,
+                                              corr_id=corr_id)
+            elif item.response_type == "matching":
+                h = int(hashlib.sha256(corr_id.encode()).hexdigest(), 16)
+                expected_pairs = expected.get("pairs", [])
+                if h % 10 < 8:
+                    pairs, conf_m = expected_pairs, 1.0
+                elif h % 10 < 9:
+                    pairs, conf_m = expected_pairs[:-1] if expected_pairs else [], 1.0
+                else:
+                    pairs, conf_m = None, 0.0
+                db.add(OcrAttempt(zone_id=zone.id, provider="mock",
+                                  raw_json={"pairs": pairs}, confidence=conf_m))
+                n_review += _decide_and_store(db, item=item, zone=zone, student=student,
+                                              ocr_text="", conf=conf_m, selected=None,
+                                              corr_id=corr_id, selected_pairs=pairs)
+            elif item.response_type == "table_fill":
+                cells = expected.get("cells", [])
+                h = int(hashlib.sha256(corr_id.encode()).hexdigest(), 16)
+                cell_texts = []
+                for ri, row in enumerate(cells):
+                    for ci, cell in enumerate(row):
+                        ok = (h >> (ri * 7 + ci)) % 5 != 0
+                        val = str(cell["value"])
+                        cell_texts.append(val if ok else _wrong_answer(val, h))
+                db.add(OcrAttempt(zone_id=zone.id, provider="mock",
+                                  raw_json={"cells": cell_texts}, confidence=1.0))
+                n_review += _decide_and_store(db, item=item, zone=zone, student=student,
+                                              ocr_text="", conf=1.0, selected=None,
+                                              corr_id=corr_id, cell_texts=cell_texts)
             else:
                 hint = _expected_as_text(expected)
                 h = int(hashlib.sha256((corr_id + "ans").encode()).hexdigest(), 16)

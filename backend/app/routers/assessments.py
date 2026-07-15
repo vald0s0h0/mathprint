@@ -35,6 +35,9 @@ class AssessmentPatch(BaseModel):
     pages: int | None = None
     personalization_mode: Literal["common", "common_variants", "individual"] | None = None
     competency_ids: list[str] | None = None
+    # source des exercices (§ Sésamaths) : "auto" = comportement historique
+    # (MathALÉA + DeepSeek), inchangé si le champ n'est jamais envoyé
+    exercise_source: Literal["auto", "mathalea", "sesamaths"] | None = None
 
 
 class GenerateIn(BaseModel):
@@ -92,6 +95,8 @@ def patch_assessment(assessment_id: str, body: AssessmentPatch, db: Session = De
         a.personalization_mode = body.personalization_mode
     if body.competency_ids is not None:
         a.blueprint_json = {**(a.blueprint_json or {}), "competency_ids": body.competency_ids}
+    if body.exercise_source is not None:
+        a.blueprint_json = {**(a.blueprint_json or {}), "exercise_source": body.exercise_source}
     db.commit()
     return {"ok": True}
 

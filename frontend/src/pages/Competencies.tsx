@@ -1,6 +1,8 @@
-// Grilles officielles (programmes cycles 3 et 4) — affichage hiérarchisé
-// domaine > thème > objectifs. Le référentiel suit le cycle global ; les
-// codes techniques (IDs) ne sont pas affichés.
+// Référentiels par niveau — affichage hiérarchisé domaine (H1) > chapitre
+// (H2) > compétences (H3). Le référentiel suit le cycle global. L'ID court
+// (ex. A1.1, repris de la numérotation du sommaire) est affiché à côté du
+// libellé de compétence — un libellé isolé (ex. "Automatismes") ne suffit
+// pas à savoir de quoi il s'agit sans son chapitre.
 import {
   Accordion, Badge, Group, ScrollArea, Select, Stack, Text, TextInput, Title,
 } from '@mantine/core'
@@ -12,7 +14,7 @@ import { useAppState } from '../state/AppState'
 type Framework = { id: string; name: string; grade_level: string; version: string; status: string }
 type Domain = {
   code: string; name: string
-  themes: { code: string; name: string; competencies: { id: string; code: string; label: string }[] }[]
+  chapters: { code: string; name: string; competencies: { id: string; code: string; short_id: string; label: string }[] }[]
 }
 
 export default function Competencies() {
@@ -44,14 +46,14 @@ export default function Competencies() {
     const q = filter.toLowerCase()
     return tree.map((d) => ({
       ...d,
-      themes: d.themes.map((t) => ({
-        ...t,
-        competencies: t.competencies.filter((c) => c.label.toLowerCase().includes(q)),
-      })).filter((t) => t.competencies.length),
-    })).filter((d) => d.themes.length)
+      chapters: d.chapters.map((ch) => ({
+        ...ch,
+        competencies: ch.competencies.filter((c) => c.label.toLowerCase().includes(q)),
+      })).filter((ch) => ch.competencies.length),
+    })).filter((d) => d.chapters.length)
   }, [tree, filter])
 
-  const total = tree.reduce((n, d) => n + d.themes.reduce((m, t) => m + t.competencies.length, 0), 0)
+  const total = tree.reduce((n, d) => n + d.chapters.reduce((m, ch) => m + ch.competencies.length, 0), 0)
 
   return (
     <Stack gap="sm">
@@ -90,21 +92,22 @@ export default function Competencies() {
                 <Group gap="xs">
                   <Text fw={650} size="sm">{d.name}</Text>
                   <Text size="xs" c="dimmed">
-                    {d.themes.reduce((n, t) => n + t.competencies.length, 0)} objectifs
+                    {d.chapters.reduce((n, ch) => n + ch.competencies.length, 0)} objectifs
                   </Text>
                 </Group>
               </Accordion.Control>
               <Accordion.Panel>
                 <Stack gap="sm">
-                  {d.themes.map((t) => (
-                    <div key={t.code}>
+                  {d.chapters.map((ch) => (
+                    <div key={ch.code}>
                       <Text size="xs" fw={700} c="dimmed" tt="uppercase" mb={4}>
-                        {t.name} ({t.competencies.length})
+                        {ch.code} {ch.name} ({ch.competencies.length})
                       </Text>
                       <Stack gap={2}>
-                        {t.competencies.map((c) => (
+                        {ch.competencies.map((c) => (
                           <Text key={c.id} size="sm" py={1} pl="sm"
                             style={{ borderLeft: '2px solid var(--mantine-color-default-border)' }}>
+                            {c.short_id && <Text span c="dimmed" size="xs" mr={6}>{c.short_id}</Text>}
                             {c.label}
                           </Text>
                         ))}

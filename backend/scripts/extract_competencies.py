@@ -4,8 +4,16 @@ Source : encadrés « Objectifs d'apprentissage » des programmes de mathématiq
 - Cycle 3 : seule l'année Sixième est retenue (CM1/CM2 = primaire, exclus).
 - Cycle 4 : Cinquième, Quatrième, Troisième.
 
-Sortie : app/data/competencies_fr.json — hiérarchie grade > domaine > thème > objectifs,
-avec codes stables (ex : 5E-NC-OPE-03).
+Sortie : app/data/competencies_fr.json — hiérarchie grade > domaine (H1) >
+chapitre (H2) > compétences (H3), avec codes techniques stables (ex :
+5E-NC-OPE-03, jamais affichés) — pas d'ID court ici (`short_id` laissé vide),
+contrairement au référentiel 5e ci-dessous.
+
+ATTENTION : le référentiel 5e n'est PLUS régénéré par ce script depuis la
+refonte basée sur le sommaire du cahier 5e (domaine/chapitre/compétence avec
+ID court A1.1, cf. seed.migrate_5e_framework) — relancer ce script écraserait
+son bloc "5e" avec l'ancienne hiérarchie officielle. Si relancé, refusionner
+manuellement le bloc 5e depuis une sauvegarde de competencies_fr.json.
 """
 import json
 import re
@@ -194,12 +202,12 @@ def build_json() -> dict:
                                ("5e", 4, data_c4.get("5e", {})),
                                ("4e", 4, data_c4.get("4e", {})),
                                ("3e", 4, data_c4.get("3e", {}))]:
-        fw = {"grade_level": grade, "cycle": cycle,
+        fw = {"grade_level": grade, "cycle": cycle, "program_year": 2026,
               "name": f"Programme officiel {grade} (cycle {cycle})",
               "version": "2026", "domains": []}
         for dom, themes in data.items():
             dcode = DOMAIN_CODES[dom]
-            dnode = {"name": dom, "code": dcode, "themes": []}
+            dnode = {"name": dom, "code": dcode, "chapters": []}
             used_tcodes: set[str] = set()
             for theme, objectives in themes.items():
                 tcode = slug_word(theme)
@@ -223,9 +231,9 @@ def build_json() -> dict:
                     seen.add(key)
                     comp.append({
                         "code": f"{grade[0].upper()}E-{dcode}-{tcode}-{len(comp)+1:02d}",
-                        "label": obj,
+                        "short_id": "", "label": obj,
                     })
-                dnode["themes"].append({"name": theme, "code": tcode, "competencies": comp})
+                dnode["chapters"].append({"name": theme, "code": tcode, "competencies": comp})
             fw["domains"].append(dnode)
         frameworks.append(fw)
     return {"source": "Programmes officiels de mathématiques cycles 3 et 4",
@@ -238,9 +246,9 @@ if __name__ == "__main__":
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
     for fw in result["frameworks"]:
-        n = sum(len(t["competencies"]) for d in fw["domains"] for t in d["themes"])
+        n = sum(len(t["competencies"]) for d in fw["domains"] for t in d["chapters"])
         print(f"{fw['grade_level']} (cycle {fw['cycle']}): {len(fw['domains'])} domaines, {n} compétences")
         for d in fw["domains"]:
-            counts = ", ".join(f"{t['name']}={len(t['competencies'])}" for t in d["themes"])
+            counts = ", ".join(f"{t['name']}={len(t['competencies'])}" for t in d["chapters"])
             print(f"   [{d['code']}] {d['name']}: {counts}")
     print("->", out_path)

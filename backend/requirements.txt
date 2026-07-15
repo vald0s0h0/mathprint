@@ -17,3 +17,4 @@ pillow-heif>=0.18
 numpy>=1.26
 psycopg2-binary>=2.9; platform_machine != "unsupported"
 matplotlib>=3.8
+pymupdf>=1.24

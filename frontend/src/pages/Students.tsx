@@ -25,17 +25,22 @@ type Detail = {
   id: string; first_name: string; last_name: string; pseudonym: string
   class_name: string | null; level: number | null; level_locked: boolean
   evidence_count: number
-  competencies: { code: string; label: string; domain: string; theme: string; mastery: number; confidence: number; recall_probability: number; due_at: string }[]
-  due: { code: string; label: string; reason: string; recall_probability: number }[]
+  competencies: { code: string; short_id: string; label: string; domain: string; chapter: string; mastery: number; confidence: number; recall_probability: number; due_at: string }[]
+  due: { code: string; short_id: string; label: string; chapter: string; reason: string; recall_probability: number }[]
 }
 type Report = { id: string; period: string; content: string; status: string }
 type Year = { id: string; label: string; active: boolean }
 
-// ligne compacte : libellé + mini-barre + % rappel (sans code technique)
+// ligne compacte : ID court + chapitre + libellé (un libellé isolé comme
+// "Automatismes" ne dit rien sans son chapitre) + mini-barre + % rappel
 function CompetencyRow({ c }: { c: Detail['competencies'][0] }) {
+  const full = c.chapter ? `${c.chapter} · ${c.label}` : c.label
   return (
-    <Group gap={8} wrap="nowrap" py={2} title={c.label}>
-      <Text size="xs" style={{ flex: 1, minWidth: 0 }} lineClamp={1}>{c.label}</Text>
+    <Group gap={8} wrap="nowrap" py={2} title={full}>
+      <Text size="xs" style={{ flex: 1, minWidth: 0 }} lineClamp={1}>
+        {c.short_id && <Text span c="dimmed" mr={4}>{c.short_id}</Text>}
+        {full}
+      </Text>
       <Progress value={c.mastery * 100} size={6} w={70} color={masteryColor(c.mastery)}
         style={{ flexShrink: 0 }} />
       <Text size="xs" c="dimmed" w={34} ta="right" style={{ flexShrink: 0 }}>
@@ -332,7 +337,7 @@ export default function Students() {
                           <Text size="xs" fw={700} c="dimmed" tt="uppercase" mb={2}>
                             {domain} ({comps.length})
                           </Text>
-                          {comps.sort((a, b) => a.label.localeCompare(b.label))
+                          {comps.sort((a, b) => a.chapter.localeCompare(b.chapter) || a.label.localeCompare(b.label))
                             .map((c) => <CompetencyRow key={c.code} c={c} />)}
                         </div>
                       ))}
@@ -346,12 +351,18 @@ export default function Students() {
                 <Tabs.Panel value="oubli" pt="sm">
                   {detail.due.length === 0
                     ? <Text c="dimmed" size="sm">Aucune compétence à réviser.</Text>
-                    : detail.due.map((d, i) => (
-                      <Group key={i} justify="space-between" mt="xs" wrap="nowrap">
-                        <Text size="sm" lineClamp={1} title={d.label}>{d.label}</Text>
-                        <Badge color="orange" variant="light">{d.reason}</Badge>
-                      </Group>
-                    ))}
+                    : detail.due.map((d, i) => {
+                      const full = d.chapter ? `${d.chapter} · ${d.label}` : d.label
+                      return (
+                        <Group key={i} justify="space-between" mt="xs" wrap="nowrap">
+                          <Text size="sm" lineClamp={1} title={full}>
+                            {d.short_id && <Text span c="dimmed" mr={4}>{d.short_id}</Text>}
+                            {full}
+                          </Text>
+                          <Badge color="orange" variant="light">{d.reason}</Badge>
+                        </Group>
+                      )
+                    })}
                 </Tabs.Panel>
                 <Tabs.Panel value="rapports" pt="sm">
                   <Button size="xs" onClick={makeReport} mb="sm">Générer un compte rendu</Button>

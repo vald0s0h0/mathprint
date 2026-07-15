@@ -32,7 +32,9 @@ def student_detail(student_id: str, db: Session = Depends(get_db)):
     for d in due:
         comp = comps.get(d["competency_id"])
         d["code"] = comp.code if comp else "?"
+        d["short_id"] = comp.short_id if comp else ""
         d["label"] = comp.label if comp else "Compétence supprimée"
+        d["chapter"] = comp.chapter_name if comp else ""
 
     return {
         "id": s.id, "first_name": s.first_name, "last_name": s.last_name,
@@ -44,9 +46,10 @@ def student_detail(student_id: str, db: Session = Depends(get_db)):
         "competencies": [{
             "competency_id": st.competency_id,
             "code": comps[st.competency_id].code if st.competency_id in comps else "?",
+            "short_id": comps[st.competency_id].short_id if st.competency_id in comps else "",
             "label": comps[st.competency_id].label if st.competency_id in comps else "?",
             "domain": comps[st.competency_id].domain_name if st.competency_id in comps else "",
-            "theme": comps[st.competency_id].theme_name if st.competency_id in comps else "",
+            "chapter": comps[st.competency_id].chapter_name if st.competency_id in comps else "",
             "mastery": st.mastery, "confidence": st.confidence,
             "stability_days": st.stability,
             "recall_probability": round(recall_probability(st), 3),

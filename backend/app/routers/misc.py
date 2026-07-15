@@ -35,34 +35,34 @@ def competencies(framework_id: str | None = None, db: Session = Depends(get_db))
     q = db.query(Competency).order_by(Competency.order_index)
     if framework_id:
         q = q.filter_by(framework_id=framework_id)
-    return [{"id": c.id, "code": c.code, "label": c.label,
+    return [{"id": c.id, "code": c.code, "short_id": c.short_id, "label": c.label,
              "description": c.description, "framework_id": c.framework_id,
              "domain_code": c.domain_code, "domain_name": c.domain_name,
-             "theme_code": c.theme_code, "theme_name": c.theme_name}
+             "chapter_code": c.chapter_code, "chapter_name": c.chapter_name}
             for c in q.all()]
 
 
 def build_competency_tree(rows: list[Competency], competency_extra=None) -> list[dict]:
-    """Hiérarchie domaine > thème > compétences, dans l'ordre `order_index`
-    (rows doit déjà être trié) — partagée par l'onglet Compétences et le
-    tableau de l'étape Exercices de l'assistant sujet (competency-matrix),
-    qui doivent afficher exactement la même hiérarchie. `competency_extra`,
-    si fourni, reçoit chaque Competency et retourne des champs additionnels
-    fusionnés dans l'entrée (ex. maîtrise par classe)."""
+    """Hiérarchie domaine (H1) > chapitre (H2) > compétences (H3), dans
+    l'ordre `order_index` (rows doit déjà être trié) — partagée par l'onglet
+    Compétences et le tableau de l'étape Exercices de l'assistant sujet
+    (competency-matrix), qui doivent afficher exactement la même hiérarchie.
+    `competency_extra`, si fourni, reçoit chaque Competency et retourne des
+    champs additionnels fusionnés dans l'entrée (ex. maîtrise par classe)."""
     domains: list[dict] = []
     for c in rows:
         d = next((x for x in domains if x["code"] == c.domain_code), None)
         if d is None:
-            d = {"code": c.domain_code, "name": c.domain_name, "themes": []}
+            d = {"code": c.domain_code, "name": c.domain_name, "chapters": []}
             domains.append(d)
-        t = next((x for x in d["themes"] if x["code"] == c.theme_code), None)
-        if t is None:
-            t = {"code": c.theme_code, "name": c.theme_name, "competencies": []}
-            d["themes"].append(t)
-        entry = {"id": c.id, "code": c.code, "label": c.label}
+        ch = next((x for x in d["chapters"] if x["code"] == c.chapter_code), None)
+        if ch is None:
+            ch = {"code": c.chapter_code, "name": c.chapter_name, "competencies": []}
+            d["chapters"].append(ch)
+        entry = {"id": c.id, "code": c.code, "short_id": c.short_id, "label": c.label}
         if competency_extra:
             entry.update(competency_extra(c))
-        t["competencies"].append(entry)
+        ch["competencies"].append(entry)
     return domains
 
 
@@ -77,7 +77,7 @@ def competencies_tree(framework_id: str, db: Session = Depends(get_db)):
 # ------------------------------------------------------------- paramètres
 
 class ProviderIn(BaseModel):
-    provider: str        # mathpix | deepseek | anthropic
+    provider: str        # mathpix | deepseek-flash | deepseek-pro | anthropic
     model: str = ""
     secret: str = ""
     active: bool = True
@@ -192,7 +192,7 @@ def templates_preview(body: TemplatesPreviewIn):
 def costs(db: Session = Depends(get_db)):
     now = datetime.now(timezone.utc)
     out = {}
-    for provider in ("mathpix", "deepseek", "anthropic"):
+    for provider in ("mathpix", "deepseek-flash", "deepseek-pro", "anthropic"):
         day = db.query(func.coalesce(func.sum(ApiUsageEvent.estimated_cost), 0.0)).filter(
             ApiUsageEvent.provider == provider,
             ApiUsageEvent.created_at >= now - timedelta(days=1)).scalar()

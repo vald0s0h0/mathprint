@@ -254,6 +254,92 @@ def detect_qcm(warped: np.ndarray, boxes: list[dict],
     return selected, densities
 
 
+def detect_matching(warped: np.ndarray, left_points: list[dict], right_points: list[dict]
+                    ) -> tuple[list[list[int]] | None, float]:
+    """Détection heuristique v1 du trait manuscrit reliant une pastille gauche
+    à une pastille droite (§ points à relier). Combine segments Hough (traits
+    droits) et extrémités de composantes connexes (approximation des traits
+    courbes) ; toute pastille dont la connexion est ambiguë (plusieurs
+    partenaires détectés côté gauche ou côté droit) est EXCLUE du résultat
+    plutôt que devinée (RM-005). Retourne (paires acceptées, confiance) ;
+    None si rien d'exploitable. À affiner une fois de vrais scans manuscrits
+    disponibles — le seuil d'accroche (snap_radius) et le filtrage des petits
+    contours sont les premiers paramètres à recalibrer."""
+    if not left_points or not right_points:
+        return None, 0.0
+
+    def _center_px(pt: dict) -> tuple[float, float]:
+        return pt_to_px(pt["x_pt"] + pt["w_pt"] / 2, pt["y_pt"] + pt["h_pt"] / 2)
+
+    left_centers = [_center_px(p) for p in left_points]
+    right_centers = [_center_px(p) for p in right_points]
+    xs = [c[0] for c in left_centers + right_centers]
+    ys = [c[1] for c in left_centers + right_centers]
+    margin = 40
+    x0, x1 = max(0, int(min(xs) - margin)), int(max(xs) + margin)
+    y0, y1 = max(0, int(min(ys) - margin)), int(max(ys) + margin)
+    band = warped[y0:y1, x0:x1]
+    if band.size == 0:
+        return None, 0.0
+
+    gray = cv2.cvtColor(dropout_filter(band), cv2.COLOR_BGR2GRAY)
+    ink_mask = (gray < 150).astype(np.uint8) * 255
+
+    snap_radius = 22.0  # px, tolérance d'accroche sur une pastille
+
+    def _nearest(px: float, py: float, centers: list[tuple[float, float]]) -> int | None:
+        best_i, best_d = None, snap_radius
+        for i, (cx, cy) in enumerate(centers):
+            d = ((px - (cx - x0)) ** 2 + (py - (cy - y0)) ** 2) ** 0.5
+            if d < best_d:
+                best_i, best_d = i, d
+        return best_i
+
+    candidates: dict[tuple[int, int], int] = {}
+
+    def _register(ax: float, ay: float, bx: float, by: float) -> None:
+        li = _nearest(ax, ay, left_centers)
+        ri = _nearest(bx, by, right_centers)
+        if li is None or ri is None:
+            li = _nearest(bx, by, left_centers)
+            ri = _nearest(ax, ay, right_centers)
+        if li is None or ri is None:
+            return
+        candidates[(li, ri)] = candidates.get((li, ri), 0) + 1
+
+    lines = cv2.HoughLinesP(ink_mask, 1, np.pi / 180, threshold=25,
+                            minLineLength=30, maxLineGap=8)
+    for seg in (lines if lines is not None else []):
+        x_a, y_a, x_b, y_b = seg[0]
+        _register(float(x_a), float(y_a), float(x_b), float(y_b))
+
+    contours, _ = cv2.findContours(ink_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    for cnt in contours:
+        if cv2.contourArea(cnt) < 15:
+            continue
+        pts = cnt.reshape(-1, 2)
+        leftmost = pts[pts[:, 0].argmin()]
+        rightmost = pts[pts[:, 0].argmax()]
+        _register(float(leftmost[0]), float(leftmost[1]),
+                  float(rightmost[0]), float(rightmost[1]))
+
+    if not candidates:
+        return None, 0.0
+
+    left_partner: dict[int, set[int]] = {}
+    right_partner: dict[int, set[int]] = {}
+    for li, ri in candidates:
+        left_partner.setdefault(li, set()).add(ri)
+        right_partner.setdefault(ri, set()).add(li)
+
+    pairs = [[li, ri] for li, ri in candidates
+             if len(left_partner[li]) == 1 and len(right_partner[ri]) == 1]
+    if not pairs:
+        return None, 0.0
+    confidence = len(pairs) / max(len(left_points), len(right_points))
+    return pairs, confidence
+
+
 def encode_png(img: np.ndarray) -> bytes:
     ok, buf = cv2.imencode(".png", img)
     if not ok:
