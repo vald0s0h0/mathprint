@@ -39,6 +39,8 @@ Reprise sur erreur : l'état d'extraction d'un chapitre est persistant
 import hashlib
 import json
 import logging
+import re
+import time
 
 from sqlalchemy.orm import Session
 
@@ -69,14 +71,40 @@ def _cache_key(*parts) -> str:
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
+def _is_rate_limited(exc: Exception) -> bool:
+    resp = getattr(exc, "response", None)
+    return getattr(resp, "status_code", None) == 429
+
+
+def _retry_after_s(exc: Exception, attempt: int) -> float:
+    """Délai avant nouvel essai : en-tête `retry-after` si le serveur en donne
+    un, sinon backoff exponentiel (2, 4, 8 s) — l'extraction enchaîne une page
+    par seconde et sature sinon le quota Anthropic (cf. rafale de 429)."""
+    resp = getattr(exc, "response", None)
+    try:
+        return max(1.0, float((resp.headers or {}).get("retry-after")))
+    except (AttributeError, TypeError, ValueError):
+        return float(2 ** (attempt + 1))
+
+
 def _cached_vision(db: Session, cache_key: str, model: str, system: str,
                    user_text: str, image_png: bytes, correlation_id: str) -> dict:
     cached = db.query(SesamathsLlmCache).filter_by(cache_key=cache_key).first()
     if cached:
         return cached.response_json
-    data = providers.claude_vision_json(
-        db, "sesamaths_vision_extract", system, user_text, image_png,
-        max_tokens=6000, model=model, correlation_id=correlation_id)
+    for attempt in range(3):
+        try:
+            data = providers.claude_vision_json(
+                db, "sesamaths_vision_extract", system, user_text, image_png,
+                max_tokens=6000, model=model, correlation_id=correlation_id)
+            break
+        except Exception as e:
+            if not _is_rate_limited(e) or attempt == 2:
+                raise
+            delay = _retry_after_s(e, attempt)
+            logger.info("Sésamaths : 429 sur %s, nouvel essai dans %.0f s "
+                        "(tentative %s/3)", model, delay, attempt + 2)
+            time.sleep(delay)
     db.add(SesamathsLlmCache(cache_key=cache_key, response_json=data))
     db.commit()
     return data
@@ -150,6 +178,11 @@ def _to_candidate(raw: dict, doc, page_idx: int, competency, db: Session,
 
     valid = exercise_gen._validate_exercise(raw, competency, db, existing_norms)
     if valid is None:
+        # pourquoi, et pas seulement combien : sans ça un « 11 renvoyés, 0
+        # validés » est indiagnosticable (cf. incident extraction A1).
+        logger.warning("Sésamaths : exercice p%s REFUSÉ — %s | énoncé : %.90s",
+                       page_idx, exercise_gen.diagnose_rejection(raw, competency),
+                       str(raw.get("statement", "")).replace("\n", " "))
         return None
     valid["difficulty"] = difficulty
     return valid
@@ -171,6 +204,7 @@ def _extract_page(db: Session, doc, manual, chapter_code: str, page_meta: dict,
                  "et les rappels de leçon.")
     png = sesamaths_pdf.render_page_png(doc, idx)
 
+    errors: list[str] = []
     for model in (settings.claude_vision_model, settings.claude_vision_fallback_model):
         cache_key = _cache_key(manual.sha256, "page", str(idx), PROMPT_VERSION,
                               model, settings.sesamaths_schema_version)
@@ -180,6 +214,7 @@ def _extract_page(db: Session, doc, manual, chapter_code: str, page_meta: dict,
         except Exception as e:
             logger.warning("Sésamaths : extraction vision page %s (%s) échouée : %s",
                            idx, model, e)
+            errors.append(f"{model}: {e}")
             continue
         raw_list = data.get("exercises") or []
         cands: list[dict] = []
@@ -196,10 +231,27 @@ def _extract_page(db: Session, doc, manual, chapter_code: str, page_meta: dict,
             return []
         logger.info("Sésamaths : page %s sans exercice valide en %s, repli %s",
                     idx, model, settings.claude_vision_fallback_model)
+    # AUCUN modèle n'a répondu : c'est un ÉCHEC, pas une page vide. Sans cette
+    # distinction la page serait marquée « done », le chapitre « complet », et
+    # le complément DeepSeek autorisé à inventer à la place des vrais exercices.
+    if errors:
+        raise RuntimeError(f"aucun modèle vision n'a répondu ({' | '.join(errors)})")
     return []
 
 
 # ================================================================ chapitre
+
+def series_number_for(competency) -> int | None:
+    """Numéro de Série du manuel correspondant à la compétence.
+
+    Dans le manuel Sésamath une « Série » EST une compétence : le référentiel
+    5e est aligné dessus (A1.1 « Automatismes » = Série 1 « Automatismes » du
+    chapitre A1). Le suffixe du code compétence donne donc directement la
+    Série, et l'extraction ne lit que SES pages — pas tout le chapitre."""
+    code = (getattr(competency, "code", "") or "")
+    m = re.search(r"\.(\d+)$", code.strip())
+    return int(m.group(1)) if m else None
+
 
 def _resolve_chapter(db: Session, competency):
     """(doc, manual, chapter_code) — chapter_code est None si indisponible
@@ -224,10 +276,14 @@ def ensure_chapter_pool(db: Session, doc, manual, chapter_code: str, competency
     """État persistant par chapitre — machine à états PAR PAGE. Ne lève jamais :
     toute erreur est journalisée, le pool renvoyé peut être partiel (reprise
     ciblée : seules les pages en échec sont retentées au prochain appel)."""
+    # L'état est persisté PAR COMPÉTENCE (= par Série du manuel), pas par
+    # chapitre : on n'extrait que les pages de la Série demandée, donc une
+    # poignée de pages au lieu des ~17 du chapitre.
+    extraction_key = getattr(competency, "code", "") or chapter_code
     row = (db.query(SesamathsChapterExtraction)
-           .filter_by(manual_id=manual.id, chapter_code=chapter_code).first())
+           .filter_by(manual_id=manual.id, chapter_code=extraction_key).first())
     if row is None:
-        row = SesamathsChapterExtraction(manual_id=manual.id, chapter_code=chapter_code)
+        row = SesamathsChapterExtraction(manual_id=manual.id, chapter_code=extraction_key)
         db.add(row)
         db.flush()
 
@@ -243,12 +299,22 @@ def ensure_chapter_pool(db: Session, doc, manual, chapter_code: str, competency
     try:
         if row.step == "pending":
             pages = sesamaths_pdf.chapter_exercise_pages(doc, manual.toc_json, chapter_code)
+            series_no = series_number_for(competency)
+            if series_no is not None:
+                scoped = [p for p in pages if p.get("series_number") == series_no]
+                if scoped:
+                    pages = scoped
+                else:
+                    logger.warning("Sésamaths : aucune page pour la Série %s du "
+                                   "chapitre %s — repli sur tout le chapitre",
+                                   series_no, chapter_code)
             row.page_range_json = {"pages": pages, "done_pages": []}
             row.step = "pages_located"
-            logger.info("Sésamaths : chapitre %s « %s » — %s page(s) d'exercices "
-                        "localisée(s) via la table des matières : %s",
-                        chapter_code, competency.chapter_name, len(pages),
-                        [p["index"] for p in pages])
+            logger.info("Sésamaths : %s « %s » (chapitre %s, Série %s) — %s page(s) "
+                        "d'exercices ciblée(s) : %s", extraction_key,
+                        getattr(competency, "label", ""), chapter_code,
+                        series_no if series_no is not None else "?",
+                        len(pages), [p["index"] for p in pages])
             db.commit()
 
         if row.step == "pages_located":
@@ -258,9 +324,9 @@ def ensure_chapter_pool(db: Session, doc, manual, chapter_code: str, competency
             existing_norms = {exercise_gen._normalize_statement_for_dedup(c["statement"])
                               for c in pool}
             todo = [p for p in pages if p["index"] not in done]
-            logger.info("Sésamaths : chapitre %s — extraction vision de %s page(s) "
-                        "restante(s) (%s déjà faite(s), %s exercice(s) en pool)",
-                        chapter_code, len(todo), len(done), len(pool))
+            logger.info("Sésamaths : %s — extraction vision de %s page(s) restante(s) "
+                        "(%s déjà faite(s), %s exercice(s) en pool)",
+                        extraction_key, len(todo), len(done), len(pool))
             failed: list[int] = []
             for pg in pages:
                 if pg["index"] in done:
@@ -280,9 +346,9 @@ def ensure_chapter_pool(db: Session, doc, manual, chapter_code: str, competency
             row.failed_series_json = failed
             row.step = "done" if not failed else "pages_located"
             row.error_message = "" if pool else "Aucun exercice validé pour ce chapitre"
-            logger.info("Sésamaths : chapitre %s — extraction %s : %s exercice(s) "
-                        "réel(s) au total, %s page(s) en échec %s",
-                        chapter_code, "terminée" if not failed else "PARTIELLE",
+            logger.info("Sésamaths : %s — extraction %s : %s exercice(s) réel(s) "
+                        "extrait(s), %s page(s) en échec %s",
+                        extraction_key, "terminée" if not failed else "PARTIELLE",
                         len(pool), len(failed), failed or "")
             db.commit()
     except Exception as e:

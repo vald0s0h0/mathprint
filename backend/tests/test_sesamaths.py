@@ -188,6 +188,31 @@ def test_to_candidate_crops_figure_from_bbox(db_session, manual_doc):
     assert Path(fig["params"]["path"]).exists()
 
 
+def test_series_scoped_to_competency(db_session, manual_doc, toc):
+    # Dans le manuel, une « Série » EST une compétence (A1.1 « Automatismes » =
+    # Série 1). L'extraction ne doit lire que les pages de CETTE Série, pas les
+    # 17 du chapitre — sinon on paie 17 appels vision au lieu de 2 (et on sature
+    # le quota, cf. rafale de 429).
+    import types
+    assert sesamaths.series_number_for(types.SimpleNamespace(code="A1.1")) == 1
+    assert sesamaths.series_number_for(types.SimpleNamespace(code="A1.7")) == 7
+    assert sesamaths.series_number_for(types.SimpleNamespace(code="A1")) is None
+
+    comp = _seed_competency(db_session, "A1", "Opérations", "Automatismes")
+    comp.code = "A1.1"
+    db_session.commit()
+    doc, manual, chapter_code = sesamaths._resolve_chapter(db_session, comp)
+    sesamaths.ensure_chapter_pool(db_session, doc, manual, chapter_code, comp)
+
+    from app.models import SesamathsChapterExtraction
+    row = (db_session.query(SesamathsChapterExtraction)
+           .filter_by(manual_id=manual.id, chapter_code="A1.1").first())
+    assert row is not None, "l'état d'extraction est keyé par compétence, pas par chapitre"
+    pages = [p["index"] for p in row.page_range_json["pages"]]
+    assert pages == [5, 6]                     # Série 1 seulement
+    assert all(p["series_number"] == 1 for p in row.page_range_json["pages"])
+
+
 def test_ensure_bank_sesamaths_missing_manual_raises_clear_error(db_session, monkeypatch):
     from app.config import settings
     monkeypatch.setattr(settings, "sesamaths_manuals", {})

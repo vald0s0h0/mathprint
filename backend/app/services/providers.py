@@ -86,6 +86,17 @@ def _config(db: Session, provider: str) -> ProviderConfig | None:
     return db.query(ProviderConfig).filter_by(provider=provider, active=True).first()
 
 
+# Familles de modèles Claude qui REFUSENT (400) un préremplissage assistant :
+# tout 4.6 et au-delà. Haiku 4.5 (et antérieurs) l'acceptent encore. Voir
+# claude_vision_json / claude_json : le prefill "{" force la sortie JSON.
+_NO_PREFILL_MODELS = ("opus-4-6", "opus-4-7", "opus-4-8", "sonnet-4-6",
+                      "sonnet-5", "fable-5", "mythos-5")
+
+
+def _supports_assistant_prefill(model: str | None) -> bool:
+    return not any(tag in (model or "") for tag in _NO_PREFILL_MODELS)
+
+
 def _mock_enabled(db: Session, cfg: ProviderConfig | None) -> bool:
     from .runtime_settings import mock_enabled
     return mock_enabled(db) or cfg is None or not cfg.encrypted_secret
@@ -456,6 +467,24 @@ def claude_vision_json(db: Session, operation: str, system: str, user_text: str,
         return _claude_vision_mock(operation, correlation_id or "")
 
     b64 = base64.b64encode(image_png).decode()
+    # Le préremplissage assistant "{" (qui force le JSON) est REFUSÉ par un 400
+    # sur la famille Claude 4.6+ (Opus 4.6/4.7/4.8, Sonnet 4.6/5, Fable 5) ; il
+    # reste valide sur Haiku 4.5. Sans ce garde-fou, tout repli Opus échoue
+    # systématiquement en 400 (cf. incident extraction Sésamaths).
+    prefill_ok = _supports_assistant_prefill(model)
+    messages = [
+        {"role": "user", "content": [
+            {"type": "image", "source": {"type": "base64",
+                                         "media_type": "image/png", "data": b64}},
+            {"type": "text", "text": user_text},
+        ]},
+    ]
+    if prefill_ok:
+        messages.append({"role": "assistant", "content": "{"})
+    else:
+        system += ("\n\nRéponds UNIQUEMENT par l'objet JSON demandé, sans texte "
+                   "avant ni après, sans bloc de code Markdown.")
+
     r = _post_with_deadline(
         "https://api.anthropic.com/v1/messages",
         headers={"x-api-key": cfg.encrypted_secret, "anthropic-version": "2023-06-01"},
@@ -463,14 +492,7 @@ def claude_vision_json(db: Session, operation: str, system: str, user_text: str,
             "model": model,
             "max_tokens": max_tokens,
             "system": [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
-            "messages": [
-                {"role": "user", "content": [
-                    {"type": "image", "source": {"type": "base64",
-                                                 "media_type": "image/png", "data": b64}},
-                    {"type": "text", "text": user_text},
-                ]},
-                {"role": "assistant", "content": "{"},
-            ],
+            "messages": messages,
         },
         timeout=90, provider="Claude",
     )
@@ -484,7 +506,8 @@ def claude_vision_json(db: Session, operation: str, system: str, user_text: str,
             cost=usage.get("input_tokens", 0) * in_rate + usage.get("output_tokens", 0) * out_rate,
             correlation_id=correlation_id)
 
-    content_text = "{" + "".join(b.get("text", "") for b in data.get("content", []))
+    body = "".join(b.get("text", "") for b in data.get("content", []))
+    content_text = ("{" + body) if prefill_ok else body
     try:
         return json.loads(content_text)
     except json.JSONDecodeError:
@@ -494,7 +517,9 @@ def claude_vision_json(db: Session, operation: str, system: str, user_text: str,
                 return json.loads(m.group(0))
             except json.JSONDecodeError:
                 pass
-        raise ValueError("Réponse Claude vision hors schéma JSON")
+        raise ValueError(
+            f"Réponse Claude vision hors schéma JSON ({model}, "
+            f"{len(content_text)} car.) : {content_text[:200]!r}")
 
 
 def _claude_vision_mock(operation: str, correlation_id: str) -> dict:

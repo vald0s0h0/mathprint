@@ -149,6 +149,54 @@ def _check_text(text: str, min_len: int = 1, max_len: int = 1200) -> bool:
     return mathrender.has_valid_math(text)
 
 
+def _text_reject_reason(text: str, min_len: int, max_len: int) -> str | None:
+    """Pourquoi _check_text refuse ce texte (None = accepté). Diagnostic
+    uniquement : _check_text reste la source de vérité."""
+    if not min_len <= len(text) <= max_len:
+        return f"longueur {len(text)} hors [{min_len}, {max_len}]"
+    bad = [c for c, is_math in mathrender.split_math_spans(text)
+           if not is_math and "\\" in c]
+    if bad:
+        return f"commande LaTeX hors $...$ : {bad[0][:60]!r}"
+    for content, is_math in mathrender.split_math_spans(text):
+        if is_math and mathrender.sanitize_latex(content) is None:
+            return f"span LaTeX refusé : ${content[:60]}$"
+    return None
+
+
+def diagnose_rejection(raw: dict, competency: Competency) -> str:
+    """Explique en clair pourquoi _validate_exercise a refusé `raw`.
+
+    Rejoue les mêmes contrôles dans le même ordre et renvoie le PREMIER qui
+    échoue. Appelé uniquement sur le chemin d'échec (jamais en régime normal),
+    pour que les logs disent « pourquoi » au lieu d'un simple compte de rejets.
+    Ne remplace pas la validation : si tout passe ici, le refus vient d'un
+    contrôle spécifique au type de réponse (auto-vérification, doublon…)."""
+    if not isinstance(raw, dict):
+        return f"pas un objet JSON ({type(raw).__name__})"
+    statement = str(raw.get("statement", "")).strip()
+    correction = str(raw.get("correction", "")).strip()
+    if (r := _text_reject_reason(statement, 15, 1200)):
+        return f"énoncé invalide : {r}"
+    if (r := _text_reject_reason(correction, 5, 1500)):
+        return f"correction invalide : {r}"
+    rtype = raw.get("response_type", "short_text")
+    if rtype not in VALID_RESPONSE_TYPES:
+        return f"response_type inconnu : {rtype!r}"
+    if (competency.domain_code in GEOMETRY_DOMAINS and rtype != "manual_drawing"
+            and _is_geometry_verb(statement)):
+        return "verbe de construction géométrique hors manual_drawing"
+    if raw.get("figure") is not None and figures.validate_figure(raw.get("figure")) is None:
+        return f"figure invalide : {str(raw.get('figure'))[:80]}"
+    answer = raw.get("answer") or {}
+    if not answer:
+        return "champ 'answer' absent ou vide"
+    if not answer.get("type"):
+        return f"answer.type absent : {str(answer)[:80]}"
+    return (f"contrôle spécifique à '{rtype}' (answer.type={answer.get('type')!r}) — "
+            f"auto-vérification, doublon ou incohérence réponse/énoncé")
+
+
 def _validate_exercise(raw: dict, competency: Competency, db: Session,
                        existing_norms: set[str]) -> dict | None:
     """Valide un exercice candidat. Retourne le contrat interne ou None."""
