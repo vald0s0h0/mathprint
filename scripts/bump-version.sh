@@ -14,8 +14,10 @@
 #   scripts/bump-version.sh --set X.Y.Z            # fixe une version précise
 #
 # À lancer AVANT chaque commit/push destiné au NAS : le commit inclura les
-# fichiers de version bumpés, et « git push --follow-tags » publiera le tag
-# (release.yml construit alors l'image épinglable ghcr …:vX.Y.Z).
+# fichiers de version bumpés, et « git push --follow-tags » publiera le tag —
+# à condition qu'il soit ANNOTÉ (« git tag -a »), sinon --follow-tags l'ignore
+# en silence (release.yml, déclenché par le push d'un tag v*.*.*, ne construit
+# alors jamais l'image épinglable ghcr …:vX.Y.Z).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -51,4 +53,8 @@ perl -0pi -e "s/\"version\": \"[0-9]+\.[0-9]+\.[0-9]+\"/\"version\": \"${new}\"/
 git add "$VERSION_PY" "$VERSION_TS" "$PKG_JSON"
 echo "Version ${current} -> ${new}"
 echo "Fichiers stagés. Après ton commit, pose le tag :"
-echo "  git tag v${new} && git push --follow-tags"
+# « git tag » (léger) + « --follow-tags » ne publie RIEN : --follow-tags ne
+# pousse que les tags ANNOTÉS. C'est ce qui a fait que v1.0.8 à v1.0.12 sont
+# restés locaux et que release.yml (déclenché par le push d'un tag v*.*.*) n'a
+# jamais construit leur image épinglable. D'où « git tag -a ».
+echo "  git tag -a v${new} -m \"MathPrint ${new}\" && git push --follow-tags"
