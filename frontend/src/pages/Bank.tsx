@@ -3,11 +3,13 @@
 // donne la couverture, l'aperçu fidèle (KaTeX + figures identiques au PDF),
 // le retrait d'un contenu douteux et la génération ciblée.
 import {
-  ActionIcon, Badge, Box, Button, Card, Group, Loader, Paper, ScrollArea,
+  ActionIcon, Badge, Box, Button, Card, Collapse, Group, Loader, Paper, ScrollArea,
   SegmentedControl, Select, Stack, Table, Tabs, Text, Title, Tooltip,
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
-import { AlertTriangle, BookOpen, Lightbulb, Library, RefreshCw, Trash2 } from 'lucide-react'
+import {
+  AlertTriangle, BookOpen, ChevronDown, ChevronUp, Lightbulb, Library, RefreshCw, Trash2,
+} from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../api'
 import FigurePreview from '../components/FigurePreview'
@@ -25,6 +27,10 @@ type Exercise = {
   statement: string; correction: string; response_type: string
   choices: string[]; source: string; kind: string
   quality: Record<string, number>; figure: Record<string, any> | null
+  // extraction brute (source="sesamaths" uniquement) dont provient cette
+  // ligne, avant adaptation au format de la plateforme
+  raw: { number?: string; title?: string | null; text?: string
+    table?: Record<string, any>; matching?: Record<string, any> } | null
 }
 type Lesson = {
   id: string; competency_id: string; level_min: number; level_max: number
@@ -67,6 +73,7 @@ function QualityBadge({ quality }: { quality: Record<string, number> }) {
 }
 
 function ExerciseCard({ ex, onRetire }: { ex: Exercise; onRetire: (id: string) => void }) {
+  const [showRaw, setShowRaw] = useState(false)
   return (
     <Card withBorder radius="md" p="sm">
       <Group justify="space-between" wrap="nowrap" align="flex-start" mb={6}>
@@ -79,12 +86,37 @@ function ExerciseCard({ ex, onRetire }: { ex: Exercise; onRetire: (id: string) =
           </Badge>
           <QualityBadge quality={ex.quality} />
         </Group>
-        <Tooltip label="Retirer de la banque (remplacé à la prochaine génération)">
-          <ActionIcon variant="subtle" color="red" size="sm" onClick={() => onRetire(ex.id)}>
-            <Trash2 size={14} />
-          </ActionIcon>
-        </Tooltip>
+        <Group gap={4} wrap="nowrap">
+          {ex.raw && (
+            <Tooltip label={showRaw ? 'Masquer le texte original' : 'Voir le texte original extrait du manuel'}>
+              <ActionIcon variant="subtle" color="gray" size="sm" onClick={() => setShowRaw((v) => !v)}>
+                {showRaw ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+              </ActionIcon>
+            </Tooltip>
+          )}
+          <Tooltip label="Retirer de la banque (remplacé à la prochaine génération)">
+            <ActionIcon variant="subtle" color="red" size="sm" onClick={() => onRetire(ex.id)}>
+              <Trash2 size={14} />
+            </ActionIcon>
+          </Tooltip>
+        </Group>
       </Group>
+      {ex.raw && (
+        <Collapse in={showRaw}>
+          <Paper bg="var(--mantine-color-default-hover)" p={8} radius="sm" mb={8}
+            style={{ borderLeft: '3px solid var(--mantine-color-gray-5)' }}>
+            <Text size="xs" c="dimmed" fw={600} mb={2}>
+              Texte original extrait{ex.raw.number ? ` (exercice ${ex.raw.number})` : ''}
+            </Text>
+            {ex.raw.text && <MathText text={ex.raw.text} size="sm" />}
+            {(ex.raw.table || ex.raw.matching) && (
+              <Text size="xs" c="dimmed" mt={4} style={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace' }}>
+                {JSON.stringify(ex.raw.table ?? ex.raw.matching, null, 1)}
+              </Text>
+            )}
+          </Paper>
+        </Collapse>
+      )}
       <MathText text={ex.statement} />
       {ex.choices.length > 0 && (
         <Group gap="md" mt={6}>

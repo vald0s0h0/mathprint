@@ -39,6 +39,10 @@ def _exercise_out(ex: GeneratedExercise, comp: Competency | None) -> dict:
         "figure": ex.figure_json,
         "status": ex.status,
         "created_at": ex.created_at.isoformat() if ex.created_at else None,
+        # extraction brute (texte à marqueurs + tableau/matching bruts) dont
+        # provient cette ligne, source="sesamaths" uniquement — affichage
+        # "avant/après" en banque
+        "raw": ex.raw_extract_json,
     }
 
 

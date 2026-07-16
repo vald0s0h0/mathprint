@@ -376,12 +376,15 @@ def claude_text(db: Session, operation: str, system: str, user_text: str,
 
 
 def claude_json(db: Session, operation: str, system: str, payload: dict,
-                max_tokens: int = 500, correlation_id: str | None = None) -> dict:
-    """Claude Haiku en mode JSON pour vérification croisée (exercices, rappels)."""
+                max_tokens: int = 500, model: str | None = None,
+                correlation_id: str | None = None) -> dict:
+    """Claude en mode JSON pour vérification croisée (exercices, rappels) et
+    pour l'adaptateur Sésamaths (JSON brut -> contrat app, texte pur, pas
+    d'image). `model` explicite (ex. repli Opus) prioritaire sur la config."""
     cfg = _config(db, "anthropic")
     if _today_cost(db, "anthropic") > settings.llm_daily_cost_limit_eur:
         raise BudgetExceeded("Budget Anthropic quotidien atteint")
-    model = cfg.model if cfg and cfg.model else settings.claude_model
+    model = model or (cfg.model if cfg and cfg.model else settings.claude_model)
 
     if _mock_enabled(db, cfg):
         _record(db, "anthropic", model, operation, input_tokens=400, output_tokens=80,
@@ -408,7 +411,22 @@ def claude_json(db: Session, operation: str, system: str, payload: dict,
                         "difficulty_level": 3, "quantity": 4,
                         "kind_mix": {"application": 0.55, "probleme": 0.35, "qcm": 0.10},
                         "pacing_days": 7, "lesson_competency_ids": weak[:2]}}
+        if operation == "sesamaths_adapt":
+            return _sesamaths_adapt_mock(correlation_id or "")
         return {}
+
+    # préremplissage assistant "{" (force une sortie JSON, l'API Messages n'a
+    # pas de response_format JSON) : REFUSÉ par un 400 sur la famille Claude
+    # 4.6+ (Opus 4.6/4.7/4.8, Sonnet 4.6/5, Fable 5), cf. claude_vision_json —
+    # même garde-fou ici, sinon le repli Opus de l'adaptateur Sésamaths
+    # échouerait systématiquement en 400.
+    prefill_ok = _supports_assistant_prefill(model)
+    messages = [{"role": "user", "content": json.dumps(payload, ensure_ascii=False)}]
+    if prefill_ok:
+        messages.append({"role": "assistant", "content": "{"})
+    system_text = system if prefill_ok else (
+        system + "\n\nRéponds UNIQUEMENT par l'objet JSON demandé, sans texte "
+        "avant ni après, sans bloc de code Markdown.")
 
     r = _post_with_deadline(
         "https://api.anthropic.com/v1/messages",
@@ -416,23 +434,29 @@ def claude_json(db: Session, operation: str, system: str, payload: dict,
         json_body={
             "model": model,
             "max_tokens": max_tokens,
-            "system": [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
-            # préremplissage "{" : force une sortie JSON (l'API Messages n'a
-            # pas de response_format JSON)
-            "messages": [{"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
-                         {"role": "assistant", "content": "{"}],
+            "system": [{"type": "text", "text": system_text, "cache_control": {"type": "ephemeral"}}],
+            "messages": messages,
         },
         timeout=60, provider="Claude",
     )
     r.raise_for_status()
     data = r.json()
     usage = data.get("usage", {})
+    # tarifs : Opus 4.8 ~5$/25$ ; Haiku 4.5 ~1$/5$ par MTok (même barème que
+    # claude_vision_json — un appel Opus ici (repli adaptateur) doit être
+    # comptabilisé à son vrai coût, pas au tarif Haiku)
+    in_rate, out_rate = (5e-6, 25e-6) if "opus" in (model or "") else (1e-6, 5e-6)
     _record(db, "anthropic", model, operation,
             input_tokens=usage.get("input_tokens", 0), output_tokens=usage.get("output_tokens", 0),
-            cost=usage.get("input_tokens", 0) * 1e-6 + usage.get("output_tokens", 0) * 5e-6,
+            cost=usage.get("input_tokens", 0) * in_rate + usage.get("output_tokens", 0) * out_rate,
             correlation_id=correlation_id)
 
-    content_text = "{" + "".join(b.get("text", "") for b in data.get("content", []))
+    if data.get("stop_reason") == "max_tokens":
+        raise ValueError(
+            f"Réponse Claude JSON TRONQUÉE ({model}) : dépasse "
+            f"max_tokens={max_tokens}. Augmente max_tokens pour cet appel.")
+    body = "".join(b.get("text", "") for b in data.get("content", []))
+    content_text = ("{" + body) if prefill_ok else body
     try:
         return json.loads(content_text)
     except json.JSONDecodeError:
@@ -530,11 +554,40 @@ def claude_vision_json(db: Session, operation: str, system: str, user_text: str,
 
 
 def _claude_vision_mock(operation: str, correlation_id: str) -> dict:
-    """Extraction vision simulée : quelques exercices synthétiques au contrat
-    exgen-3 (LaTeX balisé, tableau, QCM), seedés par la page pour rester
-    déterministes en test — exerce toute la chaîne de validation sans réseau."""
+    """Extraction BRUTE simulée (appel 1, extracteur — schéma générique à
+    marqueurs, aucune résolution) : quelques exercices synthétiques, seedés
+    par la page pour rester déterministes en test — exerce toute la chaîne
+    extraction+adaptation+validation sans réseau. Longueur (3) volontairement
+    alignée sur `_sesamaths_adapt_mock` : `sesamaths._adapt_page` exige une
+    correspondance 1:1 entre exercices bruts et adaptés."""
     import random
-    rng = random.Random(correlation_id or "sesa-vision")
+    rng = random.Random(correlation_id or "sesa-extract")
+    a, b = rng.randint(2, 20), rng.randint(2, 20)
+    exercises = [
+        {"number": "1", "title": None,
+         "text": (f"Voici une liste de nombres : $221$, $4\\,065$, $940$. "
+                  f"Combien valent ${a} + {b}$ ? " + "{{blank}}")},
+        {"number": "2", "title": "Division euclidienne",
+         "text": "Complète le tableau de la division euclidienne.",
+         "table": {"rows": 2, "cols": 2,
+                   "col_labels": ["Quotient", "Reste"],
+                   "row_labels": ["$87$ par $9$", "$764$ par $8$"],
+                   "cells": [[{"value": None, "given": False}, {"value": None, "given": False}],
+                             [{"value": None, "given": False}, {"value": None, "given": False}]]}},
+        {"number": "3", "title": None,
+         "text": (f"Que vaut ${a} \\times {b}$ ? " + "{{check}} " + f"${a * b}$  "
+                  + "{{check}} " + f"${a * b + a}$  " + "{{check}} " + f"${a + b}$")},
+    ]
+    return {"exercises": exercises, "confidence": 0.9, "reason_code": "mock_extract"}
+
+
+def _sesamaths_adapt_mock(correlation_id: str) -> dict:
+    """Adaptation simulée (appel 2, adaptateur — contrat app) : LaTeX balisé,
+    tableau, QCM. Contenu volontairement indépendant du JSON brut reçu (le
+    mock n'a pas besoin de comprendre les marqueurs), mais de MÊME LONGUEUR
+    que `_claude_vision_mock` (3) pour respecter la correspondance 1:1."""
+    import random
+    rng = random.Random(correlation_id or "sesa-adapt")
     a, b = rng.randint(2, 20), rng.randint(2, 20)
     exercises = [
         {"kind": "application",
@@ -562,4 +615,4 @@ def _claude_vision_mock(operation: str, correlation_id: str) -> dict:
          "answer": {"type": "choice", "correct": [0]},
          "difficulty": rng.randint(3, 5)},
     ]
-    return {"exercises": exercises, "confidence": 0.9, "reason_code": "mock_vision"}
+    return {"exercises": exercises, "confidence": 0.9, "reason_code": "mock_adapt"}

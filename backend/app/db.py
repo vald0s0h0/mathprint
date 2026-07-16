@@ -34,6 +34,7 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("source", "TEXT"),
         ("kind", "TEXT"),
         ("quality_json", "JSON"),
+        ("raw_extract_json", "JSON"),
     ],
     "lesson_snippets": [
         ("verifier_model", "TEXT"),

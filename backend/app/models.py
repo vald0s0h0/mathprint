@@ -185,6 +185,10 @@ class GeneratedExercise(Base):
     kind: Mapped[str] = mapped_column(String, default="application")
     # Scores qualité du vérificateur (justesse, adéquation compétence/niveau, clarté)
     quality_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Exercice brut dont provient cette ligne (source="sesamaths" uniquement) :
+    # texte à marqueurs + tableau/matching bruts avant adaptation, pour
+    # affichage "avant/après" en banque (cf. services.sesamaths._adapt_page)
+    raw_extract_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
 
 class ExerciseCompetency(Base):

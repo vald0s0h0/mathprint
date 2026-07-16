@@ -88,11 +88,27 @@ def _normalize_statement_for_dedup(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
+_LEAKED_MARKER_RE = re.compile(r"\{\{(?:line\d+|check|dot)\}\}")
+
+
+def _leaked_marker(text: str) -> str | None:
+    """Marqueur d'extraction Sésamaths (cf. services.sesamaths) resté non
+    transformé par l'adaptateur : {{lineN}}/{{check}}/{{dot}} doivent
+    toujours être convertis en response_type/answer app (multiline_text,
+    qcm, matching) et retirés du texte final — seul {{blank}} peut y
+    subsister. Le rendu PDF ne connaît que {{blank}} ; un marqueur oublié
+    s'afficherait comme texte parasite sur la copie imprimée."""
+    m = _LEAKED_MARKER_RE.search(text)
+    return m.group(0) if m else None
+
+
 def _check_text(text: str, min_len: int = 1, max_len: int = 1200) -> bool:
     """Texte balisé valide : longueur, LaTeX des spans, pas de LaTeX hors spans."""
     if not min_len <= len(text) <= max_len:
         return False
     if _has_raw_latex_outside_math(text):
+        return False
+    if _leaked_marker(text):
         return False
     return mathrender.has_valid_math(text)
 
@@ -106,6 +122,8 @@ def _text_reject_reason(text: str, min_len: int, max_len: int) -> str | None:
            if not is_math and "\\" in c]
     if bad:
         return f"commande LaTeX hors $...$ : {bad[0][:60]!r}"
+    if (leaked := _leaked_marker(text)):
+        return f"marqueur d'extraction non transformé par l'adaptateur : {leaked!r}"
     for content, is_math in mathrender.split_math_spans(text):
         if is_math and mathrender.sanitize_latex(content) is None:
             return f"span LaTeX refusé : ${content[:60]}$"

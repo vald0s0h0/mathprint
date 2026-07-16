@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     # défaut, repli Opus 4.8 sur les pages denses qu'Haiku n'arrive pas à extraire
     claude_vision_model: str = "claude-haiku-4-5"
     claude_vision_fallback_model: str = "claude-opus-4-8"
+    # adaptation Sésamaths (texte pur, JSON brut -> contrat app) : même paire
+    # Haiku/Opus que la vision, réglable indépendamment (l'adaptateur ne paie
+    # jamais de tokens image, coût très inférieur à un appel vision)
+    claude_adapt_model: str = "claude-haiku-4-5"
+    claude_adapt_fallback_model: str = "claude-opus-4-8"
 
     # --- Budgets / quotas par défaut ---
     mathpix_concurrency: int = 3

@@ -167,6 +167,104 @@ def test_ensure_bank_sesamaths_end_to_end_mock(db_session):
     assert any(r.response_type == "table_fill" for r in stored)
 
 
+def test_raw_extract_json_populated_by_mock_pipeline(db_session):
+    # Chaque ligne issue de la pipeline Sésamaths doit conserver l'exercice
+    # BRUT (texte à marqueurs) dont elle provient, pour l'affichage
+    # "avant/après" de la page Banque (cf. content.py::_exercise_out).
+    comp = _seed_competency(db_session, "A1", "Opérations", "Effectuer une division euclidienne")
+    sesamaths.ensure_bank(db_session, comp, level=2, min_variants=3)
+    stored = (db_session.query(GeneratedExercise)
+              .filter_by(competency_id=comp.id, source="sesamaths").all())
+    assert stored
+    assert all(r.raw_extract_json is not None for r in stored)
+    assert all("text" in r.raw_extract_json or "table" in r.raw_extract_json for r in stored)
+
+
+def test_adapt_version_bump_reuses_cached_extraction(db_session, monkeypatch):
+    # Bumper ADAPT_PROMPT_VERSION seul doit ré-adapter depuis le JSON brut
+    # déjà en cache, SANS repayer la vision — c'est tout l'intérêt de séparer
+    # extraction et adaptation en 2 appels.
+    from app.models import SesamathsChapterExtraction
+    from app.services import providers
+
+    comp = _seed_competency(db_session, "A1", "Opérations", "Automatismes")
+    comp.code = "A1.1"
+    db_session.commit()
+
+    vision_calls: list[int] = []
+    adapt_calls: list[int] = []
+    orig_vision, orig_adapt = providers.claude_vision_json, providers.claude_json
+
+    def counted_vision(*a, **kw):
+        vision_calls.append(1)
+        return orig_vision(*a, **kw)
+
+    def counted_adapt(*a, **kw):
+        adapt_calls.append(1)
+        return orig_adapt(*a, **kw)
+
+    monkeypatch.setattr(providers, "claude_vision_json", counted_vision)
+    monkeypatch.setattr(providers, "claude_json", counted_adapt)
+
+    doc, manual, chapter_code = sesamaths._resolve_chapter(db_session, comp)
+    pool1 = sesamaths.ensure_chapter_pool(db_session, doc, manual, chapter_code, comp)
+    assert pool1
+    assert len(vision_calls) > 0
+    assert len(adapt_calls) > 0
+
+    row = (db_session.query(SesamathsChapterExtraction)
+           .filter_by(manual_id=manual.id, chapter_code="A1.1").first())
+    assert row.step == "done"
+
+    vision_calls.clear()
+    adapt_calls.clear()
+    monkeypatch.setattr(sesamaths, "ADAPT_PROMPT_VERSION", "sesamaths-adapt-TEST")
+    pool2 = sesamaths.ensure_chapter_pool(db_session, doc, manual, chapter_code, comp)
+    assert pool2
+    assert len(vision_calls) == 0    # aucun nouvel appel vision
+    assert len(adapt_calls) > 0      # ré-adaptation bien effectuée
+
+
+def test_extract_version_bump_forces_full_reextraction(db_session, monkeypatch):
+    # Bumper EXTRACT_PROMPT_VERSION doit au contraire déclencher une
+    # ré-extraction complète (la fidélité de lecture a changé).
+    from app.services import providers
+
+    comp = _seed_competency(db_session, "A1", "Opérations", "Automatismes")
+    comp.code = "A1.1"
+    db_session.commit()
+
+    vision_calls: list[int] = []
+    orig_vision = providers.claude_vision_json
+    monkeypatch.setattr(providers, "claude_vision_json",
+                        lambda *a, **kw: (vision_calls.append(1), orig_vision(*a, **kw))[1])
+
+    doc, manual, chapter_code = sesamaths._resolve_chapter(db_session, comp)
+    sesamaths.ensure_chapter_pool(db_session, doc, manual, chapter_code, comp)
+    assert len(vision_calls) > 0
+
+    vision_calls.clear()
+    monkeypatch.setattr(sesamaths, "EXTRACT_PROMPT_VERSION", "sesamaths-extract-TEST")
+    pool2 = sesamaths.ensure_chapter_pool(db_session, doc, manual, chapter_code, comp)
+    assert pool2
+    assert len(vision_calls) > 0     # ré-extraction complète
+
+
+def test_leaked_marker_rejected(db_session):
+    # Un statement adapté qui laisse fuiter un marqueur d'extraction non
+    # transformé ({{lineN}}/{{check}}/{{dot}}) ne doit jamais atteindre le
+    # rendu PDF (qui ne connaît que {{blank}}) : rejet déterministe.
+    from app.services import exercise_gen
+    comp = _seed_competency(db_session, "A1", "Opérations", "Calculer")
+    raw = {"kind": "application",
+           "statement": "Explique ta démarche pour calculer $12 + 8$. {{line2}}",
+           "correction": "$12 + 8 = 20$",
+           "response_type": "short_text",
+           "answer": {"type": "text", "value": "vingt"}}
+    assert exercise_gen._validate_exercise(raw, comp, db_session, set()) is None
+    assert "marqueur" in exercise_gen.diagnose_rejection(raw, comp)
+
+
 def test_to_candidate_crops_figure_from_bbox(db_session, manual_doc):
     # Un exercice qui référence une figure par bbox doit voir cette zone recadrée
     # du PDF et attachée en figure "image" (extraction des formes géométriques).
