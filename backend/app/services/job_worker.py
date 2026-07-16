@@ -1,7 +1,7 @@
 """Worker de fond in-process pour la génération de sujets (assistant, étape
 finale « Générer le sujet ») : la modale ferme immédiatement, la génération
-(qui peut déclencher des appels DeepSeek/Claude via exercise_gen.ensure_bank
-si la banque est insuffisante) tourne dans ce thread, hors requête HTTP.
+(qui peut déclencher des appels vision Claude via exercise_gen.ensure_bank
+si la banque Sésamaths est insuffisante) tourne dans ce thread, hors requête HTTP.
 
 Un seul job traité à la fois (déploiement mono-conteneur, cf. cahier des
 charges) : la file est la table `jobs` existante, un simple thread daemon la

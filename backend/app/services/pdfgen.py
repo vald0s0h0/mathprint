@@ -592,6 +592,8 @@ def _zone_height(response_type: str, choices: list[str], width: float,
         return total_h + 2.5 * mm
     if response_type == "short_text":
         return 0.0 if inline else 13 * mm
+    if response_type == "multi_blank":
+        return 0.0  # cases dessinées en ligne dans l'énoncé, jamais de zone dédiée
     if response_type == "multiline_text":
         lines = max(3, min(12, int(grading.get("lines", 5))))
         return lines * 7 * mm + 4 * mm
@@ -604,6 +606,17 @@ def _zone_height(response_type: str, choices: list[str], width: float,
     if response_type == "manual_drawing":
         return _MANUAL_DRAWING_H
     return 13 * mm
+
+
+def _cell_display_text(cell: dict) -> str:
+    """Texte imprimé pour une cellule "given" (déjà donnée dans le manuel)."""
+    ctype = cell.get("type")
+    if ctype == "rational":
+        num, den = cell["value"]
+        return f"$\\dfrac{{{num}}}{{{den}}}$"
+    if ctype == "decimal":
+        return f"{cell['value']:g}"
+    return str(cell.get("value", ""))
 
 
 def _draw_table_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float,
@@ -652,9 +665,18 @@ def _draw_table_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float,
             inset = 1.2 * mm
             bx, by = cx + inset, ry_top - row_h + inset
             bw, bh = col_w - 2 * inset, row_h - 2 * inset
-            c.setStrokeColor(DROPOUT)
-            c.setLineWidth(0.7)
-            c.roundRect(bx, by, bw, bh, 0.8 * mm)
+            cell = cells[i][j] if i < len(cells) and j < len(cells[i]) else None
+            if cell and cell.get("given"):
+                c.setFillColor(black)
+                text = _cell_display_text(cell)
+                lay = _rich_layout(text, bw, max(6, font_size - 1))
+                cy = by + bh / 2
+                _draw_rich(c, bx, cy + lay["height"] / 2, lay, max(6, font_size - 1),
+                           centered=True, width=bw)
+            else:
+                c.setStrokeColor(DROPOUT)
+                c.setLineWidth(0.7)
+                c.roundRect(bx, by, bw, bh, 0.8 * mm)
             row_meta.append({"x_pt": bx, "y_pt": by, "w_pt": bw, "h_pt": bh})
         cells_meta.append(row_meta)
     c.setStrokeColor(black)
@@ -811,13 +833,25 @@ def _draw_exercise_card(c: canvas.Canvas, x: float, y_top: float, w: float,
                     height=fh, mask="auto", preserveAspectRatio=True)
     c.setFillColor(black)
 
-    # zone réponse élève (saumon) — sauf short_text inline : la case fait déjà
-    # partie de l'énoncé (inline_blanks), pas de zone dédiée sous le texte
+    # zone réponse élève (saumon) — sauf short_text/multi_blank inline : la ou
+    # les case(s) font déjà partie de l'énoncé (inline_blanks), pas de zone
+    # dédiée sous le texte
     zone_y = card_bottom + CARD_PAD
     if response_type == "short_text" and inline_blanks:
         b = inline_blanks[0]
         zone_geo = {"x_pt": b["x_pt"], "y_pt": b["y_pt"], "w_pt": b["w_pt"], "h_pt": b["h_pt"]}
         meta = {}
+    elif response_type == "multi_blank" and inline_blanks:
+        # une case par occurrence de {{blank}}, stockées comme une unique
+        # "ligne" de cellules — même forme que table_fill (meta["cells"]),
+        # réutilisée telle quelle par la correction (services.pipeline).
+        xs0 = min(b["x_pt"] for b in inline_blanks)
+        ys0 = min(b["y_pt"] for b in inline_blanks)
+        xs1 = max(b["x_pt"] + b["w_pt"] for b in inline_blanks)
+        ys1 = max(b["y_pt"] + b["h_pt"] for b in inline_blanks)
+        zone_geo = {"x_pt": xs0, "y_pt": ys0, "w_pt": xs1 - xs0, "h_pt": ys1 - ys0}
+        meta = {"cells": [[{"x_pt": b["x_pt"], "y_pt": b["y_pt"],
+                            "w_pt": b["w_pt"], "h_pt": b["h_pt"]} for b in inline_blanks]]}
     else:
         meta = _draw_answer_zone(c, x, zone_y, w, zone_h, response_type, choices,
                                  font_size, grading)

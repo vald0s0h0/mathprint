@@ -87,9 +87,12 @@ def grade(expected: dict, grading: dict, ocr_text: str, ocr_confidence: float,
                       reason_code="matching_match" if ok else "matching_partial")
         return result
 
-    # --- tableau à remplir : une comparaison numérique/texte par cellule ---
+    # --- tableau à remplir : une comparaison numérique/texte par cellule
+    # (les cellules "given" sont déjà imprimées dans le manuel, non éditables,
+    # exclues de la notation) ---
     if comparator == "table_cells":
-        flat_expected = [cell for row in (grading.get("cells") or []) for cell in row]
+        flat_expected = [cell for row in (grading.get("cells") or []) for cell in row
+                          if not cell.get("given")]
         if cell_texts is None or len(cell_texts) != len(flat_expected):
             result.update(tier="D", reason_code="table_unreadable")
             return result
@@ -103,7 +106,11 @@ def grade(expected: dict, grading: dict, ocr_text: str, ocr_confidence: float,
                 if got is None:
                     result.update(tier="D", reason_code="table_cell_unreadable")
                     return result
-                ok = got == Fraction(str(exp_cell["value"]))
+                if exp_cell["type"] == "rational":
+                    num, den = exp_cell["value"]
+                    ok = got == Fraction(int(num), int(den))
+                else:
+                    ok = got == Fraction(str(exp_cell["value"]))
             score += 1.0 if ok else 0.0
         tier = "A" if score == len(flat_expected) else "B"
         result.update(tier=tier, score=score, confidence=1.0,

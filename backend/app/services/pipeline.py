@@ -207,12 +207,21 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
                     db, item=item, zone=zone, student=student,
                     ocr_text="", conf=conf_m, selected=None, corr_id=corr_id,
                     selected_pairs=pairs)
-            elif item.response_type == "table_fill":
+            elif item.response_type in ("table_fill", "multi_blank"):
+                # multi_blank : mêmes cellules qu'un table_fill à 1 ligne
+                # (meta["cells"] rempli en une seule "ligne" dans pdfgen), donc
+                # exactement la même logique de découpe/OCR par cellule.
                 cells_meta = (zone.meta_json or {}).get("cells", [])
                 expected_cells = item.expected_json.get("cells", [])
                 cell_texts, confs = [], []
                 for ri, row in enumerate(cells_meta):
                     for ci, cell in enumerate(row):
+                        # cellule "given" : déjà imprimée dans le manuel, non
+                        # éditable par l'élève, exclue de l'OCR et de la notation
+                        # (cf. grading.table_cells qui filtre la même liste).
+                        if (ri < len(expected_cells) and ci < len(expected_cells[ri])
+                                and expected_cells[ri][ci].get("given")):
+                            continue
                         ccrop = worker_cv.crop_zone(res.warped, cell["x_pt"], cell["y_pt"],
                                                     cell["w_pt"], cell["h_pt"], padding_pt=0)
                         cfiltered = worker_cv.dropout_filter(ccrop)
@@ -328,7 +337,7 @@ def _process_mock(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
                 n_review += _decide_and_store(db, item=item, zone=zone, student=student,
                                               ocr_text="", conf=conf_m, selected=None,
                                               corr_id=corr_id, selected_pairs=pairs)
-            elif item.response_type == "table_fill":
+            elif item.response_type in ("table_fill", "multi_blank"):
                 cells = expected.get("cells", [])
                 h = int(hashlib.sha256(corr_id.encode()).hexdigest(), 16)
                 cell_texts = []

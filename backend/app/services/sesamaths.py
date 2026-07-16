@@ -1,6 +1,6 @@
-"""Pipeline Sésamaths (refonte VISION) : extraction d'exercices depuis les
-manuels scolaires PDF (collection Sésamath), en complément de la moisson
-MathALÉA/DeepSeek existante.
+"""Pipeline Sésamaths (VISION) : extraction d'exercices depuis les manuels
+scolaires PDF (collection Sésamath) — SEULE source d'exercices de l'app
+depuis le 16/07 (la génération MathALÉA/DeepSeek a été retirée d'exercise_gen).
 
 Pourquoi la vision. Les pages du manuel sont à deux colonnes denses (badges de
 nombres, tableaux à compléter, figures géométriques). L'extraction TEXTE
@@ -8,13 +8,13 @@ nombres, tableaux à compléter, figures géométriques). L'extraction TEXTE
 nature illisibles en texte. On rend donc CHAQUE page en image et on l'extrait
 avec un LLM multimodal, UN appel par page.
 
-Architecture (mêmes barrières que exgen-3, réutilisées telles quelles) :
+Architecture :
   1. CARTE (services.sesamaths_pdf) : la table des matières donne la page
      imprimée de chaque Série ; on en déduit la plage de pages fichier de
      chaque Série (hors « Culture »), sans jamais parcourir le manuel entier.
   2. EXTRACTION VISION (Claude Haiku 4.5, une fois par page, mise en cache par
      hash pdf+page+prompt+modèle+schéma) : lit l'IMAGE de la page et restitue
-     TOUS ses exercices au contrat exgen-3 EXACT (statement/correction/
+     TOUS ses exercices au contrat JSON de exercise_gen (statement/correction/
      response_type/answer/figure + difficulty), énoncés à l'identique, maths en
      LaTeX, tableaux reconstruits, badges de nombres inclus, questions
      reformulées vers un type de réponse de l'UI. Repli Opus 4.8 sur les pages
@@ -25,12 +25,11 @@ Architecture (mêmes barrières que exgen-3, réutilisées telles quelles) :
   4. VALIDATION DÉTERMINISTE : chaque candidat repasse par
      exercise_gen._validate_exercise (LaTeX, types de réponse, auto-vérif) —
      aucune duplication de logique.
-  5. COMPLÉMENT si le chapitre ne fournit pas assez d'exercices : génération
-     DeepSeek Pro inspirée des exercices Sésamaths réellement extraits du même
-     chapitre, vérifiée par Claude — seul usage « génératif » de la pipeline.
-  6. BANQUE : GeneratedExercise avec source="sesamaths" (extrait) ou
-     "sesamaths_deepseek" (complément), pool STRICTEMENT séparé de la banque
-     par défaut.
+  5. Si le chapitre ne fournit pas assez d'exercices réels au niveau demandé,
+     on ne comble PAS par de l'invention (le complément DeepSeek a été retiré) :
+     la banque reste partielle, avec un avertissement explicite dans les logs.
+  6. BANQUE : GeneratedExercise avec source="sesamaths", pool STRICTEMENT
+     séparé de la banque par défaut.
 
 Reprise sur erreur : l'état d'extraction d'un chapitre est persistant
 (SesamathsChapterExtraction), machine à états PAR PAGE — seules les pages en
@@ -46,14 +45,14 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..models import CompetencyFramework, GeneratedExercise, SesamathsChapterExtraction, SesamathsLlmCache
-from . import exercise_gen, mathrender, providers, sesamaths_pdf
+from . import exercise_gen, providers, sesamaths_pdf
 
 logger = logging.getLogger(__name__)
 
 # Entre dans la clé du cache LLM : TOUJOURS le bumper en même temps qu'une
 # modification de _VISION_EXTRACT_INTRO, sinon les réponses mises en cache par
 # l'ANCIEN prompt sont resservies et le nouveau prompt reste sans effet.
-PROMPT_VERSION = "sesamaths-3-vision-structure"
+PROMPT_VERSION = "sesamaths-7-never-refuse"
 SOURCE_POOL = ("sesamaths", "sesamaths_deepseek")
 
 
@@ -90,24 +89,44 @@ def _retry_after_s(exc: Exception, attempt: int) -> float:
         return float(2 ** (attempt + 1))
 
 
+def _is_truncated(exc: Exception) -> bool:
+    return "TRONQUÉE" in str(exc)
+
+
+# Budgets de sortie essayés dans l'ordre : une page dense en table_fill
+# multi-lignes (JSON verbeux, une cellule = un objet) peut dépasser 16000
+# tokens. Sans ce palier, la page entière était perdue (exercices comptés en
+# échec) au lieu d'être retentée avec plus de place (cf. incident série A1).
+_VISION_TOKEN_BUDGETS = (16000, 32000, 48000)
+
+
 def _cached_vision(db: Session, cache_key: str, model: str, system: str,
                    user_text: str, image_png: bytes, correlation_id: str) -> dict:
     cached = db.query(SesamathsLlmCache).filter_by(cache_key=cache_key).first()
     if cached:
         return cached.response_json
-    for attempt in range(3):
-        try:
-            data = providers.claude_vision_json(
-                db, "sesamaths_vision_extract", system, user_text, image_png,
-                max_tokens=16000, model=model, correlation_id=correlation_id)
-            break
-        except Exception as e:
-            if not _is_rate_limited(e) or attempt == 2:
+    data = None
+    for budget in _VISION_TOKEN_BUDGETS:
+        for attempt in range(3):
+            try:
+                data = providers.claude_vision_json(
+                    db, "sesamaths_vision_extract", system, user_text, image_png,
+                    max_tokens=budget, model=model, correlation_id=correlation_id)
+                break
+            except Exception as e:
+                if _is_rate_limited(e) and attempt < 2:
+                    delay = _retry_after_s(e, attempt)
+                    logger.info("Sésamaths : 429 sur %s, nouvel essai dans %.0f s "
+                                "(tentative %s/3)", model, delay, attempt + 2)
+                    time.sleep(delay)
+                    continue
+                if _is_truncated(e) and budget != _VISION_TOKEN_BUDGETS[-1]:
+                    logger.info("Sésamaths : réponse tronquée sur %s à max_tokens=%s, "
+                               "nouvel essai avec un budget plus élevé", model, budget)
+                    break
                 raise
-            delay = _retry_after_s(e, attempt)
-            logger.info("Sésamaths : 429 sur %s, nouvel essai dans %.0f s "
-                        "(tentative %s/3)", model, delay, attempt + 2)
-            time.sleep(delay)
+        if data is not None:
+            break
     db.add(SesamathsLlmCache(cache_key=cache_key, response_json=data))
     db.commit()
     return data
@@ -120,6 +139,15 @@ _VISION_EXTRACT_INTRO = (
     "page d'un manuel de §GRADE§ (collection Sésamath), Série §SERIES_NUMBER§ "
     "« §SERIES_NAME§ » du chapitre « §CHAPTER_NAME§ ». Extrais CHAQUE exercice "
     "numéroté de cette page, SANS EN OUBLIER, SANS en inventer.\n\n"
+    "RÈGLE ABSOLUE, PLUS IMPORTANTE QUE TOUT LE RESTE : tu ne REFUSES ni "
+    "n'OMETS JAMAIS un exercice sous prétexte que son format de réponse "
+    "d'origine (Vrai/Faux, classement, opération posée, coloriage, tracé...) "
+    "ne correspond à aucun type supporté tel quel. REFORMULE TOUJOURS la "
+    "consigne pour qu'elle rentre dans un des formats de réponse listés plus "
+    "bas ; si et SEULEMENT SI aucune reformulation n'est possible, utilise "
+    "\"manual_drawing\" (dernier recours universel, valable pour N'IMPORTE "
+    "QUEL exercice, pas seulement la géométrie). Il n'y a donc AUCUNE "
+    "situation où un exercice doit être laissé de côté.\n\n"
     "CE QU'EST UN EXERCICE (règle la plus importante) :\n"
     "- UN exercice = UN badge numéroté (chiffre BLANC dans un petit carré de "
     "couleur), avec le titre qui le suit éventuellement. Le badge est le SEUL "
@@ -133,12 +161,19 @@ _VISION_EXTRACT_INTRO = (
     "- Le nombre d'exercices que tu renvoies doit être EXACTEMENT le nombre de "
     "badges numérotés de la page.\n\n"
     "STRUCTURE DES RÉPONSES (à respecter fidèlement) :\n"
-    "- PLUSIEURS champs de réponse (a., b., c.…) -> UN exercice \"table_fill\" "
-    "avec UNE LIGNE PAR SOUS-QUESTION : \"row_labels\" = [\"a.\", \"b.\", …] (ou "
-    "l'énoncé court de chaque sous-question), et une COLONNE PAR VALEUR attendue "
-    "(ex. « quotient » et « reste » -> 2 colonnes ; un seul résultat -> "
-    "col_labels = [\"Calcul\", \"Résultat\"]). Chaque ligne garde son énoncé "
-    "propre dans row_labels ; \"statement\" ne porte que la consigne commune.\n"
+    "- PLUSIEURS champs de réponse STRUCTURELLEMENT IDENTIQUES (a., b., c.… même "
+    "forme de calcul, seuls les nombres changent, ou un vrai tableau imprimé) -> "
+    "UN exercice \"table_fill\" avec UNE LIGNE PAR SOUS-QUESTION : \"row_labels\" = "
+    "[\"a.\", \"b.\", …] (ou l'énoncé court de chaque sous-question), et une COLONNE "
+    "PAR VALEUR attendue (ex. « quotient » et « reste » -> 2 colonnes ; un seul "
+    "résultat -> col_labels = [\"Calcul\", \"Résultat\"]). Chaque ligne garde son "
+    "énoncé propre dans row_labels ; \"statement\" ne porte que la consigne commune.\n"
+    "- PLUSIEURS champs de réponse HÉTÉROGÈNES (phrases ou équations de formes "
+    "différentes, pas une grille régulière) -> UN exercice \"multi_blank\" : place "
+    "un marqueur {{blank}} à chaque endroit où l'élève écrit sa réponse, DANS "
+    "\"statement\" qui contient alors le texte complet de toutes les sous-questions "
+    "à la suite (garde leurs préfixes « a. », « b. »…), et fournis une valeur par "
+    "{{blank}} dans answer.values, dans le même ordre.\n"
     "- UN SEUL champ de réponse -> \"short_text\".\n"
     "- Conserve l'ORDRE et le LIBELLÉ d'origine des sous-questions.\n\n"
     "RÈGLES D'EXTRACTION :\n"
@@ -150,10 +185,17 @@ _VISION_EXTRACT_INTRO = (
     "l'énoncé : recopie-la intégralement dans \"statement\".\n"
     "- Un TABLEAU à compléter doit être reconstruit en \"table_fill\" (l'élève y "
     "écrit ses réponses) : reprends libellés de lignes/colonnes et calcule les "
-    "cellules attendues.\n"
-    "- REFORMULE si besoin la consigne pour qu'elle rentre dans l'un des types de "
+    "cellules attendues. Si une colonne du tableau imprimé donne déjà une valeur "
+    "(ex. le calcul à effectuer) et qu'une seule colonne est à remplir par "
+    "l'élève, marque les cellules déjà imprimées \"given\":true (elles seront "
+    "recopiées telles quelles, pas transformées en case vide).\n"
+    "- REFORMULE TOUJOURS la consigne pour qu'elle rentre dans l'un des types de "
     "réponse ci-dessous (ex. « quels nombres sont divisibles par 2 ? » -> QCM à "
-    "choix multiples listant les nombres de l'énoncé).\n"
+    "choix multiples listant les nombres de l'énoncé ; « Vrai ou Faux ? » -> "
+    "qcm_single à 2 choix ; « range dans l'ordre croissant » -> QCM listant des "
+    "propositions d'ordre, ou short_text avec la séquence attendue en texte). "
+    "N'utilise \"manual_drawing\" que si VRAIMENT aucune reformulation ne "
+    "fonctionne — jamais pour éviter l'effort de reformuler.\n"
     "- IGNORE : les rubriques « Culture », les rappels de leçon (« À RETENIR »), "
     "les QR codes, en-têtes et pieds de page.\n"
     "- Si un exercice s'appuie sur une FIGURE (géométrie, droite graduée, repère, "
@@ -431,8 +473,7 @@ def _extracted_chapter(db: Session, competency) -> tuple[list[dict], bool]:
 def harvest(db: Session, competency, level: int, need: int,
            existing_norms: set[str], pool: list[dict]) -> list[dict]:
     """Moisson des exercices Sésamaths déjà extraits du chapitre de
-    `competency`, filtrés au niveau demandé — point d'entrée analogue à
-    exercise_gen._harvest_mathalea."""
+    `competency`, filtrés au niveau demandé."""
     if need <= 0:
         return []
     out = []
@@ -448,62 +489,6 @@ def harvest(db: Session, competency, level: int, need: int,
         c = dict(cand)
         c["_source"] = "sesamaths"
         out.append(c)
-    return out
-
-
-def top_up_with_deepseek_pro(db: Session, competency, level: int, need: int,
-                             pool: list[dict], existing_norms: set[str]) -> list[dict]:
-    """Complément DeepSeek Pro inspiré des exercices Sésamaths réellement
-    extraits du même chapitre, vérifié par Claude Haiku (langage naturel) —
-    seul usage « génératif » de cette pipeline, réservé au comblement."""
-    if need <= 0:
-        return []
-    examples = [c["statement"] for c in pool[:3]]
-    avoid = [mathrender.strip_math(s)[:120] for s in examples]
-    system, payload = exercise_gen._generation_payload(db, competency, level, need, avoid)
-    if examples:
-        payload["inspiration_examples"] = examples
-        system += (
-            "\n\nINSPIRATION : les exercices ci-dessous (\"inspiration_examples\") sont "
-            "des exercices RÉELS déjà validés du même chapitre — inspire-toi de leur "
-            "style et de leur niveau pour créer des exercices DIFFÉRENTS (jamais une "
-            "simple reformulation), qui évaluent la même compétence.")
-
-    out: list[dict] = []
-    for attempt in range(2):
-        if len(out) >= need:
-            break
-        try:
-            data = providers.deepseek_json(
-                db, "exercise_generation", system, payload, max_tokens=6000,
-                model=settings.deepseek_pro_model,
-                correlation_id=f"sesamaths-topup-{competency.code}-L{level}-att{attempt}")
-        except Exception as e:
-            logger.warning("Sésamaths : top-up DeepSeek Pro indisponible pour %s "
-                           "niveau %s : %s", competency.code, level, e)
-            break
-        for raw in (data.get("exercises") or [])[:need - len(out) + 2]:
-            if len(out) >= need:
-                break
-            valid = exercise_gen._validate_exercise(raw, competency, db, existing_norms)
-            if valid is None:
-                continue
-            is_good, verdict = exercise_gen._verify_with_claude(db, competency, level, valid)
-            if not is_good:
-                fixed_raw = exercise_gen._repair_exercise(db, competency, level, valid, verdict)
-                if fixed_raw is None:
-                    continue
-                existing_norms.discard(
-                    exercise_gen._normalize_statement_for_dedup(valid["statement"]))
-                valid = exercise_gen._validate_exercise(fixed_raw, competency, db, existing_norms)
-                if valid is None:
-                    continue
-                is_good, verdict = exercise_gen._verify_with_claude(db, competency, level, valid)
-                if not is_good:
-                    continue
-                verdict = {**verdict, "repaired": True}
-            valid["_verdict"] = verdict
-            out.append(valid)
     return out
 
 
@@ -546,48 +531,35 @@ def ensure_bank(db: Session, competency, level: int,
     added: list[GeneratedExercise] = []
     next_variant = len(rows)
 
-    def _store(candidate: dict, source: str, verdict: dict) -> None:
+    def _store(candidate: dict, verdict: dict) -> None:
         nonlocal next_variant
         row = GeneratedExercise(
             competency_id=competency.id, difficulty_level=level, variant=next_variant,
             statement=candidate["statement"], correction=candidate["correction"],
             response_type=candidate["response_type"],
             expected_json=candidate["expected"], grading_json=candidate["grading"],
-            model=(settings.claude_vision_model if source == "sesamaths"
-                  else settings.deepseek_pro_model),
+            model=settings.claude_vision_model,
             prompt_version=PROMPT_VERSION, status="active",
-            verifier_model=settings.claude_model if source == "sesamaths_deepseek" else "",
-            verifier_verdict_json=verdict, quality_json=verdict.get("scores") or {},
-            figure_json=candidate.get("figure_json"), source=source,
+            verifier_model="", verifier_verdict_json=verdict,
+            quality_json=verdict.get("scores") or {},
+            figure_json=candidate.get("figure_json"), source="sesamaths",
             kind=candidate.get("kind", "application"))
         db.add(row)
         added.append(row)
         next_variant += 1
 
     for cand in harvest(db, competency, level, missing, existing_norms, pool):
-        _store(cand, "sesamaths", cand.get("_verdict", {}))
-    n_real = len(added)
+        _store(cand, cand.get("_verdict", {}))
     missing = min_variants - len(rows) - len(added)
 
-    # Complément DeepSeek Pro : autorisé UNIQUEMENT si le chapitre a été
-    # ENTIÈREMENT extrait (tous les exercices réels sont présents) et qu'il
-    # faut encore ajuster le niveau. Si l'extraction est incomplète, on ne
-    # comble pas par de l'invention — on préfère un pool partiel mais RÉEL.
-    if missing > 0 and fully_done:
-        logger.info("Sésamaths : %s exercice(s) réel(s) au niveau %s pour %s, "
-                    "%s complément(s) DeepSeek Pro (ajustement de niveau, inspiré "
-                    "du chapitre)", n_real, level, competency.code, missing)
-        try:
-            for cand in top_up_with_deepseek_pro(db, competency, level, missing,
-                                                 pool, existing_norms):
-                _store(cand, "sesamaths_deepseek", cand.get("_verdict", {}))
-        except Exception as e:
-            logger.warning("Sésamaths : top-up DeepSeek Pro %s niveau %s impossible : %s",
-                           competency.code, level, e)
-    elif missing > 0:
-        logger.warning("Sésamaths : extraction INCOMPLÈTE de %s — pas de complément "
-                       "DeepSeek (on ne comble pas par de l'invention). %s variante(s) "
-                       "réelle(s) fournie(s) au niveau %s", competency.code, n_real, level)
+    # Aucun complément généré : depuis le 16/07, seule l'extraction vision
+    # du manuel produit des exercices. Si le chapitre n'en fournit pas assez
+    # au niveau demandé, on préfère un pool partiel mais RÉEL à une invention.
+    if missing > 0:
+        logger.warning("Sésamaths : %s exercice(s) réel(s) au niveau %s pour %s, "
+                       "%s manquant(s) — pas de complément généré (extraction %s)",
+                       len(added), level, competency.code, missing,
+                       "complète" if fully_done else "INCOMPLÈTE")
 
     db.flush()
     if not rows and not added:
@@ -600,7 +572,6 @@ def ensure_bank(db: Session, competency, level: int,
         raise ValueError(
             f"Aucun exercice Sésamaths n'a passé les contrôles qualité pour "
             f"{competency.code} niveau {level}")
-    logger.info("Sésamaths : banque %s niveau %s prête : %s variante(s) "
-                "(%s réelle(s) + %s complément(s))", competency.code, level,
-                len(rows) + len(added), n_real, len(added) - n_real)
+    logger.info("Sésamaths : banque %s niveau %s prête : %s variante(s) réelle(s)",
+                competency.code, level, len(rows) + len(added))
     return rows + added
