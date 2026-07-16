@@ -185,9 +185,9 @@ class GeneratedExercise(Base):
     kind: Mapped[str] = mapped_column(String, default="application")
     # Scores qualité du vérificateur (justesse, adéquation compétence/niveau, clarté)
     quality_json: Mapped[dict] = mapped_column(JSON, default=dict)
-    # Exercice brut dont provient cette ligne (source="sesamaths" uniquement) :
-    # texte à marqueurs + tableau/matching bruts avant adaptation, pour
-    # affichage "avant/après" en banque (cf. services.sesamaths._adapt_page)
+    # Blocs OCR Mistral bruts ({"blocks": [...]}) dont provient cette ligne
+    # (source="sesamaths" uniquement), avant adaptation — affichage
+    # "avant/après" en banque (cf. services.sesamaths._to_candidate)
     raw_extract_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
 
@@ -312,10 +312,13 @@ class SesamathsManual(Base):
 
 
 class SesamathsChapterExtraction(Base):
-    """État d'extraction d'un chapitre d'un manuel — une ligne par
-    (manual_id, chapter_code). `step` porte la machine à états
-    (pending|pages_located|raw_extracted|structured|done|failed) : une reprise
-    après erreur repart du dernier step réussi (§ Sésamaths, reprise ciblée)."""
+    """État d'extraction d'une Série d'un manuel — une ligne par (manual_id,
+    chapter_code=code compétence, cf. services.sesamaths._extraction_key).
+    `step` porte la machine à états à 2 phases : pending (rien fait) ->
+    extracted (JSON brut Mistral OCR en cache dans `raw_json`, pas encore
+    adapté) -> done (`validated_json` = pool prêt). Une Série tient en 1-3
+    pages en général, la reprise sur erreur se fait donc au niveau de la
+    Série entière, pas page par page (§ Sésamaths)."""
     __tablename__ = "sesamaths_chapter_extractions"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
     manual_id: Mapped[str] = mapped_column(ForeignKey("sesamaths_manuals.id"))
@@ -323,10 +326,11 @@ class SesamathsChapterExtraction(Base):
     step: Mapped[str] = mapped_column(String, default="pending")
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     error_message: Mapped[str] = mapped_column(Text, default="")
-    page_range_json: Mapped[dict] = mapped_column(JSON, default=dict)   # {start_index, end_index}
-    raw_json: Mapped[dict] = mapped_column(JSON, default=dict)          # texte/figures bruts par page
-    validated_json: Mapped[list] = mapped_column(JSON, default=list)    # candidats validés (pool du chapitre)
-    failed_series_json: Mapped[list] = mapped_column(JSON, default=list)  # séries à relancer
+    # {start_index, end_index, series_number, series_name, versions:{extract,adapt,schema}}
+    page_range_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    raw_json: Mapped[dict] = mapped_column(JSON, default=dict)          # réponse OCR Mistral brute (blocs typés)
+    validated_json: Mapped[list] = mapped_column(JSON, default=list)    # candidats validés (pool de la Série)
+    failed_series_json: Mapped[list] = mapped_column(JSON, default=list)  # non utilisé (granularité Série)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
 

@@ -1,4 +1,4 @@
-"""Clients Mathpix / DeepSeek / Claude Haiku (§6.3, §8).
+"""Clients Mathpix / DeepSeek / Claude Haiku / Mistral OCR (§6.3, §8).
 
 Règles appliquées ici :
 - aucun nom d'élève ne transite (pseudonymes uniquement, RM-010) ;
@@ -88,7 +88,7 @@ def _config(db: Session, provider: str) -> ProviderConfig | None:
 
 # Familles de modèles Claude qui REFUSENT (400) un préremplissage assistant :
 # tout 4.6 et au-delà. Haiku 4.5 (et antérieurs) l'acceptent encore. Voir
-# claude_vision_json / claude_json : le prefill "{" force la sortie JSON.
+# claude_json : le prefill "{" force la sortie JSON.
 _NO_PREFILL_MODELS = ("opus-4-6", "opus-4-7", "opus-4-8", "sonnet-4-6",
                       "sonnet-5", "fable-5", "mythos-5")
 
@@ -417,9 +417,8 @@ def claude_json(db: Session, operation: str, system: str, payload: dict,
 
     # préremplissage assistant "{" (force une sortie JSON, l'API Messages n'a
     # pas de response_format JSON) : REFUSÉ par un 400 sur la famille Claude
-    # 4.6+ (Opus 4.6/4.7/4.8, Sonnet 4.6/5, Fable 5), cf. claude_vision_json —
-    # même garde-fou ici, sinon le repli Opus de l'adaptateur Sésamaths
-    # échouerait systématiquement en 400.
+    # 4.6+ (Opus 4.6/4.7/4.8, Sonnet 4.6/5, Fable 5) — sans ce garde-fou, le
+    # repli Opus de l'adaptateur Sésamaths échouerait systématiquement en 400.
     prefill_ok = _supports_assistant_prefill(model)
     messages = [{"role": "user", "content": json.dumps(payload, ensure_ascii=False)}]
     if prefill_ok:
@@ -442,9 +441,9 @@ def claude_json(db: Session, operation: str, system: str, payload: dict,
     r.raise_for_status()
     data = r.json()
     usage = data.get("usage", {})
-    # tarifs : Opus 4.8 ~5$/25$ ; Haiku 4.5 ~1$/5$ par MTok (même barème que
-    # claude_vision_json — un appel Opus ici (repli adaptateur) doit être
-    # comptabilisé à son vrai coût, pas au tarif Haiku)
+    # tarifs : Opus 4.8 ~5$/25$ ; Haiku 4.5 ~1$/5$ par MTok — un appel Opus ici
+    # (repli adaptateur Sésamaths) doit être comptabilisé à son vrai coût,
+    # pas au tarif Haiku
     in_rate, out_rate = (5e-6, 25e-6) if "opus" in (model or "") else (1e-6, 5e-6)
     _record(db, "anthropic", model, operation,
             input_tokens=usage.get("input_tokens", 0), output_tokens=usage.get("output_tokens", 0),
@@ -470,122 +469,96 @@ def claude_json(db: Session, operation: str, system: str, payload: dict,
         raise ValueError("Réponse Claude hors schéma JSON")
 
 
-def claude_vision_json(db: Session, operation: str, system: str, user_text: str,
-                       image_png: bytes, max_tokens: int = 4000,
-                       model: str | None = None,
-                       correlation_id: str | None = None) -> dict:
-    """Claude multimodal en mode JSON : extraction d'exercices depuis l'IMAGE
-    d'une page de manuel (§ pipeline Sésamaths vision). Même transport que
-    claude_json (préremplissage "{" pour forcer le JSON), l'image étant jointe
-    en base64 avant la consigne texte."""
+def mistral_ocr(db: Session, operation: str, pdf_bytes: bytes, n_pages: int,
+                correlation_id: str | None = None) -> dict:
+    """Appel OCR Mistral 4 (moteur de reconnaissance de document PUR — pas un
+    modèle de chat, aucune instruction ni prompt) : extraction fidèle d'un
+    mini-PDF déjà réduit aux pages voulues (§ pipeline Sésamaths, extraction
+    par Série). Retourne les blocs typés natifs (title/text/table/image/
+    equation/list/...) avec bbox pixel et contenu, par page — c'est le
+    vocabulaire de Mistral lui-même, aucun schéma maison ne lui est imposé.
+    `n_pages` : nombre de pages du mini-PDF fourni (le mock ne peut pas lire
+    `pdf_bytes`, il en a besoin pour synthétiser autant de pages)."""
     import base64
-
-    cfg = _config(db, "anthropic")
-    model = model or (cfg.model if cfg and cfg.model else settings.claude_vision_model)
-    if _today_cost(db, "anthropic") > settings.llm_daily_cost_limit_eur:
-        raise BudgetExceeded("Budget Anthropic quotidien atteint")
+    cfg = _config(db, "mistral")
+    model = cfg.model if cfg and cfg.model else settings.mistral_ocr_model
+    if _today_cost(db, "mistral") > settings.llm_daily_cost_limit_eur:
+        raise BudgetExceeded("Budget Mistral quotidien atteint")
 
     if _mock_enabled(db, cfg):
-        _record(db, "anthropic", model, operation, input_tokens=1500, output_tokens=400,
-                cost=0.0, correlation_id=correlation_id)
-        return _claude_vision_mock(operation, correlation_id or "")
+        _record(db, "mistral", model, operation, units=n_pages, cost=0.0,
+                correlation_id=correlation_id)
+        return _mistral_ocr_mock(n_pages, correlation_id or "")
 
-    b64 = base64.b64encode(image_png).decode()
-    # Le préremplissage assistant "{" (qui force le JSON) est REFUSÉ par un 400
-    # sur la famille Claude 4.6+ (Opus 4.6/4.7/4.8, Sonnet 4.6/5, Fable 5) ; il
-    # reste valide sur Haiku 4.5. Sans ce garde-fou, tout repli Opus échoue
-    # systématiquement en 400 (cf. incident extraction Sésamaths).
-    prefill_ok = _supports_assistant_prefill(model)
-    messages = [
-        {"role": "user", "content": [
-            {"type": "image", "source": {"type": "base64",
-                                         "media_type": "image/png", "data": b64}},
-            {"type": "text", "text": user_text},
-        ]},
-    ]
-    if prefill_ok:
-        messages.append({"role": "assistant", "content": "{"})
-    else:
-        system += ("\n\nRéponds UNIQUEMENT par l'objet JSON demandé, sans texte "
-                   "avant ni après, sans bloc de code Markdown.")
-
+    b64 = base64.b64encode(pdf_bytes).decode()
     r = _post_with_deadline(
-        "https://api.anthropic.com/v1/messages",
-        headers={"x-api-key": cfg.encrypted_secret, "anthropic-version": "2023-06-01"},
+        "https://api.mistral.ai/v1/ocr",
+        headers={"Authorization": f"Bearer {cfg.encrypted_secret}"},
         json_body={
             "model": model,
-            "max_tokens": max_tokens,
-            "system": [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
-            "messages": messages,
+            "document": {"type": "document_url",
+                        "document_url": f"data:application/pdf;base64,{b64}"},
+            "include_blocks": True,
+            "table_format": "markdown",
         },
-        timeout=90, provider="Claude",
+        timeout=90, provider="Mistral",
     )
     r.raise_for_status()
     data = r.json()
-    usage = data.get("usage", {})
-    # tarifs : Opus 4.8 ~5$/25$ ; Haiku 4.5 ~1$/5$ par MTok
-    in_rate, out_rate = (5e-6, 25e-6) if "opus" in (model or "") else (1e-6, 5e-6)
-    _record(db, "anthropic", model, operation,
-            input_tokens=usage.get("input_tokens", 0), output_tokens=usage.get("output_tokens", 0),
-            cost=usage.get("input_tokens", 0) * in_rate + usage.get("output_tokens", 0) * out_rate,
+    got_pages = len(data.get("pages") or [])
+    # facturation Mistral OCR : ~0,004 $/page traitée, pas de tokens (même
+    # mécanique que mathpix_ocr : `units`, pas input/output_tokens)
+    _record(db, "mistral", model, operation, units=got_pages, cost=got_pages * 0.004,
             correlation_id=correlation_id)
-
-    # Sortie coupée par max_tokens : le JSON est tronqué en plein milieu, donc
-    # illisible. On le dit clairement au lieu de « hors schéma JSON », qui
-    # laissait croire à un modèle fautif (cf. page 6 perdue sur les 2 modèles).
-    if data.get("stop_reason") == "max_tokens":
-        raise ValueError(
-            f"Réponse Claude vision TRONQUÉE ({model}) : la page dépasse "
-            f"max_tokens={max_tokens}. Augmente max_tokens pour cette page.")
-    body = "".join(b.get("text", "") for b in data.get("content", []))
-    content_text = ("{" + body) if prefill_ok else body
-    try:
-        return json.loads(content_text)
-    except json.JSONDecodeError:
-        m = _JSON_OBJ_RE.search(content_text)
-        if m:
-            try:
-                return json.loads(m.group(0))
-            except json.JSONDecodeError:
-                pass
-        raise ValueError(
-            f"Réponse Claude vision hors schéma JSON ({model}, "
-            f"{len(content_text)} car.) : {content_text[:200]!r}")
+    return data
 
 
-def _claude_vision_mock(operation: str, correlation_id: str) -> dict:
-    """Extraction BRUTE simulée (appel 1, extracteur — schéma générique à
-    marqueurs, aucune résolution) : quelques exercices synthétiques, seedés
-    par la page pour rester déterministes en test — exerce toute la chaîne
-    extraction+adaptation+validation sans réseau. Longueur (3) volontairement
-    alignée sur `_sesamaths_adapt_mock` : `sesamaths._adapt_page` exige une
-    correspondance 1:1 entre exercices bruts et adaptés."""
+def _mistral_ocr_mock(n_pages: int, correlation_id: str) -> dict:
+    """Extraction brute simulée (appel 1, extracteur) : quelques blocs typés
+    natifs (title/text/table/list), seedés par la Série pour rester
+    déterministes en test — exerce toute la chaîne extraction+adaptation+
+    validation sans réseau. Un exercice numéroté (block "title") est placé
+    sur la DERNIÈRE page mockée quand n_pages > 1, pour exercer la fusion
+    inter-page côté adaptateur."""
     import random
-    rng = random.Random(correlation_id or "sesa-extract")
+    rng = random.Random(correlation_id or "mistral-ocr")
     a, b = rng.randint(2, 20), rng.randint(2, 20)
-    exercises = [
-        {"number": "1", "title": None,
-         "text": (f"Voici une liste de nombres : $221$, $4\\,065$, $940$. "
-                  f"Combien valent ${a} + {b}$ ? " + "{{blank}}")},
-        {"number": "2", "title": "Division euclidienne",
-         "text": "Complète le tableau de la division euclidienne.",
-         "table": {"rows": 2, "cols": 2,
-                   "col_labels": ["Quotient", "Reste"],
-                   "row_labels": ["$87$ par $9$", "$764$ par $8$"],
-                   "cells": [[{"value": None, "given": False}, {"value": None, "given": False}],
-                             [{"value": None, "given": False}, {"value": None, "given": False}]]}},
-        {"number": "3", "title": None,
-         "text": (f"Que vaut ${a} \\times {b}$ ? " + "{{check}} " + f"${a * b}$  "
-                  + "{{check}} " + f"${a * b + a}$  " + "{{check}} " + f"${a + b}$")},
+    first_page_blocks = [
+        {"type": "title", "content": "1 Calcule la somme.",
+         "top_left_x": 40, "top_left_y": 60, "bottom_right_x": 500, "bottom_right_y": 90},
+        {"type": "text", "content": f"Combien valent {a} + {b} ?",
+         "top_left_x": 40, "top_left_y": 100, "bottom_right_x": 500, "bottom_right_y": 130},
+        {"type": "title", "content": "2 Division euclidienne",
+         "top_left_x": 40, "top_left_y": 160, "bottom_right_x": 500, "bottom_right_y": 190},
+        {"type": "table", "content": "| Quotient | Reste |\n|---|---|\n|  |  |\n|  |  |",
+         "top_left_x": 40, "top_left_y": 200, "bottom_right_x": 500, "bottom_right_y": 320},
     ]
-    return {"exercises": exercises, "confidence": 0.9, "reason_code": "mock_extract"}
+    last_page_blocks = [
+        {"type": "title", "content": f"3 Que vaut {a} fois {b} ?",
+         "top_left_x": 40, "top_left_y": 40, "bottom_right_x": 500, "bottom_right_y": 70},
+        {"type": "list", "content": "- Vrai\n- Faux",
+         "top_left_x": 40, "top_left_y": 80, "bottom_right_x": 500, "bottom_right_y": 120},
+    ]
+    dims = {"dpi": 200, "width": 1600, "height": 2200}
+    if n_pages <= 1:
+        pages = [{"index": 0, "markdown": "", "images": [], "tables": [], "dimensions": dims,
+                 "blocks": first_page_blocks + last_page_blocks}]
+    else:
+        pages = ([{"index": 0, "markdown": "", "images": [], "tables": [], "dimensions": dims,
+                  "blocks": first_page_blocks}]
+                + [{"index": i, "markdown": "", "images": [], "tables": [], "dimensions": dims,
+                   "blocks": []} for i in range(1, n_pages - 1)]
+                + [{"index": n_pages - 1, "markdown": "", "images": [], "tables": [],
+                   "dimensions": dims, "blocks": last_page_blocks}])
+    return {"pages": pages, "model": "mock", "usage_info": {"pages_processed": n_pages}}
 
 
 def _sesamaths_adapt_mock(correlation_id: str) -> dict:
     """Adaptation simulée (appel 2, adaptateur — contrat app) : LaTeX balisé,
-    tableau, QCM. Contenu volontairement indépendant du JSON brut reçu (le
-    mock n'a pas besoin de comprendre les marqueurs), mais de MÊME LONGUEUR
-    que `_claude_vision_mock` (3) pour respecter la correspondance 1:1."""
+    tableau, QCM. `source_blocks` référence les indices globaux (aplatis,
+    dans l'ordre des pages) que `_mistral_ocr_mock` place sur la première et
+    la dernière page mockées (0-1-2-3 puis 4-5) — permet de tester la
+    reconstruction de `raw_extract_json` sans dépendre du contenu réel."""
     import random
     rng = random.Random(correlation_id or "sesa-adapt")
     a, b = rng.randint(2, 20), rng.randint(2, 20)
@@ -596,7 +569,7 @@ def _sesamaths_adapt_mock(correlation_id: str) -> dict:
          "correction": f"${a} + {b} = {a + b}$",
          "response_type": "short_text",
          "answer": {"type": "integer", "value": a + b},
-         "difficulty": rng.randint(1, 3)},
+         "difficulty": rng.randint(1, 3), "source_blocks": [0, 1]},
         {"kind": "application",
          "statement": "Complète le tableau de la division euclidienne de $87$ par $9$.",
          "correction": "$87 = 9 \\times 9 + 6$",
@@ -606,13 +579,13 @@ def _sesamaths_adapt_mock(correlation_id: str) -> dict:
                     "row_labels": ["$87$ par $9$", "$764$ par $8$"],
                     "cells": [[{"type": "integer", "value": 9}, {"type": "integer", "value": 6}],
                               [{"type": "integer", "value": 95}, {"type": "integer", "value": 4}]]},
-         "difficulty": 2},
+         "difficulty": 2, "source_blocks": [2, 3]},
         {"kind": "application",
          "statement": f"Que vaut ${a} \\times {b}$ ?",
          "correction": f"${a} \\times {b} = {a * b}$",
          "response_type": "qcm_single",
          "choices": [f"${a * b}$", f"${a * b + a}$", f"${a + b}$"],
          "answer": {"type": "choice", "correct": [0]},
-         "difficulty": rng.randint(3, 5)},
+         "difficulty": rng.randint(3, 5), "source_blocks": [4, 5]},
     ]
     return {"exercises": exercises, "confidence": 0.9, "reason_code": "mock_adapt"}

@@ -28,9 +28,10 @@ type Exercise = {
   choices: string[]; source: string; kind: string
   quality: Record<string, number>; figure: Record<string, any> | null
   // extraction brute (source="sesamaths" uniquement) dont provient cette
-  // ligne, avant adaptation au format de la plateforme
-  raw: { number?: string; title?: string | null; text?: string
-    table?: Record<string, any>; matching?: Record<string, any> } | null
+  // ligne : les blocs OCR Mistral (title/text/table/list/equation/image/...)
+  // utilisés par l'adaptateur pour la construire, avant adaptation au format
+  // de la plateforme
+  raw: { blocks: { i: number; page: number; type: string; content: string }[] } | null
 }
 type Lesson = {
   id: string; competency_id: string; level_min: number; level_max: number
@@ -105,15 +106,21 @@ function ExerciseCard({ ex, onRetire }: { ex: Exercise; onRetire: (id: string) =
         <Collapse in={showRaw}>
           <Paper bg="var(--mantine-color-default-hover)" p={8} radius="sm" mb={8}
             style={{ borderLeft: '3px solid var(--mantine-color-gray-5)' }}>
-            <Text size="xs" c="dimmed" fw={600} mb={2}>
-              Texte original extrait{ex.raw.number ? ` (exercice ${ex.raw.number})` : ''}
-            </Text>
-            {ex.raw.text && <MathText text={ex.raw.text} size="sm" />}
-            {(ex.raw.table || ex.raw.matching) && (
-              <Text size="xs" c="dimmed" mt={4} style={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace' }}>
-                {JSON.stringify(ex.raw.table ?? ex.raw.matching, null, 1)}
-              </Text>
-            )}
+            <Text size="xs" c="dimmed" fw={600} mb={4}>Blocs OCR d'origine (Mistral)</Text>
+            <Stack gap={4}>
+              {ex.raw.blocks.map((b) => (
+                <Group key={b.i} gap={6} wrap="nowrap" align="flex-start">
+                  <Badge size="xs" variant="outline" color="gray" style={{ flexShrink: 0 }}>
+                    {b.type} p.{b.page}
+                  </Badge>
+                  {b.type === 'table'
+                    ? <Text size="xs" c="dimmed" style={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace' }}>
+                        {b.content}
+                      </Text>
+                    : <MathText text={b.content} size="sm" />}
+                </Group>
+              ))}
+            </Stack>
           </Paper>
         </Collapse>
       )}

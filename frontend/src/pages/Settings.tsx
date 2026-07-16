@@ -68,6 +68,8 @@ export default function SettingsPage() {
   const [dataCorrections, setDataCorrections] = useState<CorrectionRow[]>([])
   const [confirmTarget, setConfirmTarget] = useState<{ kind: DeleteKind; id: string; label: string } | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const [purgeConfirmOpen, setPurgeConfirmOpen] = useState(false)
+  const [purging, setPurging] = useState(false)
   const { refreshSystem } = useAppState()
 
   function refresh() {
@@ -92,6 +94,25 @@ export default function SettingsPage() {
     api.get<CorrectionRow[]>('/api/data/corrections').then(setDataCorrections).catch(() => {})
   }
   useEffect(refreshData, [])
+
+  async function purgeBank() {
+    setPurging(true)
+    try {
+      const r = await api.post<{ exercises_deleted: number; extractions_reset: number }>(
+        '/api/content/bank/purge')
+      notifications.show({
+        color: 'green',
+        message: `Banque purgée : ${r.exercises_deleted} exercice(s) supprimé(s), `
+          + `${r.extractions_reset} extraction(s) réinitialisée(s) — la prochaine `
+          + 'génération repart de zéro.',
+      })
+      setPurgeConfirmOpen(false)
+    } catch (e) {
+      notifications.show({ color: 'red', message: (e as Error).message })
+    } finally {
+      setPurging(false)
+    }
+  }
 
   async function confirmDelete() {
     if (!confirmTarget) return
@@ -211,6 +232,7 @@ export default function SettingsPage() {
     'deepseek-flash': 'deepseek-v4-flash',
     'deepseek-pro': 'deepseek-v4-pro',
     anthropic: 'claude-haiku-4-5-20251001',
+    mistral: 'mistral-ocr-4-0',
   }
 
   return (
@@ -263,11 +285,12 @@ export default function SettingsPage() {
               Sans clé, un service reste en mode simulé. Les clés sont chiffrées au repos
               et jamais renvoyées intégralement.
             </Text>
-            {(['mathpix', 'deepseek-flash', 'deepseek-pro', 'anthropic'] as const).map((p) => {
+            {(['mathpix', 'deepseek-flash', 'deepseek-pro', 'anthropic', 'mistral'] as const).map((p) => {
               const row = providers.find((x) => x.provider === p)
               const labels: Record<string, string> = {
                 'deepseek-flash': 'DeepSeek Flash',
                 'deepseek-pro': 'DeepSeek Pro',
+                mistral: 'Mistral OCR (extraction Sésamaths)',
               }
               return (
                 <Card key={p} withBorder>
@@ -493,6 +516,20 @@ export default function SettingsPage() {
               disparaît avec.
             </Alert>
 
+            <Card withBorder style={{ borderColor: 'var(--mantine-color-red-6)' }}>
+              <Text fw={600} mb={2}>Banque d'exercices (Sésamaths)</Text>
+              <Text size="sm" c="dimmed" mb="sm">
+                Supprime TOUS les exercices de la banque (quelle que soit leur source) ainsi
+                que l'état d'extraction Sésamaths déjà en cache — pour repartir d'une banque
+                vide et propre si des exercices étranges ou répétés s'y sont accumulés. La
+                prochaine génération réextrait tout depuis le manuel.
+              </Text>
+              <Button color="red" variant="outline" size="xs" leftSection={<Trash2 size={14} />}
+                onClick={() => setPurgeConfirmOpen(true)}>
+                Purger toute la banque
+              </Button>
+            </Card>
+
             <Card withBorder>
               <Text fw={600} mb="xs">Classes ({dataClasses.length})</Text>
               <Table striped>
@@ -624,6 +661,24 @@ export default function SettingsPage() {
           <Group justify="flex-end">
             <Button variant="subtle" onClick={() => setConfirmTarget(null)}>Annuler</Button>
             <Button color="red" loading={deleting} onClick={confirmDelete}>Supprimer définitivement</Button>
+          </Group>
+        </Stack>
+      </Modal>
+
+      <Modal opened={purgeConfirmOpen} onClose={() => setPurgeConfirmOpen(false)}
+        title={<Text fw={650}>Confirmer la purge de la banque</Text>}>
+        <Stack>
+          <Text size="sm">
+            Supprimer définitivement TOUS les exercices de la banque (toutes sources) et
+            réinitialiser l'état d'extraction Sésamaths ?
+          </Text>
+          <Text size="xs" c="dimmed">
+            Cette action est irréversible. La prochaine génération réextrait tout depuis le
+            manuel — les premières copies après la purge seront plus lentes à générer.
+          </Text>
+          <Group justify="flex-end">
+            <Button variant="subtle" onClick={() => setPurgeConfirmOpen(false)}>Annuler</Button>
+            <Button color="red" loading={purging} onClick={purgeBank}>Purger toute la banque</Button>
           </Group>
         </Stack>
       </Modal>

@@ -44,13 +44,14 @@ class Settings(BaseSettings):
     deepseek_pro_model: str = "deepseek-v4-pro"
     exercise_variants_per_level: int = 3   # taille de banque par compétence × niveau
     claude_model: str = "claude-haiku-4-5-20251001"
-    # extraction vision des pages de manuel Sésamath (multimodal) : Haiku par
-    # défaut, repli Opus 4.8 sur les pages denses qu'Haiku n'arrive pas à extraire
-    claude_vision_model: str = "claude-haiku-4-5"
-    claude_vision_fallback_model: str = "claude-opus-4-8"
-    # adaptation Sésamaths (texte pur, JSON brut -> contrat app) : même paire
-    # Haiku/Opus que la vision, réglable indépendamment (l'adaptateur ne paie
-    # jamais de tokens image, coût très inférieur à un appel vision)
+    # extraction Sésamaths (lecture fidèle des pages de manuel) : Mistral OCR,
+    # moteur de reconnaissance de document dédié (pas un modèle de chat) —
+    # le typage de blocs (title/text/table/image/equation/list/...) exige OCR
+    # 4 précisément ("mistral-ocr-4-0"), pas "-latest" (modèles antérieurs
+    # acceptent include_blocks mais renvoient un tableau vide)
+    mistral_ocr_model: str = "mistral-ocr-4-0"
+    # adaptation Sésamaths (texte pur, blocs OCR bruts -> contrat app) : Haiku
+    # par défaut, repli Opus 4.8 si Haiku ne produit aucun candidat validé
     claude_adapt_model: str = "claude-haiku-4-5"
     claude_adapt_fallback_model: str = "claude-opus-4-8"
 

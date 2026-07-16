@@ -15,6 +15,7 @@ from ..db import get_db
 from ..deps import current_user, require_role
 from ..models import (
     Competency, CompetencyFramework, GeneratedExercise, LessonSnippet,
+    SesamathsChapterExtraction, SesamathsLlmCache,
 )
 from ..services import exercise_gen, figures
 
@@ -39,9 +40,9 @@ def _exercise_out(ex: GeneratedExercise, comp: Competency | None) -> dict:
         "figure": ex.figure_json,
         "status": ex.status,
         "created_at": ex.created_at.isoformat() if ex.created_at else None,
-        # extraction brute (texte à marqueurs + tableau/matching bruts) dont
-        # provient cette ligne, source="sesamaths" uniquement — affichage
-        # "avant/après" en banque
+        # blocs OCR Mistral bruts (title/text/table/image/...) dont provient
+        # cette ligne, source="sesamaths" uniquement — affichage "avant/après"
+        # en banque
         "raw": ex.raw_extract_json,
     }
 
@@ -193,6 +194,24 @@ def retire_lesson(lesson_id: str, db: Session = Depends(get_db)):
     sn.status = "retired"
     db.commit()
     return {"id": sn.id, "status": sn.status}
+
+
+@router.post("/bank/purge", dependencies=[Depends(require_role("admin"))])
+def purge_bank(db: Session = Depends(get_db)):
+    """Vide ENTIÈREMENT la banque d'exercices (toutes sources confondues) ET
+    l'état d'extraction Sésamaths — action irréversible, réservée à l'admin
+    (plus strict que le reste de /api/content : globale, pas ciblée à une
+    compétence). Purger seulement GeneratedExercise ne suffirait pas : le
+    pool mis en cache par Série (SesamathsChapterExtraction.validated_json)
+    resservirait le même contenu à la prochaine génération sans jamais
+    ré-extraire — cause identifiée des exercices qui "reviennent" malgré un
+    retrait. Ne touche pas aux rappels de leçon (hors périmètre)."""
+    n_exercises = db.query(GeneratedExercise).delete(synchronize_session=False)
+    n_extractions = db.query(SesamathsChapterExtraction).delete(synchronize_session=False)
+    n_cache = db.query(SesamathsLlmCache).delete(synchronize_session=False)
+    db.commit()
+    return {"exercises_deleted": n_exercises, "extractions_reset": n_extractions,
+            "cache_cleared": n_cache}
 
 
 # ------------------------------------------------------------------- figures

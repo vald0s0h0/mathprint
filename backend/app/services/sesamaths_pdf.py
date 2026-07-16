@@ -240,9 +240,21 @@ def chapter_exercise_pages(doc: "fitz.Document", toc: dict, chapter_code: str) -
 
 
 def render_page_png(doc: "fitz.Document", idx: int, dpi: int = 200) -> bytes:
-    """Rendu PNG d'une page complète (pour extraction vision). 200 dpi = bon
+    """Rendu PNG d'une page complète (aperçu/diagnostic). 200 dpi = bon
     compromis lisibilité des tableaux/figures vs. taille de l'image."""
     return doc[idx].get_pixmap(dpi=dpi).tobytes("png")
+
+
+def extract_page_range_pdf(doc: "fitz.Document", start_index: int, end_index: int) -> bytes:
+    """Construit un PDF autonome (bytes) ne contenant QUE les pages
+    [start_index, end_index] (0-indexées, incluses) de `doc` — on n'envoie à
+    l'OCR Mistral que la plage utile (une Série), jamais le manuel entier."""
+    sub = fitz.open()
+    try:
+        sub.insert_pdf(doc, from_page=start_index, to_page=end_index)
+        return sub.tobytes()
+    finally:
+        sub.close()
 
 
 def crop_bbox_png(doc: "fitz.Document", idx: int, bbox_pct: list[float],

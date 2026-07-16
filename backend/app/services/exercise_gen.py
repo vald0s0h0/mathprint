@@ -1,19 +1,21 @@
-"""Validation déterministe des exercices + banque, partagées avec l'extraction
-vision Sésamaths (services.sesamaths), SEULE source d'exercices active.
+"""Validation déterministe des exercices + banque, partagées avec l'adaptateur
+Sésamaths (services.sesamaths, appel 2 : blocs OCR Mistral -> contrat app),
+SEULE source d'exercices active.
 
 La génération DeepSeek/MathALÉA (proposer, vérifier, réparer un exercice
 inventé) et la génération de rappels de leçon ont été retirées le 16/07 :
 `ensure_bank`/`ensure_lesson` ne servent plus que la banque déjà constituée
 par l'extraction du manuel (`source="sesamaths"`) et lèvent une erreur claire
 pour toute autre source — pas de repli silencieux sur du contenu inventé.
-Ce qui reste ici et qui EST toujours utilisé par cette extraction :
+Ce qui reste ici et qui EST toujours utilisé par cette pipeline :
   - VALIDATION DÉTERMINISTE (_validate_exercise/_validate_cell) : LaTeX $...$
     entièrement validé (liste blanche + rendu d'essai), figures rendues à
     blanc, QCM cohérents (distracteurs uniques, bonne réponse présente),
     géométrie sans verbe de construction, réponse de référence acceptée par
-    le moteur de correction déterministe, anti-doublon par compétence.
+    le moteur de correction déterministe, anti-doublon par compétence
+    (_dedup_key, pas le seul énoncé — cf. commentaire dédié).
   - CONTRAT DE FORMAT (_RESPONSE_FORMAT_BLOCK/_GEN_FORMAT_RULES/_GEOMETRY_RULES) :
-    le schéma JSON attendu du LLM vision, partagé pour que _validate_exercise
+    le schéma JSON attendu de l'adaptateur, partagé pour que _validate_exercise
     n'ait pas deux contrats à connaître.
 
 Formats de réponse, choisis dans cet ordre de préférence (le plus automatisable
@@ -32,6 +34,8 @@ d'abord — priorité au QCM, intervention humaine minimisée) :
     la pipeline automatique.
 """
 
+import hashlib
+import json
 import logging
 import re
 
@@ -86,6 +90,36 @@ def _normalize_statement_for_dedup(s: str) -> str:
     s = mathrender.strip_math(s).lower()
     s = re.sub(r"\d+([.,]\d+)?", "#", s)
     return re.sub(r"\s+", " ", s).strip()
+
+
+def _dedup_key(statement: str, expected: dict | None) -> str:
+    """Identité anti-doublon d'un exercice. Le SEUL énoncé normalisé ne
+    suffit pas pour table_fill/multi_blank : "statement" n'y porte que la
+    consigne commune, souvent générique ("Calcule."), IDENTIQUE pour des
+    exercices dont les cellules/nombres sont totalement différents — deux
+    exercices réels distincts finissaient donc pris pour des doublons, et le
+    second silencieusement rejeté (pool réel bien plus petit que ce qui a été
+    extrait). On ajoute donc le contenu qui distingue réellement deux
+    exercices (cellules, choix corrects, paires, valeur) au hash d'identité."""
+    base = _normalize_statement_for_dedup(statement)
+    if not expected:
+        return base
+    etype = expected.get("type")
+    if etype == "table":  # table_fill ET multi_blank (même forme interne)
+        extra = expected.get("cells")
+    elif etype == "choice":
+        extra = expected.get("correct")
+    elif etype == "matching":
+        extra = expected.get("pairs")
+    elif etype == "rubric":
+        extra = [s.get("expected_text") for s in (expected.get("steps") or [])]
+    else:
+        extra = expected.get("value")
+    if extra is None:
+        return base
+    digest = hashlib.sha256(
+        json.dumps(extra, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:16]
+    return f"{base}|{digest}"
 
 
 _LEAKED_MARKER_RE = re.compile(r"\{\{(?:line\d+|check|dot)\}\}")
@@ -342,11 +376,6 @@ def _validate_exercise(raw: dict, competency: Competency, db: Session,
     if is_geometry and rtype != "manual_drawing" and _is_geometry_verb(statement):
         return None
 
-    # anti-doublon (le set est maintenu par l'appelant pour couvrir le lot en cours)
-    normalized = _normalize_statement_for_dedup(statement)
-    if normalized in existing_norms:
-        return None
-
     kind = raw.get("kind") if raw.get("kind") in ("application", "probleme") else "application"
 
     # figure optionnelle : validée par rendu à blanc, sinon abandonnée
@@ -356,7 +385,13 @@ def _validate_exercise(raw: dict, competency: Competency, db: Session,
     atype = answer.get("type")
 
     def _contract(expected, gpolicy, rtype):
-        existing_norms.add(normalized)
+        # anti-doublon (le set est maintenu par l'appelant pour couvrir le lot
+        # en cours) : calculé ICI, une fois `expected` connu, pas sur le seul
+        # statement — cf. _dedup_key.
+        key = _dedup_key(statement, expected)
+        if key in existing_norms:
+            return None
+        existing_norms.add(key)
         return {"statement": statement, "correction": correction,
                 "response_type": rtype, "expected": expected, "grading": gpolicy,
                 "figure_json": figure_json, "kind": kind}
@@ -661,8 +696,8 @@ _GEN_FORMAT_RULES = (
     "Les nombres simples isolés dans une phrase (« 3 crayons ») restent en texte."
 )
 
-# Contrat JSON (choix du format de réponse + figures) utilisé par l'extraction
-# vision Sésamaths (services.sesamaths._vision_system), consommé par
+# Contrat JSON (choix du format de réponse + figures) utilisé par l'adaptateur
+# Sésamaths (services.sesamaths._adapt_system), consommé par
 # _validate_exercise. La génération DeepSeek pure a été retirée (16/07) ; ce
 # bloc reste car c'est le seul contrat encore actif.
 _RESPONSE_FORMAT_BLOCK = (
@@ -752,7 +787,7 @@ _RESPONSE_FORMAT_BLOCK = (
     '"lines":int?,"rows":int?,"cols":int?,"col_labels":[str]?,"row_labels":[str]?,'
     '"cells":[[{"type":str,"value":...}]]?,"values":[{"type":str,"value":...}]?,'
     '"left":[str]?,"right":[str]?,"pairs":[[int,int]]?},'
-    '"figure":{...}?}]}'
+    '"figure":{...}?,"source_blocks":[int]?}]}'
 )
 
 _GEOMETRY_RULES = (
@@ -784,7 +819,7 @@ def ensure_bank(db: Session, competency: Competency, level: int,
         return sesamaths.ensure_bank(db, competency, level, min_variants)
     raise NotImplementedError(
         f"Génération d'exercices source={source!r} désactivée : seule "
-        "l'extraction vision Sésamaths (source=\"sesamaths\") est active.")
+        "l'extraction Sésamaths (source=\"sesamaths\") est active.")
 
 
 def bank_rows_near_level(db: Session, competency: Competency, level: int,
@@ -852,9 +887,9 @@ def ensure_lesson(db: Session, competency: Competency, level: int) -> LessonSnip
 
     La génération DeepSeek d'un rappel a été retirée (16/07) en même temps que
     la génération d'exercices : une pipeline de rappels basée sur la même
-    vision Sésamaths (extraction depuis les pages « À RETENIR » du manuel,
-    PNG rendus depuis le PDF) est prévue pour la remplacer, pas encore
-    implémentée. En attendant, seuls les rappels déjà en banque sont servis."""
+    extraction Sésamaths (pages « À RETENIR » du manuel) est prévue pour la
+    remplacer, pas encore implémentée. En attendant, seuls les rappels déjà
+    en banque sont servis."""
     lo, hi = (1, 3) if level <= 3 else (4, 5)
     row = (db.query(LessonSnippet)
            .filter_by(competency_id=competency.id, level_min=lo, level_max=hi,
@@ -865,7 +900,7 @@ def ensure_lesson(db: Session, competency: Competency, level: int) -> LessonSnip
     raise NotImplementedError(
         f"Aucun rappel de leçon en banque pour {competency.code} (niveau {lo}-{hi}) : "
         "la génération DeepSeek a été retirée, la pipeline de remplacement "
-        "(vision Sésamaths) n'est pas encore implémentée.")
+        "(extraction Sésamaths) n'est pas encore implémentée.")
 
 
 __all__ = ["ensure_bank", "pick_exercise", "ensure_lesson",
