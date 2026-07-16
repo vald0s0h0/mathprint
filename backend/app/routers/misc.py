@@ -78,7 +78,7 @@ def competencies_tree(framework_id: str, db: Session = Depends(get_db)):
 # ------------------------------------------------------------- paramètres
 
 class ProviderIn(BaseModel):
-    provider: str        # mathpix | deepseek-flash | deepseek-pro | anthropic | mistral
+    provider: str        # mathpix | deepseek-flash | deepseek-pro | anthropic | mistral | gemini
     model: str = ""
     secret: str = ""
     active: bool = True
@@ -193,7 +193,8 @@ def templates_preview(body: TemplatesPreviewIn):
 def costs(db: Session = Depends(get_db)):
     now = datetime.now(timezone.utc)
     out = {}
-    for provider in ("mathpix", "deepseek-flash", "deepseek-pro", "anthropic", "mistral"):
+    for provider in ("mathpix", "deepseek-flash", "deepseek-pro", "anthropic",
+                     "mistral", "gemini"):
         day = db.query(func.coalesce(func.sum(ApiUsageEvent.estimated_cost), 0.0)).filter(
             ApiUsageEvent.provider == provider,
             ApiUsageEvent.created_at >= now - timedelta(days=1)).scalar()

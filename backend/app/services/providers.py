@@ -1,4 +1,4 @@
-"""Clients Mathpix / DeepSeek / Claude Haiku / Mistral OCR (§6.3, §8).
+"""Clients Mathpix / DeepSeek / Claude / Mistral OCR / Gemini (§6.3, §8).
 
 Règles appliquées ici :
 - aucun nom d'élève ne transite (pseudonymes uniquement, RM-010) ;
@@ -65,6 +65,31 @@ def _post_with_deadline(url: str, *, headers: dict, json_body: dict,
 
 # premier objet {...} d'un texte (extraction tolérante de JSON)
 _JSON_OBJ_RE = re.compile(r"\{.*\}", re.DOTALL)
+
+
+# --- diagnostic d'échec commun aux pipelines (Sésamaths, Gemini) : elles
+# réessaient toutes sur les deux mêmes cas — quota momentané et réponse
+# tronquée — avec la même logique. Une seule définition, ici.
+
+def is_rate_limited(exc: Exception) -> bool:
+    resp = getattr(exc, "response", None)
+    return getattr(resp, "status_code", None) == 429
+
+
+def retry_after_s(exc: Exception, attempt: int) -> float:
+    """Délai avant nouvel essai : en-tête `retry-after` si le serveur en donne
+    un, sinon backoff exponentiel (2, 4, 8 s)."""
+    resp = getattr(exc, "response", None)
+    try:
+        return max(1.0, float((resp.headers or {}).get("retry-after")))
+    except (AttributeError, TypeError, ValueError):
+        return float(2 ** (attempt + 1))
+
+
+def is_truncated(exc: Exception) -> bool:
+    """Réponse coupée par max_tokens (cf. claude_json/gemini_json) : réessayer
+    avec un budget de sortie plus élevé, pas à l'identique."""
+    return "TRONQUÉE" in str(exc)
 
 
 def _today_cost(db: Session, provider: str) -> float:
@@ -409,7 +434,6 @@ def claude_json(db: Session, operation: str, system: str, payload: dict,
                     "next_plan": {
                         "competency_ids": [d.get("competency_id") for d in due[:3]],
                         "difficulty_level": 3, "quantity": 4,
-                        "kind_mix": {"application": 0.55, "probleme": 0.35, "qcm": 0.10},
                         "pacing_days": 7, "lesson_competency_ids": weak[:2]}}
         if operation == "sesamaths_adapt":
             return _sesamaths_adapt_mock(correlation_id or "")
@@ -474,6 +498,130 @@ def claude_json(db: Session, operation: str, system: str, payload: dict,
             except json.JSONDecodeError:
                 pass
         raise ValueError("Réponse Claude hors schéma JSON")
+
+
+# ------------------------------------------------------------------- Gemini
+
+def gemini_json(db: Session, operation: str, system: str, payload: dict,
+                max_tokens: int = 16000, model: str | None = None,
+                correlation_id: str | None = None) -> dict:
+    """Gemini en sortie JSON stricte — création d'exercices (services.gemini_gen).
+
+    L'API Gemini a un vrai mode JSON (`responseMimeType`), donc pas besoin du
+    bricolage de préremplissage utilisé côté Claude. `temperature` est laissée
+    à 1 (défaut du modèle) : la pipeline appelle plusieurs fois de suite avec
+    le même prompt pour remplir une banque, il FAUT que les lots diffèrent.
+    Attention, le budget `max_tokens` couvre aussi les tokens de réflexion
+    (2.5 Flash pense par défaut) : le viser trop bas tronque la réponse."""
+    cfg = _config(db, "gemini")
+    model = model or (cfg.model if cfg and cfg.model else settings.gemini_model)
+    if _today_cost(db, "gemini") > settings.llm_daily_cost_limit_eur:
+        raise BudgetExceeded("Budget Gemini quotidien atteint")
+
+    if _mock_enabled(db, cfg):
+        _record(db, "gemini", model, operation, input_tokens=800, output_tokens=1200,
+                cost=0.0, correlation_id=correlation_id)
+        return _gemini_mock(payload)
+
+    r = _post_with_deadline(
+        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+        headers={"x-goog-api-key": cfg.encrypted_secret,
+                 "Content-Type": "application/json"},
+        json_body={
+            "systemInstruction": {"parts": [{"text": system}]},
+            "contents": [{"role": "user",
+                          "parts": [{"text": json.dumps(payload, ensure_ascii=False)}]}],
+            "generationConfig": {"responseMimeType": "application/json",
+                                 "maxOutputTokens": max_tokens},
+        },
+        timeout=120, provider="Gemini",
+    )
+    r.raise_for_status()
+    data = r.json()
+    usage = data.get("usageMetadata", {})
+    # tarifs Gemini 2.5 Flash : ~0,30 $/MTok en entrée, ~2,50 $/MTok en sortie.
+    # candidatesTokenCount N'INCLUT PAS les tokens de réflexion (thoughtsTokenCount),
+    # pourtant facturés au tarif de sortie — les additionner, sinon le coût réel
+    # est sous-évalué face à llm_daily_cost_limit_eur.
+    in_tokens = usage.get("promptTokenCount", 0)
+    out_tokens = usage.get("candidatesTokenCount", 0) + usage.get("thoughtsTokenCount", 0)
+    _record(db, "gemini", model, operation, input_tokens=in_tokens, output_tokens=out_tokens,
+            cost=in_tokens * 3e-7 + out_tokens * 2.5e-6, correlation_id=correlation_id)
+
+    candidates = data.get("candidates") or []
+    if not candidates:
+        # pas de candidat = requête bloquée en amont (promptFeedback), jamais un
+        # simple JSON malformé : le dire explicitement plutôt que « hors schéma »
+        raise ValueError(f"Gemini n'a renvoyé aucun candidat : "
+                         f"{json.dumps(data.get('promptFeedback') or {}, ensure_ascii=False)}")
+    finish = candidates[0].get("finishReason")
+    if finish == "MAX_TOKENS":
+        raise ValueError(
+            f"Réponse Gemini JSON TRONQUÉE ({model}) : dépasse max_tokens="
+            f"{max_tokens} (tokens de réflexion inclus). Augmente max_tokens.")
+    body = "".join(p.get("text", "")
+                   for p in (candidates[0].get("content") or {}).get("parts") or [])
+    try:
+        return json.loads(body)
+    except json.JSONDecodeError:
+        m = _JSON_OBJ_RE.search(body)
+        if m:
+            try:
+                return json.loads(m.group(0))
+            except json.JSONDecodeError:
+                pass
+        raise ValueError(f"Réponse Gemini hors schéma JSON (finishReason={finish})")
+
+
+def _gemini_mock(payload: dict) -> dict:
+    """Lot d'exercices simulé au contrat app (cf. exercise_gen._validate_exercise),
+    respectant le mélange demandé au vrai modèle : 3 QCM, 1 réponse écrite, 1
+    problème rédigé. Seedé par compétence ET par numéro de lot : deux lots
+    successifs DOIVENT différer, sinon le dédoublonnage rejetterait tout le
+    2e appel et la boucle de remplissage de banque ne serait jamais exercée
+    en test."""
+    import random
+    rng = random.Random(f"{payload.get('competency_code')}-{payload.get('batch')}")
+    count = int(payload.get("count", 5))
+    exercises: list[dict] = []
+    for i in range(max(1, count)):
+        a, b = rng.randint(2, 99), rng.randint(2, 99)
+        if i < 3:  # 3 QCM
+            good = a + b
+            choices = [f"${good}$", f"${good + 10}$", f"${good - 1}$", f"${a * b}$"]
+            rng.shuffle(choices)
+            exercises.append({
+                "kind": "application",
+                "statement": f"Coche le résultat de ${a} + {b}$.",
+                "correction": f"${a} + {b} = {good}$ (on additionne les unités puis les dizaines).",
+                "response_type": "qcm_single",
+                "choices": choices,
+                "answer": {"type": "choice", "correct": [choices.index(f"${good}$")]}})
+        elif i == 3:  # 1 réponse écrite
+            exercises.append({
+                "kind": "application",
+                "statement": f"Calcule ${a} \\times {b}$.",
+                "correction": f"${a} \\times {b} = {a * b}$.",
+                "response_type": "short_text",
+                "answer": {"type": "integer", "value": a * b}})
+        else:  # 1 problème rédigé
+            price, qty = rng.randint(2, 9), rng.randint(3, 8)
+            total = price * qty
+            exercises.append({
+                "kind": "probleme",
+                "statement": (f"Pour repeindre sa chambre, Sacha achète {qty} pots de "
+                              f"peinture à ${price}\\ \\text{{€}}$ l'unité. Il paie avec "
+                              "un billet de $50\\ \\text{€}$. Combien lui rend-on ? "
+                              "Détaille ton raisonnement."),
+                "correction": (f"Prix total : ${qty} \\times {price} = {total}\\ \\text{{€}}$, "
+                               f"puis $50 - {total} = {50 - total}\\ \\text{{€}}$ rendus."),
+                "response_type": "multiline_text",
+                "answer": {"type": "rubric", "lines": 6, "steps": [
+                    {"description": "Calcul du prix total",
+                     "expected_text": f"${qty} \\times {price} = {total}$", "points": 1},
+                    {"description": "Calcul de la monnaie rendue",
+                     "expected_text": f"$50 - {total} = {50 - total}$", "points": 1}]}})
+    return {"exercises": exercises, "confidence": 0.9, "reason_code": "mock_gemini"}
 
 
 def mistral_ocr(db: Session, operation: str, pdf_bytes: bytes, n_pages: int,

@@ -35,9 +35,10 @@ class AssessmentPatch(BaseModel):
     pages: int | None = None
     personalization_mode: Literal["common", "common_variants", "individual"] | None = None
     competency_ids: list[str] | None = None
-    # source des exercices (§ Sésamaths) : "auto" = comportement historique
-    # (MathALÉA + DeepSeek), inchangé si le champ n'est jamais envoyé
-    exercise_source: Literal["auto", "mathalea", "sesamaths"] | None = None
+    # source des exercices : "sesamaths" = extraction du manuel, "gemini" =
+    # création par LLM (services.gemini_gen). "auto"/"mathalea" sont des
+    # valeurs héritées, sans pipeline derrière depuis le 16/07.
+    exercise_source: Literal["auto", "mathalea", "sesamaths", "gemini"] | None = None
 
 
 class GenerateIn(BaseModel):

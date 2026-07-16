@@ -91,25 +91,6 @@ def _cache_key(*parts) -> str:
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
-def _is_rate_limited(exc: Exception) -> bool:
-    resp = getattr(exc, "response", None)
-    return getattr(resp, "status_code", None) == 429
-
-
-def _retry_after_s(exc: Exception, attempt: int) -> float:
-    """Délai avant nouvel essai : en-tête `retry-after` si le serveur en donne
-    un, sinon backoff exponentiel (2, 4, 8 s)."""
-    resp = getattr(exc, "response", None)
-    try:
-        return max(1.0, float((resp.headers or {}).get("retry-after")))
-    except (AttributeError, TypeError, ValueError):
-        return float(2 ** (attempt + 1))
-
-
-def _is_truncated(exc: Exception) -> bool:
-    return "TRONQUÉE" in str(exc)
-
-
 def _cached_extract(db: Session, cache_key: str, pdf_bytes: bytes, n_pages: int,
                     correlation_id: str) -> dict:
     """Appel Mistral OCR mis en cache par (manuel, Série, prompt/schéma). Pas
@@ -125,8 +106,8 @@ def _cached_extract(db: Session, cache_key: str, pdf_bytes: bytes, n_pages: int,
                                          correlation_id=correlation_id)
             break
         except Exception as e:
-            if _is_rate_limited(e) and attempt < 2:
-                delay = _retry_after_s(e, attempt)
+            if providers.is_rate_limited(e) and attempt < 2:
+                delay = providers.retry_after_s(e, attempt)
                 logger.info("Sésamaths : 429 Mistral, nouvel essai dans %.0f s "
                            "(tentative %s/3)", delay, attempt + 2)
                 time.sleep(delay)
@@ -157,13 +138,13 @@ def _cached_adapt(db: Session, cache_key: str, model: str, system: str,
                     max_tokens=budget, model=model, correlation_id=correlation_id)
                 break
             except Exception as e:
-                if _is_rate_limited(e) and attempt < 2:
-                    delay = _retry_after_s(e, attempt)
+                if providers.is_rate_limited(e) and attempt < 2:
+                    delay = providers.retry_after_s(e, attempt)
                     logger.info("Sésamaths : 429 sur %s, nouvel essai dans %.0f s "
                                 "(tentative %s/3)", model, delay, attempt + 2)
                     time.sleep(delay)
                     continue
-                if _is_truncated(e) and budget != _ADAPT_TOKEN_BUDGETS[-1]:
+                if providers.is_truncated(e) and budget != _ADAPT_TOKEN_BUDGETS[-1]:
                     logger.info("Sésamaths : réponse tronquée sur %s à max_tokens=%s, "
                                "nouvel essai avec un budget plus élevé", model, budget)
                     break
@@ -279,8 +260,9 @@ _ADAPT_INTRO = (
 
 def _adapt_system(grade: str, chapter_name: str, series_number, series_name: str,
                   is_geometry: bool) -> str:
-    format_block = exercise_gen._RESPONSE_FORMAT_BLOCK.replace(
-        "{geometry_rules}", exercise_gen._GEOMETRY_RULES if is_geometry else "")
+    format_block = exercise_gen.format_contract(
+        exercise_gen._ADAPT_FORMAT_INTRO,
+        geometry_rules=exercise_gen._GEOMETRY_RULES if is_geometry else "")
     # .replace (et non .format) : le prompt contient des accolades JSON littérales
     intro = (_ADAPT_INTRO
              .replace("§GRADE§", grade)
@@ -651,32 +633,33 @@ def harvest(db: Session, competency, level: int, need: int,
 
 # ================================================================ banque
 
-def ensure_bank(db: Session, competency, level: int,
-                min_variants: int | None = None) -> list[GeneratedExercise]:
+def ensure_bank(db: Session, competency, level: int) -> list[GeneratedExercise]:
     """Équivalent de exercise_gen.ensure_bank pour la source Sésamaths : pool
     strictement séparé (source in SOURCE_POOL), jamais mélangé à la banque
-    MathALÉA/DeepSeek par défaut."""
-    level = max(1, min(5, level))
-    min_variants = min_variants or settings.exercise_variants_per_level
+    MathALÉA/DeepSeek par défaut.
 
+    Aucune cible de variantes : la Série du manuel contient ce qu'elle contient,
+    on stocke TOUT ce qu'on a su en extraire au niveau demandé. Le plafond
+    historique (settings.exercise_variants_per_level, 3) est tombé le 17/07 : il
+    ne « limitait » rien d'utile, il jetait le reste d'une extraction déjà payée
+    et bornait à 3 le choix disponible pour remplir une page — d'où des copies
+    qui répétaient les mêmes exercices."""
+    level = max(1, min(5, level))
     rows = (db.query(GeneratedExercise)
             .filter(GeneratedExercise.competency_id == competency.id,
                    GeneratedExercise.difficulty_level == level,
                    GeneratedExercise.status == "active",
                    GeneratedExercise.source.in_(SOURCE_POOL))
             .all())
-    missing = min_variants - len(rows)
-    if missing <= 0:
-        return rows
 
     # Extraction RÉELLE d'abord. Lève SesamathsExtractionError (message clair,
     # non bloquant en amont) si le manuel est introuvable — AUCUNE invention
     # DeepSeek à la place d'exercices qu'on n'a pas su extraire.
     pool, fully_done = _extracted_chapter(db, competency)
-    logger.info("Sésamaths : banque %s niveau %s — %s variante(s) en stock, %s à "
-                "produire ; %s exercice(s) réel(s) extrait(s) de la Série "
-                "(extraction %s)", competency.code, level, len(rows), missing,
-                len(pool), "complète" if fully_done else "INCOMPLÈTE")
+    logger.info("Sésamaths : banque %s niveau %s — %s variante(s) en stock ; "
+                "%s exercice(s) réel(s) extrait(s) de la Série (extraction %s)",
+                competency.code, level, len(rows), len(pool),
+                "complète" if fully_done else "INCOMPLÈTE")
 
     # Pas de filtre status="active" ICI : un exercice RETIRÉ doit rester
     # définitivement "vu" (sinon il redevient piochable dès le pool cache
@@ -709,18 +692,11 @@ def ensure_bank(db: Session, competency, level: int,
         added.append(row)
         next_variant += 1
 
-    for cand in harvest(db, competency, level, missing, existing_norms, pool):
+    # `need=len(pool)` : tout ce que la Série offre à ce niveau et qui n'est pas
+    # déjà en banque (harvest dédoublonne et filtre le niveau) — plus aucun
+    # plafond arbitraire.
+    for cand in harvest(db, competency, level, len(pool), existing_norms, pool):
         _store(cand, cand.get("_verdict", {}))
-    missing = min_variants - len(rows) - len(added)
-
-    # Aucun complément généré : depuis le 16/07, seule l'extraction du manuel
-    # produit des exercices. Si la Série n'en fournit pas assez au niveau
-    # demandé, on préfère un pool partiel mais RÉEL à une invention.
-    if missing > 0:
-        logger.warning("Sésamaths : %s exercice(s) réel(s) au niveau %s pour %s, "
-                       "%s manquant(s) — pas de complément généré (extraction %s)",
-                       len(added), level, competency.code, missing,
-                       "complète" if fully_done else "INCOMPLÈTE")
 
     db.flush()
     if not rows and not added:

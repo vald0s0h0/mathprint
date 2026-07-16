@@ -48,6 +48,32 @@ def _sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
+# (chemin, mtime, taille) -> (sha256, Document). `open_manual` est appelé une
+# fois par élève × compétence × tentative de remplissage lors d'une génération
+# de sujet (des centaines de fois), et relisait à chaque appel les 43 Mo du
+# manuel pour les hasher, en rouvrant un Document jamais refermé. Le manuel est
+# livré avec le code et ne change qu'au déploiement : l'empreinte du fichier
+# (mtime + taille) suffit à détecter un remplacement, et on ne repaie alors que
+# ce cas-là.
+_DOC_CACHE: dict[tuple, tuple[str, "fitz.Document"]] = {}
+
+
+def _open_cached(path: Path) -> tuple[str, "fitz.Document"]:
+    st = path.stat()
+    key = (str(path), st.st_mtime_ns, st.st_size)
+    hit = _DOC_CACHE.get(key)
+    if hit is not None:
+        return hit
+    # fichier remplacé : ne jeter que les versions périmées de CE manuel — les
+    # autres niveaux (4e, 3e… quand ils arriveront) gardent le leur, sinon deux
+    # niveaux utilisés en alternance se chasseraient l'un l'autre du cache
+    for stale in [k for k in _DOC_CACHE if k[0] == str(path)]:
+        _DOC_CACHE.pop(stale)
+    entry = (_sha256_file(path), fitz.open(str(path)))
+    _DOC_CACHE[key] = entry
+    return entry
+
+
 def get_or_create_manual(db: Session, grade_level: str) -> SesamathsManual:
     row = db.query(SesamathsManual).filter_by(grade_level=grade_level).first()
     if row is None:
@@ -145,8 +171,7 @@ def open_manual(db: Session, grade_level: str) -> tuple["fitz.Document | None", 
         return None, manual
 
     try:
-        sha = _sha256_file(path)
-        doc = fitz.open(str(path))
+        sha, doc = _open_cached(path)
     except Exception as e:
         manual.status = "error"
         manual.error_message = f"Ouverture PDF impossible ({path.name}) : {e}"

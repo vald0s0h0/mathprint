@@ -112,7 +112,6 @@ def generate_assessment_job(db: Session, assessment: Assessment,
     assessment.duplex = max_pages >= 2
     ex_tpl_font_size = int(tpl["exercise"].get("font_size", font_size))
     math_fs = int(tpl["exercise"].get("math_size", 12))
-    capacity = pdfgen.estimate_capacity(max_pages)
     # marge de pages RÉELLES (DocumentPage signées) au-delà de la cible : les
     # exercices obligatoires (une compétence cochée = un exercice, boucle
     # ci-dessous) ne sont jamais soumis au contrôle de capacité qui ne
@@ -148,7 +147,11 @@ def generate_assessment_job(db: Session, assessment: Assessment,
         render_items: list[dict] = []
         lessons_added: set[str] = set()
         kind_counts: dict[str, int] = {}
-        picked_ids: set[str] = set()  # exercices déjà utilisés dans CETTE copie
+        # exercices déjà servis dans CETTE copie, par identité de CONTENU et non
+        # par id de ligne : deux compétences voisines peuvent avoir en banque le
+        # même exercice, l'élève ne doit pas le voir deux fois (cf.
+        # distribution.exercise_identity)
+        picked_keys: set[str] = set()
 
         def _add_item(seq: int, comp_id: str, item_seed: int) -> bool:
             nonlocal total_non_qcm
@@ -157,7 +160,7 @@ def generate_assessment_job(db: Session, assessment: Assessment,
                 bank, _ = exercise_gen.bank_rows_near_level(
                     db, comp, level5, source=exercise_source)
                 row = distribution.pick_balanced_exercise(
-                    bank, kind_counts, target_mix, item_seed, exclude_ids=picked_ids)
+                    bank, kind_counts, target_mix, item_seed, exclude_keys=picked_keys)
             except Exception as e:
                 logger.warning("%s (%s) : %s", comp.code, student.llm_pseudonym, e)
                 warnings.append(f"{comp.code} ({student.llm_pseudonym}) : {e}")
@@ -177,7 +180,8 @@ def generate_assessment_job(db: Session, assessment: Assessment,
                 except Exception as e:
                     warnings.append(f"Rappel {comp.code} ({student.llm_pseudonym}) indisponible : {e}")
 
-            picked_ids.add(row.id)
+            identity = distribution.exercise_identity(row)
+            picked_keys.add(identity)
             choices = row.grading_json.get("choices", [])
             item = CopyItem(
                 copy_id=copy.id, catalog_id=catalog_refs[comp_id].id, sequence=seq,
@@ -194,7 +198,7 @@ def generate_assessment_job(db: Session, assessment: Assessment,
                                  "figure": row.figure_json,
                                  "grading": row.grading_json,
                                  "inline": bool((row.expected_json or {}).get("inline")),
-                                 "_exercise_id": row.id,
+                                 "_identity": identity,
                                  "_bucket": distribution.exercise_bucket(row)})
             if not row.response_type.startswith("qcm"):
                 total_non_qcm += 1
@@ -208,36 +212,38 @@ def generate_assessment_job(db: Session, assessment: Assessment,
         # cochées (priorité, en boucle) — bank_rows_near_level/ensure_bank ne
         # déclenchent une génération LLM que si la banque est épuisée pour
         # cette compétence/ce niveau.
-        running_h = sum(pdfgen.estimate_item_height(
-            ri, ex_tpl_font_size, math_fs, tpl["exercise"], tpl["lesson"])
-            for ri in render_items)
+        # Le critère est le nombre de pages RÉELLEMENT occupées (pdfgen.
+        # pages_needed simule le placement en colonnes), pas une somme de
+        # hauteurs comparée à une capacité théorique : une carte ne se coupe
+        # pas, le bas de colonne perdu faisait déborder d'une page toute copie
+        # remplie au plus près. Un item qui ne rentre pas n'arrête PAS la
+        # boucle : un plus petit (autre compétence, autre format) peut encore
+        # tenir dans la place restante.
+        def _heights(items: list[dict]) -> list[float]:
+            return [pdfgen.estimate_item_height(
+                ri, ex_tpl_font_size, math_fs, tpl["exercise"], tpl["lesson"])
+                for ri in items]
+
         fill_seq = len(priority)
         fill_attempts = 0
-        while running_h < capacity and fill_attempts < MAX_FILL_ATTEMPTS and priority:
+        while fill_attempts < MAX_FILL_ATTEMPTS and priority:
             comp_id = priority[fill_seq % len(priority)]
             fill_attempts += 1
             before = len(render_items)
             if not _add_item(fill_seq, comp_id, seed * 100 + fill_seq):
                 fill_seq += 1
                 continue
-            added = render_items[before:]
-            item_h = sum(pdfgen.estimate_item_height(
-                ri, ex_tpl_font_size, math_fs, tpl["exercise"], tpl["lesson"])
-                for ri in added)
-            if running_h + item_h > capacity:
-                for ri in added:
+            if pdfgen.pages_needed(_heights(render_items)) > max_pages:
+                for ri in render_items[before:]:
                     if ri.get("item_id"):
                         db.query(CopyItem).filter_by(id=ri["item_id"]).delete()
                         if not ri["response_type"].startswith("qcm"):
                             total_non_qcm -= 1
                         if ri.get("_bucket"):
                             kind_counts[ri["_bucket"]] = max(0, kind_counts.get(ri["_bucket"], 0) - 1)
-                        picked_ids.discard(ri.get("_exercise_id"))
+                        picked_keys.discard(ri.get("_identity"))
                 db.flush()
                 del render_items[before:]
-                fill_seq += 1
-                continue  # cet item ne rentre pas : on tente une autre compétence
-            running_h += item_h
             fill_seq += 1
 
         _set_progress(db, job, round(5 + 90 * (s_idx + 1) / max(1, len(students))),

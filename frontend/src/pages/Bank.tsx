@@ -62,9 +62,10 @@ const RESPONSE_LABELS: Record<string, string> = {
 
 const SOURCE_LABELS: Record<string, string> = {
   mathalea: 'MathALÉA', sesamaths: 'Sésamaths', sesamaths_deepseek: 'Sésamaths (IA)',
+  gemini: 'Gemini',
 }
 const SOURCE_COLORS: Record<string, string> = {
-  mathalea: 'green', sesamaths: 'teal', sesamaths_deepseek: 'teal',
+  mathalea: 'green', sesamaths: 'teal', sesamaths_deepseek: 'teal', gemini: 'violet',
 }
 
 function QualityBadge({ quality }: { quality: Record<string, number> }) {
@@ -321,6 +322,9 @@ export default function Bank() {
   const [lessons, setLessons] = useState<Lesson[] | null>(null)
   const [sesamathsRaw, setSesamathsRaw] = useState<SesamathsRaw | null>(null)
   const [levelFilter, setLevelFilter] = useState('all')
+  // source utilisée par « Compléter la banque » / « Générer la banque » : les
+  // deux pools sont séparés côté serveur, on choisit donc lequel on remplit
+  const [genSource, setGenSource] = useState('sesamaths')
   const [busy, setBusy] = useState(false)
   // ajout d'une compétence pas encore en banque
   const [allComps, setAllComps] = useState<Comp[]>([])
@@ -368,7 +372,8 @@ export default function Bank() {
   const generate = (kind: 'exercises' | 'lessons', level: number) => {
     if (!selected) return
     setBusy(true)
-    api.post(`/api/content/${kind}/generate`, { competency_id: selected.competency_id, level })
+    api.post(`/api/content/${kind}/generate`,
+      { competency_id: selected.competency_id, level, ...(kind === 'exercises' && { source: genSource }) })
       .then(() => {
         notifications.show({ message: 'Génération terminée', color: 'teal' })
         loadDetail(selected)
@@ -381,7 +386,7 @@ export default function Bank() {
   const addCompetency = () => {
     if (!newComp) return
     setBusy(true)
-    api.post('/api/content/exercises/generate', { competency_id: newComp, level: 3 })
+    api.post('/api/content/exercises/generate', { competency_id: newComp, level: 3, source: genSource })
       .then(() => {
         notifications.show({ message: 'Banque amorcée (niveau 3)', color: 'teal' })
         setNewComp(null)
@@ -412,7 +417,11 @@ export default function Bank() {
           </Text>
         </Box>
         <Group gap="xs">
-          <Select size="xs" w={340} searchable clearable placeholder="Amorcer une compétence…"
+          <SegmentedControl size="xs" value={genSource} onChange={setGenSource} data={[
+            { value: 'sesamaths', label: 'Sésamaths' },
+            { value: 'gemini', label: 'Gemini' },
+          ]} />
+          <Select size="xs" w={300} searchable clearable placeholder="Amorcer une compétence…"
             data={addable.map((c) => ({ value: c.id, label: `${c.code} — ${c.label}` }))}
             value={newComp} onChange={setNewComp} disabled={busy} />
           <Button size="xs" onClick={addCompetency} disabled={!newComp} loading={busy}>
@@ -502,7 +511,7 @@ export default function Bank() {
                   <Button size="compact-xs" variant="light" loading={busy}
                     leftSection={<RefreshCw size={13} />}
                     onClick={() => generate('exercises', levelFilter === 'all' ? 3 : Number(levelFilter))}>
-                    Compléter la banque
+                    Compléter la banque ({SOURCE_LABELS[genSource]})
                   </Button>
                 </Group>
                 {exercises === null ? <Loader size="sm" /> : (

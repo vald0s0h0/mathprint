@@ -72,9 +72,22 @@ def exercise_bucket(row: GeneratedExercise) -> str:
     return row.kind or "application"
 
 
+def exercise_identity(row: GeneratedExercise) -> str:
+    """Identité d'un exercice pour l'anti-répétition DANS une copie.
+
+    L'id de ligne ne suffit pas : la banque est constituée par compétence, et
+    deux compétences voisines peuvent parfaitement avoir produit le MÊME
+    exercice chacune de son côté (le dédoublonnage d'exercise_gen est, lui,
+    par compétence — deux lignes distinctes, légitimes). Pour l'élève, c'est
+    pourtant deux fois le même exercice sur sa copie. On compare donc le
+    contenu, avec la même clé que la banque (_dedup_key)."""
+    return exercise_gen._dedup_key(row.statement, row.expected_json,
+                                   (row.grading_json or {}).get("choices"))
+
+
 def pick_balanced_exercise(rows: list[GeneratedExercise], counts: dict[str, int],
                            target_mix: dict[str, float], seed: int,
-                           exclude_ids: set[str] | None = None) -> GeneratedExercise:
+                           exclude_keys: set[str] | None = None) -> GeneratedExercise:
     """Choisit, dans une banque déjà chargée pour une compétence × niveau,
     l'exercice du type le moins représenté par rapport au mix cible de la
     copie en cours ; sélection déterministe (seed) à l'intérieur du type
@@ -82,14 +95,15 @@ def pick_balanced_exercise(rows: list[GeneratedExercise], counts: dict[str, int]
     l'appelant (via exercise_bucket) si l'item est finalement retiré (ex.
     dépassement de la capacité de page).
 
-    `exclude_ids` : identifiants déjà utilisés dans la copie en cours — jamais
-    re-piochés tant qu'il reste des exercices non utilisés (pas deux fois le
-    même exercice dans un même sujet d'un élève). Repli sur l'ensemble complet
-    si tous les exercices disponibles sont déjà exclus."""
+    `exclude_keys` : identités (cf. exercise_identity) déjà servies dans la
+    copie en cours — jamais re-piochées tant qu'il reste des exercices non
+    utilisés (pas deux fois le même exercice dans un même sujet d'un élève).
+    Repli sur l'ensemble complet si tous les exercices disponibles sont déjà
+    exclus."""
     if not rows:
         raise ValueError("banque vide")
-    if exclude_ids:
-        available = [r for r in rows if r.id not in exclude_ids]
+    if exclude_keys:
+        available = [r for r in rows if exercise_identity(r) not in exclude_keys]
         rows = available or rows
     by_bucket: dict[str, list[GeneratedExercise]] = {}
     for r in rows:
@@ -120,19 +134,25 @@ def _fresh_plan(student: Student) -> dict | None:
 
 def apply_next_plan(student: Student, target_mix: dict[str, float],
                     level5: int) -> tuple[dict[str, float], int]:
-    """En mode "individuel", affine (sans jamais remplacer) le mix de types
-    et la difficulté à partir du plan post-correction stocké pour l'élève
-    (cf. services.appreciation) — évite un second appel LLM à la création du
-    sujet. Ignoré si absent ou plus vieux que settings.next_plan_max_age_days ;
-    le périmètre de compétences coché par le professeur n'est jamais modifié
-    par cette fonction."""
+    """En mode "individuel", affine la difficulté à partir du plan
+    post-correction stocké pour l'élève (cf. services.appreciation) — évite un
+    second appel LLM à la création du sujet. Ignoré si absent ou plus vieux que
+    settings.next_plan_max_age_days ; le périmètre de compétences coché par le
+    professeur n'est jamais modifié par cette fonction.
+
+    Le mix de types, lui, n'est PLUS pris dans le plan (le LLM en proposait un
+    par élève, qui écrasait silencieusement settings.exercise_kind_mix) : ce
+    réglage fixe la répartition de la charge de correction entre CV (gratuit)
+    et OCR Mathpix (payant, sous quota), une contrainte d'infrastructure globale
+    — pas une préférence pédagogique à personnaliser élève par élève. Le retour
+    reste un couple (mix, niveau) : le mix passé par l'appelant est renvoyé
+    inchangé, la signature ne bouge pas."""
     plan = _fresh_plan(student)
     if not plan:
         return target_mix, level5
-    mix = plan.get("kind_mix") or target_mix
     plan_level = plan.get("difficulty_level")
     level = plan_level if isinstance(plan_level, int) and 1 <= plan_level <= 5 else level5
-    return mix, level
+    return target_mix, level
 
 
 def lesson_review_targets(candidate_ids: list[str], student: Student, due: list[dict],

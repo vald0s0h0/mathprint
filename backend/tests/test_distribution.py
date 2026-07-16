@@ -63,6 +63,46 @@ def test_pick_balanced_exercise_empty_bank_raises():
         pass
 
 
+def _statement_row(statement: str, value: int, row_id: str = "") -> GeneratedExercise:
+    # id explicite : le défaut SQLAlchemy n'est appliqué qu'à l'insertion
+    return GeneratedExercise(id=row_id or f"row-{id(statement)}-{value}",
+                             kind="application", response_type="short_text",
+                             difficulty_level=3, statement=statement,
+                             expected_json={"type": "integer", "value": value},
+                             grading_json={"max_score": 1, "comparator": "numeric"})
+
+
+def test_exercise_identity_is_content_based_not_row_id():
+    # Deux LIGNES distinctes (banques de deux compétences voisines) portant le
+    # MÊME exercice : pour l'élève c'est un doublon, même si le dédoublonnage
+    # de la banque — par compétence — les a légitimement laissées passer.
+    a = _statement_row("Calcule $7 \\times 8$.", 56, row_id="ligne-competence-A1.1")
+    b = _statement_row("Calcule $7 \\times 8$.", 56, row_id="ligne-competence-A1.2")
+    assert a.id != b.id
+    assert distribution.exercise_identity(a) == distribution.exercise_identity(b)
+    other = _statement_row("Calcule $9 \\times 8$.", 72)
+    assert distribution.exercise_identity(other) != distribution.exercise_identity(a)
+
+
+def test_pick_balanced_exercise_excludes_same_exercise_from_another_competency():
+    served = _statement_row("Calcule $7 \\times 8$.", 56)
+    twin = _statement_row("Calcule $7 \\times 8$.", 56)      # autre ligne, même contenu
+    fresh = _statement_row("Calcule $9 \\times 8$.", 72)
+    picked = distribution.pick_balanced_exercise(
+        [twin, fresh], {}, {"application": 1.0}, seed=0,
+        exclude_keys={distribution.exercise_identity(served)})
+    assert picked is fresh
+
+
+def test_pick_balanced_exercise_falls_back_when_everything_excluded():
+    # Filet de sécurité : mieux vaut répéter un exercice que ne rien imprimer.
+    row = _statement_row("Calcule $7 \\times 8$.", 56)
+    picked = distribution.pick_balanced_exercise(
+        [row], {}, {"application": 1.0}, seed=0,
+        exclude_keys={distribution.exercise_identity(row)})
+    assert picked is row
+
+
 def test_apply_next_plan_ignored_when_absent():
     student = Student(next_plan_json=None, next_plan_updated_at=None)
     mix, level = distribution.apply_next_plan(student, {"application": 1.0}, 3)
@@ -71,15 +111,29 @@ def test_apply_next_plan_ignored_when_absent():
 
 def test_apply_next_plan_used_when_recent():
     student = Student(
-        next_plan_json={"kind_mix": {"qcm": 1.0}, "difficulty_level": 5},
+        next_plan_json={"difficulty_level": 5},
         next_plan_updated_at=datetime.now(timezone.utc) - timedelta(days=1))
     mix, level = distribution.apply_next_plan(student, {"application": 1.0}, 3)
-    assert mix == {"qcm": 1.0} and level == 5
+    assert level == 5                      # la difficulté, elle, reste personnalisée
+    assert mix == {"application": 1.0}
+
+
+def test_apply_next_plan_never_overrides_the_correction_load_mix():
+    # Le mix qcm/manuscrit répartit la charge de correction entre CV (gratuit)
+    # et OCR Mathpix (payant, sous quota) : c'est une contrainte globale, pas
+    # une préférence à personnaliser. Un vieux plan qui en porte encore un
+    # (champ retiré du prompt, mais des plans stockés en contiennent) ne doit
+    # PLUS l'imposer.
+    student = Student(
+        next_plan_json={"kind_mix": {"qcm": 1.0}, "difficulty_level": 5},
+        next_plan_updated_at=datetime.now(timezone.utc) - timedelta(days=1))
+    mix, _ = distribution.apply_next_plan(student, {"application": 1.0}, 3)
+    assert mix == {"application": 1.0}
 
 
 def test_apply_next_plan_ignored_when_stale():
     student = Student(
-        next_plan_json={"kind_mix": {"qcm": 1.0}, "difficulty_level": 5},
+        next_plan_json={"difficulty_level": 5},
         next_plan_updated_at=datetime.now(timezone.utc) - timedelta(days=200))
     mix, level = distribution.apply_next_plan(student, {"application": 1.0}, 3)
     assert mix == {"application": 1.0} and level == 3

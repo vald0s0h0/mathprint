@@ -1,22 +1,27 @@
-"""Validation déterministe des exercices + banque, partagées avec l'adaptateur
-Sésamaths (services.sesamaths, appel 2 : blocs OCR Mistral -> contrat app),
-SEULE source d'exercices active.
+"""Validation déterministe des exercices + banque, partagées par les DEUX
+pipelines qui produisent des exercices :
+  - services.sesamaths : adaptation des blocs OCR Mistral d'un manuel Sésamath
+    (`source="sesamaths"`) ;
+  - services.gemini_gen : création d'exercices par Gemini à partir d'une
+    compétence du référentiel (`source="gemini"`).
+Toute autre source lève une erreur claire — pas de repli silencieux sur du
+contenu inventé hors pipeline assumée (la génération DeepSeek/MathALÉA et
+celle des rappels de leçon ont été retirées le 16/07).
 
-La génération DeepSeek/MathALÉA (proposer, vérifier, réparer un exercice
-inventé) et la génération de rappels de leçon ont été retirées le 16/07 :
-`ensure_bank`/`ensure_lesson` ne servent plus que la banque déjà constituée
-par l'extraction du manuel (`source="sesamaths"`) et lèvent une erreur claire
-pour toute autre source — pas de repli silencieux sur du contenu inventé.
-Ce qui reste ici et qui EST toujours utilisé par cette pipeline :
+Ce qui vit ici, et que les deux pipelines partagent SANS jamais le réécrire :
   - VALIDATION DÉTERMINISTE (_validate_exercise/_validate_cell) : LaTeX $...$
     entièrement validé (liste blanche + rendu d'essai), figures rendues à
     blanc, QCM cohérents (distracteurs uniques, bonne réponse présente),
     géométrie sans verbe de construction, réponse de référence acceptée par
     le moteur de correction déterministe, anti-doublon par compétence
     (_dedup_key, pas le seul énoncé — cf. commentaire dédié).
-  - CONTRAT DE FORMAT (_RESPONSE_FORMAT_BLOCK/_GEN_FORMAT_RULES/_GEOMETRY_RULES) :
-    le schéma JSON attendu de l'adaptateur, partagé pour que _validate_exercise
-    n'ait pas deux contrats à connaître.
+  - CONTRAT DE FORMAT (`format_contract`, assemblé depuis _FORMAT_MENU/
+    _FIGURE_RULES/_GEN_FORMAT_RULES/_JSON_CONTRACT) : le bloc de prompt qui
+    décrit le JSON attendu. Seule l'INTRO diffère d'une pipeline à l'autre
+    (_ADAPT_FORMAT_INTRO : adapter un exercice de manuel sans jamais en
+    omettre ; _GEMINI_FORMAT_INTRO : inventer, sans droit aux formats non
+    corrigeables). Le reste est commun DÉLIBÉRÉMENT : un prompt qui décrirait
+    le contrat autrement que _validate_exercise produit des rejets muets.
 
 Formats de réponse, choisis dans cet ordre de préférence (le plus automatisable
 d'abord — priorité au QCM, intervention humaine minimisée) :
@@ -709,11 +714,15 @@ _GEN_FORMAT_RULES = (
     "Les nombres simples isolés dans une phrase (« 3 crayons ») restent en texte."
 )
 
-# Contrat JSON (choix du format de réponse + figures) utilisé par l'adaptateur
-# Sésamaths (services.sesamaths._adapt_system), consommé par
-# _validate_exercise. La génération DeepSeek pure a été retirée (16/07) ; ce
-# bloc reste car c'est le seul contrat encore actif.
-_RESPONSE_FORMAT_BLOCK = (
+# Contrat JSON (menu des formats de réponse + figures + schéma de sortie),
+# consommé par _validate_exercise et partagé par TOUTES les pipelines qui
+# produisent des exercices : l'adaptateur Sésamaths (services.sesamaths, blocs
+# OCR -> contrat app) et la création Gemini (services.gemini_gen, invention
+# pure). Une seule définition, sinon un prompt dérive du validateur et les
+# exercices sont rejetés sans raison visible (cf. incident table_fill 16/07).
+# Seule l'INTRO change d'une pipeline à l'autre (adapter vs inventer) : elle
+# est passée en paramètre à `format_contract`.
+_ADAPT_FORMAT_INTRO = (
     "CHOIX DU FORMAT DE RÉPONSE — RÈGLE ABSOLUE : N'OMETS JAMAIS UN EXERCICE. "
     "Chaque exercice DOIT être renvoyé, quel que soit son énoncé d'origine — la "
     "plateforme n'imprime QUE l'un des 8 formats ci-dessous, jamais la mise en "
@@ -727,6 +736,28 @@ _RESPONSE_FORMAT_BLOCK = (
     "puisqu'il ne demande aucune réponse structurée. Il n'existe donc JAMAIS "
     "de raison légitime d'omettre un exercice : au pire, utilise "
     "\"manual_drawing\".\n"
+)
+
+# Intro de la pipeline Gemini : on n'adapte pas un exercice existant, on
+# l'invente — le modèle choisit donc son format AVANT de rédiger, et n'a
+# jamais l'excuse du « format d'origine » pour tomber sur un dernier recours
+# non corrigeable automatiquement (formats 7 et 8, refusés par
+# gemini_gen._reject_reason).
+_GEMINI_FORMAT_INTRO = (
+    "CHOIX DU FORMAT DE RÉPONSE : tu INVENTES chaque exercice — choisis donc "
+    "TOUJOURS d'abord ce que l'élève devra écrire ou cocher, puis rédige "
+    "l'énoncé autour. Les 8 formats ci-dessous sont les SEULS que la "
+    "plateforme sait imprimer et corriger, mais dans cette pipeline les "
+    "formats 7 (\"matching\") et 8 (\"manual_drawing\") sont INTERDITS : leur "
+    "correction n'est pas automatisable, et comme c'est toi qui inventes "
+    "l'exercice, tu peux toujours en concevoir un qui rentre dans les formats "
+    "1 à 6. Un exercice renvoyé dans un format interdit est rejeté. "
+    "N'invente jamais un exercice qui aurait besoin d'une figure (n'utilise "
+    "pas le champ \"figure\") et ignore le champ \"source_blocks\", réservé à "
+    "une autre pipeline.\n"
+)
+
+_FORMAT_MENU = (
     "1. QCM UNIQUE / QCM MULTIPLE (\"qcm_single\"/\"qcm_multiple\") : "
     "reconnaissance, propriété, lecture de figure. 2 à 8 choix (2 pour un "
     "Vrai/Faux : choices=[\"Vrai\",\"Faux\"]), distracteurs = erreurs "
@@ -799,7 +830,9 @@ _RESPONSE_FORMAT_BLOCK = (
     "manuelle, JAMAIS automatique (aucune correction possible par la "
     "pipeline) ; aucune réponse structurée requise, \"answer\" peut être "
     "omis. Utilise CE format plutôt que d'omettre l'exercice.\n\n"
-    "{geometry_rules}"
+)
+
+_FIGURE_RULES = (
     "FIGURES : si une figure aide (géométrie, droite graduée, repère), ajoute "
     "\"figure\": {\"type\": \"rectangle\"|\"triangle\"|\"circle\"|\"angle\"|"
     "\"number_line\"|\"coordinate_plane\", \"params\": {...}} avec les MÊMES valeurs "
@@ -807,7 +840,9 @@ _RESPONSE_FORMAT_BLOCK = (
     "triangle{base,height,unit,right_angle_at} ; circle{radius,unit,show_diameter} ; "
     "angle{degrees,label} ; number_line{min,max,points:[{value,label}]} ; "
     "coordinate_plane{points:[{x,y,label}],grid}.\n\n"
-    + _GEN_FORMAT_RULES + "\n\n"
+)
+
+_JSON_CONTRACT = (
     "Réponds UNIQUEMENT en JSON strictement valide :\n"
     '{"exercises":[{"kind":"application"|"probleme","statement":str,"correction":str '
     "(TRÈS SUCCINCTE : le résultat + 1-2 phrases d'explication au maximum, "
@@ -822,6 +857,18 @@ _RESPONSE_FORMAT_BLOCK = (
     '"left":[str]?,"right":[str]?,"pairs":[[int,int]]?},'
     '"figure":{...}?,"source_blocks":[int]?}]}'
 )
+
+
+def format_contract(intro: str, *, geometry_rules: str = "") -> str:
+    """Bloc de prompt décrivant le contrat de sortie attendu par
+    `_validate_exercise` : menu des 8 formats de réponse, figures, règles
+    LaTeX, schéma JSON. `intro` cadre la MISSION de la pipeline appelante
+    (adapter un exercice existant vs en inventer un) ; tout le reste est
+    commun, et doit le rester — un prompt qui décrirait le contrat autrement
+    que le validateur produit des rejets silencieux."""
+    return (intro + _FORMAT_MENU + geometry_rules + _FIGURE_RULES
+            + _GEN_FORMAT_RULES + "\n\n" + _JSON_CONTRACT)
+
 
 _GEOMETRY_RULES = (
     "GÉOMÉTRIE (impératif absolu, sauf format \"manual_drawing\") : l'élève ne trace, "
@@ -838,45 +885,69 @@ _GEOMETRY_RULES = (
 # ================================================================ banque
 
 def ensure_bank(db: Session, competency: Competency, level: int,
-                min_variants: int | None = None,
-                source: str = "auto") -> list[GeneratedExercise]:
-    """Garantit min_variants exercices actifs pour (compétence, niveau).
+                source: str = "sesamaths") -> list[GeneratedExercise]:
+    """Garantit une banque d'exercices actifs pour (compétence, niveau).
 
-    `source="sesamaths"` délègue entièrement à services.sesamaths.ensure_bank
-    (pool séparé, extraction du manuel scolaire du niveau de la compétence) —
-    SEULE source encore active. La génération MathALÉA/DeepSeek (`source`
-    "auto"/"mathalea") a été retirée (16/07) : on ne produit plus que des
-    exercices extraits réellement du manuel, jamais générés/inventés."""
+    Deux sources actives, chacune avec son pool séparé et sa propre notion de
+    « banque suffisante » — c'est pourquoi il n'y a pas de cible commune ici :
+    - `source="sesamaths"` (services.sesamaths) : extraction du manuel scolaire.
+      Le pool est celui de la Série, fini : on prend tout, il n'y a rien à
+      viser ;
+    - `source="gemini"` (services.gemini_gen) : création par LLM. Le pool est
+      infini : on appelle par lots jusqu'à `settings.gemini_bank_target`.
+
+    La génération MathALÉA/DeepSeek (`source` "auto"/"mathalea") a été retirée
+    (16/07) : plus aucun repli silencieux sur du contenu inventé sans pipeline
+    assumée."""
     if source == "sesamaths":
         from . import sesamaths
-        return sesamaths.ensure_bank(db, competency, level, min_variants)
+        return sesamaths.ensure_bank(db, competency, level)
+    if source == "gemini":
+        from . import gemini_gen
+        return gemini_gen.ensure_bank(db, competency, level)
     raise NotImplementedError(
-        f"Génération d'exercices source={source!r} désactivée : seule "
-        "l'extraction Sésamaths (source=\"sesamaths\") est active.")
+        f"Génération d'exercices source={source!r} désactivée : seules "
+        "l'extraction Sésamaths (source=\"sesamaths\") et la création Gemini "
+        "(source=\"gemini\") sont actives.")
+
+
+def _source_pool(source: str) -> tuple[str, ...] | None:
+    """Valeurs de GeneratedExercise.source appartenant à `source` — None si la
+    source n'a pas de pool dédié (ne jamais filtrer au hasard). Les pools ne se
+    mélangent pas : un sujet « Gemini » ne doit jamais servir un exercice tiré
+    du manuel, et réciproquement."""
+    if source == "sesamaths":
+        from .sesamaths import SOURCE_POOL
+        return SOURCE_POOL
+    if source == "gemini":
+        from .gemini_gen import SOURCE
+        return (SOURCE,)
+    return None
 
 
 def bank_rows_near_level(db: Session, competency: Competency, level: int,
-                         source: str = "auto") -> tuple[list[GeneratedExercise], int]:
+                         source: str = "sesamaths") -> tuple[list[GeneratedExercise], int]:
     """Comme pick_exercise, mais retourne toute la banque du niveau le plus
     proche disponible (pour une sélection en aval équilibrée par type de
     réponse, cf. services.distribution). `source` : voir ensure_bank."""
+    pool = _source_pool(source)
     for candidate in sorted(range(1, 6), key=lambda l: abs(l - level)):
         try:
             rows = ensure_bank(db, competency, candidate, source=source)
         except Exception as e:
-            # Manuel Sésamath introuvable / extraction impossible : message clair
-            # et actionnable — inutile d'essayer les autres niveaux (le PDF manque
-            # quel que soit le niveau) et surtout PAS de repli silencieux sur une
-            # banque inventée. On remonte l'erreur telle quelle.
-            if source == "sesamaths":
-                from .sesamaths import SesamathsExtractionError
-                if isinstance(e, SesamathsExtractionError):
-                    raise
+            # Échec PROPRE à la source (manuel Sésamath introuvable, compétence
+            # de géométrie refusée par Gemini…) : message clair et actionnable,
+            # remonté tel quel. Inutile d'essayer les autres niveaux (la cause
+            # ne dépend pas du niveau) et surtout PAS de repli silencieux sur
+            # une banque d'une autre provenance.
+            from .gemini_gen import GeminiGenerationError
+            from .sesamaths import SesamathsExtractionError
+            if isinstance(e, (SesamathsExtractionError, GeminiGenerationError)):
+                raise
             q = db.query(GeneratedExercise).filter_by(
                 competency_id=competency.id, difficulty_level=candidate, status="active")
-            if source == "sesamaths":
-                from .sesamaths import SOURCE_POOL
-                q = q.filter(GeneratedExercise.source.in_(SOURCE_POOL))
+            if pool is not None:
+                q = q.filter(GeneratedExercise.source.in_(pool))
             rows = q.all()
         if rows:
             return rows, candidate

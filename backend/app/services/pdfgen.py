@@ -1025,16 +1025,45 @@ def _draw_lesson_card(c: canvas.Canvas, x: float, y_top: float, w: float,
 
 # ------------------------------------------------------------- copie entière
 
-def estimate_capacity(pages_target: int) -> float:
-    """Hauteur totale (pt) disponible pour des cartes sur `pages_target` pages,
-    deux colonnes chacune — sert au remplissage automatique de la page
-    (§ remplissage) pour savoir combien d'exercices supplémentaires tiennent."""
-    bottom_limit = MARGIN + QR_MINI + 3 * mm
-    first_page = (PAGE_H - MARGIN - HEADER_H - 4 * mm) - bottom_limit
-    other_page = (PAGE_H - MARGIN - QR_MAIN - 6 * mm) - bottom_limit
-    pages = max(1, pages_target)
-    per_page = first_page + max(0, pages - 1) * other_page
-    return per_page * 2  # deux colonnes par page
+# Géométrie verticale d'une colonne — UNE seule définition, partagée par le
+# placement réel (render_copy) et sa simulation (pages_needed) : deux règles
+# distinctes dériveraient, et c'est précisément l'écart entre « ce qu'on croit
+# faire tenir » et « ce qui tient » qui fait déborder une copie.
+_BOTTOM_LIMIT = MARGIN + QR_MINI + 3 * mm
+
+
+def _top_of_page(page_idx: int) -> float:
+    """Ordonnée de départ d'une colonne : la 1re page porte l'en-tête élève,
+    les suivantes le QR principal."""
+    return (PAGE_H - MARGIN - HEADER_H - 4 * mm) if page_idx == 0 \
+        else (PAGE_H - MARGIN - QR_MAIN - 6 * mm)
+
+
+def pages_needed(heights: list[float]) -> int:
+    """Nombre de pages qu'occuperaient des cartes de ces hauteurs (dans cet
+    ordre), en appliquant EXACTEMENT la règle de placement de `render_copy` :
+    on remplit la colonne de gauche, puis celle de droite, puis on change de
+    page — et une carte ne se coupe JAMAIS en deux.
+
+    C'est ce qui remplace l'ancienne `estimate_capacity` : comparer la SOMME
+    des hauteurs à la hauteur totale disponible ignorait le bas de colonne
+    perdu dès qu'une carte n'y rentre plus. Une copie remplie au plus près de
+    la capacité théorique (99 %) débordait donc systématiquement d'une page —
+    d'autant plus visible depuis que la banque offre assez d'exercices
+    distincts pour vraiment remplir (cf. suppression du plafond de 3)."""
+    page_idx, col = 0, 0
+    y = _top_of_page(0)
+    for h in heights:
+        if y - h < _BOTTOM_LIMIT:
+            if col == 0:
+                col = 1
+                y = _top_of_page(page_idx)
+                if y - h < _BOTTOM_LIMIT:   # carte plus haute qu'une colonne
+                    page_idx, col, y = page_idx + 1, 0, _top_of_page(page_idx + 1)
+            else:
+                page_idx, col, y = page_idx + 1, 0, _top_of_page(page_idx + 1)
+        y -= h
+    return page_idx + 1
 
 
 def estimate_item_height(item: dict, font_size: int, math_fs: int,
@@ -1076,13 +1105,12 @@ def render_copy(pdf_canvas: canvas.Canvas, *, student_name: str, class_name: str
 
     page_idx = 0
     col = 0
-    y_cursor = PAGE_H - MARGIN - HEADER_H - 4 * mm
-    bottom_limit = MARGIN + QR_MINI + 3 * mm
+    y_cursor = _top_of_page(0)
+    bottom_limit = _BOTTOM_LIMIT
     gap = GAP
 
     def top_of_page() -> float:
-        return (PAGE_H - MARGIN - HEADER_H - 4 * mm) if page_idx == 0 \
-            else (PAGE_H - MARGIN - QR_MAIN - 6 * mm)
+        return _top_of_page(page_idx)
 
     def new_page():
         nonlocal page_idx, col, y_cursor

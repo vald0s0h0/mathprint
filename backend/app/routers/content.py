@@ -5,6 +5,8 @@ cet onglet donne la visibilité et le contrôle : couverture, aperçu fidèle
 (mêmes formules qu'à l'impression), retrait d'un contenu douteux,
 regénération ciblée. Sert aussi le rendu PNG des figures paramétrées.
 """
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel
@@ -156,15 +158,24 @@ class GenerateIn(BaseModel):
     level: int  # 1-5
 
 
+class GenerateExercisesIn(GenerateIn):
+    # même choix que dans l'assistant sujet (cf. assessments.AssessmentPatch) :
+    # extraction du manuel ou création Gemini — les deux pools sont séparés
+    source: Literal["sesamaths", "gemini"] = "sesamaths"
+
+
 @router.post("/exercises/generate",
              dependencies=[Depends(require_role("admin", "teacher"))])
-def generate_exercises(body: GenerateIn, db: Session = Depends(get_db)):
-    """Complète la banque pour (compétence, niveau) jusqu'au minimum configuré."""
+def generate_exercises(body: GenerateExercisesIn, db: Session = Depends(get_db)):
+    """Complète la banque pour (compétence, niveau) à partir de la source
+    demandée : extraction Sésamaths (tout ce que la Série du manuel contient)
+    ou création Gemini (jusqu'à settings.gemini_bank_target)."""
     comp = db.get(Competency, body.competency_id)
     if not comp:
         raise HTTPException(404, "Compétence inconnue")
     try:
-        rows = exercise_gen.ensure_bank(db, comp, max(1, min(5, body.level)))
+        rows = exercise_gen.ensure_bank(db, comp, max(1, min(5, body.level)),
+                                        source=body.source)
     except Exception as e:
         db.commit()  # conserver ce qui a éventuellement été produit
         raise HTTPException(502, f"Génération impossible : {e}")

@@ -188,7 +188,7 @@ def test_ensure_bank_sesamaths_end_to_end_mock(db_session):
     # niveau 3 : la difficulté n'est plus évaluée par le LLM (17/07), le pool
     # mock entier est donc toujours au niveau 3 par défaut (cf. _to_candidate)
     comp = _seed_competency(db_session, "A1", "Opérations", "Effectuer une division euclidienne")
-    rows = sesamaths.ensure_bank(db_session, comp, level=3, min_variants=3)
+    rows = sesamaths.ensure_bank(db_session, comp, level=3)
     assert len(rows) >= 1
     assert all(r.source in sesamaths.SOURCE_POOL for r in rows)
     stored = db_session.query(GeneratedExercise).filter_by(competency_id=comp.id).all()
@@ -199,12 +199,41 @@ def test_ensure_bank_sesamaths_end_to_end_mock(db_session):
     assert any(r.response_type == "table_fill" for r in stored)
 
 
+def test_ensure_bank_stores_whole_series_pool_not_a_fixed_quota(db_session, monkeypatch):
+    # Le plafond historique (exercise_variants_per_level = 3) jetait le reste
+    # d'une extraction déjà payée et bornait à 3 le choix disponible pour
+    # remplir une page — d'où des copies qui répétaient les mêmes exercices.
+    # Ce que la Série donne, la banque le garde : ici 7 exercices, pas 3.
+    from app.services import providers
+
+    def adapt_7(db, operation, system, payload, **kw):
+        return {"exercises": [
+            {"kind": "application",
+             "statement": f"Calcule : ${i} + {i * 3}$",
+             "correction": f"${i} + {i * 3} = {i * 4}$",
+             "response_type": "short_text",
+             "answer": {"type": "integer", "value": i * 4},
+             "source_blocks": [0]} for i in range(1, 8)],
+            "confidence": 0.9}
+
+    monkeypatch.setattr(providers, "claude_json", adapt_7)
+    comp = _seed_competency(db_session, "A1", "Opérations", "Automatismes")
+    comp.code = "A1.1"
+    db_session.commit()
+
+    rows = sesamaths.ensure_bank(db_session, comp, level=3)
+    assert len(rows) == 7
+    stored = db_session.query(GeneratedExercise).filter_by(
+        competency_id=comp.id, source="sesamaths").all()
+    assert len(stored) == 7
+
+
 def test_raw_extract_json_populated_by_mock_pipeline(db_session):
     # Chaque ligne issue de la pipeline Sésamaths doit conserver les blocs OCR
     # BRUTS dont elle provient, pour l'affichage "avant/après" de la page
     # Banque (cf. content.py::_exercise_out).
     comp = _seed_competency(db_session, "A1", "Opérations", "Effectuer une division euclidienne")
-    sesamaths.ensure_bank(db_session, comp, level=3, min_variants=3)
+    sesamaths.ensure_bank(db_session, comp, level=3)
     stored = (db_session.query(GeneratedExercise)
               .filter_by(competency_id=comp.id, source="sesamaths").all())
     assert stored
@@ -259,7 +288,7 @@ def test_retired_exercise_not_reinserted(db_session):
     # jamais redevenir piochable dans le pool caché de la Série au prochain
     # ensure_bank — cause identifiée de "les mêmes exercices reviennent".
     comp = _seed_competency(db_session, "A1", "Opérations", "Effectuer une division euclidienne")
-    rows1 = sesamaths.ensure_bank(db_session, comp, level=3, min_variants=3)
+    rows1 = sesamaths.ensure_bank(db_session, comp, level=3)
     victim = next(r for r in rows1 if r.source == "sesamaths")
     victim_statement = victim.statement
     victim.status = "retired"
@@ -269,7 +298,7 @@ def test_retired_exercise_not_reinserted(db_session):
     # lève PAS ici (rows non vide), même si le pool caché n'a rien de neuf à
     # offrir pour remplacer le retiré — ce qui est vérifié est que le retiré
     # ne réapparaît jamais, pas que le quota soit reconstitué.
-    sesamaths.ensure_bank(db_session, comp, level=3, min_variants=3)
+    sesamaths.ensure_bank(db_session, comp, level=3)
     active_statements = {r.statement for r in
                          db_session.query(GeneratedExercise)
                          .filter_by(competency_id=comp.id, status="active").all()}
@@ -450,7 +479,7 @@ def test_ensure_bank_sesamaths_missing_manual_raises_clear_error(db_session, mon
     # PDF introuvable -> erreur CLAIRE, JAMAIS d'invention DeepSeek à la place
     # d'exercices qu'on n'a pas su extraire (exigence explicite).
     with pytest.raises(sesamaths.SesamathsExtractionError) as exc:
-        sesamaths.ensure_bank(db_session, comp, level=3, min_variants=1)
+        sesamaths.ensure_bank(db_session, comp, level=3)
     assert "introuvable" in str(exc.value).lower()
     # aucune ligne inventée n'a été stockée
     assert db_session.query(GeneratedExercise).filter_by(competency_id=comp.id).count() == 0
@@ -522,7 +551,7 @@ def test_purge_bank_clears_exercises_and_extraction_state(db_session):
     from app.routers import content as content_router
 
     comp = _seed_competency(db_session, "A1", "Opérations", "Effectuer une division euclidienne")
-    sesamaths.ensure_bank(db_session, comp, level=3, min_variants=2)
+    sesamaths.ensure_bank(db_session, comp, level=3)
     assert db_session.query(GeneratedExercise).count() > 0
     assert db_session.query(SesamathsChapterExtraction).count() > 0
     assert db_session.query(SesamathsLlmCache).count() > 0

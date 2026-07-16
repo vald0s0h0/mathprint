@@ -42,7 +42,6 @@ class Settings(BaseSettings):
     deepseek_reasoning_model: str = "deepseek-v4-flash-thinking"
     # création d'exercices et de rappels de leçon : modèle pro
     deepseek_pro_model: str = "deepseek-v4-pro"
-    exercise_variants_per_level: int = 3   # taille de banque par compétence × niveau
     claude_model: str = "claude-haiku-4-5-20251001"
     # extraction Sésamaths (lecture fidèle des pages de manuel) : Mistral OCR,
     # moteur de reconnaissance de document dédié (pas un modèle de chat) —
@@ -56,6 +55,22 @@ class Settings(BaseSettings):
     # seul exercice en banque", 17/07) ; Sonnet, un seul modèle, pas de repli
     # (un 2e modèle "correcteur" ajoutait de la complexité sans fiabiliser)
     claude_adapt_model: str = "claude-sonnet-5"
+    # création d'exercices (pipeline Gemini, cf. services/gemini_gen.py) :
+    # invention pure à partir d'une compétence du référentiel, aucun manuel lu
+    gemini_model: str = "gemini-2.5-flash"
+
+    # --- Pipeline Gemini (banque d'exercices inventés, par compétence) ---
+    # Taille de banque visée par compétence × niveau. Il n'existe PAS
+    # d'équivalent côté Sésamaths : ce que la Série du manuel contient est
+    # tout ce qu'on peut en extraire (ni plus ni moins), alors qu'ici on
+    # appelle le LLM autant de fois que nécessaire. La cible doit couvrir un
+    # remplissage de page complet sans jamais resservir le même exercice à un
+    # élève (generation.py plafonne le remplissage à 10 tentatives).
+    gemini_bank_target: int = 10
+    gemini_batch_size: int = 5            # exercices demandés par appel
+    # garde-fou : au-delà, on garde ce qu'on a plutôt que d'enchaîner les
+    # appels payants pour une compétence sur laquelle le modèle patine
+    gemini_max_batches: int = 6
 
     # --- Budgets / quotas par défaut ---
     mathpix_concurrency: int = 3
@@ -74,7 +89,16 @@ class Settings(BaseSettings):
     # --- Pédagogie ---
     forgetting_threshold: float = 0.80   # probabilité de rappel sous laquelle une compétence est "due"
     level_max_auto_delta: int = 1        # variation auto max du niveau 1-10 par cycle
-    exercise_kind_mix: dict = {"application": 0.55, "probleme": 0.35, "qcm": 0.10}
+    # Mélange visé des types d'exercices DANS une copie (cf. services.
+    # distribution.pick_balanced_exercise). Ce réglage n'est pas seulement
+    # pédagogique : il fixe la répartition de la CHARGE DE CORRECTION entre les
+    # deux moteurs automatiques. Le bucket "qcm" (tout response_type qcm_*) est
+    # corrigé par vision par ordinateur — gratuit, local, fiable ; tout le reste
+    # (application/probleme = cases manuscrites) part en OCR Mathpix — payant et
+    # sous quota (mathpix_daily_limit). Cible : ~50 % CV / ~50 % Mathpix.
+    # Le ratio application/probleme historique (55/35) est conservé à
+    # l'intérieur de la moitié Mathpix.
+    exercise_kind_mix: dict = {"qcm": 0.50, "application": 0.30, "probleme": 0.20}
     next_plan_max_age_days: int = 60     # au-delà, le plan post-correction stocké est ignoré
     lesson_review_mastery_threshold: float = 0.5  # maîtrise sous ce seuil = lacune -> rappel de leçon
     max_lessons_per_copy: int = 2        # rappels de leçon max insérés dans une même copie

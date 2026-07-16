@@ -233,6 +233,7 @@ export default function SettingsPage() {
     'deepseek-pro': 'deepseek-v4-pro',
     anthropic: 'claude-haiku-4-5-20251001',
     mistral: 'mistral-ocr-4-0',
+    gemini: 'gemini-2.5-flash',
   }
 
   return (
@@ -285,12 +286,13 @@ export default function SettingsPage() {
               Sans clé, un service reste en mode simulé. Les clés sont chiffrées au repos
               et jamais renvoyées intégralement.
             </Text>
-            {(['mathpix', 'deepseek-flash', 'deepseek-pro', 'anthropic', 'mistral'] as const).map((p) => {
+            {(['mathpix', 'deepseek-flash', 'deepseek-pro', 'anthropic', 'mistral', 'gemini'] as const).map((p) => {
               const row = providers.find((x) => x.provider === p)
               const labels: Record<string, string> = {
                 'deepseek-flash': 'DeepSeek Flash',
                 'deepseek-pro': 'DeepSeek Pro',
                 mistral: 'Mistral OCR (extraction Sésamaths)',
+                gemini: 'Gemini (création d\'exercices)',
               }
               return (
                 <Card key={p} withBorder>

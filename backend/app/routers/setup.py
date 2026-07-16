@@ -14,7 +14,8 @@ from ..services.security import hash_password, make_token
 
 router = APIRouter(prefix="/api/setup", tags=["setup"])
 
-ALLOWED_PROVIDERS = {"mathpix", "deepseek-flash", "deepseek-pro", "anthropic", "mistral"}
+ALLOWED_PROVIDERS = {"mathpix", "deepseek-flash", "deepseek-pro", "anthropic",
+                     "mistral", "gemini"}
 
 
 class ProviderSetupIn(BaseModel):
