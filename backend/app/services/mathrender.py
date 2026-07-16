@@ -41,7 +41,7 @@ ALLOWED_COMMANDS = {
     "cup", "cap", "parallel", "perp",
     # symboles
     "pi", "infty", "circ", "degree", "euro", "%", "ldots", "cdots", "dots",
-    "angle", "triangle", "Rightarrow", "rightarrow",
+    "angle", "triangle", "Rightarrow", "rightarrow", "leftrightarrow",
     # espacement (normalisé/retiré pour mathtext)
     ",", ";", "!", ":", "quad", "qquad",
     # accolades littérales
@@ -63,7 +63,7 @@ _UNICODE_MAP = {
     "×": r"\times ", "÷": r"\div ", "·": r"\cdot ", "−": "-", "–": "-",
     "≤": r"\leq ", "≥": r"\geq ", "≠": r"\neq ", "≈": r"\approx ",
     "π": r"\pi ", "²": "^2", "³": "^3", "°": r"^\circ ", "∞": r"\infty ",
-    "→": r"\rightarrow ", "⇒": r"\Rightarrow ",
+    "→": r"\rightarrow ", "⇒": r"\Rightarrow ", "↔": r"\leftrightarrow ",
     "œ": "oe", " ": " ", " ": " ",
 }
 

@@ -52,7 +52,7 @@ logger = logging.getLogger(__name__)
 # Entre dans la clé du cache LLM : TOUJOURS le bumper en même temps qu'une
 # modification de _VISION_EXTRACT_INTRO, sinon les réponses mises en cache par
 # l'ANCIEN prompt sont resservies et le nouveau prompt reste sans effet.
-PROMPT_VERSION = "sesamaths-7-never-refuse"
+PROMPT_VERSION = "sesamaths-8-expression-cells-fixes"
 SOURCE_POOL = ("sesamaths", "sesamaths_deepseek")
 
 

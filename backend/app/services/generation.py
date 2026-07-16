@@ -113,6 +113,15 @@ def generate_assessment_job(db: Session, assessment: Assessment,
     ex_tpl_font_size = int(tpl["exercise"].get("font_size", font_size))
     math_fs = int(tpl["exercise"].get("math_size", 12))
     capacity = pdfgen.estimate_capacity(max_pages)
+    # marge de pages RÉELLES (DocumentPage signées) au-delà de la cible : les
+    # exercices obligatoires (une compétence cochée = un exercice, boucle
+    # ci-dessous) ne sont jamais soumis au contrôle de capacité qui ne
+    # s'applique qu'au remplissage — un contenu obligatoire volumineux peut
+    # donc dépasser max_pages. Sans cette réserve, pdfgen.render_copy improvise
+    # un page_id "overflow-N" sans contrepartie en base (FK violation à
+    # l'insertion des zones) ET sans QR signé (page illisible au scan même si
+    # on rattrapait la ligne DocumentPage après coup).
+    PAGE_RESERVE = 6
     MAX_FILL_ATTEMPTS = 10
     total_non_qcm = 0
 
@@ -234,8 +243,13 @@ def generate_assessment_job(db: Session, assessment: Assessment,
         _set_progress(db, job, round(5 + 90 * (s_idx + 1) / max(1, len(students))),
                      f"Copie {s_idx + 1}/{len(students)} ({student.llm_pseudonym})")
 
+        # pages RÉELLES (signées) créées jusqu'à max_pages + PAGE_RESERVE : le
+        # contenu obligatoire peut déborder de la cible, jamais du réservoir
+        # (cf. commentaire PAGE_RESERVE ci-dessus) ; les pages en trop sont
+        # supprimées ci-dessous une fois le nombre de pages réellement utilisé
+        # connu.
         pages_meta, page_rows = [], []
-        for p in range(max_pages):
+        for p in range(max_pages + PAGE_RESERVE):
             page = DocumentPage(copy_id=copy.id, page_no=p + 1,
                                 side="recto" if p % 2 == 0 else "verso")
             db.add(page)
@@ -251,6 +265,15 @@ def generate_assessment_job(db: Session, assessment: Assessment,
             pages_meta=pages_meta, font_size=font_size, tpl=tpl)
 
         used_pages = max((z["page_index"] for z in zones), default=0) + 1
+        if used_pages > max_pages + PAGE_RESERVE:
+            # au-delà du réservoir : pdfgen a dû improviser un page_id
+            # "overflow-N" sans QR signé (page illisible au scan) — on arrête
+            # net plutôt que de produire une copie dont une partie ne sera
+            # jamais corrigeable, ou de planter plus loin sur la contrainte FK.
+            raise ValueError(
+                f"Copie {student.llm_pseudonym} : {used_pages} page(s) nécessaire(s), "
+                f"dépasse la réserve ({max_pages + PAGE_RESERVE}) — réduisez le nombre "
+                f"de compétences cochées ou augmentez le nombre de pages cible.")
         if used_pages > max_pages:
             warnings.append(
                 f"Débordement copie {student.llm_pseudonym} : {used_pages} pages "

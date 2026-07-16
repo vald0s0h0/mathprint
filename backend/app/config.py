@@ -86,7 +86,7 @@ class Settings(BaseSettings):
     # manuel LIVRÉ avec le code (dans app/data/manuals), donc présent à
     # l'identique en dev et dans l'image Docker — cf. _APP_DIR ci-dessus.
     sesamaths_manuals: dict[str, str] = {"5e": str(_APP_DIR / "data" / "manuals" / "5.pdf")}
-    sesamaths_schema_version: str = "5"   # bump -> invalide l'ancien cache (texte)
+    sesamaths_schema_version: str = "6"   # bump -> invalide l'ancien cache (texte)
 
     # --- Impression (CUPS local ou IPP réseau, §11.5) ---
     printing_enabled: bool = True

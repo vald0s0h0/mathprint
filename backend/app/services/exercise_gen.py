@@ -152,8 +152,60 @@ def diagnose_rejection(raw: dict, competency: Competency) -> str:
         return _diagnose_qcm(raw, answer, rtype)
     if rtype == "matching":
         return _diagnose_matching(answer)
+    if rtype in ("short_text", "multiline_text"):
+        return _diagnose_short_text(answer)
     return (f"contrôle spécifique à '{rtype}' (answer.type={answer.get('type')!r}) — "
             f"auto-vérification, doublon ou incohérence réponse/énoncé")
+
+
+def _diagnose_short_text(answer: dict) -> str:
+    atype = answer.get("type")
+    if atype == "integer":
+        try:
+            int(answer["value"])
+        except (KeyError, TypeError, ValueError):
+            return "short_text : answer.value absent ou non entier"
+    elif atype in ("decimal", "number"):
+        try:
+            float(str(answer["value"]).replace(",", "."))
+        except (KeyError, TypeError, ValueError):
+            return "short_text : answer.value absent ou non décimal"
+    elif atype == "rational":
+        v = answer.get("value")
+        if not (isinstance(v, (list, tuple)) and len(v) == 2):
+            return "short_text : answer.value doit être [num, den]"
+        try:
+            num, den = int(v[0]), int(v[1])
+        except (TypeError, ValueError):
+            return "short_text : num/den non entiers"
+        if den == 0:
+            return "short_text : dénominateur nul"
+    elif atype == "expression":
+        val = str(answer.get("value", "")).strip()
+        if not val or len(val) > 120:
+            return f"short_text : expression vide ou trop longue ({len(val)} car., max 120)"
+    elif atype == "text":
+        val = str(answer.get("value", "")).strip()
+        if not val or len(val) > 80:
+            return f"short_text : texte vide ou trop long ({len(val)} car., max 80)"
+    elif atype == "rubric":
+        steps = answer.get("steps", [])
+        if not isinstance(steps, list) or not (2 <= len(steps) <= 6):
+            got = len(steps) if isinstance(steps, list) else 0
+            return f"rubric : {got} étape(s) hors bornes [2,6]"
+        for i, step in enumerate(steps):
+            if not isinstance(step, dict):
+                return f"rubric : étape #{i} n'est pas un objet"
+            desc = str(step.get("description", "")).strip()
+            expected_text = str(step.get("expected_text", "")).strip()
+            if not desc or not expected_text:
+                return f"rubric : étape #{i} description/expected_text manquant"
+            if (r := _text_reject_reason(expected_text, 1, 400)):
+                return f"rubric : étape #{i} expected_text invalide : {r}"
+    else:
+        return f"short_text : answer.type inconnu {atype!r}"
+    return ("short_text : auto-vérification échouée (incohérence réponse/énoncé — "
+            "vérifier la notation LaTeX de answer.value, ex. \\dfrac ou {,} décimal)")
 
 
 def _diagnose_qcm(raw: dict, answer: dict, rtype: str) -> str:
@@ -519,9 +571,10 @@ def _validate_exercise(raw: dict, competency: Competency, db: Session,
 
 
 def _validate_cell(cell: dict) -> dict | None:
-    """Valide une cellule de table_fill : {"type": "integer"|"decimal"|"rational"|
-    "text", "value": ..., "given": bool?}. "given"=true : valeur déjà imprimée
-    dans le manuel (non éditable, non notée), toute autre cellule est à remplir."""
+    """Valide une cellule de table_fill/multi_blank : {"type": "integer"|
+    "decimal"|"rational"|"expression"|"text", "value": ..., "given": bool?}.
+    "given"=true : valeur déjà imprimée dans le manuel (non éditable, non
+    notée), toute autre cellule est à remplir."""
     ctype = cell.get("type")
     if ctype == "integer":
         try:
@@ -545,6 +598,11 @@ def _validate_cell(cell: dict) -> dict | None:
         if den == 0:
             return None
         v = {"type": "rational", "value": [num, den]}
+    elif ctype == "expression":
+        val = str(cell.get("value", "")).strip()
+        if not val or len(val) > 120:
+            return None
+        v = {"type": "expression", "value": val}
     elif ctype == "text":
         val = str(cell.get("value", "")).strip()
         if not val or len(val) > 40:
@@ -578,7 +636,8 @@ _GEN_FORMAT_RULES = (
     "RÈGLES DE FORMAT (obligatoires) : tout objet mathématique (nombre en écriture "
     "fractionnaire, expression, égalité, unité collée à une valeur) est balisé $...$ "
     "en LaTeX. Commandes autorisées UNIQUEMENT : \\dfrac \\frac \\sqrt \\times \\div "
-    "\\cdot \\pm \\leq \\geq \\neq \\approx \\pi \\text{...} \\% ^ _ ( ) [ ] { }. "
+    "\\cdot \\pm \\leq \\geq \\neq \\approx \\pi \\text{...} \\% ^ _ ( ) [ ] { } "
+    "\\rightarrow \\leftrightarrow (association/correspondance). "
     "Notation française : virgule décimale ($3{,}5$), unités en \\text ($7{,}5\\ \\text{cm}$). "
     "JAMAIS de LaTeX hors des bornes $...$, jamais de \\\\ ni d'environnements. "
     "Les nombres simples isolés dans une phrase (« 3 crayons ») restent en texte."
@@ -620,8 +679,9 @@ _RESPONSE_FORMAT_BLOCK = (
     "Place un marqueur {{blank}} à CHAQUE endroit où l'élève doit écrire (2 minimum — "
     "pour une seule case, utilise \"short_text\"), dans l'ordre naturel de lecture. "
     "answer = {\"type\":\"blanks\",\"values\":[{\"type\":\"integer\"|\"decimal\"|"
-    "\"rational\"|\"text\",\"value\":...}, ...]} avec EXACTEMENT une entrée par "
-    "occurrence de {{blank}}, dans le MÊME ordre que leur apparition dans \"statement\".\n"
+    "\"rational\"|\"expression\"|\"text\",\"value\":...}, ...]} avec EXACTEMENT une "
+    "entrée par occurrence de {{blank}}, dans le MÊME ordre que leur apparition dans "
+    "\"statement\".\n"
     "4. \"table_fill\" : quand plusieurs résultats du même type forment naturellement "
     "une grille (ex. compléter une table de valeurs, un tableau de proportionnalité), "
     "OU quand un badge contient plusieurs sous-questions a./b./c. STRUCTURELLEMENT "
@@ -636,8 +696,8 @@ _RESPONSE_FORMAT_BLOCK = (
     "notées (au moins une cellule de la grille doit rester non \"given\"). "
     "answer = {\"type\":\"table\",\"rows\":int (2-12),\"cols\":int (1-6),"
     "\"col_labels\":[str]?,\"row_labels\":[str]?,\"cells\":[[{\"type\":\"integer\"|"
-    "\"decimal\"|\"rational\"|\"text\",\"value\":...,\"given\":bool?}]]} (une ligne = "
-    "une liste de cellules, \"rational\" a value=[num,den]).\n"
+    "\"decimal\"|\"rational\"|\"expression\"|\"text\",\"value\":...,\"given\":bool?}]]} "
+    "(une ligne = une liste de cellules, \"rational\" a value=[num,den]).\n"
     "5. \"multiline_text\" + answer.type=\"rubric\" : raisonnement rédigé (obligatoire "
     "pour les problèmes et le niveau 5) — 2 à 5 étapes {description, expected_text, "
     "points 1-3}, expected_text = ce qu'on doit lire sur la copie, balisé $...$ ; "

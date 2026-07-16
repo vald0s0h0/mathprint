@@ -25,10 +25,16 @@ def normalize(raw: str) -> str:
     s = raw.strip()
     s = s.replace("\\times", "*").replace("×", "*").replace("÷", "/")
     s = s.replace("−", "-").replace("–", "-")
-    s = re.sub(r"\\frac\{([^}]*)\}\{([^}]*)\}", r"(\1)/(\2)", s)
+    # virgule décimale française balisée en LaTeX ($3{,}5$, cf. _GEN_FORMAT_RULES)
+    # AVANT le dépliage des fractions : sinon les accolades de {,} sont prises
+    # pour la fermeture du groupe \frac{...} et tronquent le numérateur.
+    s = re.sub(r"(?<=\d)\{,\}(?=\d)", ".", s)
+    # \frac ET \dfrac (le \d optionnel absorbe le préfixe "d" de \dfrac,
+    # sinon jamais reconnu alors que c'est la commande préférée du prompt)
+    s = re.sub(r"\\d?frac\{([^}]*)\}\{([^}]*)\}", r"(\1)/(\2)", s)
     s = s.replace("\\left", "").replace("\\right", "").replace("$", "")
     s = re.sub(r"\\text\{[^}]*\}", "", s)
-    s = re.sub(r"(?<=\d),(?=\d)", ".", s)   # virgule décimale française
+    s = re.sub(r"(?<=\d),(?=\d)", ".", s)   # virgule décimale non balisée (repli)
     s = re.sub(r"\s+", "", s)
     # réponse du type "x=5" -> garder le membre droit pour une solution demandée
     return s
@@ -101,6 +107,14 @@ def grade(expected: dict, grading: dict, ocr_text: str, ocr_confidence: float,
             norm = normalize(raw_cell or "")
             if exp_cell["type"] == "text":
                 ok = norm.casefold() == normalize(str(exp_cell["value"])).casefold()
+            elif exp_cell["type"] == "expression":
+                try:
+                    got_e = parse_expr(norm, transformations=TRANSFORMS)
+                    want_e = parse_expr(normalize(str(exp_cell["value"])), transformations=TRANSFORMS)
+                    ok = sympy.simplify(got_e - want_e) == 0
+                except Exception:
+                    result.update(tier="D", reason_code="table_cell_unreadable")
+                    return result
             else:
                 got = _parse_number(norm)
                 if got is None:
@@ -193,7 +207,14 @@ def grade(expected: dict, grading: dict, ocr_text: str, ocr_confidence: float,
         if etype == "expression" or comparator == "symbolic_equiv":
             var = sympy.Symbol(expected.get("variable", "x"))
             got_e = parse_expr(norm, transformations=TRANSFORMS, local_dict={str(var): var})
-            want_e = parse_expr(expected["value"], transformations=TRANSFORMS, local_dict={str(var): var})
+            # expected["value"] est balisé comme le reste (LaTeX $...$ : \dfrac,
+            # \times, {,} décimale française...) — il doit passer par la MÊME
+            # normalisation que le texte OCR, sinon parse_expr échoue (exception
+            # silencieusement rattrapée plus bas) dès que la réponse de référence
+            # contient la moindre notation LaTeX (cf. incident auto-vérification
+            # 'expression' toujours refusée).
+            want_e = parse_expr(normalize(str(expected["value"])), transformations=TRANSFORMS,
+                                local_dict={str(var): var})
             ok = sympy.simplify(got_e - want_e) == 0
             result.update(tier="B", score=max_score if ok else 0.0,
                           reason_code="symbolic_equiv" if ok else "symbolic_mismatch")
