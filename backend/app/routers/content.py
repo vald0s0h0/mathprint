@@ -122,6 +122,20 @@ def list_exercises(competency_id: str, level: int | None = None,
     return [_exercise_out(ex, comp) for ex in rows]
 
 
+@router.get("/sesamaths/raw")
+def sesamaths_raw(competency_id: str, db: Session = Depends(get_db)):
+    """État + pages OCR brutes (Mistral) de la Série d'une compétence — onglet
+    diagnostic « Sésamaths » de la banque, pour vérifier ce que l'OCR a
+    vraiment lu AVANT de regarder ce que l'adaptateur en a fait. Lecture
+    seule : ne déclenche jamais d'extraction (cf. services.sesamaths.
+    extraction_state) ; utiliser « Compléter la banque » pour ça."""
+    comp = db.get(Competency, competency_id)
+    if not comp:
+        raise HTTPException(404, "Compétence inconnue")
+    from ..services import sesamaths
+    return sesamaths.extraction_state(db, comp)
+
+
 @router.get("/lessons")
 def list_lessons(competency_id: str | None = None, grade_level: str | None = None,
                  db: Session = Depends(get_db)):

@@ -3,12 +3,12 @@
 // donne la couverture, l'aperçu fidèle (KaTeX + figures identiques au PDF),
 // le retrait d'un contenu douteux et la génération ciblée.
 import {
-  ActionIcon, Badge, Box, Button, Card, Collapse, Group, Loader, Paper, ScrollArea,
+  ActionIcon, Alert, Badge, Box, Button, Card, Collapse, Group, Loader, Paper, ScrollArea,
   SegmentedControl, Select, Stack, Table, Tabs, Text, Title, Tooltip,
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
 import {
-  AlertTriangle, BookOpen, ChevronDown, ChevronUp, Lightbulb, Library, RefreshCw, Trash2,
+  AlertTriangle, BookOpen, ChevronDown, ChevronUp, Lightbulb, Library, RefreshCw, ScanText, Trash2,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../api'
@@ -46,6 +46,12 @@ type Lesson = {
 }
 type Framework = { id: string; name: string; grade_level: string }
 type Comp = { id: string; code: string; label: string }
+type SesamathsRaw = {
+  status: string; detail?: string; attempts?: number
+  series_number?: number | null; series_name?: string
+  updated_at?: string | null; n_exercises_validated?: number
+  pages: { page: number; markdown: string; blocks: { type: string; content: string }[] }[]
+}
 
 const RESPONSE_LABELS: Record<string, string> = {
   short_text: 'réponse courte', multiline_text: 'raisonnement rédigé',
@@ -144,6 +150,83 @@ function ExerciseCard({ ex, onRetire }: { ex: Exercise; onRetire: (id: string) =
   )
 }
 
+const SESAMATHS_STATUS_LABELS: Record<string, string> = {
+  manual_missing: 'Manuel introuvable', chapter_missing: 'Chapitre absent du manuel',
+  not_extracted: 'Pas encore extrait', extracted: 'OCR fait, adaptation en attente',
+  done: 'Extrait et adapté',
+}
+
+// Onglet diagnostic : texte OCR Mistral BRUT, page par page, tel que lu —
+// jamais passé par l'adaptateur — pour vérifier que la donnée existe et est
+// fidèle avant de chercher un bug côté adaptation/format.
+function SesamathsRawPanel({ data }: { data: SesamathsRaw | null }) {
+  if (data === null) return <Loader size="sm" />
+  if (['manual_missing', 'chapter_missing', 'not_extracted'].includes(data.status)) {
+    return (
+      <Alert color={data.status === 'not_extracted' ? 'gray' : 'red'} variant="light"
+        title={SESAMATHS_STATUS_LABELS[data.status] ?? data.status}>
+        {data.status === 'not_extracted'
+          ? "Utilisez « Compléter la banque » dans l'onglet Exercices pour lancer l'extraction OCR de cette Série."
+          : (data.detail || 'Vérifiez la configuration du manuel dans Paramètres.')}
+      </Alert>
+    )
+  }
+  return (
+    <Stack gap="xs">
+      <Group gap={6} wrap="wrap">
+        {data.series_number != null && (
+          <Badge size="xs" variant="light" color="teal">
+            Série {data.series_number}{data.series_name ? ` — ${data.series_name}` : ''}
+          </Badge>
+        )}
+        <Badge size="xs" variant="light" color={data.status === 'done' ? 'teal' : 'yellow'}>
+          {SESAMATHS_STATUS_LABELS[data.status] ?? data.status}
+        </Badge>
+        {typeof data.n_exercises_validated === 'number' && (
+          <Badge size="xs" variant="light" color="indigo">
+            {data.n_exercises_validated} exercice(s) en banque
+          </Badge>
+        )}
+      </Group>
+      {data.detail && <Alert color="orange" variant="light" title="Dernière erreur">{data.detail}</Alert>}
+      {data.pages.length === 0 ? (
+        <Text c="dimmed" size="sm">Aucune page OCRisée pour l'instant.</Text>
+      ) : (
+        <ScrollArea.Autosize mah="58vh">
+          <Stack gap="xs">
+            {data.pages.map((p) => (
+              <Paper key={p.page} withBorder radius="sm" p={8}>
+                <Badge size="xs" variant="outline" color="gray" mb={4}>Page {p.page}</Badge>
+                {p.markdown ? (
+                  <Text size="xs" style={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace' }}>
+                    {p.markdown}
+                  </Text>
+                ) : (
+                  <Stack gap={4}>
+                    {p.blocks.map((b, i) => (
+                      <Group key={i} gap={6} wrap="nowrap" align="flex-start">
+                        <Badge size="xs" variant="outline" color="gray" style={{ flexShrink: 0 }}>
+                          {b.type}
+                        </Badge>
+                        {b.type === 'table'
+                          ? <Text size="xs" c="dimmed" style={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace' }}>
+                              {b.content}
+                            </Text>
+                          : <MathText text={b.content} size="sm" />}
+                      </Group>
+                    ))}
+                    {p.blocks.length === 0 && <Text size="xs" c="dimmed">(page vide)</Text>}
+                  </Stack>
+                )}
+              </Paper>
+            ))}
+          </Stack>
+        </ScrollArea.Autosize>
+      )}
+    </Stack>
+  )
+}
+
 // Encarts typés d'un rappel de leçon : icône dans une marge dédiée, teinte
 // distincte selon le type — reconnaissables au premier coup d'œil quel que
 // soit le thème choisi pour la carte.
@@ -236,6 +319,7 @@ export default function Bank() {
   const [selected, setSelected] = useState<Summary | null>(null)
   const [exercises, setExercises] = useState<Exercise[] | null>(null)
   const [lessons, setLessons] = useState<Lesson[] | null>(null)
+  const [sesamathsRaw, setSesamathsRaw] = useState<SesamathsRaw | null>(null)
   const [levelFilter, setLevelFilter] = useState('all')
   const [busy, setBusy] = useState(false)
   // ajout d'une compétence pas encore en banque
@@ -262,8 +346,10 @@ export default function Bank() {
     setSelected(s)
     setExercises(null)
     setLessons(null)
+    setSesamathsRaw(null)
     api.get<Exercise[]>(`/api/content/exercises?competency_id=${s.competency_id}`).then(setExercises)
     api.get<Lesson[]>(`/api/content/lessons?competency_id=${s.competency_id}`).then(setLessons)
+    api.get<SesamathsRaw>(`/api/content/sesamaths/raw?competency_id=${s.competency_id}`).then(setSesamathsRaw)
   }, [])
 
   const retireExercise = (id: string) => {
@@ -399,9 +485,14 @@ export default function Bank() {
             </Group>
             <Tabs defaultValue="exercises">
               <Tabs.List mb="xs">
+                <Tabs.Tab value="sesamaths" leftSection={<ScanText size={14} />}>Sésamaths</Tabs.Tab>
                 <Tabs.Tab value="exercises">Exercices ({(exercises ?? []).length})</Tabs.Tab>
                 <Tabs.Tab value="lessons">Rappels de leçon ({(lessons ?? []).length})</Tabs.Tab>
               </Tabs.List>
+
+              <Tabs.Panel value="sesamaths">
+                <SesamathsRawPanel data={sesamathsRaw} />
+              </Tabs.Panel>
 
               <Tabs.Panel value="exercises">
                 <Group justify="space-between" mb="xs">

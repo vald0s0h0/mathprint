@@ -380,7 +380,7 @@ def claude_json(db: Session, operation: str, system: str, payload: dict,
                 correlation_id: str | None = None) -> dict:
     """Claude en mode JSON pour vérification croisée (exercices, rappels) et
     pour l'adaptateur Sésamaths (JSON brut -> contrat app, texte pur, pas
-    d'image). `model` explicite (ex. repli Opus) prioritaire sur la config."""
+    d'image). `model` explicite prioritaire sur la config."""
     cfg = _config(db, "anthropic")
     if _today_cost(db, "anthropic") > settings.llm_daily_cost_limit_eur:
         raise BudgetExceeded("Budget Anthropic quotidien atteint")
@@ -441,10 +441,17 @@ def claude_json(db: Session, operation: str, system: str, payload: dict,
     r.raise_for_status()
     data = r.json()
     usage = data.get("usage", {})
-    # tarifs : Opus 4.8 ~5$/25$ ; Haiku 4.5 ~1$/5$ par MTok — un appel Opus ici
-    # (repli adaptateur Sésamaths) doit être comptabilisé à son vrai coût,
-    # pas au tarif Haiku
-    in_rate, out_rate = (5e-6, 25e-6) if "opus" in (model or "") else (1e-6, 5e-6)
+    # tarifs approx. par MTok : Opus 4.8 ~5$/25$, Sonnet 5 ~3$/15$, Haiku 4.5
+    # ~1$/5$ — l'adaptateur Sésamaths tourne sur Sonnet en continu (pas juste
+    # un repli occasionnel) : le confondre avec le tarif Haiku sous-évaluerait
+    # durablement le coût réel face à llm_daily_cost_limit_eur.
+    m = model or ""
+    if "opus" in m:
+        in_rate, out_rate = 5e-6, 25e-6
+    elif "sonnet" in m:
+        in_rate, out_rate = 3e-6, 15e-6
+    else:
+        in_rate, out_rate = 1e-6, 5e-6
     _record(db, "anthropic", model, operation,
             input_tokens=usage.get("input_tokens", 0), output_tokens=usage.get("output_tokens", 0),
             cost=usage.get("input_tokens", 0) * in_rate + usage.get("output_tokens", 0) * out_rate,
@@ -540,16 +547,24 @@ def _mistral_ocr_mock(n_pages: int, correlation_id: str) -> dict:
          "top_left_x": 40, "top_left_y": 80, "bottom_right_x": 500, "bottom_right_y": 120},
     ]
     dims = {"dpi": 200, "width": 1600, "height": 2200}
+
+    def _md(blocks: list[dict]) -> str:
+        # reconstruction markdown simulée (Mistral en fournit une par page,
+        # cf. page.markdown) — pour exercer l'onglet diagnostic « Sésamaths »
+        # (affichage du texte OCR brut) sans dépendre d'un vrai appel réseau.
+        return "\n\n".join(b["content"] for b in blocks)
+
     if n_pages <= 1:
-        pages = [{"index": 0, "markdown": "", "images": [], "tables": [], "dimensions": dims,
-                 "blocks": first_page_blocks + last_page_blocks}]
+        blocks = first_page_blocks + last_page_blocks
+        pages = [{"index": 0, "markdown": _md(blocks), "images": [], "tables": [],
+                 "dimensions": dims, "blocks": blocks}]
     else:
-        pages = ([{"index": 0, "markdown": "", "images": [], "tables": [], "dimensions": dims,
-                  "blocks": first_page_blocks}]
+        pages = ([{"index": 0, "markdown": _md(first_page_blocks), "images": [], "tables": [],
+                  "dimensions": dims, "blocks": first_page_blocks}]
                 + [{"index": i, "markdown": "", "images": [], "tables": [], "dimensions": dims,
                    "blocks": []} for i in range(1, n_pages - 1)]
-                + [{"index": n_pages - 1, "markdown": "", "images": [], "tables": [],
-                   "dimensions": dims, "blocks": last_page_blocks}])
+                + [{"index": n_pages - 1, "markdown": _md(last_page_blocks), "images": [],
+                   "tables": [], "dimensions": dims, "blocks": last_page_blocks}])
     return {"pages": pages, "model": "mock", "usage_info": {"pages_processed": n_pages}}
 
 

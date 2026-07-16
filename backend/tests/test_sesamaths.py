@@ -185,8 +185,10 @@ def _seed_competency(db, chapter_code: str, chapter_name: str, label: str) -> Co
 
 
 def test_ensure_bank_sesamaths_end_to_end_mock(db_session):
+    # niveau 3 : la difficulté n'est plus évaluée par le LLM (17/07), le pool
+    # mock entier est donc toujours au niveau 3 par défaut (cf. _to_candidate)
     comp = _seed_competency(db_session, "A1", "Opérations", "Effectuer une division euclidienne")
-    rows = sesamaths.ensure_bank(db_session, comp, level=2, min_variants=3)
+    rows = sesamaths.ensure_bank(db_session, comp, level=3, min_variants=3)
     assert len(rows) >= 1
     assert all(r.source in sesamaths.SOURCE_POOL for r in rows)
     stored = db_session.query(GeneratedExercise).filter_by(competency_id=comp.id).all()
@@ -202,7 +204,7 @@ def test_raw_extract_json_populated_by_mock_pipeline(db_session):
     # BRUTS dont elle provient, pour l'affichage "avant/après" de la page
     # Banque (cf. content.py::_exercise_out).
     comp = _seed_competency(db_session, "A1", "Opérations", "Effectuer une division euclidienne")
-    sesamaths.ensure_bank(db_session, comp, level=2, min_variants=3)
+    sesamaths.ensure_bank(db_session, comp, level=3, min_variants=3)
     stored = (db_session.query(GeneratedExercise)
               .filter_by(competency_id=comp.id, source="sesamaths").all())
     assert stored
@@ -228,21 +230,46 @@ def test_dedup_key_distinguishes_table_fill_with_different_cells():
     assert exercise_gen._dedup_key(statement, dict(expected_a)) == key_a
 
 
+def test_dedup_key_distinguishes_manual_drawing_without_expected_signal():
+    # manual_drawing n'a AUCUN answer structuré (expected={"type":"manual"}) :
+    # le repli sur la seule base normalisée (chiffres effacés) confondait deux
+    # exercices bien réels dont l'énoncé a juste la même trame de phrase —
+    # cause identifiée d'un pool réduit à un seul exercice survivant.
+    from app.services import exercise_gen
+    expected = {"type": "manual"}
+    key_a = exercise_gen._dedup_key("Trace le triangle ABC de côté 5 cm.", expected)
+    key_b = exercise_gen._dedup_key("Trace le triangle DEF de côté 9 cm.", expected)
+    assert key_a != key_b
+    # même énoncé -> même clé (un VRAI doublon reste détecté)
+    assert exercise_gen._dedup_key("Trace le triangle ABC de côté 5 cm.", dict(expected)) == key_a
+
+
+def test_dedup_key_distinguishes_qcm_by_choices_not_just_correct_index():
+    # expected["correct"] est un INDICE (0, 1, ...), identique pour beaucoup
+    # de QCM différents par hasard — le contenu réel des choix doit compter.
+    from app.services import exercise_gen
+    expected = {"type": "choice", "correct": [0]}
+    key_a = exercise_gen._dedup_key("Que vaut le produit ?", expected, ["$12$", "$14$"])
+    key_b = exercise_gen._dedup_key("Que vaut le produit ?", expected, ["$56$", "$60$"])
+    assert key_a != key_b
+
+
 def test_retired_exercise_not_reinserted(db_session):
     # "Retirer" un exercice (Bank.tsx) doit rester définitif : il ne doit
     # jamais redevenir piochable dans le pool caché de la Série au prochain
     # ensure_bank — cause identifiée de "les mêmes exercices reviennent".
     comp = _seed_competency(db_session, "A1", "Opérations", "Effectuer une division euclidienne")
-    rows1 = sesamaths.ensure_bank(db_session, comp, level=2, min_variants=3)
+    rows1 = sesamaths.ensure_bank(db_session, comp, level=3, min_variants=3)
     victim = next(r for r in rows1 if r.source == "sesamaths")
     victim_statement = victim.statement
     victim.status = "retired"
     db_session.commit()
 
-    try:
-        sesamaths.ensure_bank(db_session, comp, level=2, min_variants=3)
-    except ValueError:
-        pass  # pool mock minuscule, épuisé au niveau 2 — pas ce qui est testé ici
+    # 2 exercices actifs restent (sur les 3 du pool mock) : ensure_bank ne
+    # lève PAS ici (rows non vide), même si le pool caché n'a rien de neuf à
+    # offrir pour remplacer le retiré — ce qui est vérifié est que le retiré
+    # ne réapparaît jamais, pas que le quota soit reconstitué.
+    sesamaths.ensure_bank(db_session, comp, level=3, min_variants=3)
     active_statements = {r.statement for r in
                          db_session.query(GeneratedExercise)
                          .filter_by(competency_id=comp.id, status="active").all()}
@@ -352,7 +379,7 @@ def test_to_candidate_crops_figure_from_bbox(db_session, manual_doc):
             "response_type": "short_text",
             "answer": {"type": "integer", "value": 70},
             "source_blocks": [7],
-            "difficulty": 3}
+            "difficulty": 5}
     cand = sesamaths._to_candidate(item, manual_doc, blocks_by_index, comp, db_session,
                                    set(), out_dir)
     assert cand is not None
@@ -360,6 +387,9 @@ def test_to_candidate_crops_figure_from_bbox(db_session, manual_doc):
     assert fig and fig["type"] == "image"
     assert Path(fig["params"]["path"]).exists()
     assert cand["raw_extract_json"]["blocks"][0]["type"] == "image"
+    # le niveau n'est plus évalué par le LLM (mis de côté le 17/07) : toujours
+    # 3/5 par défaut, quelle que soit la valeur envoyée par l'adaptateur
+    assert cand["difficulty"] == 3
 
 
 def test_multi_field_exercise_stays_one_table_fill(db_session):
@@ -437,6 +467,53 @@ def test_bank_rows_near_level_propagates_missing_manual(db_session, monkeypatch)
         exercise_gen.bank_rows_near_level(db_session, comp, level=3, source="sesamaths")
 
 
+def test_extraction_state_not_extracted_then_reports_pages(db_session):
+    # Onglet diagnostic « Sésamaths » de la banque : lecture seule, ne
+    # déclenche jamais d'extraction elle-même.
+    comp = _seed_competency(db_session, "A1", "Opérations", "Automatismes")
+    comp.code = "A1.1"
+    db_session.commit()
+
+    state0 = sesamaths.extraction_state(db_session, comp)
+    assert state0["status"] == "not_extracted"
+    assert state0["pages"] == []
+
+    doc, manual, chapter_code = sesamaths._resolve_chapter(db_session, comp)
+    sesamaths.ensure_chapter_pool(db_session, doc, manual, chapter_code, comp)
+
+    state1 = sesamaths.extraction_state(db_session, comp)
+    assert state1["status"] == "done"
+    assert state1["series_number"] == 1
+    assert state1["pages"]
+    # tagué en page MANUEL (start_index=5 pour la Série 1 de A1), pas en
+    # index relatif au mini-PDF envoyé à Mistral (qui recommence à 0)
+    assert state1["pages"][0]["page"] >= 5
+    assert any(p["blocks"] or p["markdown"] for p in state1["pages"])
+
+
+def test_extraction_state_manual_missing(db_session, monkeypatch):
+    from app.config import settings
+    monkeypatch.setattr(settings, "sesamaths_manuals", {})
+    comp = _seed_competency(db_session, "A1", "Opérations", "Automatismes")
+    state = sesamaths.extraction_state(db_session, comp)
+    assert state["status"] == "manual_missing"
+    assert state["pages"] == []
+
+
+def test_sesamaths_raw_endpoint_returns_extraction_state(db_session):
+    from app.routers import content as content_router
+
+    comp = _seed_competency(db_session, "A1", "Opérations", "Automatismes")
+    comp.code = "A1.1"
+    db_session.commit()
+    doc, manual, chapter_code = sesamaths._resolve_chapter(db_session, comp)
+    sesamaths.ensure_chapter_pool(db_session, doc, manual, chapter_code, comp)
+
+    result = content_router.sesamaths_raw(competency_id=comp.id, db=db_session)
+    assert result["status"] == "done"
+    assert result["pages"]
+
+
 def test_purge_bank_clears_exercises_and_extraction_state(db_session):
     # Purger seulement GeneratedExercise ne suffirait pas : le pool mis en
     # cache par Série (SesamathsChapterExtraction.validated_json) resservirait
@@ -445,7 +522,7 @@ def test_purge_bank_clears_exercises_and_extraction_state(db_session):
     from app.routers import content as content_router
 
     comp = _seed_competency(db_session, "A1", "Opérations", "Effectuer une division euclidienne")
-    sesamaths.ensure_bank(db_session, comp, level=2, min_variants=2)
+    sesamaths.ensure_bank(db_session, comp, level=3, min_variants=2)
     assert db_session.query(GeneratedExercise).count() > 0
     assert db_session.query(SesamathsChapterExtraction).count() > 0
     assert db_session.query(SesamathsLlmCache).count() > 0

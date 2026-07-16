@@ -50,10 +50,12 @@ class Settings(BaseSettings):
     # 4 précisément ("mistral-ocr-4-0"), pas "-latest" (modèles antérieurs
     # acceptent include_blocks mais renvoient un tableau vide)
     mistral_ocr_model: str = "mistral-ocr-4-0"
-    # adaptation Sésamaths (texte pur, blocs OCR bruts -> contrat app) : Haiku
-    # par défaut, repli Opus 4.8 si Haiku ne produit aucun candidat validé
-    claude_adapt_model: str = "claude-haiku-4-5"
-    claude_adapt_fallback_model: str = "claude-opus-4-8"
+    # adaptation Sésamaths (texte pur, blocs OCR bruts -> contrat app) : tâche
+    # exigeante (découpage d'exercices, choix de format, correction) — Haiku
+    # produisait trop peu d'exercices distincts par Série (cf. incident "un
+    # seul exercice en banque", 17/07) ; Sonnet, un seul modèle, pas de repli
+    # (un 2e modèle "correcteur" ajoutait de la complexité sans fiabiliser)
+    claude_adapt_model: str = "claude-sonnet-5"
 
     # --- Budgets / quotas par défaut ---
     mathpix_concurrency: int = 3

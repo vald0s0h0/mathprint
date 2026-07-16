@@ -14,14 +14,22 @@ granularité passée de la page à la Série) :
      dédié plutôt qu'un modèle de chat), et le traitement multi-page en un
      seul appel donne à l'étape suivante toute la visibilité nécessaire pour
      ne jamais couper un exercice à cheval sur un saut de page.
-  2. ADAPTATEUR (Claude, texte pur) : reçoit la liste APLATIE des blocs de
-     toute la Série (ordre de lecture, page taguée par bloc) et les regroupe
-     en exercices — un bloc "title" numéroté ("12 Calcule...", correspondant
-     au badge coloré du manuel) démarre un nouvel exercice, tout ce qui suit
-     lui appartient jusqu'au PROCHAIN titre numéroté, même après un
-     changement de page. RÉSOUT l'exercice (l'OCR n'en fournit aucune
-     réponse), choisit le format de réponse app, attribue la difficulté,
+  2. ADAPTATEUR (Claude Sonnet, texte pur, UN SEUL modèle — cf. 17/07 :
+     Haiku produisait trop peu d'exercices distincts par Série, un 2e modèle
+     de repli "correcteur" ajoutait de la complexité sans fiabiliser, retiré)
+     : reçoit la liste APLATIE des blocs de toute la Série (ordre de
+     lecture, page taguée par bloc) et les regroupe en exercices — un bloc
+     "title" numéroté ("12 Calcule...", correspondant au badge coloré du
+     manuel) démarre un nouvel exercice, tout ce qui suit (y compris les
+     sous-parties a./b./c. et A./B./C.) lui appartient jusqu'au PROCHAIN
+     titre numéroté, même après un changement de page. Fait aussi le tri
+     entre un vrai tableau et une liste à puces sur 2 colonnes mal étiquetée
+     "table" par l'OCR, et reconnaît les "..." comme des champs réponse
+     vides (pas une ellipse). RÉSOUT l'exercice (l'OCR n'en fournit aucune
+     réponse) avec un corrigé succinct, choisit le format de réponse app,
      reformule les consignes pour rester cohérentes avec le format choisi.
+     N'évalue PLUS la difficulté (mise de côté le 17/07, cf. _to_candidate) :
+     toujours 3/5 par défaut.
   3. VALIDATION DÉTERMINISTE : chaque candidat adapté repasse par
      exercise_gen._validate_exercise — aucune duplication de logique.
   4. FIGURES : un bloc "image" référencé dans les "source_blocks" d'un
@@ -32,6 +40,9 @@ Reprise sur erreur : l'état d'extraction d'une Série est persistant
 (SesamathsChapterExtraction, keyée par compétence = Série), machine à états
 à 2 phases (extrait -> adapté) — une Série tient en 1-3 pages en général, la
 reprise se fait donc au niveau de la Série entière (pas page par page).
+`extraction_state()` expose cet état en LECTURE SEULE (jamais d'appel LLM),
+pour l'onglet diagnostic « Sésamaths » de la banque (vérifier ce que l'OCR a
+vraiment lu, avant de regarder ce que l'adaptateur en a fait).
 
 Retraitement automatique : bumper ADAPT_PROMPT_VERSION (ou
 settings.sesamaths_schema_version) sur une Série déjà "done" déclenche une
@@ -59,7 +70,7 @@ logger = logging.getLogger(__name__)
 # la séparation extracteur/adaptateur : l'adaptateur, cheap et itéré souvent,
 # ne doit jamais forcer une ré-extraction Mistral, coûteuse).
 EXTRACT_PROMPT_VERSION = "sesamaths-extract-2-mistral"
-ADAPT_PROMPT_VERSION = "sesamaths-adapt-2-mistral-blocks"
+ADAPT_PROMPT_VERSION = "sesamaths-adapt-3-sonnet"
 SOURCE_POOL = ("sesamaths", "sesamaths_deepseek")
 
 
@@ -185,29 +196,59 @@ _ADAPT_INTRO = (
     "- autres (\"code\"/\"references\"/\"aside_text\"/\"header\"/\"footer\"/"
     "\"signature\") : ignore-les, ce ne sont jamais des exercices, ni les "
     "rubriques « Culture » ou les rappels de leçon (« À RETENIR »).\n\n"
-    "# Découpage en exercices\n"
+
+    "# Nettoyage préalable — l'OCR décrit la MISE EN PAGE, pas la structure : "
+    "utilise le bon sens avant de faire confiance à un type de bloc\n"
+    "- Une liste à puces imprimée sur 2 colonnes (mise en page fréquente dans "
+    "ce manuel) est parfois étiquetée \"table\" par l'OCR alors que ce n'est "
+    "PAS un vrai tableau : un vrai tableau a un EN-TÊTE de colonne cohérent "
+    "(ex. « Quotient »/« Reste ») et une relation logique entre les cellules "
+    "d'une même ligne. Si ce n'est pas le cas, traite chaque ligne/puce "
+    "comme un ITEM INDÉPENDANT (souvent une sous-question a./b./c.), jamais "
+    "comme une grille table_fill.\n"
+    "- Toute séquence de points de suspension (« … » ou « ... », 3 points ou "
+    "plus) dans un bloc de texte ou une cellule de tableau est un CHAMP "
+    "RÉPONSE VIDE laissé pour l'élève, JAMAIS une ellipse de ponctuation à "
+    "recopier telle quelle — transforme-la systématiquement en trou à "
+    "compléter (marqueur {{blank}}, cellule de tableau non \"given\", ou "
+    "case de multi_blank selon le format choisi).\n\n"
+
+    "# Découpage en exercices — RÈGLE ABSOLUE\n"
     "Un bloc \"title\" dont le contenu commence par un numéro (ex. « 12 "
     "Calcule... », « 4. Quotients... ») marque le DÉBUT d'un nouvel exercice "
     "(ce numéro correspond au badge coloré imprimé dans le manuel). TOUS les "
     "blocs qui suivent (text/list/table/equation/image/caption), y compris "
     "sur la page SUIVANTE (le champ \"page\" change en cours de lecture), "
     "appartiennent à ce MÊME exercice jusqu'au PROCHAIN \"title\" numéroté — "
-    "ne le sépare JAMAIS à cause d'un changement de page, fusionne-le. Les "
-    "sous-questions « a. », « b. », « c. »… (blocs \"list\" ou \"text\" "
-    "successifs) NE SONT PAS des exercices séparés : ce sont les champs de "
-    "réponse d'un seul et même exercice — ne les scinde jamais, ne répète "
-    "jamais le même exercice. Le nombre d'exercices que tu renvoies doit "
-    "être EXACTEMENT le nombre de \"title\" numérotés distincts (après "
-    "fusion inter-page).\n\n"
+    "ne le sépare JAMAIS à cause d'un changement de page, fusionne-le.\n"
+    "À l'intérieur d'un exercice, deux niveaux de sous-parties existent, NI "
+    "L'UN NI L'AUTRE n'est un exercice séparé :\n"
+    "- « a. », « b. », « c. »… (minuscules) : des CALCULS ou sous-questions "
+    "associés au MÊME exercice — ce sont ses champs de réponse (typiquement "
+    "une ligne de table_fill, ou plusieurs {{blank}}), jamais des exercices "
+    "à part.\n"
+    "- « A. », « B. », « C. »… (majuscules, ex. « Partie A »/« Partie B ») : "
+    "de GRANDES parties du même exercice (souvent un contexte commun décliné "
+    "en plusieurs volets) — regroupe-les aussi dans le MÊME exercice que le "
+    "numéro qui les précède, jamais un exercice par partie.\n"
+    "Ne scinde JAMAIS un exercice en plusieurs, ne répète JAMAIS le même "
+    "exercice deux fois. Le nombre d'exercices que tu renvoies doit être "
+    "EXACTEMENT le nombre de \"title\" numérotés distincts (après fusion "
+    "inter-page) — recompte-les avant de répondre.\n\n"
+
     "Ta mission pour CHAQUE exercice ainsi délimité :\n"
-    "- RÉSOUS-le : rédige \"correction\" (résolution complète, étape par "
-    "étape, jamais vide) et calcule la/les valeur(s) de réponse — les blocs "
-    "OCR n'en fournissent aucune.\n"
+    "- RÉSOUS-le et rédige \"correction\" : un corrigé TRÈS SUCCINCT — le "
+    "résultat clairement énoncé + une explication courte (1 à 2 phrases "
+    "maximum, JAMAIS une résolution pas-à-pas façon copie double), balisé "
+    "$...$ en LaTeX si pertinent. Les blocs OCR ne fournissent aucune "
+    "réponse : calcule-la toi-même.\n"
     "- Choisis le type de réponse de la plateforme et construis \"answer\" en "
-    "conséquence (menu ci-dessous).\n"
-    "- Attribue \"difficulty\" (entier 1 à 5, relatif au niveau §GRADE§).\n"
+    "conséquence (menu ci-dessous) — jamais le format d'origine du manuel.\n"
     "- Renvoie \"source_blocks\": [les indices \"i\" de TOUS les blocs "
-    "utilisés pour cet exercice] — sert à retrouver le texte original.\n\n"
+    "utilisés pour cet exercice] — sert à retrouver le texte original.\n"
+    "- N'ÉVALUE PAS de niveau de difficulté : ce champ n'est pas demandé ici, "
+    "ignore toute idée de noter l'exercice.\n\n"
+
     "RÈGLE ABSOLUE : tu ne REFUSES ni n'OMETS JAMAIS un exercice sous "
     "prétexte que son format d'origine ne correspond à aucun type supporté "
     "tel quel. REFORMULE TOUJOURS la consigne pour qu'elle rentre dans l'un "
@@ -218,13 +259,21 @@ _ADAPT_INTRO = (
     "fait réellement sur sa copie (« Entoure »/« Souligne »/« Barre » "
     "deviennent « Coche » si tu choisis un QCM ; « Relie » reste correct "
     "pour un matching ; un bloc \"list\" Vrai/Faux devient un qcm_single à 2 "
-    "choix, choices=[\"Vrai\",\"Faux\"]). Un bloc \"table\" imprimé devient "
-    "directement un \"table_fill\" (mêmes lignes/colonnes, cellules déjà "
-    "remplies marquées \"given\":true). Au-delà de 4-5 réponses courtes dans "
-    "un même exercice, regroupe-les TOUJOURS en \"table_fill\" plutôt que de "
-    "multiplier les {{blank}} dispersés dans le texte — un tableau donne à "
-    "l'élève des limites visuelles (cadre), indispensables pour un "
-    "recadrage OCR fiable de sa copie une fois complétée.\n\n"
+    "choix, choices=[\"Vrai\",\"Faux\"]). Un bloc \"table\" imprimé (un VRAI "
+    "tableau, cf. nettoyage préalable ci-dessus) devient directement un "
+    "\"table_fill\" (mêmes lignes/colonnes, cellules déjà remplies marquées "
+    "\"given\":true). Au-delà de 4-5 réponses courtes dans un même exercice, "
+    "regroupe-les TOUJOURS en \"table_fill\" plutôt que de multiplier les "
+    "{{blank}} dispersés dans le texte — un tableau donne à l'élève des "
+    "limites visuelles (cadre), indispensables pour un recadrage OCR fiable "
+    "de sa copie une fois complétée.\n\n"
+
+    "LATEX ET ESPACES INSÉCABLES : tout nombre collé à une unité ou un "
+    "symbole (€, cm, kg, %, ...) est balisé en LaTeX avec un espace "
+    "insécable entre la valeur et l'unité — ex. « 13 € » devient "
+    "$13\\ \\text{€}$, « 7,5 cm » devient $7{,}5\\ \\text{cm}$ — jamais de "
+    "texte brut « 13 € » où une coupure de ligne séparerait le nombre de son "
+    "unité à l'impression.\n\n"
 )
 
 
@@ -273,10 +322,7 @@ def _to_candidate(item: dict, doc, blocks_by_index: dict[int, dict], competency,
         return None
     item = dict(item)
     source_idx = item.pop("source_blocks", None) or []
-    try:
-        difficulty = max(1, min(5, int(item.pop("difficulty", 3))))
-    except (TypeError, ValueError):
-        difficulty = 3
+    item.pop("difficulty", None)  # niveau non évalué par le LLM (cf. 17/07) : toujours 3
 
     # figure : si l'adaptateur n'a pas décrit une figure paramétrique
     # (rectangle/triangle/...), et qu'un bloc "image" fait partie de ses
@@ -302,7 +348,7 @@ def _to_candidate(item: dict, doc, blocks_by_index: dict[int, dict], competency,
                        exercise_gen.diagnose_rejection(item, competency),
                        str(item.get("statement", "")).replace("\n", " "))
         return None
-    valid["difficulty"] = difficulty
+    valid["difficulty"] = 3
     valid["raw_extract_json"] = {
         "blocks": [blocks_by_index[i] for i in source_idx if i in blocks_by_index]}
     return valid
@@ -331,47 +377,40 @@ def _adapt_series(db: Session, blocks: list[dict], series_range: dict, chapter_c
                   competency, is_geometry: bool, grade: str, existing_norms: set[str],
                   doc, out_dir) -> list[dict]:
     """Appel 2 (texte) : regroupe les blocs typés d'UNE Série (toutes pages
-    confondues) en exercices, résout, choisit le format, note la difficulté.
-    Essaie Haiku puis, si aucun candidat validé, repli Opus texte — sans
-    repayer l'OCR, les blocs sont déjà en main."""
+    confondues) en exercices, résout, choisit le format. Un seul modèle
+    (settings.claude_adapt_model) — un 2e modèle de repli ("qui corrige")
+    ajoutait de la complexité sans fiabiliser (cf. 17/07) ; en mode mock,
+    _cached_adapt réessaie déjà sur 429/troncature avec un budget de tokens
+    croissant, ce qui reste (résilience réseau, pas une 2e opinion)."""
     if not blocks:
         return []
     blocks_by_index = {b["i"]: b for b in blocks}
     payload = {"blocks": [{"i": b["i"], "page": b["page"], "type": b["type"],
                           "content": b["content"]} for b in blocks]}
 
-    errors: list[str] = []
-    for model in (settings.claude_adapt_model, settings.claude_adapt_fallback_model):
-        system = _adapt_system(grade, competency.chapter_name, series_range.get("number"),
-                               series_range.get("name", ""), is_geometry)
-        cache_key = _cache_key("adapt", ADAPT_PROMPT_VERSION, model,
-                              settings.sesamaths_schema_version, chapter_code,
-                              series_range.get("number"), payload["blocks"])
-        try:
-            data = _cached_adapt(db, cache_key, model, system, payload,
-                                 correlation_id=f"sesa-adp-{chapter_code}-s{series_range.get('number')}")
-        except Exception as e:
-            logger.warning("Sésamaths : adaptation Série %s (%s) échouée : %s",
-                           series_range.get("number"), model, e)
-            errors.append(f"{model}: {e}")
-            continue
-        cands: list[dict] = []
-        for item in data.get("exercises") or []:
-            c = _to_candidate(item, doc, blocks_by_index, competency, db, existing_norms, out_dir)
-            if c is not None:
-                cands.append(c)
-        logger.info("Sésamaths : adaptation Série %s — modèle %s : %s exercice(s) "
-                    "validé(s) sur %s renvoyé(s)", series_range.get("number"), model,
-                    len(cands), len(data.get("exercises") or []))
-        if cands:
-            return cands
-        if model == settings.claude_adapt_fallback_model:
-            return []
-        logger.info("Sésamaths : Série %s sans candidat validé en %s, repli %s",
-                    series_range.get("number"), model, settings.claude_adapt_fallback_model)
-    if errors:
-        raise RuntimeError(f"aucun modèle d'adaptation n'a répondu ({' | '.join(errors)})")
-    return []
+    model = settings.claude_adapt_model
+    system = _adapt_system(grade, competency.chapter_name, series_range.get("number"),
+                           series_range.get("name", ""), is_geometry)
+    cache_key = _cache_key("adapt", ADAPT_PROMPT_VERSION, model,
+                          settings.sesamaths_schema_version, chapter_code,
+                          series_range.get("number"), payload["blocks"])
+    try:
+        data = _cached_adapt(db, cache_key, model, system, payload,
+                             correlation_id=f"sesa-adp-{chapter_code}-s{series_range.get('number')}")
+    except Exception as e:
+        logger.warning("Sésamaths : adaptation Série %s (%s) échouée : %s",
+                       series_range.get("number"), model, e)
+        raise RuntimeError(f"adaptation Série {series_range.get('number')} ({model}) : {e}") from e
+
+    cands: list[dict] = []
+    for item in data.get("exercises") or []:
+        c = _to_candidate(item, doc, blocks_by_index, competency, db, existing_norms, out_dir)
+        if c is not None:
+            cands.append(c)
+    logger.info("Sésamaths : adaptation Série %s — modèle %s : %s exercice(s) "
+                "validé(s) sur %s renvoyé(s)", series_range.get("number"), model,
+                len(cands), len(data.get("exercises") or []))
+    return cands
 
 
 # ================================================================ chapitre
@@ -487,8 +526,10 @@ def ensure_chapter_pool(db: Session, doc, manual, chapter_code: str, competency
 
         if row.step == "extracted":
             blocks = _flatten_blocks(row.raw_json or {}, series_range["start_index"])
-            existing_norms = {exercise_gen._dedup_key(c["statement"], c.get("expected"))
-                              for c in (row.validated_json or [])}
+            existing_norms = {
+                exercise_gen._dedup_key(c["statement"], c.get("expected"),
+                                        (c.get("grading") or {}).get("choices"))
+                for c in (row.validated_json or [])}
             cands = _adapt_series(db, blocks, series_range, chapter_code, competency,
                                   is_geometry, grade, existing_norms, doc, out_dir)
             row.validated_json = cands
@@ -538,6 +579,53 @@ def _extracted_chapter(db: Session, competency) -> tuple[list[dict], bool]:
     return pool, fully_done
 
 
+def raw_pages(row: SesamathsChapterExtraction) -> list[dict]:
+    """Pages OCR brutes (Mistral) d'une Série, taguées par page MANUEL (pas
+    l'index relatif au mini-PDF envoyé à Mistral) — pour l'affichage
+    diagnostic (onglet « Sésamaths » de la banque). Jamais consommé par
+    l'adaptateur, qui lit row.raw_json directement via _flatten_blocks."""
+    start = (row.page_range_json or {}).get("start_index", 0)
+    out = []
+    for page in sorted((row.raw_json or {}).get("pages") or [], key=lambda p: p.get("index", 0)):
+        out.append({
+            "page": start + int(page.get("index") or 0),
+            "markdown": page.get("markdown") or "",
+            "blocks": [{"type": b.get("type"), "content": b.get("content", "")}
+                      for b in page.get("blocks") or []],
+        })
+    return out
+
+
+def extraction_state(db: Session, competency) -> dict:
+    """État d'extraction en LECTURE SEULE (aucun appel LLM, jamais d'écriture)
+    — pour l'onglet diagnostic « Sésamaths » de la banque : vérifier que
+    l'OCR a bien lu la Série AVANT de regarder ce que l'adaptateur en a fait.
+    N'appelle jamais ensure_chapter_pool : si rien n'a encore été extrait,
+    renvoie juste "not_extracted" (l'utilisateur lance l'extraction via
+    « Compléter la banque », qui existe déjà)."""
+    doc, manual, chapter_code = _resolve_chapter(db, competency)
+    if doc is None:
+        return {"status": "manual_missing",
+                "detail": manual.error_message if manual else "", "pages": []}
+    if chapter_code is None:
+        return {"status": "chapter_missing",
+                "detail": f"chapitre {competency.chapter_code} absent du manuel", "pages": []}
+    row = (db.query(SesamathsChapterExtraction)
+           .filter_by(manual_id=manual.id,
+                      chapter_code=_extraction_key(competency, chapter_code)).first())
+    if row is None or row.step in ("pending", "") or not row.raw_json:
+        return {"status": "not_extracted", "detail": "", "pages": [],
+                "series_number": series_number_for(competency)}
+    return {
+        "status": row.step, "detail": row.error_message, "attempts": row.attempts,
+        "series_number": (row.page_range_json or {}).get("series_number"),
+        "series_name": (row.page_range_json or {}).get("series_name"),
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        "n_exercises_validated": len(row.validated_json or []),
+        "pages": raw_pages(row),
+    }
+
+
 def harvest(db: Session, competency, level: int, need: int,
            existing_norms: set[str], pool: list[dict]) -> list[dict]:
     """Moisson des exercices Sésamaths déjà extraits de la Série de
@@ -550,7 +638,8 @@ def harvest(db: Session, competency, level: int, need: int,
             break
         if cand.get("difficulty") != level:
             continue
-        key = exercise_gen._dedup_key(cand["statement"], cand.get("expected"))
+        key = exercise_gen._dedup_key(cand["statement"], cand.get("expected"),
+                                      (cand.get("grading") or {}).get("choices"))
         if key in existing_norms:
             continue
         existing_norms.add(key)
@@ -593,7 +682,8 @@ def ensure_bank(db: Session, competency, level: int,
     # définitivement "vu" (sinon il redevient piochable dès le pool cache
     # suivant — "Retirer" ne retirait rien durablement, cf. incident doublons).
     existing_norms = {
-        exercise_gen._dedup_key(ex.statement, ex.expected_json)
+        exercise_gen._dedup_key(ex.statement, ex.expected_json,
+                                (ex.grading_json or {}).get("choices"))
         for ex in db.query(GeneratedExercise)
         .filter(GeneratedExercise.competency_id == competency.id,
                GeneratedExercise.source.in_(SOURCE_POOL)).all()}

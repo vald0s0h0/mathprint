@@ -92,7 +92,7 @@ def _normalize_statement_for_dedup(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
-def _dedup_key(statement: str, expected: dict | None) -> str:
+def _dedup_key(statement: str, expected: dict | None, choices: list | None = None) -> str:
     """Identité anti-doublon d'un exercice. Le SEUL énoncé normalisé ne
     suffit pas pour table_fill/multi_blank : "statement" n'y porte que la
     consigne commune, souvent générique ("Calcule."), IDENTIQUE pour des
@@ -100,15 +100,28 @@ def _dedup_key(statement: str, expected: dict | None) -> str:
     exercices réels distincts finissaient donc pris pour des doublons, et le
     second silencieusement rejeté (pool réel bien plus petit que ce qui a été
     extrait). On ajoute donc le contenu qui distingue réellement deux
-    exercices (cellules, choix corrects, paires, valeur) au hash d'identité."""
+    exercices (cellules, choix, paires, valeur) au hash d'identité.
+
+    Un QCM est distingué par ses CHOIX (texte), pas seulement l'INDICE de la
+    bonne réponse (expected["correct"]) : deux QCM différents ont ~1 chance
+    sur 2-4 de partager le même indice correct, ce qui les ferait passer à
+    tort pour des doublons.
+
+    "manual_drawing" (et tout type sans réponse structurée) n'a AUCUN contenu
+    distinctif dans `expected` : replier sur le SEUL énoncé normalisé (base,
+    chiffres effacés) confondait alors deux exercices bien réels dont
+    l'énoncé a juste la même trame de phrase (ex. « Trace le triangle ABC de
+    côté 5 cm » / « … de côté 9 cm ») — cause identifiée d'un pool réduit à
+    un seul exercice survivant. Le repli utilise donc l'énoncé COMPLET (pas
+    la base sans chiffres), jamais juste la trame."""
     base = _normalize_statement_for_dedup(statement)
     if not expected:
-        return base
+        return f"{base}|{hashlib.sha256(statement.encode('utf-8')).hexdigest()[:16]}"
     etype = expected.get("type")
     if etype == "table":  # table_fill ET multi_blank (même forme interne)
         extra = expected.get("cells")
     elif etype == "choice":
-        extra = expected.get("correct")
+        extra = (choices, expected.get("correct"))
     elif etype == "matching":
         extra = expected.get("pairs")
     elif etype == "rubric":
@@ -116,7 +129,7 @@ def _dedup_key(statement: str, expected: dict | None) -> str:
     else:
         extra = expected.get("value")
     if extra is None:
-        return base
+        return f"{base}|{hashlib.sha256(statement.encode('utf-8')).hexdigest()[:16]}"
     digest = hashlib.sha256(
         json.dumps(extra, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:16]
     return f"{base}|{digest}"
@@ -384,11 +397,11 @@ def _validate_exercise(raw: dict, competency: Competency, db: Session,
     answer = raw.get("answer") or {}
     atype = answer.get("type")
 
-    def _contract(expected, gpolicy, rtype):
+    def _contract(expected, gpolicy, rtype, choices=None):
         # anti-doublon (le set est maintenu par l'appelant pour couvrir le lot
         # en cours) : calculé ICI, une fois `expected` connu, pas sur le seul
         # statement — cf. _dedup_key.
-        key = _dedup_key(statement, expected)
+        key = _dedup_key(statement, expected, choices)
         if key in existing_norms:
             return None
         existing_norms.add(key)
@@ -418,7 +431,7 @@ def _validate_exercise(raw: dict, competency: Competency, db: Session,
             return None  # « tout est juste » n'évalue rien
         expected = {"type": "choice", "correct": correct}
         gpolicy = {"max_score": 1, "comparator": "qcm", "negative": 0, "choices": choices}
-        return _contract(expected, gpolicy, rtype)
+        return _contract(expected, gpolicy, rtype, choices=choices)
 
     # ---------------- tableau à remplir ----------------
     if rtype == "table_fill":
@@ -702,70 +715,89 @@ _GEN_FORMAT_RULES = (
 # bloc reste car c'est le seul contrat encore actif.
 _RESPONSE_FORMAT_BLOCK = (
     "CHOIX DU FORMAT DE RÉPONSE — RÈGLE ABSOLUE : N'OMETS JAMAIS UN EXERCICE. "
-    "Chaque exercice DOIT être renvoyé, quel que soit son énoncé d'origine. "
-    "Priorité au format le PLUS automatisable, l'intervention humaine à la "
-    "correction doit rester exceptionnelle — REFORMULE TOUJOURS la tâche pour "
-    "qu'elle rentre dans l'un des formats 1 à 6 ci-dessous, dans cet ordre de "
-    "préférence. C'est SEULEMENT si AUCUNE reformulation n'est possible dans "
-    "AUCUN de ces formats que tu utilises le format 7 (\"manual_drawing\") — "
-    "qui accepte n'importe quel exercice sans exception, quel que soit son "
-    "domaine (pas seulement la géométrie) puisqu'il ne demande aucune réponse "
-    "structurée. Il n'existe donc JAMAIS de raison légitime d'omettre un "
-    "exercice : au pire, utilise \"manual_drawing\".\n"
-    "1. \"qcm_single\"/\"qcm_multiple\" : reconnaissance, propriété, lecture de figure. "
-    "2 à 8 choix (2 pour un Vrai/Faux : choices=[\"Vrai\",\"Faux\"]), distracteurs = "
-    "erreurs TYPIQUES d'élèves (erreur de signe, de priorité, confusion "
+    "Chaque exercice DOIT être renvoyé, quel que soit son énoncé d'origine — la "
+    "plateforme n'imprime QUE l'un des 8 formats ci-dessous, jamais la mise en "
+    "page du manuel/PDF d'origine. Priorité au format le PLUS automatisable, "
+    "l'intervention humaine à la correction doit rester exceptionnelle — "
+    "REFORMULE TOUJOURS la tâche pour qu'elle rentre dans l'un des formats 1 à "
+    "7 ci-dessous, dans cet ordre de préférence. C'est SEULEMENT si AUCUNE "
+    "reformulation n'est possible dans AUCUN de ces formats que tu utilises le "
+    "format 8 (\"manual_drawing\") — qui accepte n'importe quel exercice sans "
+    "exception, quel que soit son domaine (pas seulement la géométrie) "
+    "puisqu'il ne demande aucune réponse structurée. Il n'existe donc JAMAIS "
+    "de raison légitime d'omettre un exercice : au pire, utilise "
+    "\"manual_drawing\".\n"
+    "1. QCM UNIQUE / QCM MULTIPLE (\"qcm_single\"/\"qcm_multiple\") : "
+    "reconnaissance, propriété, lecture de figure. 2 à 8 choix (2 pour un "
+    "Vrai/Faux : choices=[\"Vrai\",\"Faux\"]), distracteurs = erreurs "
+    "TYPIQUES d'élèves (erreur de signe, de priorité, confusion "
     "périmètre/aire...), une seule formulation possible de la bonne réponse ; "
-    "PRÉFÈRE ce format à chaque fois qu'une tâche de reconnaissance/classement le "
-    "permet, quitte à transformer une question ouverte en QCM à choix nombreux — un "
-    "exercice \"Vrai ou Faux ?\" du manuel devient un qcm_single à 2 choix.\n"
-    "2. \"short_text\" : un résultat unique — answer.type parmi \"integer\", "
-    "\"decimal\", \"rational\" (valeur [num, den]), \"expression\" (réduite, variable "
-    "précisée), \"text\" (mot exact attendu, ex. « isocèle »). Si la réponse s'insère "
-    "naturellement au milieu de la phrase ou de l'équation (texte à trous), place le "
-    "marqueur littéral {{blank}} à cet endroit précis dans \"statement\" (UN SEUL "
-    "{{blank}} — pour plusieurs cases indépendantes, voir \"multi_blank\" ci-dessous) ; "
-    "sinon la case de réponse est ajoutée après l'énoncé.\n"
-    "3. \"multi_blank\" : PLUSIEURS cases de réponse courte indépendantes dans le même "
-    "exercice, quand les sous-questions (a., b., c...) sont des phrases ou équations "
-    "hétérogènes qui NE forment PAS une grille régulière (sinon préfère \"table_fill\"). "
-    "Place un marqueur {{blank}} à CHAQUE endroit où l'élève doit écrire (2 minimum — "
-    "pour une seule case, utilise \"short_text\"), dans l'ordre naturel de lecture. "
-    "answer = {\"type\":\"blanks\",\"values\":[{\"type\":\"integer\"|\"decimal\"|"
-    "\"rational\"|\"expression\"|\"text\",\"value\":...}, ...]} avec EXACTEMENT une "
-    "entrée par occurrence de {{blank}}, dans le MÊME ordre que leur apparition dans "
-    "\"statement\".\n"
-    "4. \"table_fill\" : quand plusieurs résultats du même type forment naturellement "
-    "une grille (ex. compléter une table de valeurs, un tableau de proportionnalité), "
-    "OU quand un badge contient plusieurs sous-questions a./b./c. STRUCTURELLEMENT "
-    "IDENTIQUES (même forme de phrase, seuls les nombres changent) : une ligne par "
-    "sous-question, row_labels[i] = la phrase complète de la sous-question (avec le "
-    "trou à la place où il apparaît, ex. « a. 7 × 8 = »), cols=1, cells[i][0] = la "
-    "réponse attendue pour cette ligne. \"statement\" ne porte alors que la consigne "
-    "commune (peut être très courte, ex. « Calcule. »), le détail complet est dans "
-    "row_labels. Si un tableau du manuel imprime déjà certaines valeurs (colonne de "
-    "calcul donnée, seule la colonne résultat est à remplir), marque ces cellules "
-    "\"given\":true — elles seront imprimées telles quelles, non éditables, non "
-    "notées (au moins une cellule de la grille doit rester non \"given\"). "
+    "PRÉFÈRE ce format à chaque fois qu'une tâche de reconnaissance/classement "
+    "le permet, quitte à transformer une question ouverte en QCM à choix "
+    "nombreux — un exercice « Vrai ou Faux ? » du manuel devient un "
+    "qcm_single à 2 choix.\n"
+    "2. CASE SIMPLE AVEC RÉPONSE COURTE (\"short_text\", EN LIGNE) : la "
+    "réponse s'insère naturellement au milieu de la phrase ou de l'équation "
+    "(texte à trous) — place le marqueur littéral {{blank}} à cet endroit "
+    "précis dans \"statement\" (UN SEUL {{blank}} ; pour plusieurs cases "
+    "indépendantes dans le même exercice, voir « case à trous » ci-dessous). "
+    "answer.type parmi \"integer\", \"decimal\", \"rational\" (valeur "
+    "[num, den]), \"expression\" (réduite, variable précisée), \"text\" (mot "
+    "exact attendu, ex. « isocèle »).\n"
+    "3. CASE TOUTE LA LARGEUR POUR RÉPONSE MOYENNE (\"short_text\", EN BLOC) : "
+    "même answer.type qu'au format 2, mais la réponse ne s'insère PAS "
+    "naturellement dans une phrase (ex. « Calcule $12+8$. », résultat "
+    "attendu seul) — n'utilise PAS {{blank}}, la case de réponse est ajoutée "
+    "automatiquement après l'énoncé, sur toute la largeur de la colonne.\n"
+    "4. CASE À TROUS (\"multi_blank\") : PLUSIEURS cases de réponse courte "
+    "indépendantes dans le MÊME exercice, quand les sous-questions (a., b., "
+    "c...) sont des phrases ou équations hétérogènes qui NE forment PAS une "
+    "grille régulière (sinon préfère « tableau à remplir »). Place un "
+    "marqueur {{blank}} à CHAQUE endroit où l'élève doit écrire (2 minimum — "
+    "pour une seule case, utilise le format 2 ou 3), dans l'ordre naturel de "
+    "lecture. answer = {\"type\":\"blanks\",\"values\":[{\"type\":\"integer\"|"
+    "\"decimal\"|\"rational\"|\"expression\"|\"text\",\"value\":...}, ...]} "
+    "avec EXACTEMENT une entrée par occurrence de {{blank}}, dans le MÊME "
+    "ordre que leur apparition dans \"statement\".\n"
+    "5. TABLEAU À REMPLIR (\"table_fill\") : quand plusieurs résultats du "
+    "même type forment naturellement une grille (ex. compléter une table de "
+    "valeurs, un tableau de proportionnalité), OU quand un badge contient "
+    "plusieurs sous-questions a./b./c. STRUCTURELLEMENT IDENTIQUES (même "
+    "forme de phrase, seuls les nombres changent) : une ligne par "
+    "sous-question, row_labels[i] = la phrase complète de la sous-question "
+    "(avec le trou à la place où il apparaît, ex. « a. 7 × 8 = »), cols=1, "
+    "cells[i][0] = la réponse attendue pour cette ligne. \"statement\" ne "
+    "porte alors que la consigne commune (peut être très courte, ex. "
+    "« Calcule. »), le détail complet est dans row_labels. Si un tableau du "
+    "manuel imprime déjà certaines valeurs (colonne de calcul donnée, seule "
+    "la colonne résultat est à remplir), marque ces cellules \"given\":true "
+    "— elles seront imprimées telles quelles, non éditables, non notées (au "
+    "moins une cellule de la grille doit rester non \"given\"). "
     "answer = {\"type\":\"table\",\"rows\":int (2-12),\"cols\":int (1-6),"
     "\"col_labels\":[str]?,\"row_labels\":[str]?,\"cells\":[[{\"type\":\"integer\"|"
     "\"decimal\"|\"rational\"|\"expression\"|\"text\",\"value\":...,\"given\":bool?}]]} "
     "(une ligne = une liste de cellules, \"rational\" a value=[num,den]).\n"
-    "5. \"multiline_text\" + answer.type=\"rubric\" : raisonnement rédigé (obligatoire "
-    "pour les problèmes et le niveau 5) — 2 à 5 étapes {description, expected_text, "
-    "points 1-3}, expected_text = ce qu'on doit lire sur la copie, balisé $...$ ; "
-    "ajoute \"lines\": nombre de lignes de rédaction à prévoir (3-12, proportionné à "
-    "la longueur attendue de la réponse).\n"
-    "6. \"matching\" (DERNIER RECOURS avant le tracé, à n'utiliser que si aucun des "
-    "formats ci-dessus ne convient à une tâche d'association) : deux listes à relier — "
-    "answer = {\"type\":\"matching\",\"left\":[str] (2-6),\"right\":[str] (2-6),"
-    "\"pairs\":[[i,j]]} (indices 0-based, chaque élément utilisé une seule fois).\n"
-    "7. \"manual_drawing\" (DERNIER RECOURS ABSOLU, tous domaines confondus — pas "
-    "seulement la géométrie : construction géométrique, tâche de repérage/coloriage "
-    "sur une figure non géométrique, opération posée en colonnes, ou toute tâche qui "
-    "ne rentre vraiment dans AUCUN des formats 1 à 6 malgré la reformulation) : "
-    "l'élève écrit/trace librement sur la copie, la correction est TOUJOURS manuelle, "
-    "jamais automatique ; aucune réponse structurée requise, \"answer\" peut être "
+    "6. MULTI-LIGNE POUR RÉPONSE RAISONNÉE (\"multiline_text\", "
+    "answer.type=\"rubric\") : raisonnement rédigé (obligatoire pour les "
+    "problèmes) — 2 à 5 étapes {description, expected_text, points 1-3}, "
+    "expected_text = ce qu'on doit lire sur la copie, balisé $...$ ; ajoute "
+    "\"lines\" : nombre de lignes de rédaction à prévoir (3-12), PROPORTIONNÉ "
+    "à la longueur attendue de la réponse (pas un nombre fixe) — une "
+    "justification en une phrase mérite 3-4 lignes, un problème à plusieurs "
+    "étapes 8-12.\n"
+    "7. POINTS À RELIER (\"matching\", DERNIER RECOURS avant le tracé, à "
+    "n'utiliser que si aucun des formats ci-dessus ne convient à une tâche "
+    "d'association) : deux listes à relier — answer = {\"type\":\"matching\","
+    "\"left\":[str] (2-6),\"right\":[str] (2-6),\"pairs\":[[i,j]]} (indices "
+    "0-based, chaque élément utilisé une seule fois).\n"
+    "8. FIGURE GÉOMÉTRIQUE, COLORIAGE, DESSIN (\"manual_drawing\", DERNIER "
+    "RECOURS ABSOLU, tous domaines confondus — pas seulement la géométrie : "
+    "construction géométrique, tâche de repérage/coloriage sur une figure "
+    "non géométrique, opération posée en colonnes, ou toute tâche qui ne "
+    "rentre vraiment dans AUCUN des formats 1 à 7 malgré la reformulation) : "
+    "l'élève écrit/trace librement sur la copie, la correction est TOUJOURS "
+    "manuelle, JAMAIS automatique (aucune correction possible par la "
+    "pipeline) ; aucune réponse structurée requise, \"answer\" peut être "
     "omis. Utilise CE format plutôt que d'omettre l'exercice.\n\n"
     "{geometry_rules}"
     "FIGURES : si une figure aide (géométrie, droite graduée, repère), ajoute "
@@ -778,7 +810,8 @@ _RESPONSE_FORMAT_BLOCK = (
     + _GEN_FORMAT_RULES + "\n\n"
     "Réponds UNIQUEMENT en JSON strictement valide :\n"
     '{"exercises":[{"kind":"application"|"probleme","statement":str,"correction":str '
-    "(rédigée comme au tableau, chaque étape justifiée),"
+    "(TRÈS SUCCINCTE : le résultat + 1-2 phrases d'explication au maximum, "
+    "jamais une résolution pas-à-pas),"
     '"response_type":"short_text"|"qcm_single"|"qcm_multiple"|"multi_blank"|'
     '"multiline_text"|"table_fill"|"matching"|"manual_drawing",'
     '"choices":[str]?,"answer":{"type":"integer"|"decimal"|"rational"|"expression"|'
