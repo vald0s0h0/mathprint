@@ -2,8 +2,8 @@
 pipelines qui produisent des exercices :
   - services.sesamaths : adaptation des blocs OCR Mistral d'un manuel Sésamath
     (`source="sesamaths"`) ;
-  - services.gemini_gen : création d'exercices par Gemini à partir d'une
-    compétence du référentiel (`source="gemini"`).
+  - services.gemini_gen : création d'exercices par Gemini, en s'appuyant sur
+    ces mêmes blocs OCR comme référence de programme/niveau (`source="gemini"`).
 Toute autre source lève une erreur claire — pas de repli silencieux sur du
 contenu inventé hors pipeline assumée (la génération DeepSeek/MathALÉA et
 celle des rappels de leçon ont été retirées le 16/07).

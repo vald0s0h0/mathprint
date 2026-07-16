@@ -15,7 +15,7 @@ import TemplateEditor from '../components/TemplateEditor'
 import { useAppState } from '../state/AppState'
 
 type Me = { id: string; email: string; display_name: string; role: string }
-type Provider = { provider: string; model: string; secret_preview: string; active: boolean }
+type Provider = { provider: string; secret_preview: string; active: boolean }
 type PrintersInfo = {
   local: { name: string; default?: boolean; status: string }[]
   network: { name: string; uri: string; status: string }[]
@@ -58,7 +58,7 @@ export default function SettingsPage() {
   const [printers, setPrinters] = useState<PrintersInfo | null>(null)
   const [backups, setBackups] = useState<{ name: string; size: number }[]>([])
   const [calibrations, setCalibrations] = useState<any[]>([])
-  const [edit, setEdit] = useState<Record<string, { model: string; secret: string }>>({})
+  const [edit, setEdit] = useState<Record<string, string>>({})
   const [netName, setNetName] = useState('')
   const [netUri, setNetUri] = useState('')
   const [webBuild, setWebBuild] = useState<Build | null>(null)
@@ -151,8 +151,8 @@ export default function SettingsPage() {
   }
 
   async function save(provider: string) {
-    const e = edit[provider] || { model: '', secret: '' }
-    await api.post('/api/settings/providers', { provider, ...e, active: true })
+    const secret = edit[provider] || ''
+    await api.post('/api/settings/providers', { provider, secret, active: true })
     notifications.show({ color: 'green', message: `${provider} enregistré` })
     refresh()
   }
@@ -227,15 +227,6 @@ export default function SettingsPage() {
     }
   }
 
-  const defaults: Record<string, string> = {
-    mathpix: 'v3/text',
-    'deepseek-flash': 'deepseek-v4-flash',
-    'deepseek-pro': 'deepseek-v4-pro',
-    anthropic: 'claude-haiku-4-5-20251001',
-    mistral: 'mistral-ocr-4-0',
-    gemini: 'gemini-2.5-flash',
-  }
-
   return (
     <Stack>
       <Title order={2}>Paramètres</Title>
@@ -305,13 +296,8 @@ export default function SettingsPage() {
                             leftSection={<FlaskConical size={11} />}>simulé</Badge>}
                     </Group>
                   </Group>
-                  <Group mt="sm" grow>
-                    <TextInput label="Modèle" placeholder={defaults[p]}
-                      defaultValue={row?.model}
-                      onChange={(e) => setEdit({ ...edit, [p]: { ...(edit[p] || { secret: '' }), model: e.target.value } })} />
-                    <TextInput label={p === 'mathpix' ? 'app_id:app_key' : 'Clé API'} type="password"
-                      onChange={(e) => setEdit({ ...edit, [p]: { ...(edit[p] || { model: '' }), secret: e.target.value } })} />
-                  </Group>
+                  <TextInput mt="sm" label={p === 'mathpix' ? 'app_id:app_key' : 'Clé API'} type="password"
+                    onChange={(e) => setEdit({ ...edit, [p]: e.target.value })} />
                   <Button size="xs" mt="sm" onClick={() => save(p)}>Enregistrer</Button>
                 </Card>
               )

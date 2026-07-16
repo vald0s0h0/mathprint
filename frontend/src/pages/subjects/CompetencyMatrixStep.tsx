@@ -40,8 +40,9 @@ export default function CompetencyMatrixStep({
       <Group justify="space-between" align="flex-end">
         <Stack gap={2}>
           <Text size="xs" c="dimmed" fw={600}>Source des exercices</Text>
-          {/* Sésamaths : extraits du manuel 5e. Gemini : créés par IA à partir
-              de la compétence (pas de géométrie pour l'instant). */}
+          {/* Les deux sources lisent le manuel 5e : Sésamaths en ADAPTE les
+              exercices, Gemini s'en sert de référence (programme, niveau) pour
+              en CRÉER d'autres — pas de géométrie pour l'instant. */}
           <SegmentedControl size="xs" value={source} onChange={onSourceChange} data={[
             { value: 'auto', label: 'Automatique' },
             { value: 'mathalea', label: 'MathALÉA' },

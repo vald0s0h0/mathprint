@@ -43,6 +43,10 @@ reprise se fait donc au niveau de la Série entière (pas page par page).
 `extraction_state()` expose cet état en LECTURE SEULE (jamais d'appel LLM),
 pour l'onglet diagnostic « Sésamaths » de la banque (vérifier ce que l'OCR a
 vraiment lu, avant de regarder ce que l'adaptateur en a fait).
+`ensure_series_ocr()` expose la phase 1 SEULE (blocs OCR, sans adaptation) à
+la pipeline Gemini, qui lit le manuel comme CONTEXTE de programme sans avoir
+besoin des exercices adaptés — même extraction, même cache, une seule facture
+OCR pour les deux pipelines.
 
 Retraitement automatique : bumper ADAPT_PROMPT_VERSION (ou
 settings.sesamaths_schema_version) sur une Série déjà "done" déclenche une
@@ -465,18 +469,25 @@ def ensure_chapter_pool(db: Session, doc, manual, chapter_code: str, competency
 
     current_versions = {"extract": EXTRACT_PROMPT_VERSION, "adapt": ADAPT_PROMPT_VERSION,
                         "schema": settings.sesamaths_schema_version}
-    if row.step == "done":
-        stored = (row.page_range_json or {}).get("versions", {})
-        if stored.get("extract") != current_versions["extract"]:
-            logger.info("Sésamaths : %s — version d'extraction changée (%s -> %s), "
-                        "ré-extraction complète", extraction_key,
-                        stored.get("extract"), current_versions["extract"])
-            row.step = "pending"
-            row.raw_json = {}
-            row.validated_json = []
-            db.commit()
-        elif (stored.get("adapt") != current_versions["adapt"]
-              or stored.get("schema") != current_versions["schema"]):
+    stored = (row.page_range_json or {}).get("versions", {})
+    # La péremption de l'EXTRACTION vaut aussi pour une Série restée en
+    # "extracted" — état devenu courant : la pipeline Gemini extrait sans
+    # jamais adapter (ensure_series_ocr). Ne la contrôler que sur "done"
+    # laisserait ces Séries-là se faire adapter depuis un raw_json périmé,
+    # puis estampiller de la version courante : le bump d'EXTRACT_PROMPT_VERSION
+    # ne garantirait plus la ré-extraction qu'il promet.
+    if (row.step in ("done", "extracted")
+            and stored.get("extract") != current_versions["extract"]):
+        logger.info("Sésamaths : %s — version d'extraction changée (%s -> %s), "
+                    "ré-extraction complète", extraction_key,
+                    stored.get("extract"), current_versions["extract"])
+        row.step = "pending"
+        row.raw_json = {}
+        row.validated_json = []
+        db.commit()
+    elif row.step == "done":
+        if (stored.get("adapt") != current_versions["adapt"]
+                or stored.get("schema") != current_versions["schema"]):
             logger.info("Sésamaths : %s — version d'adaptation changée (%s -> %s), "
                         "ré-adaptation depuis le JSON brut Mistral déjà en cache "
                         "(aucun nouvel appel OCR)", extraction_key,
@@ -486,6 +497,8 @@ def ensure_chapter_pool(db: Session, doc, manual, chapter_code: str, competency
             db.commit()
         else:
             return row.validated_json or []
+    # "extracted" ne retourne JAMAIS ici : la Série a du raw_json mais pas
+    # d'exercices — elle tombe dans la phase d'adaptation ci-dessous.
 
     row.attempts += 1
     is_geometry = (competency.domain_code in exercise_gen.GEOMETRY_DOMAINS
@@ -559,6 +572,67 @@ def _extracted_chapter(db: Session, competency) -> tuple[list[dict], bool]:
                       chapter_code=_extraction_key(competency, chapter_code)).first())
     fully_done = bool(row and row.step == "done")
     return pool, fully_done
+
+
+def ensure_series_ocr(db: Session, competency) -> list[dict]:
+    """Blocs OCR Mistral de la Série de `competency` (phase 1 SEULE), pour une
+    pipeline TIERCE qui veut lire le manuel sans en adapter les exercices —
+    aujourd'hui services.gemini_gen, qui s'en sert de contexte de programme.
+
+    Ne lance JAMAIS l'adaptateur (phase 2, Claude Sonnet) : l'appelant veut le
+    texte du manuel, pas des exercices au contrat app — les payer serait
+    absurde. Partage en revanche l'état et le cache d'extraction de la pipeline
+    Sésamaths : si la Série a déjà été extraite, aucun appel OCR n'est fait, et
+    si c'est nous qui l'extrayons, la Série reste en `step="extracted"`, prête
+    à être adaptée gratuitement le jour où la pipeline Sésamaths passe dessus.
+
+    N'invalide RIEN sur changement de version de prompt : gérer ici la machine
+    à états de `ensure_chapter_pool` la dupliquerait à moitié. Un raw_json déjà
+    présent est du texte de manuel, toujours bon comme contexte, quelle que
+    soit la version du prompt qui l'a demandé.
+
+    Lève SesamathsExtractionError si le manuel ou le chapitre sont introuvables
+    (l'appelant décide quoi en faire — jamais de repli silencieux)."""
+    doc, manual, chapter_code = _resolve_chapter(db, competency)
+    if doc is None or chapter_code is None:
+        detail = (manual.error_message if manual and manual.error_message
+                  else f"chapitre {competency.chapter_code} absent du manuel")
+        raise SesamathsExtractionError(
+            f"Le PDF du manuel Sésamath est introuvable (ou le chapitre "
+            f"{competency.chapter_code} en est absent). Détail : {detail}")
+
+    extraction_key = _extraction_key(competency, chapter_code)
+    row = (db.query(SesamathsChapterExtraction)
+           .filter_by(manual_id=manual.id, chapter_code=extraction_key).first())
+    if row is None:
+        row = SesamathsChapterExtraction(manual_id=manual.id, chapter_code=extraction_key)
+        db.add(row)
+        db.flush()
+
+    series_range = _resolve_series_range(doc, manual, chapter_code, competency)
+    if not row.raw_json:
+        row.attempts += 1
+        try:
+            row.raw_json = _extract_series(db, doc, series_range, chapter_code)
+        except Exception as e:
+            row.error_message = str(e)[:2000]
+            db.commit()
+            raise SesamathsExtractionError(
+                f"L'OCR de la Série de {competency.code} a échoué : {e}") from e
+        row.page_range_json = {**(row.page_range_json or {}),
+                               "start_index": series_range["start_index"],
+                               "end_index": series_range["end_index"],
+                               "series_number": series_range["number"],
+                               "series_name": series_range.get("name", ""),
+                               # estampiller la version d'extraction est
+                               # OBLIGATOIRE, pas cosmétique : c'est elle que
+                               # ensure_chapter_pool relit pour savoir si ce
+                               # raw_json est périmé (cf. le commentaire là-bas).
+                               "versions": {**(row.page_range_json or {}).get("versions", {}),
+                                            "extract": EXTRACT_PROMPT_VERSION}}
+        row.step = "extracted"
+        db.commit()
+    return _flatten_blocks(row.raw_json or {}, series_range["start_index"])
 
 
 def raw_pages(row: SesamathsChapterExtraction) -> list[dict]:

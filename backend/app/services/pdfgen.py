@@ -86,7 +86,7 @@ COL_W = (PAGE_W - 2 * MARGIN - COL_GAP) / 2
 # en entraînement) | Métadonnées (justifié droite) | QR/fiduciels (inchangé).
 NOTE_W, NOTE_H = 23 * mm, 15 * mm
 APPRECIATION_W = 80 * mm
-QR_ZONE_W = QR_MAIN + 2 * MARGIN + 2 * mm
+QR_ZONE_W = QR_MAIN
 # clearance du fiduciel TL (haut-gauche) : aucune zone ne doit le recouvrir
 HEADER_LEFT = MARGIN + QR_MINI + 4 * mm
 
@@ -273,7 +273,7 @@ def _draw_header(c: canvas.Canvas, student_name: str, class_name: str, title: st
 
     # --- zone Métadonnées, justifiée à droite (nom/prénom, classe, titre, date) ---
     mx, my, mw, mh = geo["meta"]["x"], geo["meta"]["y"], geo["meta"]["w"], geo["meta"]["h"]
-    meta_right = geo["qr"]["x"] - 2 * mm
+    meta_right = geo["qr"]["x"] - 3 * mm
     line_y = my + mh - name_fs
     c.setFillColor(black)
     c.setFont("Helvetica-Bold", name_fs)

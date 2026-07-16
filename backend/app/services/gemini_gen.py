@@ -1,17 +1,33 @@
-"""Pipeline Gemini : création d'exercices à partir d'une compétence du
-référentiel — 2e source d'exercices de l'app, à côté de l'extraction du manuel
-Sésamath (services.sesamaths).
+"""Pipeline Gemini : création d'exercices ANCRÉS DANS LE MANUEL de la classe —
+2e source d'exercices de l'app, à côté de l'extraction Sésamath
+(services.sesamaths).
 
-Différence de nature avec Sésamaths, qui explique toute l'architecture :
-Sésamaths LIT un manuel (le pool d'exercices d'une Série est fini — ce qui est
-imprimé est tout ce qu'on peut extraire, ni plus ni moins), alors qu'ici on
-INVENTE (le pool est infini, c'est nous qui décidons quand nous arrêter). D'où :
+Les deux pipelines lisent donc le MÊME manuel, mais n'en font pas la même
+chose : Sésamaths ADAPTE les exercices imprimés (pool fini — ce qui est dans
+la Série est tout ce qu'on peut en tirer), Gemini s'en sert de RÉFÉRENCE pour
+en créer d'autres (pool infini, c'est nous qui décidons quand nous arrêter).
+
+Le contexte manuel n'est pas un raffinement : sans lui (première version, 17/07)
+le modèle ne disposait que du libellé de la compétence et produisait des
+exercices mal ciblés, au mauvais niveau, hors programme — un libellé de
+référentiel ne dit ni jusqu'où va le programme, ni quelle taille de nombres est
+attendue dans la classe. Les pages du manuel le disent. D'où : pas de contexte
+manuel = pas de création (GeminiGenerationError), jamais un repli silencieux
+sur l'invention libre qui a justement causé le problème.
+
+Ce contexte est la phase 1 de Sésamaths — l'OCR Mistral de la Série, via
+sesamaths.ensure_series_ocr — SANS son adaptateur Claude : on veut le texte du
+manuel, pas des exercices au contrat app. L'extraction et son cache sont
+partagés avec l'autre pipeline : une seule facture OCR par Série, quelle que
+soit celle qui passe la première.
+
+Reste propre à la création (le pool est infini) :
   - pas de cache LLM : rappeler le modèle avec le même prompt doit produire des
     exercices NEUFS, c'est le but même de la boucle ;
   - appels par lots de `settings.gemini_batch_size` (5), répétés jusqu'à ce que
-    la banque atteigne `settings.gemini_bank_target` — 2 appels si tout passe,
-    davantage si la validation en recale (nombre d'appels non borné a priori,
-    seulement plafonné par `settings.gemini_max_batches`) ;
+    la banque atteigne `settings.gemini_bank_target` (30) — 6 appels si tout
+    passe, davantage si la validation en recale (nombre d'appels non borné a
+    priori, seulement plafonné par `settings.gemini_max_batches`) ;
   - anti-doublon à deux niveaux : les énoncés déjà produits sont renvoyés au
     modèle à chaque lot (« n'en produis aucun équivalent »), ET tout candidat
     dupliqué est rejeté déterministiquement (exercise_gen._dedup_key) — la
@@ -43,11 +59,11 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..models import Competency, CompetencyFramework, GeneratedExercise
-from . import exercise_gen, providers
+from . import exercise_gen, providers, sesamaths
 
 logger = logging.getLogger(__name__)
 
-PROMPT_VERSION = "gemini-exgen-1"
+PROMPT_VERSION = "gemini-exgen-2-manuel"
 SOURCE = "gemini"
 # Seul niveau produit : la difficulté n'est pas évaluée (cf. en-tête).
 GENERATED_LEVEL = 3
@@ -87,6 +103,33 @@ _INTRO = (
     "qui relève d'une AUTRE compétence de cette liste est hors sujet. Les "
     "§COUNT§ exercices portent TOUS sur la SEULE compétence cible.\n\n"
     "§COMPETENCY_TREE§\n\n"
+
+    "# LE MANUEL DE LA CLASSE SUR CETTE COMPÉTENCE — TA RÉFÉRENCE\n"
+    "Voici le texte des pages du manuel de §GRADE§ (collection Sésamath) "
+    "consacrées EXACTEMENT à la compétence cible, tel que lu par OCR : ce sont "
+    "les exercices réellement donnés à ces élèves. C'est ta référence de "
+    "vérité pour les trois choses que tu ne dois surtout pas deviner :\n"
+    "- le PROGRAMME : ce qui est au programme sur cette compétence est ce qui "
+    "est traité dans ces pages, rien de plus — pas de notion vue plus tard "
+    "dans l'année ni dans une classe supérieure, même si elle a un rapport ;\n"
+    "- le NIVEAU : la taille et la nature des nombres, la longueur des "
+    "énoncés, le nombre d'étapes attendues, le vocabulaire employé ;\n"
+    "- l'OBJECTIF D'APPRENTISSAGE : ce que ces exercices font réellement "
+    "travailler à l'élève.\n"
+    "Tu as le droit de REPRENDRE tel quel un énoncé de ces pages, et le droit "
+    "d'en INVENTER de nouveaux — mais uniquement en t'INSPIRANT de ceux-ci : "
+    "même type de tâche, même exigence, nombres et contextes renouvelés. Un "
+    "exercice qui ne serait ni repris ni inspiré de ces pages est hors sujet, "
+    "même s'il colle au libellé de la compétence.\n"
+    "Ce texte est BRUT et vient d'un OCR de pages imprimées : la mise en page "
+    "peut être désordonnée, des fragments s'y mêlent (numéros de page, titres "
+    "de rubrique, « À RETENIR », légendes), et les réponses n'y figurent PAS "
+    "(une suite de points « ... » est une case que l'élève devait remplir, "
+    "jamais un texte à recopier). Ignore les fragments, et RÉSOUS toi-même "
+    "tout énoncé que tu reprends. Les exercices de ces pages qui s'appuient "
+    "sur une FIGURE sont inutilisables ici (cf. règle géométrie) : ne les "
+    "reprends pas.\n\n"
+    "§MANUAL_CONTEXT§\n\n"
 
     "# Ce que deviennent tes exercices (enjeu de la plateforme)\n"
     "Ils sont imprimés sur des copies papier distribuées aux élèves ; les "
@@ -181,7 +224,39 @@ def _competency_name(c: Competency) -> str:
     return f"{c.short_id} {c.label}".strip() if c.short_id else c.label
 
 
-def _system_prompt(db: Session, competency: Competency, grade: str, count: int) -> str:
+# Blocs OCR sans valeur de contexte : ni énoncé, ni consigne, ni donnée — que
+# du bruit de mise en page. "image" est écarté pour une autre raison : son
+# "content" est vide (la figure vit dans son bbox, cf. sesamaths._to_candidate),
+# la citer ne ferait qu'annoncer au modèle des exercices qu'il ne peut pas voir
+# — et qu'on lui interdit de toute façon de reprendre (géométrie).
+_CONTEXT_SKIP_BLOCKS = {"header", "footer", "signature", "references", "code",
+                        "aside_text", "image"}
+
+
+def _manual_context(blocks: list[dict]) -> str:
+    """Rend les blocs OCR d'une Série en texte lisible pour le prompt : un bloc
+    par ligne, taggé de son type (le modèle doit savoir qu'un « table » est un
+    tableau imprimé et un « title » un numéro d'exercice), regroupé par page du
+    manuel. Aucune interprétation ici — le regroupement en exercices, c'est le
+    travail de l'ADAPTATEUR Sésamaths, et il n'a pas lieu d'être pour un simple
+    contexte de programme."""
+    lines: list[str] = []
+    current_page = None
+    for b in blocks:
+        if b.get("type") in _CONTEXT_SKIP_BLOCKS:
+            continue
+        content = str(b.get("content") or "").strip()
+        if not content:
+            continue
+        if b.get("page") != current_page:
+            current_page = b.get("page")
+            lines.append(f"\n--- page {current_page} du manuel ---")
+        lines.append(f"({b.get('type')}) {content}")
+    return "\n".join(lines).strip()
+
+
+def _system_prompt(db: Session, competency: Competency, grade: str, count: int,
+                   manual_context: str) -> str:
     # .replace (et non .format) : le prompt contient des accolades littérales
     # (schéma JSON, marqueur {{blank}})
     intro = (_INTRO
@@ -190,7 +265,11 @@ def _system_prompt(db: Session, competency: Competency, grade: str, count: int) 
              .replace("§COMPETENCY§", _competency_name(competency))
              .replace("§CHAPTER§", f"{competency.chapter_code} {competency.chapter_name}".strip())
              .replace("§DOMAIN§", f"{competency.domain_code} {competency.domain_name}".strip())
-             .replace("§COMPETENCY_TREE§", _competency_tree(db, competency)))
+             .replace("§COMPETENCY_TREE§", _competency_tree(db, competency))
+             # en dernier : le texte du manuel est le SEUL fragment non maîtrisé
+             # du prompt (OCR d'un PDF). S'il contenait « §COMPETENCY_TREE§ » ou
+             # tout autre marqueur, un .replace ultérieur l'interpréterait.
+             .replace("§MANUAL_CONTEXT§", manual_context))
     return intro + exercise_gen.format_contract(exercise_gen._GEMINI_FORMAT_INTRO)
 
 
@@ -234,11 +313,12 @@ def _to_candidate(item: dict, competency: Competency, db: Session,
 
 
 def _generate_batch(db: Session, competency: Competency, grade: str, batch: int,
-                    already_created: list[str], existing_norms: set[str]) -> list[dict]:
+                    already_created: list[str], existing_norms: set[str],
+                    manual_context: str) -> list[dict]:
     """Un appel Gemini = un lot de `settings.gemini_batch_size` exercices, dont
     on ne garde que ceux qui passent la validation déterministe."""
     count = settings.gemini_batch_size
-    system = _system_prompt(db, competency, grade, count)
+    system = _system_prompt(db, competency, grade, count, manual_context)
     payload = {"grade_level": grade, "competency_code": competency.code,
                "competency_label": _competency_name(competency),
                "chapter": f"{competency.chapter_code} {competency.chapter_name}".strip(),
@@ -290,10 +370,18 @@ def _bank_rows(db: Session, competency: Competency, level: int) -> list[Generate
 
 
 def ensure_bank(db: Session, competency: Competency, level: int) -> list[GeneratedExercise]:
-    """Garantit `settings.gemini_bank_target` exercices actifs pour la
-    compétence, en enchaînant autant d'appels Gemini que nécessaire. Pool
-    strictement séparé (source="gemini"), jamais mélangé aux exercices extraits
-    du manuel."""
+    """Garantit `settings.gemini_bank_target` (30) exercices actifs pour la
+    compétence, en enchaînant autant d'appels Gemini que nécessaire — banque
+    vide : 30 d'un coup (6 lots de 5) ; banque partielle : le complément
+    seulement ; banque pleine : rien du tout, sans même lire le manuel.
+
+    Remplir d'un coup, et pas au besoin d'un sujet, est délibéré : les sujets
+    suivants puisent dans la banque sans plus rien payer, et le modèle n'a pas
+    à recréer à l'aveugle des exercices proches de ceux déjà en stock.
+
+    Pool strictement séparé (source="gemini") : les exercices CRÉÉS d'après le
+    manuel ne se mélangent jamais à ceux qui en sont EXTRAITS (source
+    "sesamaths"), même si les deux pipelines lisent les mêmes pages."""
     level = max(1, min(5, level))
     rows = _bank_rows(db, competency, level)
     if level != GENERATED_LEVEL:
@@ -307,6 +395,9 @@ def ensure_bank(db: Session, competency: Competency, level: int) -> list[Generat
             f"de géométrie ({competency.domain_name}) ne sont pas encore traités "
             "par cette pipeline. Choisissez la source Sésamaths pour cette compétence.")
 
+    # Banque déjà pleine : on ne crée RIEN et on ne lit même pas le manuel. Les
+    # exercices en stock serviront les prochains sujets — c'est tout l'intérêt
+    # de viser 30 d'un coup plutôt que de rappeler le modèle à chaque sujet.
     target = settings.gemini_bank_target
     if len(rows) >= target:
         return rows
@@ -317,6 +408,29 @@ def ensure_bank(db: Session, competency: Competency, level: int) -> list[Generat
         raise GeminiGenerationError(
             f"Création Gemini impossible pour {competency.code} : le niveau de "
             "classe (référentiel) est introuvable.")
+
+    # Contexte manuel AVANT le premier appel : sans les pages de la Série, le
+    # modèle n'a que le libellé de la compétence et produit hors programme (cf.
+    # en-tête). Pas de contexte = pas de création, message clair — surtout pas
+    # un repli sur l'invention libre. Phase 1 de Sésamaths seule (OCR mis en
+    # cache, partagé) : aucun appel à l'adaptateur Claude.
+    try:
+        blocks = sesamaths.ensure_series_ocr(db, competency)
+    except sesamaths.SesamathsExtractionError as e:
+        raise GeminiGenerationError(
+            f"Création Gemini impossible pour {competency.code} : les pages du "
+            f"manuel traitant cette compétence n'ont pas pu être lues, or elles "
+            f"sont le contexte qui cale le programme et le niveau des exercices "
+            f"créés. Détail : {e}") from e
+    manual_context = _manual_context(blocks)
+    if not manual_context:
+        raise GeminiGenerationError(
+            f"Création Gemini impossible pour {competency.code} : l'OCR des pages "
+            "du manuel traitant cette compétence n'a renvoyé aucun texte "
+            "exploitable — sans ce contexte, les exercices créés seraient hors "
+            "programme.")
+    logger.info("Gemini : contexte manuel pour %s — %s bloc(s) OCR retenu(s), "
+                "%s caractères", competency.code, len(blocks), len(manual_context))
 
     # Pas de filtre status="active" : un exercice RETIRÉ doit rester
     # définitivement « vu », sinon il est recréé à l'identique au prochain
@@ -338,12 +452,21 @@ def ensure_bank(db: Session, competency: Competency, level: int) -> list[Generat
     next_variant = len(rows)
     error: Exception | None = None
 
-    for batch in range(settings.gemini_max_batches):
+    # « batch » = le n-ième lot demandé pour cette compétence DEPUIS TOUJOURS,
+    # pas depuis ce run : on le reprend là où la banque s'est arrêtée. Reparti
+    # de 0, un complément de banque partielle (25 en stock, cible 30) redemande
+    # au modèle un lot qu'il a déjà produit — il le resert à l'identique, tout
+    # est rejeté en doublon, et la boucle s'arrête sur un « aucun exercice
+    # exploitable » trompeur. Compté sur `seen` (retirés inclus) : ces lots-là
+    # ont bien été demandés et payés.
+    first_batch = len(seen) // max(1, settings.gemini_batch_size)
+
+    for batch in range(first_batch, first_batch + settings.gemini_max_batches):
         if len(rows) + len(added) >= target:
             break
         try:
             cands = _generate_batch(db, competency, grade, batch, already_created,
-                                    existing_norms)
+                                    existing_norms, manual_context)
         except Exception as e:
             # Garder ce qui a déjà été produit : un lot en échec ne doit pas
             # jeter les précédents (le message remonte si la banque est vide).

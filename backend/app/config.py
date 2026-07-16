@@ -56,21 +56,26 @@ class Settings(BaseSettings):
     # (un 2e modèle "correcteur" ajoutait de la complexité sans fiabiliser)
     claude_adapt_model: str = "claude-sonnet-5"
     # création d'exercices (pipeline Gemini, cf. services/gemini_gen.py) :
-    # invention pure à partir d'une compétence du référentiel, aucun manuel lu
+    # création ANCRÉE dans les pages du manuel traitant la compétence (OCR
+    # Mistral de la Série, partagé avec la pipeline Sésamaths)
     gemini_model: str = "gemini-2.5-flash"
 
-    # --- Pipeline Gemini (banque d'exercices inventés, par compétence) ---
+    # --- Pipeline Gemini (banque d'exercices créés, par compétence) ---
     # Taille de banque visée par compétence × niveau. Il n'existe PAS
     # d'équivalent côté Sésamaths : ce que la Série du manuel contient est
     # tout ce qu'on peut en extraire (ni plus ni moins), alors qu'ici on
-    # appelle le LLM autant de fois que nécessaire. La cible doit couvrir un
-    # remplissage de page complet sans jamais resservir le même exercice à un
-    # élève (generation.py plafonne le remplissage à 10 tentatives).
-    gemini_bank_target: int = 10
+    # appelle le LLM autant de fois que nécessaire.
+    # 30 (et non 10) : on remplit la banque D'UN COUP pour la compétence, et
+    # les sujets suivants y puisent sans plus rien payer. Une cible calée sur
+    # le besoin d'UN sujet fait rappeler le modèle à chaque sujet, et lui fait
+    # recréer à l'aveugle des exercices proches de ceux déjà en banque.
+    gemini_bank_target: int = 30
     gemini_batch_size: int = 5            # exercices demandés par appel
     # garde-fou : au-delà, on garde ce qu'on a plutôt que d'enchaîner les
-    # appels payants pour une compétence sur laquelle le modèle patine
-    gemini_max_batches: int = 6
+    # appels payants pour une compétence sur laquelle le modèle patine.
+    # 10 pour 30 exercices par lots de 5 : 6 lots parfaits suffiraient, la
+    # marge absorbe les exercices recalés par la validation.
+    gemini_max_batches: int = 10
 
     # --- Budgets / quotas par défaut ---
     mathpix_concurrency: int = 3

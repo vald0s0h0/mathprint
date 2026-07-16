@@ -1,9 +1,16 @@
-"""Tests de la pipeline Gemini (§ création d'exercices par LLM).
+"""Tests de la pipeline Gemini (§ création d'exercices ancrée dans le manuel).
 
 Tout tourne en mode mock (aucune clé API, aucun réseau) : le mock de
 providers.gemini_json renvoie un lot au contrat app, seedé par compétence ET
 par numéro de lot — c'est ce qui permet d'exercer réellement la boucle « autant
 d'appels que nécessaire » et le dédoublonnage entre lots.
+
+Le VRAI manuel 5.pdf est en revanche nécessaire : depuis que la création est
+ancrée dans les pages du manuel traitant la compétence, `ensure_bank` résout
+un vrai chapitre dans la vraie table des matières (seul l'appel OCR lui-même
+est mocké). Sans manuel, la pipeline refuse de créer — c'est le comportement
+voulu, testé explicitement ci-dessous, mais qui rend le reste du module non
+exécutable, d'où le skip global (même contrat que tests/test_sesamaths.py).
 """
 import sys
 from pathlib import Path
@@ -17,12 +24,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.config import settings
 from app.db import Base
 from app.models import Competency, CompetencyFramework, GeneratedExercise
-from app.services import exercise_gen, gemini_gen, providers
+from app.services import exercise_gen, gemini_gen, providers, sesamaths
+
+MANUAL_PATH = Path(__file__).resolve().parents[1] / "app" / "data" / "manuals" / "5.pdf"
+
+pytestmark = pytest.mark.skipif(not MANUAL_PATH.exists(), reason="manuel 5.pdf absent")
 
 
 @pytest.fixture
 def db_session(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "data_dir", tmp_path)
+    monkeypatch.setattr(settings, "sesamaths_manuals", {"5e": str(MANUAL_PATH)})
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     session = sessionmaker(bind=engine)()
@@ -62,11 +74,12 @@ def test_ensure_bank_gemini_reaches_target_over_several_batches(db_session):
     assert all(r.source == "gemini" for r in rows)
     assert all(r.difficulty_level == 3 for r in rows)       # difficulté figée
     assert all(r.model == settings.gemini_model for r in rows)
-    # cible 10, lots de 5 -> 2 appels au moins : la boucle a bien tourné
     assert len({r.variant for r in rows}) == len(rows)
 
 
-def test_ensure_bank_gemini_calls_llm_until_target_then_stops(db_session, monkeypatch):
+def _counted_gemini(monkeypatch) -> list[dict]:
+    """Enregistre les payloads envoyés à Gemini, sans changer le comportement
+    (le mock répond toujours)."""
     calls: list[dict] = []
     orig = providers.gemini_json
 
@@ -75,21 +88,57 @@ def test_ensure_bank_gemini_calls_llm_until_target_then_stops(db_session, monkey
         return orig(db, operation, system, payload, **kw)
 
     monkeypatch.setattr(providers, "gemini_json", counted)
+    return calls
+
+
+def test_ensure_bank_gemini_calls_llm_until_target_then_stops(db_session, monkeypatch):
+    calls = _counted_gemini(monkeypatch)
     comp = _seed_domain(db_session)
     gemini_gen.ensure_bank(db_session, comp, level=3)
 
-    # cible 10 / lots de 5 = 2 appels si tout passe, et surtout PAS un de plus
-    assert len(calls) == 2
-    assert [c["batch"] for c in calls] == [0, 1]
+    # cible 30 / lots de 5 = 6 appels si tout passe, et surtout PAS un de plus
+    assert len(calls) == 6
+    assert [c["batch"] for c in calls] == [0, 1, 2, 3, 4, 5]
     assert all(c["count"] == settings.gemini_batch_size for c in calls)
-    # le 2e appel connaît les énoncés du 1er (anti-doublon côté prompt)
+    # chaque lot connaît les énoncés de tous les précédents (anti-doublon côté
+    # prompt ; le dédoublonnage déterministe reste le filet, cf. _dedup_key)
     assert calls[0]["already_created"] == []
     assert len(calls[1]["already_created"]) == 5
+    assert len(calls[5]["already_created"]) == 25
 
-    # banque déjà pleine : plus aucun appel
-    calls.clear()
+
+def test_ensure_bank_gemini_full_bank_creates_nothing_and_reads_no_manual(
+        db_session, monkeypatch):
+    # « si plus de 30 exos > ne rien faire, prendre ces exos pour les prochains
+    # sujets » : banque pleine = aucun appel Gemini ET aucune lecture du manuel
+    # (les 30 exercices resservent tels quels, gratuitement).
+    comp = _seed_domain(db_session)
     gemini_gen.ensure_bank(db_session, comp, level=3)
+
+    calls = _counted_gemini(monkeypatch)
+    monkeypatch.setattr(sesamaths, "ensure_series_ocr",
+                        lambda *a, **kw: pytest.fail("manuel relu alors que la "
+                                                     "banque est pleine"))
+    rows = gemini_gen.ensure_bank(db_session, comp, level=3)
     assert calls == []
+    assert len(rows) >= settings.gemini_bank_target
+
+
+def test_ensure_bank_gemini_partial_bank_creates_only_the_remainder(db_session, monkeypatch):
+    # « si banque contient moins de 30 exercices > faire les exos restants » :
+    # 25 déjà en stock -> un seul lot de 5, pas 30 de plus.
+    comp = _seed_domain(db_session)
+    monkeypatch.setattr(settings, "gemini_bank_target", 25)
+    gemini_gen.ensure_bank(db_session, comp, level=3)
+    assert len(gemini_gen._bank_rows(db_session, comp, 3)) == 25
+
+    monkeypatch.setattr(settings, "gemini_bank_target", 30)
+    calls = _counted_gemini(monkeypatch)
+    rows = gemini_gen.ensure_bank(db_session, comp, level=3)
+    assert len(calls) == 1
+    assert len(rows) == 30
+    # le lot complémentaire connaît les 25 déjà en banque
+    assert len(calls[0]["already_created"]) == 25
 
 
 def test_ensure_bank_gemini_no_duplicates_in_bank(db_session):
@@ -150,6 +199,127 @@ def test_gemini_geometry_refused_with_clear_message(db_session):
         gemini_gen.ensure_bank(db_session, comp, level=3)
     assert "géométrie" in str(exc.value).lower()
     assert db_session.query(GeneratedExercise).count() == 0
+
+
+def test_gemini_refuses_to_create_without_the_manual_context(db_session, monkeypatch):
+    # Sans les pages du manuel, le modèle n'a que le libellé de la compétence :
+    # c'est EXACTEMENT ce qui produisait des exercices hors programme et au
+    # mauvais niveau. Pas de contexte = pas de création, message actionnable —
+    # jamais un repli silencieux sur l'invention libre.
+    monkeypatch.setattr(settings, "sesamaths_manuals", {})
+    calls = _counted_gemini(monkeypatch)
+    comp = _seed_domain(db_session)
+
+    with pytest.raises(gemini_gen.GeminiGenerationError) as exc:
+        gemini_gen.ensure_bank(db_session, comp, level=3)
+    assert "manuel" in str(exc.value).lower()
+    assert calls == []                                   # rien n'a été payé
+    assert db_session.query(GeneratedExercise).count() == 0
+
+
+def test_gemini_refuses_to_create_when_ocr_returns_no_usable_text(db_session, monkeypatch):
+    # Un manuel lisible mais dont l'OCR ne rend que du bruit de mise en page
+    # (en-têtes/pieds) ne cale ni le programme ni le niveau : c'est un « pas de
+    # contexte » déguisé, à refuser aussi.
+    monkeypatch.setattr(providers, "mistral_ocr", lambda *a, **kw: {"pages": [
+        {"index": 0, "dimensions": {"width": 600, "height": 800},
+         "blocks": [{"type": "footer", "content": "42",
+                     "top_left_x": 0, "top_left_y": 0,
+                     "bottom_right_x": 10, "bottom_right_y": 10}]}]})
+    calls = _counted_gemini(monkeypatch)
+    comp = _seed_domain(db_session)
+
+    with pytest.raises(gemini_gen.GeminiGenerationError) as exc:
+        gemini_gen.ensure_bank(db_session, comp, level=3)
+    assert "aucun texte" in str(exc.value).lower()
+    assert calls == []
+
+
+def test_gemini_grounds_every_batch_in_the_manual_ocr_text(db_session, monkeypatch):
+    # Le contexte manuel doit arriver dans le prompt SYSTÈME de CHAQUE lot :
+    # un seul lot non ancré recrée des exercices hors programme.
+    systems: list[str] = []
+    orig = providers.gemini_json
+
+    def capture(db, operation, system, payload, **kw):
+        systems.append(system)
+        return orig(db, operation, system, payload, **kw)
+
+    monkeypatch.setattr(providers, "gemini_json", capture)
+    comp = _seed_domain(db_session)
+    gemini_gen.ensure_bank(db_session, comp, level=3)
+
+    ocr = gemini_gen._manual_context(sesamaths.ensure_series_ocr(db_session, comp))
+    assert ocr and len(systems) == 6
+    assert all(ocr in s for s in systems)
+
+
+def test_gemini_reads_the_manual_via_ocr_only_never_the_paid_adapter(db_session, monkeypatch):
+    # L'adaptateur Sésamaths (Claude Sonnet) transforme les blocs OCR en
+    # exercices au contrat app : Gemini n'en a aucun besoin (il veut le TEXTE
+    # du manuel) et le payer serait absurde. L'OCR, lui, est mis en cache et
+    # partagé avec la pipeline Sésamaths : une seule facture par Série.
+    ocr_calls: list[int] = []
+    orig_ocr = providers.mistral_ocr
+
+    def counted_ocr(db, operation, pdf_bytes, n_pages, **kw):
+        ocr_calls.append(1)
+        return orig_ocr(db, operation, pdf_bytes, n_pages, **kw)
+
+    monkeypatch.setattr(providers, "mistral_ocr", counted_ocr)
+    monkeypatch.setattr(providers, "claude_json",
+                        lambda *a, **kw: pytest.fail("adaptateur Claude appelé "
+                                                     "alors que Gemini ne veut que l'OCR"))
+    comp = _seed_domain(db_session)
+    gemini_gen.ensure_bank(db_session, comp, level=3)
+    assert len(ocr_calls) == 1          # une Série = un appel OCR, pas un par lot
+
+    # ... et la Série reste prête à être adaptée gratuitement par la pipeline
+    # Sésamaths le jour où elle passe dessus (extraction déjà en cache)
+    ocr_calls.clear()
+    gemini_gen._manual_context(sesamaths.ensure_series_ocr(db_session, comp))
+    assert ocr_calls == []
+
+
+def _counted_ocr(monkeypatch) -> list[int]:
+    calls: list[int] = []
+    orig = providers.mistral_ocr
+
+    def counted(db, operation, pdf_bytes, n_pages, **kw):
+        calls.append(1)
+        return orig(db, operation, pdf_bytes, n_pages, **kw)
+
+    monkeypatch.setattr(providers, "mistral_ocr", counted)
+    return calls
+
+
+def test_manual_ocr_paid_by_gemini_is_reused_by_the_sesamaths_pipeline(db_session, monkeypatch):
+    # Les deux pipelines lisent les MÊMES pages : l'OCR payé par l'une doit
+    # servir à l'autre. Gemini extrait (phase 1) et laisse la Série prête à
+    # adapter ; Sésamaths passe ensuite dessus sans repayer l'OCR.
+    comp = _seed_domain(db_session)
+    gemini_gen.ensure_bank(db_session, comp, level=3)
+
+    ocr_calls = _counted_ocr(monkeypatch)
+    rows = sesamaths.ensure_bank(db_session, comp, level=3)
+    assert ocr_calls == []                       # OCR déjà payé par Gemini
+    assert rows and all(r.source in sesamaths.SOURCE_POOL for r in rows)
+
+
+def test_extract_version_bump_still_reextracts_a_series_left_extracted_by_gemini(
+        db_session, monkeypatch):
+    # Garantie documentée de la pipeline Sésamaths : bumper
+    # EXTRACT_PROMPT_VERSION force une ré-extraction. Gemini laisse
+    # couramment des Séries en "extracted" (il extrait sans jamais adapter) —
+    # sans contrôle de version sur cet état, elles seraient adaptées depuis un
+    # raw_json périmé PUIS estampillées de la version courante.
+    comp = _seed_domain(db_session)
+    gemini_gen.ensure_bank(db_session, comp, level=3)     # Série -> "extracted"
+
+    ocr_calls = _counted_ocr(monkeypatch)
+    monkeypatch.setattr(sesamaths, "EXTRACT_PROMPT_VERSION", "sesamaths-extract-TEST")
+    sesamaths.ensure_bank(db_session, comp, level=3)
+    assert len(ocr_calls) == 1                   # ré-extraction bien déclenchée
 
 
 def test_gemini_other_levels_generate_nothing(db_session, monkeypatch):
@@ -231,7 +401,7 @@ def test_gemini_total_failure_raises_clear_error(db_session, monkeypatch):
 
 def test_system_prompt_frames_target_competency_among_its_domain(db_session):
     comp = _seed_domain(db_session)
-    prompt = gemini_gen._system_prompt(db_session, comp, "5e", 5)
+    prompt = gemini_gen._system_prompt(db_session, comp, "5e", 5, "(title) 1 Calcule.")
     # la cible est marquée, les voisines présentes (périmètre), et la consigne
     # de ne traiter QUE la cible est explicite
     tree = gemini_gen._competency_tree(db_session, comp)
@@ -248,9 +418,53 @@ def test_system_prompt_frames_target_competency_among_its_domain(db_session):
 
 def test_system_prompt_forbids_uncorrectable_formats(db_session):
     comp = _seed_domain(db_session)
-    prompt = gemini_gen._system_prompt(db_session, comp, "5e", 5)
+    prompt = gemini_gen._system_prompt(db_session, comp, "5e", 5, "(title) 1 Calcule.")
     assert "INTERDITS" in prompt
     assert "matching" in prompt and "manual_drawing" in prompt
+
+
+def test_system_prompt_carries_the_manual_ocr_text_and_how_to_use_it(db_session):
+    # La raison d'être de la v2 : sans les pages du manuel, le modèle n'avait
+    # que le libellé de la compétence et créait hors programme / au mauvais
+    # niveau. Le texte OCR doit arriver TEL QUEL dans le prompt, avec le droit
+    # de reprendre ET d'inventer en s'en inspirant.
+    comp = _seed_domain(db_session)
+    ocr = "(title) 12 Calcule chacun des produits\n(text) a. $7 \\times 8$"
+    prompt = gemini_gen._system_prompt(db_session, comp, "5e", 5, ocr)
+    assert ocr in prompt
+    for expected in ("PROGRAMME", "NIVEAU", "OBJECTIF D'APPRENTISSAGE",
+                     "REPRENDRE", "INVENTER"):
+        assert expected in prompt
+
+
+def test_manual_context_drops_layout_noise_and_tags_pages():
+    # L'OCR décrit la mise en page : en-têtes/pieds de page ne disent rien du
+    # programme, et une "image" a un contenu vide (la figure vit dans son bbox)
+    # — la citer annoncerait au modèle un exercice qu'il ne peut pas voir.
+    blocks = [
+        {"i": 0, "page": 12, "type": "header", "content": "Chapitre A1"},
+        {"i": 1, "page": 12, "type": "title", "content": "12 Calcule."},
+        {"i": 2, "page": 12, "type": "image", "content": ""},
+        {"i": 3, "page": 13, "type": "text", "content": "a. $7 \\times 8$"},
+    ]
+    out = gemini_gen._manual_context(blocks)
+    assert "Chapitre A1" not in out
+    assert "(image)" not in out
+    assert "(title) 12 Calcule." in out
+    assert "(text) a. $7 \\times 8$" in out
+    assert "--- page 12 du manuel ---" in out and "--- page 13 du manuel ---" in out
+
+
+def test_manual_ocr_text_cannot_forge_a_prompt_placeholder(db_session):
+    # Le texte du manuel est le SEUL fragment non maîtrisé du prompt (OCR d'un
+    # PDF imprimé). Substitué en DERNIER, un marqueur §...§ qu'il contiendrait
+    # reste littéral au lieu d'être interprété et de réécrire le prompt.
+    comp = _seed_domain(db_session)
+    prompt = gemini_gen._system_prompt(db_session, comp, "5e", 5,
+                                       "(text) §COMPETENCY_TREE§ §GRADE§")
+    assert "(text) §COMPETENCY_TREE§ §GRADE§" in prompt
+    # l'arbre des compétences n'a PAS été réinjecté à la place du marqueur
+    assert prompt.count("A1.2 Divisions euclidiennes") == 1
 
 
 def test_generate_subject_end_to_end_fills_one_page_without_duplicates(db_session):
