@@ -511,8 +511,16 @@ def gemini_json(db: Session, operation: str, system: str, payload: dict,
     bricolage de préremplissage utilisé côté Claude. `temperature` est laissée
     à 1 (défaut du modèle) : la pipeline appelle plusieurs fois de suite avec
     le même prompt pour remplir une banque, il FAUT que les lots diffèrent.
-    Attention, le budget `max_tokens` couvre aussi les tokens de réflexion
-    (2.5 Flash pense par défaut) : le viser trop bas tronque la réponse."""
+    Attention, le budget `max_tokens` couvre aussi les tokens de réflexion (les
+    modèles Flash récents pensent par défaut) : le viser trop bas tronque la
+    réponse.
+
+    `settings.gemini_model` est un alias "-latest" (cf. config.py) : Google y
+    fait pointer un modèle concret différent selon les époques, sans prévenir
+    — ce qui déplace aussi le tarif réel. `modelVersion` dans la réponse dit
+    lequel a effectivement servi ; on l'enregistre tel quel dans
+    ApiUsageEvent.model (au lieu de l'alias, toujours identique) pour que la
+    page Coûts reste lisible si Google fait glisser l'alias."""
     cfg = _config(db, "gemini")
     model = model or (cfg.model if cfg and cfg.model else settings.gemini_model)
     if _today_cost(db, "gemini") > settings.llm_daily_cost_limit_eur:
@@ -539,14 +547,18 @@ def gemini_json(db: Session, operation: str, system: str, payload: dict,
     r.raise_for_status()
     data = r.json()
     usage = data.get("usageMetadata", {})
-    # tarifs Gemini 2.5 Flash : ~0,30 $/MTok en entrée, ~2,50 $/MTok en sortie.
+    # tarifs Gemini 3.5 Flash (modèle pointé par l'alias "gemini-flash-latest"
+    # au 17/07) : ~1,50 $/MTok en entrée, ~9,00 $/MTok en sortie. À REVÉRIFIER
+    # si `modelVersion` ci-dessous change un jour : l'alias suit le modèle
+    # "flash" recommandé par Google, pas un tarif figé.
     # candidatesTokenCount N'INCLUT PAS les tokens de réflexion (thoughtsTokenCount),
     # pourtant facturés au tarif de sortie — les additionner, sinon le coût réel
     # est sous-évalué face à llm_daily_cost_limit_eur.
     in_tokens = usage.get("promptTokenCount", 0)
     out_tokens = usage.get("candidatesTokenCount", 0) + usage.get("thoughtsTokenCount", 0)
-    _record(db, "gemini", model, operation, input_tokens=in_tokens, output_tokens=out_tokens,
-            cost=in_tokens * 3e-7 + out_tokens * 2.5e-6, correlation_id=correlation_id)
+    _record(db, "gemini", data.get("modelVersion") or model, operation,
+            input_tokens=in_tokens, output_tokens=out_tokens,
+            cost=in_tokens * 1.5e-6 + out_tokens * 9e-6, correlation_id=correlation_id)
 
     candidates = data.get("candidates") or []
     if not candidates:

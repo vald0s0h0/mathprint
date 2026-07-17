@@ -57,8 +57,14 @@ class Settings(BaseSettings):
     claude_adapt_model: str = "claude-sonnet-5"
     # création d'exercices (pipeline Gemini, cf. services/gemini_gen.py) :
     # création ANCRÉE dans les pages du manuel traitant la compétence (OCR
-    # Mistral de la Série, partagé avec la pipeline Sésamaths)
-    gemini_model: str = "gemini-2.5-flash"
+    # Mistral de la Série, partagé avec la pipeline Sésamaths).
+    # "gemini-2.5-flash" (nom figé) renvoie 404 "no longer available to new
+    # users" pour toute clé API créée après son retrait — trouvé le 17/07 en
+    # diagnostiquant une banque Gemini vide (0 exercice créé). L'alias
+    # "-latest" évite que ça se reproduise à la prochaine dépréciation : au
+    # prix d'un modèle cible qui peut changer sous nos pieds (donc un tarif à
+    # revérifier de temps en temps, cf. gemini_json).
+    gemini_model: str = "gemini-flash-latest"
 
     # --- Pipeline Gemini (banque d'exercices créés, par compétence) ---
     # Taille de banque visée par compétence × niveau. Il n'existe PAS
