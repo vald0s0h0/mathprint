@@ -50,6 +50,13 @@ pas le niveau et cette pipeline ne produit donc QUE du niveau 3 ; un appel pour
 un autre niveau ne génère rien et laisse exercise_gen.bank_rows_near_level se
 rabattre sur le 3.
 
+Barème : le modèle renvoie en revanche un "effort_points" par exercice — ce
+n'est PAS la difficulté déguisée (cf. point précédent), mais ce que l'exercice
+VAUT d'après l'effort qu'il exige (temps de réflexion). Les deux grandeurs sont
+volontairement distinctes : on ne note pas le niveau de l'élève, on récompense
+le travail fourni. Contrat et repères dans exercise_gen._BAREME_RULES,
+conversion en note dans services/scoring.py.
+
 Géométrie : hors périmètre pour l'instant (refus explicite, message clair).
 """
 import logging
@@ -63,7 +70,7 @@ from . import exercise_gen, providers, sesamaths
 
 logger = logging.getLogger(__name__)
 
-PROMPT_VERSION = "gemini-exgen-2-manuel"
+PROMPT_VERSION = "gemini-exgen-3-bareme"
 SOURCE = "gemini"
 # Seul niveau produit : la difficulté n'est pas évaluée (cf. en-tête).
 GENERATED_LEVEL = 3
@@ -163,6 +170,10 @@ _INTRO = (
     "- respecter le programme français de §GRADE§ ;\n"
     "- viser une difficulté MOYENNE, pour un élève médian de §GRADE§ ; "
     "n'évalue et ne renvoie AUCUN niveau de difficulté, ce n'est pas demandé ;\n"
+    "- donner à chaque exercice son barème \"effort_points\" (cf. BARÈME dans "
+    "le contrat de format) : ce que l'exercice coûte en TEMPS DE RÉFLEXION, "
+    "jamais le niveau de l'élève ni la difficulté de l'exercice — c'est une "
+    "grandeur différente de celle du point précédent, ne les confonds pas ;\n"
     "- employer un français simple et naturel, des phrases courtes ;\n"
     "- ne poser aucune question ambiguë : une seule lecture possible de "
     "l'énoncé, une seule réponse juste ;\n"

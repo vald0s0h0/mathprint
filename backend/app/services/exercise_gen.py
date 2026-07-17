@@ -15,9 +15,16 @@ Ce qui vit ici, et que les deux pipelines partagent SANS jamais le réécrire :
     géométrie sans verbe de construction, réponse de référence acceptée par
     le moteur de correction déterministe, anti-doublon par compétence
     (_dedup_key, pas le seul énoncé — cf. commentaire dédié).
+  - BARÈME D'EFFORT (_BAREME_RULES côté prompt, `scoring.item_bareme` côté
+    validation) : chaque exercice arrive en banque avec ce qu'il VAUT en points
+    professeur (multiples de 0,5), demandé au modèle d'après l'EFFORT qu'il
+    exige — le temps de réflexion — et jamais d'après le niveau de l'élève. Le
+    barème s'AJOUTE à grading_json (`bareme_points`), il ne remplace pas
+    `max_score` qui reste l'échelle interne du moteur de correction : les deux
+    échelles et leur conversion sont documentées dans services/scoring.py.
   - CONTRAT DE FORMAT (`format_contract`, assemblé depuis _FORMAT_MENU/
-    _FIGURE_RULES/_GEN_FORMAT_RULES/_JSON_CONTRACT) : le bloc de prompt qui
-    décrit le JSON attendu. Seule l'INTRO diffère d'une pipeline à l'autre
+    _BAREME_RULES/_FIGURE_RULES/_GEN_FORMAT_RULES/_JSON_CONTRACT) : le bloc de
+    prompt qui décrit le JSON attendu. Seule l'INTRO diffère d'une pipeline à l'autre
     (_ADAPT_FORMAT_INTRO : adapter un exercice de manuel sans jamais en
     omettre ; _GEMINI_FORMAT_INTRO : inventer, sans droit aux formats non
     corrigeables). Le reste est commun DÉLIBÉRÉMENT : un prompt qui décrirait
@@ -50,7 +57,7 @@ from ..models import (
     Competency, ExerciseCatalog, ExerciseCompetency, GeneratedExercise,
     LessonSnippet,
 )
-from . import figures, grading, mathrender
+from . import figures, grading, mathrender, scoring
 
 logger = logging.getLogger(__name__)
 
@@ -410,6 +417,16 @@ def _validate_exercise(raw: dict, competency: Competency, db: Session,
         if key in existing_norms:
             return None
         existing_norms.add(key)
+        # Barème d'effort (§ barème) AJOUTÉ à gpolicy, jamais à la place de
+        # `max_score` : ce dernier est l'échelle interne du moteur de correction
+        # (1 par cellule de tableau…) et le validateur s'en sert juste en
+        # dessous pour vérifier que la réponse de référence obtient bien le
+        # maximum. Un barème hors normes ou absent est REMPLACÉ par le repli
+        # déterministe, jamais motif de rejet : l'exercice est bon, seul son
+        # étiquetage est douteux (cf. services.scoring).
+        gpolicy = dict(gpolicy)
+        gpolicy["bareme_points"] = scoring.item_bareme(
+            {**gpolicy, "bareme_points": raw.get("effort_points")}, rtype)
         return {"statement": statement, "correction": correction,
                 "response_type": rtype, "expected": expected, "grading": gpolicy,
                 "figure_json": figure_json, "kind": kind}
@@ -832,6 +849,38 @@ _FORMAT_MENU = (
     "omis. Utilise CE format plutôt que d'omettre l'exercice.\n\n"
 )
 
+# Barème d'effort, demandé à la CRÉATION de l'exercice (§ barème). Il vit dans
+# le contrat PARTAGÉ, avec le reste du format, pour la raison habituelle : le
+# validateur qui le lit (_validate_exercise -> grading["bareme_points"]) est
+# partagé lui aussi, et un prompt qui décrirait le champ autrement produirait
+# des barèmes silencieusement remplacés par le repli (services.scoring.
+# fallback_bareme).
+_BAREME_RULES = (
+    "BARÈME (obligatoire, un par exercice) : \"effort_points\" = ce que "
+    "l'exercice VAUT, un multiple de 0,5 entre 0,5 et 5.\n"
+    "Il récompense l'EFFORT qu'il faut fournir pour le résoudre, c'est-à-dire "
+    "le TEMPS DE RÉFLEXION et le nombre d'étapes de raisonnement. Il ne "
+    "dépend JAMAIS du niveau de l'élève, ni d'une difficulté que tu "
+    "attribuerais à l'exercice : un élève fragile fournit plus d'effort sur un "
+    "exercice facile qu'un bon élève sur un exercice moyen, et c'est l'effort "
+    "qu'on récompense. Deux exercices qui demandent le même travail valent le "
+    "même nombre de points, quel que soit leur habillage.\n"
+    "Repères (temps de réflexion d'un élève de la classe, sans compter "
+    "l'écriture) :\n"
+    "- 0,5 : réponse immédiate, une seule lecture, aucun calcul à poser "
+    "(moins de 30 secondes) ;\n"
+    "- 1 : une opération, ou l'application directe d'une règle du cours "
+    "(environ 1 minute) ;\n"
+    "- 1,5 à 2 : deux étapes enchaînées, ou une méthode à choisir avant de "
+    "calculer (2 à 3 minutes) ;\n"
+    "- 2,5 à 3,5 : plusieurs étapes, une mise en équation, ou un tableau à "
+    "compléter en entier (4 à 6 minutes) ;\n"
+    "- 4 à 5 : problème complet à raisonnement rédigé, avec plusieurs "
+    "résultats intermédiaires (7 minutes et plus).\n"
+    "Un exercice à PLUSIEURS cases de réponse (tableau, {{blank}}, "
+    "sous-questions) vaut l'effort de l'ENSEMBLE des cases, pas d'une seule.\n\n"
+)
+
 _FIGURE_RULES = (
     "FIGURES : si une figure aide (géométrie, droite graduée, repère), ajoute "
     "\"figure\": {\"type\": \"rectangle\"|\"triangle\"|\"circle\"|\"angle\"|"
@@ -844,7 +893,9 @@ _FIGURE_RULES = (
 
 _JSON_CONTRACT = (
     "Réponds UNIQUEMENT en JSON strictement valide :\n"
-    '{"exercises":[{"kind":"application"|"probleme","statement":str,"correction":str '
+    '{"exercises":[{"kind":"application"|"probleme","effort_points":number '
+    "(multiple de 0,5 entre 0,5 et 5, cf. BARÈME),"
+    '"statement":str,"correction":str '
     "(TRÈS SUCCINCTE : le résultat + 1-2 phrases d'explication au maximum, "
     "jamais une résolution pas-à-pas),"
     '"response_type":"short_text"|"qcm_single"|"qcm_multiple"|"multi_blank"|'
@@ -861,12 +912,12 @@ _JSON_CONTRACT = (
 
 def format_contract(intro: str, *, geometry_rules: str = "") -> str:
     """Bloc de prompt décrivant le contrat de sortie attendu par
-    `_validate_exercise` : menu des 8 formats de réponse, figures, règles
-    LaTeX, schéma JSON. `intro` cadre la MISSION de la pipeline appelante
-    (adapter un exercice existant vs en inventer un) ; tout le reste est
-    commun, et doit le rester — un prompt qui décrirait le contrat autrement
+    `_validate_exercise` : menu des 8 formats de réponse, barème d'effort,
+    figures, règles LaTeX, schéma JSON. `intro` cadre la MISSION de la pipeline
+    appelante (adapter un exercice existant vs en inventer un) ; tout le reste
+    est commun, et doit le rester — un prompt qui décrirait le contrat autrement
     que le validateur produit des rejets silencieux."""
-    return (intro + _FORMAT_MENU + geometry_rules + _FIGURE_RULES
+    return (intro + _FORMAT_MENU + geometry_rules + _BAREME_RULES + _FIGURE_RULES
             + _GEN_FORMAT_RULES + "\n\n" + _JSON_CONTRACT)
 
 

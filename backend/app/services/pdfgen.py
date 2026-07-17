@@ -7,8 +7,9 @@ Design des sujets :
   l'overlay de correction ; à droite l'identité de l'élève (nom/prénom/classe,
   gros) puis le méta du sujet (date, type, titre du lot, petit) — un filet
   sépare clairement l'en-tête des exercices ;
-- chaque exercice dans une carte à coins arrondis avec ombre portée, icône
-  crayon, pastilles de difficulté (1-5) ;
+- chaque exercice dans une carte à coins arrondis avec ombre portée, badge
+  numéroté coloré par difficulté (1 bleu -> 5 rouge), l'énoncé démarrant sur
+  la même ligne que le badge ;
 - rappels de leçon dans un cadre distinct (fond ambre clair, icône livre) ;
 - zones de réponse ÉLÈVE en rouge saumon clair (dropout, supprimé avant OCR) ;
 - bande de correction en pointillés gris sous chaque exercice : réservée à
@@ -38,6 +39,7 @@ from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase.pdfmetrics import stringWidth
 
 from ..config import settings
+from . import scoring
 from .runtime_settings import DEFAULT_TEMPLATES
 
 PAGE_W, PAGE_H = A4  # 595.27 x 841.89 pt
@@ -61,7 +63,26 @@ LESSON_BORDER = HexColor("#E4C46A")
 LESSON_TEXT = HexColor("#6B5310")
 TITLE_RULE = HexColor("#37474F")
 DOT_ON = HexColor("#455A64")
-DOT_OFF = HexColor("#D3DCE3")
+
+# Badge de numéro d'exercice : la difficulté 1-5 n'est plus affichée en clair
+# (pastilles), elle EST la couleur du badge. Dégradé froid -> chaud, teintes
+# assez foncées pour porter un numéro blanc lisible (le jaune franc ne le
+# ferait pas).
+DIFFICULTY_COLORS = {
+    1: HexColor("#2563EB"),   # bleu
+    2: HexColor("#16A34A"),   # vert
+    3: HexColor("#CA8A04"),   # jaune
+    4: HexColor("#EA580C"),   # orange
+    5: HexColor("#DC2626"),   # rouge
+}
+
+
+def _difficulty_color(level5: int) -> Color:
+    try:
+        lvl = int(level5)
+    except (TypeError, ValueError):
+        lvl = 3
+    return DIFFICULTY_COLORS[min(5, max(1, lvl))]
 
 # encarts typés d'un rappel de leçon (§ rendu rappels) : trois icônes/couleurs
 # fixes indépendantes du thème de la carte, pour rester reconnaissables quelle
@@ -81,11 +102,20 @@ RADIUS = 2.2 * mm
 GAP = 3.5 * mm          # espace vertical entre deux cartes/rappels
 COL_W = (PAGE_W - 2 * MARGIN - COL_GAP) / 2
 
-# En-tête en 4 zones horizontales contiguës, pleine hauteur, sans séparateur
-# vertical : Note (23mm, contrôle seul) | Appréciation (80mm, absorbe la Note
-# en entraînement) | Métadonnées (justifié droite) | QR/fiduciels (inchangé).
-NOTE_W, NOTE_H = 23 * mm, 15 * mm
-APPRECIATION_W = 80 * mm
+# En-tête en 4 zones horizontales, pleine hauteur, séparées par une gouttière
+# (jamais contiguës : c'est le chevauchement identité/appréciation qu'on
+# corrige) : Note (contrôle seul) | Appréciation (élastique) | Identité+méta
+# (largeur FIXE, justifiée droite) | QR/fiduciels (inchangé).
+#
+# La largeur de la zone méta est fixe et NON déduite du texte : l'overlay de
+# correction rejoue header_geometry() sans connaître le nom de l'élève, et
+# doit retomber sur exactement les mêmes rects. C'est donc la taille du nom
+# qui s'adapte à la zone (_fit_size), pas l'inverse.
+NOTE_W = 23 * mm
+META_W = 62 * mm
+HEADER_GAP = 3 * mm       # gouttière entre deux zones voisines
+HEADER_PAD_V = 1.5 * mm   # inset vertical commun : cadres et bloc méta alignés
+HEADER_LABEL_DY = 4.5 * mm  # ligne de base des libellés NOTE/APPRÉCIATION sous le haut de bande
 QR_ZONE_W = QR_MAIN
 # clearance du fiduciel TL (haut-gauche) : aucune zone ne doit le recouvrir
 HEADER_LEFT = MARGIN + QR_MINI + 4 * mm
@@ -99,17 +129,16 @@ def header_geometry(assessment_type: str) -> dict:
     bottom = top - HEADER_H
     h = HEADER_H
     show_note = assessment_type == "control"
-    note_w = NOTE_W if show_note else 0.0
-    note_x = HEADER_LEFT
-    appreciation_w = APPRECIATION_W + (0.0 if show_note else NOTE_W)
-    appreciation_x = note_x + note_w
-    meta_x = appreciation_x + appreciation_w
-    meta_w = max(20 * mm, PAGE_W - MARGIN - QR_ZONE_W - meta_x)
     qr_x = PAGE_W - MARGIN - QR_ZONE_W
+    meta_x = qr_x - HEADER_GAP - META_W
+    note_x = HEADER_LEFT
+    note_w = NOTE_W if show_note else 0.0
+    appreciation_x = note_x + (note_w + HEADER_GAP if show_note else 0.0)
+    appreciation_w = meta_x - HEADER_GAP - appreciation_x
     return {
         "note": {"x": note_x, "y": bottom, "w": note_w, "h": h, "visible": show_note},
         "appreciation": {"x": appreciation_x, "y": bottom, "w": appreciation_w, "h": h},
-        "meta": {"x": meta_x, "y": bottom, "w": meta_w, "h": h},
+        "meta": {"x": meta_x, "y": bottom, "w": META_W, "h": h},
         "qr": {"x": qr_x, "y": bottom, "w": QR_ZONE_W, "h": h},
     }
 
@@ -145,25 +174,6 @@ def _draw_markers(c: canvas.Canvas, page_payload: str):
 
 
 # ------------------------------------------------------------------- icônes
-
-def _icon_pencil(c: canvas.Canvas, x: float, y: float, size: float = 3.2 * mm,
-                 color=DOT_ON):
-    """Petit crayon vectoriel (corps incliné + pointe)."""
-    c.saveState()
-    c.translate(x, y)
-    c.rotate(45)
-    c.setFillColor(color)
-    c.setStrokeColor(color)
-    body_w, body_h = size * 0.32, size * 0.85
-    c.rect(-body_w / 2, 0, body_w, body_h, stroke=0, fill=1)
-    p = c.beginPath()
-    p.moveTo(-body_w / 2, 0)
-    p.lineTo(body_w / 2, 0)
-    p.lineTo(0, -size * 0.32)
-    p.close()
-    c.drawPath(p, stroke=0, fill=1)
-    c.restoreState()
-
 
 def _icon_book(c: canvas.Canvas, x: float, y: float, size: float = 3.4 * mm,
                color=LESSON_TEXT):
@@ -213,14 +223,37 @@ def _icon_warning(c: canvas.Canvas, x: float, y: float, size: float = 3.4 * mm,
     c.restoreState()
 
 
-def _difficulty_dots(c: canvas.Canvas, x_right: float, y: float, level5: int,
-                     color=DOT_ON):
-    """5 pastilles, remplies jusqu'au niveau de difficulté."""
-    r = 0.85 * mm
-    for i in range(5):
-        cx = x_right - (4 - i) * 2.6 * mm
-        c.setFillColor(color if i < level5 else DOT_OFF)
-        c.circle(cx, y, r, stroke=0, fill=1)
+BADGE_GAP = 1.8 * mm    # blanc entre le badge et le début de l'énoncé
+
+
+def _badge_metrics(font_size: float) -> tuple[float, float, float]:
+    """(largeur, hauteur, taille de police) du badge numéroté d'un exercice —
+    dimensionné sur le corps de l'énoncé pour rester solidaire de la 1re ligne
+    de texte quel que soit le gabarit."""
+    badge_fs = max(6.5, font_size - 0.5)
+    return (badge_fs + 5.4, badge_fs + 3.4, badge_fs)
+
+
+def _badge_min_asc(font_size: float) -> float:
+    """Ascendante minimale de la 1re ligne d'énoncé pour que le badge, centré
+    sur la hauteur d'œil du texte, ne déborde pas au-dessus de la carte."""
+    _bw, bh, _bfs = _badge_metrics(font_size)
+    return font_size * 0.35 + bh / 2
+
+
+def _draw_badge(c: canvas.Canvas, x: float, y_base: float, font_size: float,
+                seq: int, level5: int) -> float:
+    """Badge « numéro d'exercice » posé à gauche de la 1re ligne d'énoncé,
+    centré sur la hauteur d'œil du texte. Retourne sa largeur."""
+    bw, bh, bfs = _badge_metrics(font_size)
+    by = y_base + font_size * 0.35 - bh / 2
+    c.setFillColor(_difficulty_color(level5))
+    c.roundRect(x, by, bw, bh, 1.0 * mm, stroke=0, fill=1)
+    c.setFillColor(white)
+    c.setFont("Helvetica-Bold", bfs)
+    c.drawCentredString(x + bw / 2, by + (bh - bfs * 0.72) / 2, str(seq))
+    c.setFillColor(black)
+    return bw
 
 
 def _dotted(c: canvas.Canvas):
@@ -235,58 +268,99 @@ def _solid(c: canvas.Canvas):
 
 # ------------------------------------------------------------------- en-tête
 
-def _draw_header(c: canvas.Canvas, student_name: str, class_name: str, title: str,
-                 assessment_type: str, the_date: str, tpl: dict | None = None):
-    """En-tête en 4 zones pleine hauteur, gauche -> droite, sans séparateur
-    vertical : Note (contrôle seul) | Appréciation | Métadonnées | QR."""
-    tpl = tpl or DEFAULT_TEMPLATES["header"]
-    accent = HexColor(tpl.get("accent", "#37474F"))
+def _fit_size(text: str, font: str, max_w: float, start: float,
+              min_size: float) -> float:
+    """Plus grande taille <= start telle que `text` tienne dans max_w."""
+    size = start
+    while size > min_size and stringWidth(text, font, size) > max_w:
+        size -= 0.25
+    return size
+
+
+def _meta_rows(student_name: str, class_name: str, title: str, label: str,
+               the_date: str, width: float, tpl: dict,
+               accent: Color) -> list[tuple]:
+    """Lignes (texte, police, corps, couleur) du bloc identité/méta, ajustées
+    pour tenir dans `width`. L'identité passe sur une seule ligne
+    « Nom / Classe » tant que la réduire reste raisonnable ; au-delà (noms
+    longs) elle se scinde en deux lignes plutôt que de déborder sur la zone
+    Appréciation."""
     name_fs = float(tpl.get("name_size", 14))
     title_fs = float(tpl.get("title_size", 8))
+    ident = _pdf_safe(f"{student_name}  /  {class_name}")
+    ident_fs = _fit_size(ident, "Helvetica-Bold", width, name_fs, 9.0)
+    if stringWidth(ident, "Helvetica-Bold", ident_fs) <= width:
+        rows = [(ident, "Helvetica-Bold", ident_fs, black)]
+    else:
+        name = _pdf_safe(student_name)
+        rows = [
+            (name, "Helvetica-Bold",
+             _fit_size(name, "Helvetica-Bold", width, name_fs, 7.0), black),
+            (_pdf_safe(class_name), "Helvetica-Bold",
+             _fit_size(_pdf_safe(class_name), "Helvetica-Bold", width,
+                       title_fs + 1, 6.5), accent),
+        ]
+    if title:
+        t = _pdf_safe(title)
+        rows.append((t, "Helvetica-Bold",
+                     _fit_size(t, "Helvetica-Bold", width, title_fs, 6.0), accent))
+    if tpl.get("show_date", True):
+        meta_fs = max(6.0, title_fs - 1)
+        rows.append((_pdf_safe(f"{label}  ·  {the_date}"), "Helvetica", meta_fs,
+                     HexColor("#6A737C")))
+    return rows
+
+
+def _draw_header(c: canvas.Canvas, student_name: str, class_name: str, title: str,
+                 assessment_type: str, the_date: str, tpl: dict | None = None):
+    """En-tête en 4 zones, gauche -> droite : Note (contrôle seul) |
+    Appréciation | Identité+méta | QR. Les trois premières partagent la même
+    bande verticale (HEADER_PAD_V) : cadres alignés haut et bas, bloc méta
+    centré dessus, gouttière entre chaque zone."""
+    tpl = tpl or DEFAULT_TEMPLATES["header"]
+    accent = HexColor(tpl.get("accent", "#37474F"))
     y_top = PAGE_H - MARGIN
     header_bottom = y_top - HEADER_H
     label = "Contrôle" if assessment_type == "control" else "Entraînement"
     geo = header_geometry(assessment_type)
+    band_bottom = header_bottom + HEADER_PAD_V
+    band_h = HEADER_H - 2 * HEADER_PAD_V
 
-    # --- zone Note (23mm, contrôle uniquement) ---
+    # --- zone Note (contrôle uniquement) ---
     if geo["note"]["visible"]:
-        nx, ny, nw, nh = geo["note"]["x"], geo["note"]["y"], geo["note"]["w"], geo["note"]["h"]
+        nx, nw = geo["note"]["x"], geo["note"]["w"]
         _dotted(c)
-        c.roundRect(nx + 1.5 * mm, ny + 1.5 * mm, nw - 3 * mm, nh - 3 * mm, 2 * mm)
+        c.roundRect(nx, band_bottom, nw, band_h, 2 * mm)
         _solid(c)
         c.setFillColor(DOTTED_GRAY)
         c.setFont("Helvetica", 6.5)
-        c.drawCentredString(nx + nw / 2, ny + nh - 5 * mm, "NOTE")
+        c.drawCentredString(nx + nw / 2, band_bottom + band_h - HEADER_LABEL_DY, "NOTE")
         c.setFillColor(black)
 
-    # --- zone Appréciation (absorbe la Note en mode entraînement) ---
-    ax, ay, aw, ah = geo["appreciation"]["x"], geo["appreciation"]["y"], \
-        geo["appreciation"]["w"], geo["appreciation"]["h"]
+    # --- zone Appréciation (absorbe la largeur de la Note en entraînement) ---
+    ax, aw = geo["appreciation"]["x"], geo["appreciation"]["w"]
     _dotted(c)
-    c.roundRect(ax + 1.5 * mm, ay + 1.5 * mm, aw - 3 * mm, ah - 3 * mm, 2 * mm)
+    c.roundRect(ax, band_bottom, aw, band_h, 2 * mm)
     _solid(c)
     c.setFillColor(DOTTED_GRAY)
     c.setFont("Helvetica", 6.5)
-    c.drawString(ax + 3.5 * mm, ay + ah - 5 * mm,
+    c.drawString(ax + 2.5 * mm, band_bottom + band_h - HEADER_LABEL_DY,
                  "APPRÉCIATION — remplie à la correction")
     c.setFillColor(black)
 
-    # --- zone Métadonnées, justifiée à droite (nom/prénom, classe, titre, date) ---
-    mx, my, mw, mh = geo["meta"]["x"], geo["meta"]["y"], geo["meta"]["w"], geo["meta"]["h"]
-    meta_right = geo["qr"]["x"] - 3 * mm
-    line_y = my + mh - name_fs
-    c.setFillColor(black)
-    c.setFont("Helvetica-Bold", name_fs)
-    c.drawRightString(meta_right, line_y, f"{student_name}  /  {class_name}")
-    line_y -= name_fs * 0.55 + 2 * mm
-    c.setFont("Helvetica-Bold", title_fs)
-    c.setFillColor(accent)
-    c.drawRightString(meta_right, line_y, title)
-    if tpl.get("show_date", True):
-        line_y -= title_fs * 0.7 + 1.6 * mm
-        c.setFont("Helvetica", max(6.0, title_fs - 1))
-        c.setFillColor(HexColor("#6A737C"))
-        c.drawRightString(meta_right, line_y, f"{label}  ·  {the_date}")
+    # --- zone Identité + méta : justifiée à droite, bloc centré sur la bande ---
+    meta_right = geo["meta"]["x"] + geo["meta"]["w"]
+    rows = _meta_rows(student_name, class_name, title, label, the_date,
+                      geo["meta"]["w"], tpl, accent)
+    row_gap = 1.6 * mm
+    block_h = sum(fs * 0.72 for _t, _f, fs, _c in rows) + row_gap * (len(rows) - 1)
+    y = band_bottom + (band_h + block_h) / 2
+    for text, font, fs, color in rows:
+        y -= fs * 0.72
+        c.setFont(font, fs)
+        c.setFillColor(color)
+        c.drawRightString(meta_right, y, text)
+        y -= row_gap
 
     # filet séparateur en-tête / exercices (pas de séparateur vertical entre zones)
     c.setStrokeColor(accent)
@@ -361,14 +435,40 @@ def _legacy_to_tagged(statement: str) -> str:
 
 
 BLANK_TOKEN = "{{blank}}"
-BLANK_W = 18 * mm
+# Case à remplir : 2 cm x 1 cm, dimension d'écriture manuscrite d'élève de
+# collège — c'est une contrainte physique (la main), pas une proportion du
+# corps de texte : elle ne suit donc PAS font_size. C'est au contraire le
+# texte de ces énoncés qui grossit (BLANK_FONT_BOOST) pour rester en rapport.
+BLANK_W = 20 * mm
+BLANK_H = 10 * mm
+BLANK_FONT_BOOST = 2.0
 
 
-def _rich_layout(text: str, width: float, fs: float, math_fs: float | None = None) -> dict:
+def _blank_statement_fs(response_type: str, statement: str,
+                        font_size: float) -> float:
+    """Corps de texte d'un exercice À TROUS — agrandi pour ne pas paraître
+    minuscule à côté de cases dimensionnées pour l'écriture manuscrite.
+
+    Le critère est la présence réelle de cases : les types multi_blank et
+    table_fill en portent par construction, short_text seulement s'il place un
+    {{blank}} dans son énoncé (sinon sa réponse est un cadre pleine largeur,
+    qui n'a aucune raison de faire grossir le texte)."""
+    has_blank = (response_type in ("multi_blank", "table_fill")
+                 or BLANK_TOKEN in (statement or ""))
+    return font_size + BLANK_FONT_BOOST if has_blank else font_size
+
+
+def _rich_layout(text: str, width: float, fs: float, math_fs: float | None = None,
+                 first_indent: float = 0.0, first_min_asc: float = 0.0) -> dict:
     """Met en page un texte balisé $...$ : flot de mots et d'images maths.
-    Retourne {lines: [{segs, asc, desc, h, w}], height} ; seg = ("word", str)
-    ou ("math", ImageReader, w, h, d) ou ("blank", w, asc, desc) — case de
-    réponse courte insérée en ligne (marqueur BLANK_TOKEN)."""
+    Retourne {lines: [{segs, asc, desc, h, w, indent}], height} ; seg =
+    ("word", str) ou ("math", ImageReader, w, h, d) ou ("blank", w, asc, desc)
+    — case de réponse courte insérée en ligne (marqueur BLANK_TOKEN).
+
+    `first_indent` réserve de la place en tête de 1re ligne (badge numéroté de
+    la carte exercice) : la ligne est raccourcie d'autant et décalée au dessin.
+    `first_min_asc` force une ascendante minimale sur cette 1re ligne pour que
+    le badge y tienne en entier."""
     from . import mathrender
     math_fs = math_fs or fs
     # seg = ("word", texte, glue) | ("math", img, w, h, d, glue) |
@@ -403,7 +503,8 @@ def _rich_layout(text: str, width: float, fs: float, math_fs: float | None = Non
             for pi, part in enumerate(parts):
                 _emit_words(part)
                 if pi < len(parts) - 1:
-                    segs.append(("blank", BLANK_W, fs * 0.78, fs * 0.24, False))
+                    segs.append(("blank", BLANK_W, BLANK_H - fs * 0.24,
+                                 fs * 0.24, False))
                     prev_no_space = False
         else:
             _emit_words(content)
@@ -423,12 +524,13 @@ def _rich_layout(text: str, width: float, fs: float, math_fs: float | None = Non
     raw_lines: list[list[tuple]] = []
     cur: list[tuple] = []
     cur_w = 0.0
+    avail = max(1.0, width - first_indent)   # 1re ligne : place du badge en moins
     for seg in segs:
         w = _seg_w(seg)
         add = w if (not cur or _seg_glue(seg)) else w + space_w
-        if cur and cur_w + add > width:
+        if cur and cur_w + add > avail:
             raw_lines.append(cur)
-            cur, cur_w = [seg], w
+            cur, cur_w, avail = [seg], w, width
         else:
             cur.append(seg)
             cur_w += add
@@ -436,8 +538,10 @@ def _rich_layout(text: str, width: float, fs: float, math_fs: float | None = Non
         raw_lines.append(cur)
 
     lines, total_h = [], 0.0
-    for line in raw_lines:
+    for i, line in enumerate(raw_lines):
         asc, desc = fs * 0.78, fs * 0.24
+        if i == 0:
+            asc = max(asc, first_min_asc)
         for seg in line:
             if seg[0] == "math":
                 asc = max(asc, seg[3] - seg[4])
@@ -448,6 +552,7 @@ def _rich_layout(text: str, width: float, fs: float, math_fs: float | None = Non
         lh = asc + desc + 2.2
         n_spaces = sum(1 for j, s in enumerate(line) if j > 0 and not _seg_glue(s))
         lines.append({"segs": line, "asc": asc, "desc": desc, "h": lh,
+                      "indent": first_indent if i == 0 else 0.0,
                       "w": sum(_seg_w(s) for s in line) + space_w * n_spaces})
         total_h += lh
     return {"lines": lines, "height": total_h}
@@ -463,7 +568,9 @@ def _draw_rich(c: canvas.Canvas, x: float, y_top: float, layout: dict, fs: float
     y = y_top
     for line in layout["lines"]:
         y_base = y - line["asc"]
-        cx = x + ((width - line["w"]) / 2 if centered and width else 0)
+        cx = x + line.get("indent", 0.0)
+        if centered and width:
+            cx += (width - line["w"]) / 2
         for j, seg in enumerate(line["segs"]):
             if j > 0 and not seg[-1]:
                 cx += space_w
@@ -514,11 +621,14 @@ def _figure_image(figure_json: dict | None, max_w: float, max_h: float):
 _DISPLAY_RE = re.compile(r"^(.*?[:?])\s*\$([^$]+)\$\s*\??\s*$", re.DOTALL)
 
 
-def _statement_layout(statement: str, width: float, font_size: int,
-                      math_size: int, figure_json: dict | None = None) -> dict:
+def _statement_layout(statement: str, width: float, font_size: float,
+                      math_size: int, figure_json: dict | None = None,
+                      first_indent: float = 0.0,
+                      first_min_asc: float = 0.0) -> dict:
     """Met en page un énoncé : texte riche + éventuelle expression finale mise
     en valeur (motif « consigne : $expr$ » -> centrée, plus grande) + figure.
-    Retourne {intro, display, figure, height}."""
+    `first_indent`/`first_min_asc` réservent la place du badge numéroté en tête
+    de 1re ligne. Retourne {intro, display, figure, height}."""
     statement = _legacy_to_tagged(statement or "")
     display = None
     body = statement
@@ -527,7 +637,8 @@ def _statement_layout(statement: str, width: float, font_size: int,
         im = _math_image(m.group(2), math_size)
         if im is not None and im[1] <= width - 4:
             body, display = m.group(1), im
-    intro = _rich_layout(body, width, font_size)
+    intro = _rich_layout(body, width, font_size, first_indent=first_indent,
+                         first_min_asc=first_min_asc)
     figure = _figure_image(figure_json, min(width, 62 * mm), 42 * mm)
     height = intro["height"]
     if display:
@@ -541,40 +652,101 @@ def _qcm_layout(choices: list[str], width: float,
                 font_size: int) -> tuple[list[dict], float, int]:
     """Disposition en colonnes (remplies colonne par colonne). Les labels sont
     mis en page en riche (formules rendues). Retourne (items, hauteur, ncols) ;
-    item = {index, dx, dy, lay, lw, box} en relatif (origine haut-gauche)."""
+    item = {index, dx, dy, lay, lw, box} en relatif (origine haut-gauche).
+
+    Deux passes : la 1re mesure la largeur NATURELLE des labels pour choisir le
+    nombre de colonnes, la 2de les remet en page à la largeur réelle de leur
+    colonne. Une passe unique à `width` ignorait la place prise par la case à
+    cocher et son blanc — le label, dessiné après la case, débordait alors de
+    la carte d'autant."""
     box = 2.0 * mm
     gap_x, gap_y, pad = 6.0 * mm, 1.6 * mm, 1.6 * mm
-    lays = []
-    max_lw, max_h = 0.0, 6.0 * mm
-    for choice in choices:
-        lay = _rich_layout(choice, max(width, 10 * mm), font_size)
-        lw = max((ln["w"] for ln in lay["lines"]), default=0.0)
-        lays.append((lay, lw))
-        max_lw = max(max_lw, lw)
-        max_h = max(max_h, lay["height"] + gap_y)
     n = len(choices)
-    item_w = box + pad + max_lw + gap_x
+    solo_w = max(10 * mm, width - box - pad)     # label sur une seule colonne
+    nat = [max((ln["w"] for ln in _rich_layout(ch, solo_w, font_size)["lines"]),
+               default=0.0) for ch in choices]
+    item_w = box + pad + (max(nat) if nat else 0.0) + gap_x
     ncols = max(1, min(3, n, int(width // item_w) if item_w > 0 else 1))
     nrows = -(-n // ncols)  # ceil
-    items = []
-    for i, (lay, lw) in enumerate(lays):
+
+    col_total = width / ncols
+    lab_w = max(10 * mm, col_total - box - pad - (gap_x if ncols > 1 else 0.0))
+    items, max_h = [], 6.0 * mm
+    lays = []
+    for choice in choices:
+        lay = _rich_layout(choice, lab_w, font_size)
+        lays.append(lay)
+        max_h = max(max_h, lay["height"] + gap_y)
+    for i, lay in enumerate(lays):
         col, row = divmod(i, nrows)
-        items.append({"index": i, "dx": col * item_w, "dy": row * max_h,
+        lw = max((ln["w"] for ln in lay["lines"]), default=0.0)
+        items.append({"index": i, "dx": col * col_total, "dy": row * max_h,
                       "lay": lay, "lw": lw, "box": box})
     return items, nrows * max_h, ncols
 
 
+# Interligne des zones de rédaction (multiline_text) : les élèves écrivent plus
+# gros que le corps imprimé — mesure/dessin doivent lire la MÊME constante.
+MULTILINE_ROW_H = 9 * mm
+
 _TABLE_HEAD_H = 6.0 * mm
-_TABLE_ROWLAB_W = 15.0 * mm
-_TABLE_ROW_H = 7.5 * mm
+_TABLE_CELL_PAD = 1.2 * mm
+_TABLE_COL_W = BLANK_W + 2 * _TABLE_CELL_PAD     # colonne « confortable » : case pleine taille
+_TABLE_MIN_COL_W = 10.0 * mm                     # plancher quand les colonnes sont nombreuses
+_TABLE_ROW_MIN_H = BLANK_H + 2 * _TABLE_CELL_PAD
+_TABLE_ROWLAB_MIN_W = 18.0 * mm
 _MATCHING_PASTILLE = 2.2 * mm
 _MATCHING_COL_GAP = 10.0 * mm
 _MANUAL_DRAWING_H = 60.0 * mm
 
 
-def _table_zone_height(rows: int, col_labels: list | None) -> float:
-    head_h = _TABLE_HEAD_H if col_labels else 0.0
-    return head_h + rows * _TABLE_ROW_H + 2 * mm
+def _table_geometry(w: float, col_labels: list | None, row_labels: list | None,
+                    cells: list[list[dict]], font_size: int) -> dict:
+    """Géométrie complète d'un tableau à remplir — UNE définition, partagée par
+    la mesure (_table_zone_height) et le dessin (_draw_table_zone).
+
+    Le cas dominant est cols=1 : le générateur y met la sous-question entière
+    dans row_labels[i] (« a. 4,8 + ... = 12,5 ») et la grille ne porte qu'une
+    case. La largeur va donc en priorité au libellé, la colonne réponse étant
+    dimensionnée sur la case (20 mm) et non sur la place restante — c'est
+    l'inverse de l'ancienne règle (libellé figé à 15 mm), qui écrasait le
+    libellé sous une case démesurée."""
+    rows = len(cells)
+    cols = max((len(r) for r in cells), default=0) or 1
+    inner = w - 2 * CARD_PAD
+    lab_fs = max(6, font_size - 1)
+
+    rowlab_w = 0.0
+    if row_labels:
+        room = inner - cols * _TABLE_MIN_COL_W       # place cessible au libellé
+        rowlab_w = max(0.0, min(room, max(_TABLE_ROWLAB_MIN_W,
+                                          inner - cols * _TABLE_COL_W)))
+    grid_w = inner - rowlab_w
+    col_w = grid_w / cols
+
+    # bandeau de tête dimensionné sur les libellés RÉELS : « Nombre manquant »
+    # sur une colonne de 22 mm passe à la ligne, et une hauteur figée le faisait
+    # retomber dans la 1re case.
+    col_lays = [_rich_layout(str(lbl), col_w - 2 * mm, lab_fs)
+                for lbl in (col_labels or [])]
+    head_h = (max([_TABLE_HEAD_H]
+                  + [lay["height"] + 2 * _TABLE_CELL_PAD for lay in col_lays])
+              if col_labels else 0.0)
+
+    row_lays = [_rich_layout(str(lbl), max(8 * mm, rowlab_w - 2 * _TABLE_CELL_PAD),
+                             lab_fs) for lbl in (row_labels or [])]
+    row_hs = [max(_TABLE_ROW_MIN_H,
+                  (row_lays[i]["height"] + 2 * _TABLE_CELL_PAD) if i < len(row_lays) else 0.0)
+              for i in range(rows)]
+    return {"rows": rows, "cols": cols, "head_h": head_h, "rowlab_w": rowlab_w,
+            "grid_w": grid_w, "col_w": col_w, "col_lays": col_lays,
+            "row_lays": row_lays, "row_hs": row_hs, "lab_fs": lab_fs,
+            "height": head_h + sum(row_hs) + 2 * mm}
+
+
+def _table_zone_height(w: float, col_labels: list | None, row_labels: list | None,
+                       cells: list[list[dict]], font_size: int) -> float:
+    return _table_geometry(w, col_labels, row_labels, cells, font_size)["height"]
 
 
 def _matching_zone_height(left: list, right: list, font_size: int) -> float:
@@ -596,10 +768,11 @@ def _zone_height(response_type: str, choices: list[str], width: float,
         return 0.0  # cases dessinées en ligne dans l'énoncé, jamais de zone dédiée
     if response_type == "multiline_text":
         lines = max(3, min(12, int(grading.get("lines", 5))))
-        return lines * 7 * mm + 4 * mm
+        return lines * MULTILINE_ROW_H + 4 * mm
     if response_type == "table_fill":
         cells = grading.get("cells") or [[]]
-        return _table_zone_height(len(cells), grading.get("col_labels"))
+        return _table_zone_height(width, grading.get("col_labels"),
+                                  grading.get("row_labels"), cells, font_size)
     if response_type == "matching":
         return _matching_zone_height(grading.get("left", []), grading.get("right", []),
                                      font_size)
@@ -622,63 +795,62 @@ def _cell_display_text(cell: dict) -> str:
 def _draw_table_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float,
                      col_labels: list | None, row_labels: list | None,
                      cells: list[list[dict]], font_size: int) -> dict:
-    rows, cols = len(cells), len(cells[0]) if cells else 0
-    head_h = _TABLE_HEAD_H if col_labels else 0.0
-    rowlab_w = _TABLE_ROWLAB_W if row_labels else 0.0
-    grid_x = x + CARD_PAD + rowlab_w
-    grid_w = w - 2 * CARD_PAD - rowlab_w
+    geo = _table_geometry(w, col_labels, row_labels, cells, font_size)
+    rows, cols = geo["rows"], geo["cols"]
+    head_h, col_w, lab_fs = geo["head_h"], geo["col_w"], geo["lab_fs"]
+    grid_x = x + CARD_PAD + geo["rowlab_w"]
+    grid_w = geo["grid_w"]
     grid_top = y + h - 1 * mm
     grid_bottom = y + 1 * mm
-    row_h = (grid_top - head_h - grid_bottom) / max(1, rows)
-    col_w = grid_w / max(1, cols)
 
     c.setStrokeColor(CARD_BORDER)
     c.setLineWidth(0.7)
     c.rect(grid_x, grid_bottom, grid_w, grid_top - head_h - grid_bottom, stroke=1, fill=0)
     if col_labels:
         c.setFillColor(black)
-        for j, label in enumerate(col_labels):
-            lay = _rich_layout(str(label), col_w - 2 * mm, max(6, font_size - 1))
-            _draw_rich(c, grid_x + j * col_w + 1 * mm, grid_top - 1.6 * mm, lay,
-                       max(6, font_size - 1), centered=True, width=col_w - 2 * mm)
+        for j, lay in enumerate(geo["col_lays"]):
+            _draw_rich(c, grid_x + j * col_w + 1 * mm,
+                       grid_top - (head_h - lay["height"]) / 2, lay,
+                       lab_fs, centered=True, width=col_w - 2 * mm)
         c.line(grid_x, grid_top - head_h, grid_x + grid_w, grid_top - head_h)
-    if row_labels:
-        for i, label in enumerate(row_labels):
-            ry = grid_top - head_h - i * row_h - row_h / 2
-            lay = _rich_layout(str(label), rowlab_w - 3 * mm, max(6, font_size - 1))
-            _draw_rich(c, x + CARD_PAD, ry + lay["height"] / 2, lay, max(6, font_size - 1))
 
     cells_meta = []
+    ry_top = grid_top - head_h
     for i in range(rows):
+        row_h = geo["row_hs"][i]
         row_meta = []
-        ry_top = grid_top - head_h - i * row_h
         if i > 0:
             c.setStrokeColor(CARD_BORDER)
             c.setLineWidth(0.5)
             c.line(grid_x, ry_top, grid_x + grid_w, ry_top)
+        if i < len(geo["row_lays"]):
+            lay = geo["row_lays"][i]
+            _draw_rich(c, x + CARD_PAD, ry_top - (row_h - lay["height"]) / 2, lay, lab_fs)
         for j in range(cols):
             cx = grid_x + j * col_w
             if j > 0:
                 c.setStrokeColor(CARD_BORDER)
                 c.setLineWidth(0.5)
                 c.line(cx, grid_bottom, cx, grid_top - head_h)
-            inset = 1.2 * mm
-            bx, by = cx + inset, ry_top - row_h + inset
-            bw, bh = col_w - 2 * inset, row_h - 2 * inset
+            # case centrée dans la cellule, plafonnée à la taille d'écriture
+            # manuscrite (BLANK_W x BLANK_H) — une cellule large ne l'étire pas
+            bw = min(BLANK_W, col_w - 2 * _TABLE_CELL_PAD)
+            bh = min(BLANK_H, row_h - 2 * _TABLE_CELL_PAD)
+            bx = cx + (col_w - bw) / 2
+            by = ry_top - row_h + (row_h - bh) / 2
             cell = cells[i][j] if i < len(cells) and j < len(cells[i]) else None
             if cell and cell.get("given"):
                 c.setFillColor(black)
-                text = _cell_display_text(cell)
-                lay = _rich_layout(text, bw, max(6, font_size - 1))
-                cy = by + bh / 2
-                _draw_rich(c, bx, cy + lay["height"] / 2, lay, max(6, font_size - 1),
-                           centered=True, width=bw)
+                lay = _rich_layout(_cell_display_text(cell), col_w - 2 * mm, lab_fs)
+                _draw_rich(c, cx + 1 * mm, ry_top - (row_h - lay["height"]) / 2, lay,
+                           lab_fs, centered=True, width=col_w - 2 * mm)
             else:
                 c.setStrokeColor(DROPOUT)
                 c.setLineWidth(0.7)
                 c.roundRect(bx, by, bw, bh, 0.8 * mm)
             row_meta.append({"x_pt": bx, "y_pt": by, "w_pt": bw, "h_pt": bh})
         cells_meta.append(row_meta)
+        ry_top -= row_h
     c.setStrokeColor(black)
     c.setFillColor(black)
     return {"cells": cells_meta}
@@ -734,13 +906,16 @@ def _draw_answer_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float,
         top = y + h - 2 * mm
         for it in items:
             bx = x + CARD_PAD + it["dx"]
-            by = top - it["dy"] - it["box"]
+            row_top = top - it["dy"]
+            # La case se cale sur le TEXTE (centre de case sur la hauteur d'œil
+            # de la 1re ligne du label), et non l'inverse : la poser à partir du
+            # haut de la ligne la laissait flotter sous le texte.
+            first_asc = it["lay"]["lines"][0]["asc"] if it["lay"]["lines"] else font_size * 0.78
+            y_base = row_top - first_asc
+            by = y_base + font_size * 0.35 - it["box"] / 2
             c.setStrokeColor(DROPOUT)
             c.rect(bx, by, it["box"], it["box"])
-            # label riche (formules rendues), 1re ligne de base alignée sur la case
-            first_asc = it["lay"]["lines"][0]["asc"] if it["lay"]["lines"] else font_size
-            _draw_rich(c, bx + it["box"] + 1.6 * mm, by + 0.8 * mm + first_asc,
-                       it["lay"], font_size)
+            _draw_rich(c, bx + it["box"] + 1.6 * mm, row_top, it["lay"], font_size)
             c.setStrokeColor(DROPOUT)
             inner = 1.1 * mm
             boxes.append({"index": it["index"], "x_pt": bx + inner, "y_pt": by + inner,
@@ -759,7 +934,7 @@ def _draw_answer_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float,
         c.roundRect(x + CARD_PAD, y + 1 * mm, w - 2 * CARD_PAD, h - 2 * mm, 1.5 * mm)
         if response_type == "multiline_text":
             c.setLineWidth(0.35)
-            line_gap = 7 * mm
+            line_gap = MULTILINE_ROW_H
             ly = y + h - 1 * mm - line_gap
             while ly > y + 3 * mm:
                 c.line(x + CARD_PAD + 1.5 * mm, ly, x + w - CARD_PAD - 1.5 * mm, ly)
@@ -768,29 +943,27 @@ def _draw_answer_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float,
     return meta
 
 
-def _exercise_head_h(tpl: dict) -> float:
-    return max(5.2 * mm, float(tpl.get("title_size", 9)) + 6)
-
-
 def _exercise_card_h(layout: dict, zone_h: float, tpl: dict) -> float:
     """Hauteur totale de l'unité (carte + espace + bande de correction),
-    toujours placée d'un bloc (jamais coupée par saut de colonne/page)."""
-    return (_exercise_head_h(tpl) + layout["height"] + zone_h
-            + STRIP_H + STRIP_GAP + 3 * CARD_PAD)
+    toujours placée d'un bloc (jamais coupée par saut de colonne/page).
+
+    Plus de ligne de titre : le badge numéroté vit DANS la 1re ligne de
+    l'énoncé (layout["intro"], dimensionnée par _badge_min_asc), et la hauteur
+    d'en-tête qu'elle coûtait est rendue au contenu."""
+    return layout["height"] + zone_h + STRIP_H + STRIP_GAP + 3 * CARD_PAD
 
 
 def _draw_exercise_card(c: canvas.Canvas, x: float, y_top: float, w: float,
                         seq: int, layout: dict, zone_h: float,
                         level5: int, response_type: str, choices: list[str],
-                        tpl: dict, grading: dict | None = None) -> tuple[float, dict, dict]:
-    """Carte exercice + bande de correction hors carte (§ correction). Retourne
+                        tpl: dict, font_size: float,
+                        grading: dict | None = None) -> tuple[float, dict, dict]:
+    """Carte exercice + bande de correction hors carte (§ correction).
+    `font_size` vient de _exercise_layout : c'est celui qui a servi à MESURER
+    `layout`/`zone_h`, le redériver ici les désaccorderait. Retourne
     (hauteur totale, geo zone réponse, meta)."""
-    font_size = int(tpl.get("font_size", 9))
-    title_fs = float(tpl.get("title_size", font_size))
     border = HexColor(tpl.get("border", "#C7CDD4"))
-    accent = HexColor(tpl.get("accent", "#455A64"))
     radius = max(0.0, float(tpl.get("radius", 2.2))) * mm
-    head_h = _exercise_head_h(tpl)
     card_h = _exercise_card_h(layout, zone_h, tpl)
     y = y_top - card_h                              # bas de l'unité entière (carte + strip)
     card_bottom = y + STRIP_H + STRIP_GAP            # bas de la carte seule (strip exclue)
@@ -805,22 +978,16 @@ def _draw_exercise_card(c: canvas.Canvas, x: float, y_top: float, w: float,
     c.setLineWidth(0.9)
     c.roundRect(x, card_bottom, w, card_h_body, radius, stroke=1, fill=1)
 
-    # ligne de titre : icône + "Exercice N" + pastilles difficulté
-    ty = card_bottom + card_h_body - head_h
-    _icon_pencil(c, x + CARD_PAD + 1.2 * mm, ty + 1.2 * mm, color=accent)
-    c.setFillColor(black)
-    c.setFont("Helvetica-Bold", title_fs)
-    c.drawString(x + CARD_PAD + 3.6 * mm, ty + 0.8 * mm, f"Exercice {seq}")
-    _difficulty_dots(c, x + w - CARD_PAD - 1 * mm, ty + 1.8 * mm, level5, color=accent)
-    c.setStrokeColor(HexColor("#E4E8EC"))
-    c.setLineWidth(0.5)
-    c.line(x + CARD_PAD, ty - 0.6 * mm, x + w - CARD_PAD, ty - 0.6 * mm)
-
     # énoncé riche (texte + formules PNG), expression finale mise en valeur,
     # figure paramétrée éventuelle ; `blanks` récupère la géométrie d'une
-    # éventuelle case de réponse courte insérée en ligne (short_text inline)
+    # éventuelle case de réponse courte insérée en ligne (short_text inline).
+    # Le badge numéroté occupe le retrait réservé en tête de 1re ligne.
+    ty = card_bottom + card_h_body - CARD_PAD
     inline_blanks: list = []
-    line_y = _draw_rich(c, x + CARD_PAD, ty - 1.2 * mm, layout["intro"], font_size,
+    first = layout["intro"]["lines"][0] if layout["intro"]["lines"] else None
+    _draw_badge(c, x + CARD_PAD, ty - (first["asc"] if first else font_size * 0.78),
+                font_size, seq, level5)
+    line_y = _draw_rich(c, x + CARD_PAD, ty, layout["intro"], font_size,
                         blanks=inline_blanks)
     if layout["display"]:
         img, dw, dh, _dd = layout["display"]
@@ -1066,6 +1233,23 @@ def pages_needed(heights: list[float]) -> int:
     return page_idx + 1
 
 
+def _exercise_layout(item: dict, font_size: int, math_fs: int) -> tuple[dict, float, float]:
+    """(layout de l'énoncé, corps de texte, hauteur de zone réponse) d'un
+    exercice — UNE définition, appelée à l'identique par la mesure
+    (estimate_item_height) et par le dessin (render_copy). Deux constructions
+    parallèles dériveraient, et c'est cet écart que test_page_fill traque."""
+    rtype = item["response_type"]
+    fs = _blank_statement_fs(rtype, item.get("statement", ""), font_size)
+    badge_w, _bh, _bfs = _badge_metrics(fs)
+    layout = _statement_layout(item["statement"], COL_W - 2 * CARD_PAD, fs, math_fs,
+                               item.get("figure"),
+                               first_indent=badge_w + BADGE_GAP,
+                               first_min_asc=_badge_min_asc(fs))
+    zone_h = _zone_height(rtype, item.get("choices", []), COL_W, fs,
+                          item.get("grading"), item.get("inline", False))
+    return layout, fs, zone_h
+
+
 def estimate_item_height(item: dict, font_size: int, math_fs: int,
                          ex_tpl: dict, lesson_tpl: dict) -> float:
     """Hauteur (pt) qu'occuperait `item` (placement inclus), sans dessiner —
@@ -1079,11 +1263,7 @@ def estimate_item_height(item: dict, font_size: int, math_fs: int,
         }
         lay = _lesson_layout(blocks, COL_W, fs)
         return _lesson_card_h(lay, lesson_tpl) + GAP
-    choices = item.get("choices", [])
-    layout = _statement_layout(item["statement"], COL_W - 2 * CARD_PAD,
-                               font_size, math_fs, item.get("figure"))
-    zone_h = _zone_height(item["response_type"], choices, COL_W, font_size,
-                          item.get("grading"), item.get("inline", False))
+    layout, _fs, zone_h = _exercise_layout(item, font_size, math_fs)
     return _exercise_card_h(layout, zone_h, ex_tpl) + GAP
 
 
@@ -1158,10 +1338,7 @@ def render_copy(pdf_canvas: canvas.Canvas, *, student_name: str, class_name: str
 
         seq += 1
         choices = item.get("choices", [])
-        layout = _statement_layout(item["statement"], col_w - 2 * CARD_PAD,
-                                   font_size, math_fs, item.get("figure"))
-        zone_h = _zone_height(item["response_type"], choices, col_w, font_size,
-                              item.get("grading"), item.get("inline", False))
+        layout, item_fs, zone_h = _exercise_layout(item, font_size, math_fs)
         card_h = _exercise_card_h(layout, zone_h, ex_tpl)
         place(card_h + gap)
         x = MARGIN + col * (col_w + COL_GAP)
@@ -1169,7 +1346,7 @@ def render_copy(pdf_canvas: canvas.Canvas, *, student_name: str, class_name: str
         _, zone_geo, meta = _draw_exercise_card(
             pdf_canvas, x, y_cursor, col_w, seq, layout, zone_h,
             item.get("level5", 3), item["response_type"], choices, ex_tpl,
-            item.get("grading"))
+            item_fs, item.get("grading"))
         zones.append({
             "item_id": item["item_id"], "page_index": page_idx,
             "page_id": pages_meta[page_idx]["page_id"],
@@ -1208,7 +1385,8 @@ def _draw_appreciation_content(c: canvas.Canvas, geo: dict, progress: list[dict]
         geo["appreciation"]["w"], geo["appreciation"]["h"]
     inner_x = ax + 3.5 * mm
     inner_w = aw - 7 * mm
-    y = ay + ah - 8 * mm
+    # sous le libellé « APPRÉCIATION » imprimé sur le sujet, jamais dessus
+    y = ay + ah - HEADER_PAD_V - HEADER_LABEL_DY - 3.5 * mm
     bar_h = 2.2 * mm
     for p in progress:
         label = f"{p['competency_name']}  {round(p['pct_acquired'] * 100)}%"
@@ -1249,10 +1427,11 @@ def render_overlay(path: str, *, copies_annotations: list[dict],
                           f"Correction — {page.get('student', '')}")
         if page.get("note") is not None and geo["note"]["visible"]:
             nx, ny, nw, nh = geo["note"]["x"], geo["note"]["y"], geo["note"]["w"], geo["note"]["h"]
-            box_h = 15 * mm
-            box_y = ny + nh - box_h - 3 * mm
-            c.setFont("Helvetica-Bold", 13)
-            c.drawCentredString(nx + nw / 2, box_y + box_h / 2 - 2 * mm, str(page["note"]))
+            # centrée dans le cadre imprimé, sous son libellé « NOTE »
+            band_bottom, band_h = ny + HEADER_PAD_V, nh - 2 * HEADER_PAD_V
+            c.setFont("Helvetica-Bold", 15)
+            c.drawCentredString(nx + nw / 2, band_bottom + (band_h - 6 * mm) / 2 - 5,
+                                str(page["note"]))
         if page.get("progress") or page.get("synthesis"):
             _draw_appreciation_content(c, geo, page.get("progress") or [],
                                        page.get("synthesis") or "")
@@ -1265,7 +1444,11 @@ def render_overlay(path: str, *, copies_annotations: list[dict],
         for z in page.get("page_zones", []):
             strip = z.get("strip")
             ok = bool(z.get("full_credit"))
-            score_txt = f"{z.get('score', '')}/{z.get('max_score', '')}"
+            # points de BARÈME (cf. services.pipeline.build_overlays), donc des
+            # demis : « 1,5/2 » à la française, jamais « 1.5/2.0 » — c'est lu
+            # par un élève de 5e sur sa copie.
+            score_txt = (f"{scoring.format_points(z['score'])}/"
+                         f"{scoring.format_points(z['max_score'])}")
             if strip:
                 sx, sy, sw, _sh = strip["x_pt"], strip["y_pt"], strip["w_pt"], strip["h_pt"]
                 c.setFont("Helvetica-Bold", 8)

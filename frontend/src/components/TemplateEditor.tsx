@@ -8,29 +8,34 @@ import {
   Slider, Stack, Switch, Text,
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
-import { BookOpen, Eye, Pencil, RotateCcw, Save } from 'lucide-react'
+import { BookOpen, Eye, RotateCcw, Save } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, getToken } from '../api'
 import MathText from './MathText'
 
 export type DocTemplates = {
   header: { name_size: number; title_size: number; accent: string; show_date: boolean }
-  exercise: { font_size: number; title_size: number; math_size: number; border: string; accent: string; radius: number; shadow: boolean }
+  exercise: { font_size: number; math_size: number; border: string; radius: number; shadow: boolean }
   lesson: { font_size: number; bg: string; border: string; text: string }
 }
 
 export const TEMPLATE_DEFAULTS: DocTemplates = {
   header: { name_size: 14, title_size: 8, accent: '#37474F', show_date: true },
-  exercise: { font_size: 9, title_size: 9, math_size: 12, border: '#C7CDD4', accent: '#455A64', radius: 2.2, shadow: true },
+  exercise: { font_size: 9, math_size: 12, border: '#C7CDD4', radius: 2.2, shadow: true },
   lesson: { font_size: 8, bg: '#FFF6DF', border: '#E4C46A', text: '#6B5310' },
 }
 
 // pt (PDF) -> px (aperçu) : l'aperçu est agrandi pour rester lisible à l'écran
 const S = 1.7
 
+// Miroir de pdfgen.DIFFICULTY_COLORS (badge de numéro d'exercice, 1 -> 5)
+const DIFFICULTY_COLORS: Record<number, string> = {
+  1: '#2563EB', 2: '#16A34A', 3: '#CA8A04', 4: '#EA580C', 5: '#DC2626',
+}
+
 type Sel =
   | { part: 'header'; field: 'name_size' | 'title_size' }
-  | { part: 'exercise'; field: 'font_size' | 'math_size' | 'title_size' }
+  | { part: 'exercise'; field: 'font_size' | 'math_size' }
   | { part: 'lesson'; field: 'font_size' }
   | null
 
@@ -231,26 +236,15 @@ export default function TemplateEditor() {
               boxShadow: ex.shadow ? '2px 3px 6px rgba(90,100,110,0.35)' : 'none',
               padding: 10,
             }}>
-              <Group justify="space-between" wrap="nowrap"
-                style={{ borderBottom: '1px solid #E4E8EC', paddingBottom: 4 }}>
-                <Group gap={6} wrap="nowrap">
-                  <Pencil size={ex.title_size * S * 0.9} color={ex.accent} />
-                  <Resizable sel={sel} me={{ part: 'exercise', field: 'title_size' }}
-                    onSelect={setSel} size={ex.title_size}
-                    onResize={(v) => set('exercise', { title_size: v })}>
-                    <span style={{ fontWeight: 700, fontSize: ex.title_size * S }}>Exercice 1</span>
-                  </Resizable>
-                </Group>
-                <Group gap={3} wrap="nowrap">
-                  {[0, 1, 2, 3, 4].map((i) => (
-                    <span key={i} style={{
-                      width: 7, height: 7, borderRadius: 7,
-                      background: i < 2 ? ex.accent : '#D3DCE3',
-                    }} />
-                  ))}
-                </Group>
-              </Group>
-              <div style={{ marginTop: 6 }}>
+              {/* Badge numéroté coloré par la difficulté (1 bleu -> 5 rouge),
+                  l'énoncé démarre sur la même ligne — miroir de pdfgen. */}
+              <div style={{ marginTop: 2 }}>
+                <span style={{
+                  display: 'inline-block', verticalAlign: 'middle',
+                  background: DIFFICULTY_COLORS[2], color: '#fff', fontWeight: 700,
+                  fontSize: ex.font_size * S * 0.95, lineHeight: 1.15,
+                  borderRadius: 3, padding: '1px 5px', marginRight: 5,
+                }}>2</span>
                 <Resizable sel={sel} me={{ part: 'exercise', field: 'font_size' }}
                   onSelect={setSel} size={ex.font_size}
                   onResize={(v) => set('exercise', { font_size: v })}>
@@ -332,8 +326,10 @@ export default function TemplateEditor() {
             <Stack gap="sm" mt="md">
               <ColorInput size="xs" label="Couleur du cadre"
                 value={ex.border} onChange={(v) => set('exercise', { border: v })} />
-              <ColorInput size="xs" label="Accent (icône + difficulté)"
-                value={ex.accent} onChange={(v) => set('exercise', { accent: v })} />
+              <Text size="xs" c="dimmed">
+                Le badge de numéro prend la couleur de la difficulté
+                (1 bleu, 2 vert, 3 jaune, 4 orange, 5 rouge) — non réglable.
+              </Text>
               <div>
                 <Text size="xs" fw={500} mb={4}>Arrondi des coins ({ex.radius.toFixed(1)} mm)</Text>
                 <Slider size="sm" min={0} max={5} step={0.2} value={ex.radius}

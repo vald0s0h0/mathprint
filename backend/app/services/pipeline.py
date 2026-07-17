@@ -22,7 +22,7 @@ from ..models import (
     ScannedPage, Student, StudentResponse, CompetencyEvidence, ExerciseCompetency,
 )
 from . import grading as grader
-from . import providers
+from . import providers, scoring
 from .appreciation import build_appreciation
 from .forgetting import apply_evidence
 from .pdfgen import render_overlay
@@ -389,8 +389,10 @@ def process_batch(db: Session, batch: ScanBatch):
 
 
 def finalize_batch(db: Session, batch: ScanBatch) -> dict:
-    """Verrouille les décisions, crée les preuves de compétence et met à jour
-    la courbe d'oubli (§7.5). Refuse s'il reste des revues ouvertes."""
+    """Verrouille les décisions, consolide les résultats (points de barème,
+    note sur la base choisie — services.scoring), crée les preuves de
+    compétence et met à jour la courbe d'oubli (§7.5). Refuse s'il reste des
+    revues ouvertes."""
     pending = (db.query(ManualReview).join(GradingDecision)
                .join(StudentResponse, GradingDecision.response_id == StudentResponse.id)
                .join(CopyItem, StudentResponse.copy_item_id == CopyItem.id)
@@ -403,9 +405,17 @@ def finalize_batch(db: Session, batch: ScanBatch) -> dict:
     assessment = db.get(Assessment, batch.assessment_id)
     copies = db.query(Copy).filter_by(assessment_id=assessment.id).all()
     n_evidence = 0
+    n_results = 0
     for copy in copies:
         if copy.status in ("absent", "generated"):
             continue  # absents et copies non scannées : jamais pénalisés
+        # Résultats consolidés de l'élève à ce sujet (points de barème par
+        # exercice + note sur la base choisie) : le suivi personnalisé est
+        # écrit ICI, à la finalisation, et pas à la création de l'overlay —
+        # un professeur qui finalise sans imprimer d'overlay a quand même
+        # corrigé, l'élève a quand même une note (§ barème).
+        if scoring.compute_copy_result(db, copy, assessment) is not None:
+            n_results += 1
         items = db.query(CopyItem).filter_by(copy_id=copy.id).all()
         for item in items:
             resp = db.query(StudentResponse).filter_by(copy_item_id=item.id).first()
@@ -427,8 +437,8 @@ def finalize_batch(db: Session, batch: ScanBatch) -> dict:
                 n_evidence += 1
         copy.status = "finalized"
     assessment.status = "finalized"
-    _set_status(db, batch, "finalized", evidence=n_evidence)
-    return {"evidence_created": n_evidence}
+    _set_status(db, batch, "finalized", evidence=n_evidence, results=n_results)
+    return {"evidence_created": n_evidence, "results_created": n_results}
 
 
 def build_overlays(db: Session, batch: ScanBatch) -> str:
@@ -443,7 +453,7 @@ def build_overlays(db: Session, batch: ScanBatch) -> str:
     for copy in copies:
         student = db.get(Student, copy.student_id)
         items = db.query(CopyItem).filter_by(copy_id=copy.id).order_by(CopyItem.sequence).all()
-        zones, total, maxtotal = [], 0.0, 0.0
+        zones = []
         for item in items:
             resp = db.query(StudentResponse).filter_by(copy_item_id=item.id).first()
             zone = db.query(ResponseZone).filter_by(item_id=item.id).first()
@@ -453,12 +463,17 @@ def build_overlays(db: Session, batch: ScanBatch) -> str:
                         .order_by(GradingDecision.created_at.desc()).first())
             if not decision:
                 continue
-            total += decision.score
-            maxtotal += decision.max_score
+            # Points affichés à côté de l'exercice = points de BARÈME, pas le
+            # score interne du moteur (3/4 cellules justes n'est pas « 3 points »
+            # si l'exercice en vaut 2) : c'est ce qui rend l'overlay lisible,
+            # les points des exercices s'additionnant alors exactement jusqu'à
+            # la note de l'en-tête.
+            bareme = scoring.item_bareme(item.grading_json, item.response_type)
+            earned = scoring.earned_points(decision.score, decision.max_score, bareme)
             full = decision.score >= decision.max_score
             zones.append({"x_pt": zone.x_pt, "y_pt": zone.y_pt, "w_pt": zone.w_pt,
-                          "h_pt": zone.h_pt, "score": decision.score,
-                          "max_score": decision.max_score, "full_credit": full,
+                          "h_pt": zone.h_pt, "score": earned,
+                          "max_score": bareme, "full_credit": full,
                           "strip": (zone.meta_json or {}).get("correction_strip"),
                           "text": "" if full else item.correction})
             db.add(Annotation(copy_id=copy.id, page_id=zone.page_id, zone_id=zone.id,
@@ -467,9 +482,14 @@ def build_overlays(db: Session, batch: ScanBatch) -> str:
                               geometry_json={"x_pt": zone.x_pt, "y_pt": zone.y_pt}))
         if not zones:
             continue  # copie non scannée : pas d'overlay
+
+        # Résultats consolidés à la finalisation (services.scoring) : la note
+        # imprimée est CELLE STOCKÉE, jamais un second calcul — deux formules
+        # pour une même note finiraient par diverger.
+        result = scoring.copy_result(db, copy, assessment)
         note = None
-        if assessment.type == "control" and maxtotal:
-            note = f"{round(total / maxtotal * 20, 1)}/20"
+        if result is not None and result.note is not None:
+            note = f"{scoring.format_points(result.note)}/{result.note_base}"
 
         if copy.appreciation_json is None:
             appreciation = build_appreciation(db, assessment.id, student)
@@ -478,13 +498,24 @@ def build_overlays(db: Session, batch: ScanBatch) -> str:
         else:
             appreciation = copy.appreciation_json
 
+        # l'appréciation imprimée rejoint le résultat consolidé : le suivi d'un
+        # élève tient alors dans une seule ligne (points, note, appréciation)
+        if result is not None:
+            result.appreciation = appreciation.get("synthesis") or ""
+            result.progress_json = {"progress": appreciation.get("progress") or []}
+            db.add(result)
+
+        comment = ""
+        if result is not None:
+            comment = (f"Score {scoring.format_points(result.points_earned)}/"
+                       f"{scoring.format_points(result.points_total)} points")
         pages_annotations.append({
             "student": f"{student.first_name} {student.last_name}",
             "assessment_type": assessment.type,
             "page_zones": zones, "note": note,
             "progress": appreciation.get("progress"),
             "synthesis": appreciation.get("synthesis"),
-            "comment": f"Score {total:g}/{maxtotal:g}",
+            "comment": comment,
         })
 
     from .runtime_settings import get_setting

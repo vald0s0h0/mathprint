@@ -18,6 +18,8 @@ type Segment = { phase: string; state: 'green' | 'orange' | 'gray' }
 type Batch = {
   id: string; assessment_id: string; status: string; page_count: number
   assessment_title: string; assessment_type: string
+  // base de notation d'un contrôle (§ barème) : null pour un entraînement
+  note_base: number | null
   class_name: string; class_id: string | null; grade_level: string
   overlay_printed: boolean; overlay_distributed: boolean
   error: string | null; pending_reviews: number; segments: Segment[]; created_at: string
@@ -298,6 +300,11 @@ export default function Corrections() {
                           color={b.assessment_type === 'control' ? 'red' : 'blue'}>
                           {b.assessment_type === 'control' ? 'Contrôle' : 'Entraînement'}
                         </Badge>
+                        {b.note_base && (
+                          <Tooltip label={`Noté sur ${b.note_base} points`}>
+                            <Badge size="sm" variant="outline" color="red">/{b.note_base}</Badge>
+                          </Tooltip>
+                        )}
                         <Text fw={600} lineClamp={1}>{b.assessment_title}</Text>
                         <Badge size="sm" variant="dot"
                           color={done ? 'gray' : awaitingScan ? 'gray' : overlayReady ? 'green' : b.pending_reviews ? 'orange' : 'blue'}>

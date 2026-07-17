@@ -44,7 +44,7 @@ from ..models import (
     Assessment, Competency, Copy, CopyItem, DocumentPage, FileObject, Job,
     ResponseZone, SchoolClass, StudentLevel,
 )
-from . import distribution, exercise_gen, forgetting
+from . import distribution, exercise_gen, forgetting, scoring
 from . import pdfgen
 from .runtime_settings import doc_templates
 from .security import sign_page
@@ -183,11 +183,17 @@ def generate_assessment_job(db: Session, assessment: Assessment,
             identity = distribution.exercise_identity(row)
             picked_keys.add(identity)
             choices = row.grading_json.get("choices", [])
+            # barème RÉSOLU (repli compris) figé sur la copie : l'instantané
+            # d'un CopyItem (RM-014) doit porter le barème avec lequel le sujet
+            # a été composé, pas dépendre d'un repli recalculé à la correction —
+            # le jour où la règle de repli change, les copies déjà imprimées ne
+            # doivent pas se mettre à valoir autre chose (§ barème).
+            grading_json = scoring.with_bareme(row.grading_json, row.response_type)
             item = CopyItem(
                 copy_id=copy.id, catalog_id=catalog_refs[comp_id].id, sequence=seq,
                 difficulty=row.difficulty_level * 2, response_type=row.response_type,
                 statement=row.statement, correction=row.correction,
-                expected_json=row.expected_json, grading_json=row.grading_json,
+                expected_json=row.expected_json, grading_json=grading_json,
                 lesson_snippet_id=lesson_snippet_id)
             db.add(item)
             db.flush()
@@ -196,7 +202,7 @@ def generate_assessment_job(db: Session, assessment: Assessment,
                                  "response_type": row.response_type,
                                  "choices": choices, "level5": row.difficulty_level,
                                  "figure": row.figure_json,
-                                 "grading": row.grading_json,
+                                 "grading": grading_json,
                                  "inline": bool((row.expected_json or {}).get("inline")),
                                  "_identity": identity,
                                  "_bucket": distribution.exercise_bucket(row)})

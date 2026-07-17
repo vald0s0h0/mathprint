@@ -15,7 +15,7 @@ from ..models import (
     Assessment, Competency, CompetencyFramework, Copy, ExerciseCatalog,
     ExerciseCompetency, SchoolClass, Student, StudentCompetencyState,
 )
-from ..services import job_worker
+from ..services import job_worker, scoring
 from ..services.forgetting import due_competencies
 from .misc import build_competency_tree
 
@@ -28,11 +28,15 @@ class AssessmentIn(BaseModel):
     type: str = "training"          # control | training
     title: str
     pages: int = 1                  # 1 = recto, 2 = recto/verso, etc.
+    # base de notation d'un contrôle (§ barème) : 5, 10 ou 20 points pour le
+    # sujet entier. Ignorée pour un entraînement (non noté).
+    note_base: int = scoring.DEFAULT_NOTE_BASE
 
 
 class AssessmentPatch(BaseModel):
     title: str | None = None
     pages: int | None = None
+    note_base: int | None = None
     personalization_mode: Literal["common", "common_variants", "individual"] | None = None
     competency_ids: list[str] | None = None
     # source des exercices : "sesamaths" = extraction du manuel, "gemini" =
@@ -57,6 +61,9 @@ def list_assessments(db: Session = Depends(get_db)):
                     "class_id": a.class_id,
                     "grade_level": cls.grade_level if cls else "",
                     "personalization_mode": a.personalization_mode,
+                    # None (et pas 0) pour un entraînement : l'UI affiche « /20 »
+                    # sur un sujet noté, rien sur les autres
+                    "note_base": scoring.assessment_note_base(a) or None,
                     "error_message": a.error_message,
                     "created_at": str(a.created_at)})
     return out
@@ -68,8 +75,11 @@ def create_assessment(body: AssessmentIn, db: Session = Depends(get_db)):
         raise HTTPException(422, "type invalide")
     if not 1 <= body.pages <= 6:
         raise HTTPException(422, "pages entre 1 et 6")
+    if body.note_base not in scoring.NOTE_BASES:
+        raise HTTPException(422, "base de notation : 5, 10 ou 20")
     a = Assessment(class_id=body.class_id, type=body.type, title=body.title,
-                   pages_target=body.pages, duplex=body.pages >= 2)
+                   pages_target=body.pages, duplex=body.pages >= 2,
+                   note_base=body.note_base)
     db.add(a)
     db.commit()
     return {"id": a.id}
@@ -92,6 +102,10 @@ def patch_assessment(assessment_id: str, body: AssessmentPatch, db: Session = De
             raise HTTPException(422, "pages entre 1 et 6")
         a.pages_target = body.pages
         a.duplex = body.pages >= 2
+    if body.note_base is not None:
+        if body.note_base not in scoring.NOTE_BASES:
+            raise HTTPException(422, "base de notation : 5, 10 ou 20")
+        a.note_base = body.note_base
     if body.personalization_mode is not None:
         a.personalization_mode = body.personalization_mode
     if body.competency_ids is not None:

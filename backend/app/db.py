@@ -24,7 +24,11 @@ def get_db():
 
 # colonnes ajoutées après la mise en service initiale : `create_all` ne modifie
 # jamais les tables existantes, donc on complète ici (SQLite comme Postgres).
-_ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
+# Format : (nom, type) — ou (nom, type, défaut SQL) quand les lignes existantes
+# doivent recevoir une valeur précise plutôt que le défaut générique de
+# `_default_sql` (ex. assessments.note_base : les contrôles créés avant la
+# notion de base de notation étaient tous notés sur 20).
+_ADDED_COLUMNS: dict[str, list[tuple[str, ...]]] = {
     "scan_batches": [("overlay_printed", "BOOLEAN"), ("overlay_distributed", "BOOLEAN")],
     "copies": [("appreciation_json", "JSON")],
     "generated_exercises": [
@@ -51,6 +55,9 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
     ],
     "assessments": [
         ("error_message", "TEXT"),
+        # sujets antérieurs au barème : la note était calculée sur 20 en dur
+        # (cf. services.pipeline.build_overlays), ils gardent donc /20
+        ("note_base", "INTEGER", "20"),
     ],
     "students": [
         ("next_plan_json", "JSON"),
@@ -79,6 +86,21 @@ _RENAMED_COLUMNS: dict[str, list[tuple[str, str]]] = {
 }
 
 
+def _default_sql(col_type: str) -> str:
+    """Défaut SQL d'une colonne ajoutée, quand l'appelant n'en impose pas.
+
+    Le type de la valeur doit correspondre à celui de la COLONNE : Postgres
+    refuse « ADD COLUMN cycle INTEGER DEFAULT '' » (default de type text sur
+    une colonne integer) là où SQLite l'accepte sans broncher — la migration
+    ne pète alors qu'en production, jamais en test local (même piège que le
+    type DATETIME, cf. incident migration SQLite/Postgres)."""
+    if col_type == "BOOLEAN":
+        return "0" if engine.dialect.name == "sqlite" else "FALSE"
+    if col_type in ("JSON", "TIMESTAMP", "INTEGER", "FLOAT", "REAL"):
+        return "NULL"
+    return "''"
+
+
 def run_migrations():
     insp = inspect(engine)
     tables = set(insp.get_table_names())
@@ -95,17 +117,14 @@ def run_migrations():
             if table not in tables:
                 continue
             existing = {c["name"] for c in insp.get_columns(table)}
-            for name, col_type in columns:
-                if name not in existing:
-                    if col_type == "BOOLEAN":
-                        default = "0" if engine.dialect.name == "sqlite" else "FALSE"
-                    elif col_type in ("JSON", "TIMESTAMP"):
-                        default = "NULL"
-                    else:
-                        default = "''"
-                    conn.execute(text(
-                        f"ALTER TABLE {table} ADD COLUMN {name} {col_type} "
-                        f"DEFAULT {default}"))
+            for spec in columns:
+                name, col_type = spec[0], spec[1]
+                if name in existing:
+                    continue
+                default = spec[2] if len(spec) > 2 else _default_sql(col_type)
+                conn.execute(text(
+                    f"ALTER TABLE {table} ADD COLUMN {name} {col_type} "
+                    f"DEFAULT {default}"))
         if "assessments" in tables:
             conn.execute(text(
                 "UPDATE assessments SET personalization_mode='common_variants' "

@@ -591,7 +591,11 @@ def _gemini_mock(payload: dict) -> dict:
     problème rédigé. Seedé par compétence ET par numéro de lot : deux lots
     successifs DOIVENT différer, sinon le dédoublonnage rejetterait tout le
     2e appel et la boucle de remplissage de banque ne serait jamais exercée
-    en test."""
+    en test.
+
+    "effort_points" est renseigné comme le ferait le vrai modèle (barème
+    d'effort, § barème) : sans lui, le mode mock ne passerait que par le repli
+    de services.scoring et la chaîne de notation ne serait jamais exercée."""
     import random
     rng = random.Random(f"{payload.get('competency_code')}-{payload.get('batch')}")
     count = int(payload.get("count", 5))
@@ -604,6 +608,7 @@ def _gemini_mock(payload: dict) -> dict:
             rng.shuffle(choices)
             exercises.append({
                 "kind": "application",
+                "effort_points": 0.5,   # une addition à cocher : réponse immédiate
                 "statement": f"Coche le résultat de ${a} + {b}$.",
                 "correction": f"${a} + {b} = {good}$ (on additionne les unités puis les dizaines).",
                 "response_type": "qcm_single",
@@ -612,6 +617,7 @@ def _gemini_mock(payload: dict) -> dict:
         elif i == 3:  # 1 réponse écrite
             exercises.append({
                 "kind": "application",
+                "effort_points": 1,     # une multiplication à poser
                 "statement": f"Calcule ${a} \\times {b}$.",
                 "correction": f"${a} \\times {b} = {a * b}$.",
                 "response_type": "short_text",
@@ -621,6 +627,7 @@ def _gemini_mock(payload: dict) -> dict:
             total = price * qty
             exercises.append({
                 "kind": "probleme",
+                "effort_points": 3,     # deux étapes + une soustraction à rédiger
                 "statement": (f"Pour repeindre sa chambre, Sacha achète {qty} pots de "
                               f"peinture à ${price}\\ \\text{{€}}$ l'unité. Il paie avec "
                               "un billet de $50\\ \\text{€}$. Combien lui rend-on ? "
@@ -733,19 +740,23 @@ def _sesamaths_adapt_mock(correlation_id: str) -> dict:
     tableau, QCM. `source_blocks` référence les indices globaux (aplatis,
     dans l'ordre des pages) que `_mistral_ocr_mock` place sur la première et
     la dernière page mockées (0-1-2-3 puis 4-5) — permet de tester la
-    reconstruction de `raw_extract_json` sans dépendre du contenu réel."""
+    reconstruction de `raw_extract_json` sans dépendre du contenu réel.
+
+    "effort_points" (barème d'effort, § barème) est renseigné comme le ferait
+    le vrai adaptateur : le contrat de format est partagé avec la pipeline
+    Gemini (exercise_gen.format_contract), le champ l'est donc aussi."""
     import random
     rng = random.Random(correlation_id or "sesa-adapt")
     a, b = rng.randint(2, 20), rng.randint(2, 20)
     exercises = [
-        {"kind": "application",
+        {"kind": "application", "effort_points": 1,
          "statement": f"Voici une liste de nombres : $221$, $4\\,065$, $940$. "
                       f"Combien valent ${a} + {b}$ ?",
          "correction": f"${a} + {b} = {a + b}$",
          "response_type": "short_text",
          "answer": {"type": "integer", "value": a + b},
          "difficulty": rng.randint(1, 3), "source_blocks": [0, 1]},
-        {"kind": "application",
+        {"kind": "application", "effort_points": 2,
          "statement": "Complète le tableau de la division euclidienne de $87$ par $9$.",
          "correction": "$87 = 9 \\times 9 + 6$",
          "response_type": "table_fill",
@@ -755,7 +766,7 @@ def _sesamaths_adapt_mock(correlation_id: str) -> dict:
                     "cells": [[{"type": "integer", "value": 9}, {"type": "integer", "value": 6}],
                               [{"type": "integer", "value": 95}, {"type": "integer", "value": 4}]]},
          "difficulty": 2, "source_blocks": [2, 3]},
-        {"kind": "application",
+        {"kind": "application", "effort_points": 0.5,
          "statement": f"Que vaut ${a} \\times {b}$ ?",
          "correction": f"${a} \\times {b} = {a * b}$",
          "response_type": "qcm_single",

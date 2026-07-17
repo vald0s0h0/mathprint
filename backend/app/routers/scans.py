@@ -16,6 +16,7 @@ from ..models import (
     User,
 )
 from ..services import sandbox as sandbox_service
+from ..services import scoring
 from ..services.pipeline import PHASES, build_overlays, finalize_batch, process_batch
 
 router = APIRouter(prefix="/api/scans", tags=["scans"], dependencies=[Depends(current_user)])
@@ -169,6 +170,7 @@ def _awaiting_scan_rows(db: Session) -> list[dict]:
         out.append({
             "id": f"awaiting-{a.id}", "assessment_id": a.id, "status": "awaiting_scan",
             "assessment_title": a.title, "assessment_type": a.type,
+            "note_base": scoring.assessment_note_base(a) or None,
             "class_name": cls.name if cls else "?", "class_id": cls.id if cls else None,
             "grade_level": cls.grade_level if cls else "", "page_count": 0,
             "error": None, "pending_reviews": 0, "segments": [],
@@ -204,6 +206,9 @@ def _batch_view(db: Session, b: ScanBatch) -> dict:
     return {"id": b.id, "assessment_id": b.assessment_id, "status": b.status,
             "assessment_title": assessment.title if assessment else "?",
             "assessment_type": assessment.type if assessment else "training",
+            # base de notation du contrôle (§ barème) — None si non noté
+            "note_base": (scoring.assessment_note_base(assessment) or None)
+                         if assessment else None,
             "class_name": cls.name if cls else "?",
             "class_id": cls.id if cls else None,
             "grade_level": cls.grade_level if cls else "",

@@ -63,12 +63,13 @@ DEFAULT_TEMPLATES: dict = {
     },
     "exercise": {
         "font_size": 9,         # texte de l'énoncé
-        "title_size": 9,        # "Exercice N"
         "math_size": 12,        # expression mathématique centrée
         "border": "#C7CDD4",    # cadre de la carte
-        "accent": "#455A64",    # icône + pastilles de difficulté
         "radius": 2.2,          # rayon des coins (mm)
         "shadow": True,
+        # pas d'accent ni de title_size : la carte n'a plus de ligne de titre,
+        # le numéro vit dans un badge dont la couleur EST la difficulté
+        # (pdfgen.DIFFICULTY_COLORS, non réglable).
     },
     "lesson": {
         "font_size": 8,

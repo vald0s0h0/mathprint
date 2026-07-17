@@ -4,7 +4,7 @@
 // filtrée par le cycle global) affiche la progression jusqu'à "prêt".
 import {
   Alert, Badge, Button, Card, Group, Modal, NumberInput, Radio, Select,
-  Stack, Stepper, Text, TextInput, Title,
+  Stack, Stepper, Text, TextInput, Title, Tooltip,
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
 import { AlertTriangle, Eye, FileText, Plus, RotateCcw, ScrollText } from 'lucide-react'
@@ -23,7 +23,13 @@ type Assessment = {
   id: string; title: string; type: string; status: string
   class_name: string; class_id: string; grade_level: string
   personalization_mode: string; error_message: string | null
+  // base de notation d'un contrôle (§ barème) : null pour un entraînement
+  note_base: number | null
 }
+
+// bases proposées pour un contrôle noté — le barème d'effort des exercices est
+// ramené à cette base par règle de trois à la correction (cf. services/scoring.py)
+const NOTE_BASES = ['5', '10', '20']
 
 const STATUS_LABEL: Record<string, { label: string; color: string }> = {
   draft: { label: 'brouillon', color: 'gray' },
@@ -51,12 +57,13 @@ export default function Subjects() {
   const [type, setType] = useState('training')
   const [title, setTitle] = useState('')
   const [pages, setPages] = useState(1)
+  const [noteBase, setNoteBase] = useState('20')
   // étape 2 : compétences cochées + source des exercices (§ Sésamaths)
   const [competencyIds, setCompetencyIds] = useState<string[]>([])
   const [suggestReason, setSuggestReason] = useState('')
-  // Sésamaths activé par défaut (extraction du manuel 5e) ; l'utilisateur peut
-  // repasser en Automatique/MathALÉA dans l'assistant
-  const [exerciseSource, setExerciseSource] = useState('sesamaths')
+  // Gemini activé par défaut (création ancrée dans l'OCR du manuel 5e) ;
+  // l'utilisateur peut repasser en Automatique/MathALÉA/Sésamaths dans l'assistant
+  const [exerciseSource, setExerciseSource] = useState('gemini')
   // étape 3 : adaptation
   const [mode, setMode] = useState('common')
   // étape 4
@@ -99,6 +106,7 @@ export default function Subjects() {
   async function createDraft() {
     const r = await api.post<{ id: string }>('/api/assessments', {
       class_id: classId, type, title: title || 'Sans titre', pages,
+      note_base: Number(noteBase),
     })
     setAssessmentId(r.id)
     try {
@@ -151,7 +159,11 @@ export default function Subjects() {
   function reset() {
     setOpen(false); setStep(0); setAssessmentId(null)
     setCompetencyIds([]); setTitle(''); setSuggestReason('')
-    setMode('common'); setType('training'); setPages(1); setExerciseSource('auto')
+    // Gemini par défaut, comme à l'initialisation de l'état : "auto" n'a plus
+    // aucune pipeline derrière depuis le 16/07, un assistant rouvert après un
+    // reset repartait donc sur une source morte.
+    setMode('common'); setType('training'); setPages(1); setExerciseSource('gemini')
+    setNoteBase('20')
   }
 
   return (
@@ -201,6 +213,11 @@ export default function Subjects() {
                       <Badge variant="light" color={a.type === 'control' ? 'red' : 'blue'} w={104}>
                         {a.type === 'control' ? 'Contrôle' : 'Entraînement'}
                       </Badge>
+                      {a.note_base && (
+                        <Tooltip label={`Noté sur ${a.note_base} points`}>
+                          <Badge size="sm" variant="outline" color="red">/{a.note_base}</Badge>
+                        </Tooltip>
+                      )}
                       <Text fw={600} lineClamp={1}>{a.title}</Text>
                       <Badge size="sm" variant="dot" color={st.color}>{st.label}</Badge>
                     </Group>
@@ -266,6 +283,19 @@ export default function Subjects() {
                   <Radio value="control" label="Contrôle noté" />
                 </Group>
               </Radio.Group>
+              {/* base de notation : un entraînement n'est pas noté */}
+              {type === 'control' && (
+                <Radio.Group label="Base de notation" value={noteBase} onChange={setNoteBase}
+                  description="Chaque exercice porte un barème d'effort (temps de réflexion
+                    demandé). La note de l'élève est ramenée à cette base par règle de trois
+                    à la correction.">
+                  <Group mt="xs">
+                    {NOTE_BASES.map((b) => (
+                      <Radio key={b} value={b} label={`/${b}`} />
+                    ))}
+                  </Group>
+                </Radio.Group>
+              )}
               <TextInput label="Titre" placeholder="ex. Fractions — semaine 12"
                 value={title} onChange={(e) => setTitle(e.target.value)} />
               <NumberInput label="Nombre de pages" value={pages} min={1} max={6}

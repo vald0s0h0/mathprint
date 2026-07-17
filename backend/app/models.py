@@ -217,6 +217,12 @@ class Assessment(Base):
     # common | common_variants | individual
     blueprint_json: Mapped[dict] = mapped_column(JSON, default=dict)
     # {"competency_ids": [...]} choisi à l'étape Exercices de l'assistant
+    # Base de notation choisie à l'étape Contexte : 5, 10 ou 20 points pour le
+    # sujet entier (§ barème). Ne s'applique qu'à un contrôle — un entraînement
+    # n'est pas noté, la valeur est alors ignorée (cf. services.scoring.
+    # assessment_note_base, jamais `note_base` en direct : un sujet peut avoir
+    # été créé en contrôle puis repassé en entraînement).
+    note_base: Mapped[int] = mapped_column(Integer, default=20)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
@@ -451,6 +457,63 @@ class Annotation(Base):
     content: Mapped[str] = mapped_column(Text, default="")
     color: Mapped[str] = mapped_column(String, default="#C62828")
     geometry_json: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+# ------------------------------------------------- résultats consolidés (suivi élève)
+
+class CopyResult(Base):
+    """Résultat d'un élève à un sujet, consolidé une fois pour toutes à la
+    finalisation du lot (services.scoring.compute_copy_result) : points de
+    barème obtenus, note sur la base choisie par le professeur, appréciation.
+
+    Cette table est le SUIVI PERSONNALISÉ : sans elle, retrouver ce qu'un élève
+    a obtenu à un sujet impose de rejoindre copy_items → student_responses →
+    grading_decisions (append-only, il faut la dernière) et de reconstituer le
+    barème de chaque exercice à chaque lecture. Elle est dérivée : on peut la
+    reconstruire, jamais la corriger à la main.
+
+    `note_raw` (exacte, avec décimales) et `note` (multiple de 0,5, arrondi au
+    supérieur) coexistent délibérément : la seconde est celle qu'on imprime sur
+    la copie, la première celle qu'il faut moyenner — arrondir puis moyenner
+    accumule le biais d'arrondi. `note_base` = 0 : sujet non noté
+    (entraînement), les points restent renseignés pour le suivi."""
+    __tablename__ = "copy_results"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
+    copy_id: Mapped[str] = mapped_column(ForeignKey("copies.id"), unique=True)
+    assessment_id: Mapped[str] = mapped_column(ForeignKey("assessments.id"))
+    student_id: Mapped[str] = mapped_column(ForeignKey("students.id"))
+    points_earned: Mapped[float] = mapped_column(Float, default=0.0)
+    points_total: Mapped[float] = mapped_column(Float, default=0.0)
+    note_base: Mapped[int] = mapped_column(Integer, default=0)   # 5|10|20, 0 = non noté
+    note_raw: Mapped[float | None] = mapped_column(Float, nullable=True)
+    note: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # instantané de la zone Appréciation imprimée (cf. services.appreciation),
+    # recopié depuis Copy.appreciation_json à la création de l'overlay
+    appreciation: Mapped[str] = mapped_column(Text, default="")
+    progress_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    finalized_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
+class CopyItemResult(Base):
+    """Résultat d'un élève à UN exercice d'un sujet (une ligne par exercice
+    réellement corrigé, cf. CopyResult).
+
+    `score`/`max_score` sont à l'échelle INTERNE du moteur de correction (1 par
+    cellule de tableau, etc.), `bareme_points`/`points_earned` à l'échelle
+    professeur — les deux sont conservées : la première dit ce qui était juste,
+    la seconde ce que ça valait (cf. en-tête de services.scoring)."""
+    __tablename__ = "copy_item_results"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
+    copy_result_id: Mapped[str] = mapped_column(ForeignKey("copy_results.id"))
+    copy_item_id: Mapped[str] = mapped_column(ForeignKey("copy_items.id"))
+    competency_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    sequence: Mapped[int] = mapped_column(Integer, default=0)
+    response_type: Mapped[str] = mapped_column(String, default="")
+    difficulty: Mapped[int] = mapped_column(Integer, default=5)
+    score: Mapped[float] = mapped_column(Float, default=0.0)
+    max_score: Mapped[float] = mapped_column(Float, default=0.0)
+    bareme_points: Mapped[float] = mapped_column(Float, default=0.0)
+    points_earned: Mapped[float] = mapped_column(Float, default=0.0)
 
 
 # ------------------------------------------------------ progression & mémorisation
