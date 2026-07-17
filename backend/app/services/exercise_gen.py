@@ -22,8 +22,14 @@ Ce qui vit ici, et que les deux pipelines partagent SANS jamais le réécrire :
     barème s'AJOUTE à grading_json (`bareme_points`), il ne remplace pas
     `max_score` qui reste l'échelle interne du moteur de correction : les deux
     échelles et leur conversion sont documentées dans services/scoring.py.
+  - MISE EN LIGNE (_LAYOUT_RULES côté prompt, `statement.normalize` côté
+    validation) : l'énoncé arrive en banque déjà découpé en lignes logiques
+    (une donnée par ligne, une sous-question par ligne), le `\\n` étant stocké
+    tel quel — cf. services/statement.py, qui définit ce format pour la
+    génération ET le rendu.
   - CONTRAT DE FORMAT (`format_contract`, assemblé depuis _FORMAT_MENU/
-    _BAREME_RULES/_FIGURE_RULES/_GEN_FORMAT_RULES/_JSON_CONTRACT) : le bloc de
+    _BAREME_RULES/_LAYOUT_RULES/_BLANK_WRITING_RULES/_FIGURE_RULES/
+    _GEN_FORMAT_RULES/_JSON_CONTRACT) : le bloc de
     prompt qui décrit le JSON attendu. Seule l'INTRO diffère d'une pipeline à l'autre
     (_ADAPT_FORMAT_INTRO : adapter un exercice de manuel sans jamais en
     omettre ; _GEMINI_FORMAT_INTRO : inventer, sans droit aux formats non
@@ -58,6 +64,9 @@ from ..models import (
     LessonSnippet,
 )
 from . import figures, grading, mathrender, scoring
+# alias : « statement » est le nom de la variable d'énoncé dans presque toutes
+# les fonctions de ce module, importer le module tel quel le masquerait.
+from . import statement as statement_mod
 
 logger = logging.getLogger(__name__)
 
@@ -200,7 +209,7 @@ def diagnose_rejection(raw: dict, competency: Competency) -> str:
     if not isinstance(raw, dict):
         return f"pas un objet JSON ({type(raw).__name__})"
     rtype = raw.get("response_type", "short_text")
-    statement = str(raw.get("statement", "")).strip()
+    statement = statement_mod.normalize(str(raw.get("statement", "")))
     correction = str(raw.get("correction", "")).strip()
     # table_fill : le détail vit dans row_labels/col_labels, "statement" ne
     # porte que la consigne commune (souvent très courte, ex. "Calcule.").
@@ -387,7 +396,11 @@ def _validate_exercise(raw: dict, competency: Competency, db: Session,
     rtype = raw.get("response_type", "short_text")
     if rtype not in VALID_RESPONSE_TYPES:
         return None
-    statement = str(raw.get("statement", "")).strip()
+    # Mise en lignes canonique AVANT tout le reste : c'est cette forme-là qui
+    # part en banque, donc c'est elle qu'il faut valider et dédoublonner (un
+    # énoncé mesuré puis normalisé pourrait franchir la longueur maximale, et
+    # deux énoncés identiques au saut de ligne près sont un doublon).
+    statement = statement_mod.normalize(str(raw.get("statement", "")))
     correction = str(raw.get("correction", "")).strip()
     # table_fill : le détail vit dans row_labels/col_labels, "statement" ne
     # porte que la consigne commune (souvent très courte, ex. "Calcule.").
@@ -881,6 +894,61 @@ _BAREME_RULES = (
     "sous-questions) vaut l'effort de l'ENSEMBLE des cases, pas d'une seule.\n\n"
 )
 
+# Mise en ligne de l'énoncé (§ services/statement.py). Dans le contrat PARTAGÉ,
+# comme le barème et pour la même raison : c'est `statement.normalize` qui lit
+# ces sauts, et elle est partagée. Un prompt qui décrirait la règle autrement
+# produirait des énoncés d'un seul tenant, silencieusement — le rendu n'a aucun
+# moyen de deviner après coup où la ligne aurait dû tomber.
+_LAYOUT_RULES = (
+    "MISE EN LIGNE DE L'ÉNONCÉ (obligatoire) : \"statement\" est un texte à "
+    "PLUSIEURS LIGNES, séparées par des sauts de ligne littéraux (\\n dans le "
+    "JSON). Le saut de ligne fait partie de l'énoncé : c'est lui qui le rend "
+    "lisible. Va à la ligne à chaque fois que le sens change de niveau :\n"
+    "- après la phrase de contexte, avant la liste des données ;\n"
+    "- une donnée par ligne dans une énumération (chaque tiret sur SA ligne) ;\n"
+    "- avant la question/consigne finale (« Coche… », « Calcule… ») ;\n"
+    "- avant CHAQUE sous-question a., b., c. — sans exception : une "
+    "sous-question ne partage JAMAIS sa ligne avec la précédente. Écris "
+    "l'étiquette en tête de ligne (« a. », « b. »…), elle sera imprimée en "
+    "pastille.\n"
+    "N'écris pas de ligne vide, ne numérote pas l'exercice, n'ajoute ni titre "
+    "ni « Exercice 1 » : la plateforme s'en charge.\n"
+    "Exemple d'énoncé BIEN mis en lignes (les \\n sont réels) :\n"
+    "\"Un randonneur parcourt un sentier de grande randonnée en quatre "
+    "jours :\\n- Jour 1 : $12{,}4\\\\ \\\\text{km}$\\n- Jour 2 : "
+    "$9{,}8\\\\ \\\\text{km}$\\n- Jour 3 : $15{,}1\\\\ \\\\text{km}$\\n"
+    "- Jour 4 : $7{,}3\\\\ \\\\text{km}$\\nCoche toutes les affirmations qui "
+    "sont exactes.\"\n"
+    "Le MÊME énoncé d'un seul tenant (« ... quatre jours : - Jour 1 : ... "
+    "- Jour 2 : ... Coche toutes les affirmations ») est REFUSÉ : il est "
+    "illisible.\n\n"
+)
+
+# Rédaction des phrases à trous. C'est une règle de LANGUE, pas de format : le
+# validateur ne peut pas la vérifier (une phrase alambiquée est du français
+# valide), seuls les exemples la portent — d'où leur présence ici plutôt qu'un
+# contrôle dans _validate_exercise.
+_BLANK_WRITING_RULES = (
+    "RÉDACTION DES PHRASES À TROUS ({{blank}}) : la case se lit DANS la phrase, "
+    "comme un mot manquant. Écris donc une phrase de français naturelle, à la "
+    "voix active, dont la case est le complément — jamais une périphrase "
+    "construite autour de « Le nombre de… est de ». Mets une sous-question par "
+    "ligne (cf. MISE EN LIGNE).\n"
+    "À NE PAS ÉCRIRE -> À ÉCRIRE :\n"
+    "- « Le nombre de plaques qu'il peut remplir complètement est de "
+    "{{blank}} » -> « Le boulanger peut remplir {{blank}} plaques de "
+    "cuisson. »\n"
+    "- « Le nombre de croissants restants qu'il placera sur une dernière "
+    "plaque est de {{blank}} » -> « Il restera {{blank}} croissant(s) sur la "
+    "dernière plaque. »\n"
+    "- « Le nombre total de plaques qu'il doit utiliser au minimum pour faire "
+    "cuire tous les croissants est de {{blank}} » -> « Il doit utiliser au "
+    "minimum {{blank}} plaques pour cuire tous les croissants. »\n"
+    "Chaque phrase reste courte et se suffit à elle-même, la case tombe au "
+    "milieu ou à la fin, et l'unité (si elle est connue) est écrite APRÈS la "
+    "case, pas dans la case.\n\n"
+)
+
 _FIGURE_RULES = (
     "FIGURES : si une figure aide (géométrie, droite graduée, repère), ajoute "
     "\"figure\": {\"type\": \"rectangle\"|\"triangle\"|\"circle\"|\"angle\"|"
@@ -912,12 +980,14 @@ _JSON_CONTRACT = (
 
 def format_contract(intro: str, *, geometry_rules: str = "") -> str:
     """Bloc de prompt décrivant le contrat de sortie attendu par
-    `_validate_exercise` : menu des 8 formats de réponse, barème d'effort,
-    figures, règles LaTeX, schéma JSON. `intro` cadre la MISSION de la pipeline
-    appelante (adapter un exercice existant vs en inventer un) ; tout le reste
-    est commun, et doit le rester — un prompt qui décrirait le contrat autrement
-    que le validateur produit des rejets silencieux."""
-    return (intro + _FORMAT_MENU + geometry_rules + _BAREME_RULES + _FIGURE_RULES
+    `_validate_exercise` : menu des 8 formats de réponse, barème d'effort, mise
+    en lignes, rédaction des phrases à trous, figures, règles LaTeX, schéma
+    JSON. `intro` cadre la MISSION de la pipeline appelante (adapter un exercice
+    existant vs en inventer un) ; tout le reste est commun, et doit le rester —
+    un prompt qui décrirait le contrat autrement que le validateur produit des
+    rejets silencieux."""
+    return (intro + _FORMAT_MENU + geometry_rules + _BAREME_RULES
+            + _LAYOUT_RULES + _BLANK_WRITING_RULES + _FIGURE_RULES
             + _GEN_FORMAT_RULES + "\n\n" + _JSON_CONTRACT)
 
 

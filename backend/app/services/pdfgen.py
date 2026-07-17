@@ -40,6 +40,7 @@ from reportlab.pdfbase.pdfmetrics import stringWidth
 
 from ..config import settings
 from . import scoring
+from . import statement as statement_mod
 from .runtime_settings import DEFAULT_TEMPLATES
 
 PAGE_W, PAGE_H = A4  # 595.27 x 841.89 pt
@@ -242,16 +243,21 @@ def _badge_min_asc(font_size: float) -> float:
 
 
 def _draw_badge(c: canvas.Canvas, x: float, y_base: float, font_size: float,
-                seq: int, level5: int) -> float:
-    """Badge « numéro d'exercice » posé à gauche de la 1re ligne d'énoncé,
-    centré sur la hauteur d'œil du texte. Retourne sa largeur."""
+                label: str, color: Color) -> float:
+    """Pastille posée à gauche d'une ligne de texte, centrée sur sa hauteur
+    d'œil. Retourne sa largeur.
+
+    Deux usages, une seule forme — c'est voulu : le numéro de l'exercice en
+    tête d'énoncé, et l'étiquette d'une sous-question (« a », « b »…) en tête
+    de sa ligne. Les deux portent la couleur de DIFFICULTÉ de l'exercice, si
+    bien qu'un coup d'œil rattache chaque sous-question à sa carte."""
     bw, bh, bfs = _badge_metrics(font_size)
     by = y_base + font_size * 0.35 - bh / 2
-    c.setFillColor(_difficulty_color(level5))
+    c.setFillColor(color)
     c.roundRect(x, by, bw, bh, 1.0 * mm, stroke=0, fill=1)
     c.setFillColor(white)
     c.setFont("Helvetica-Bold", bfs)
-    c.drawCentredString(x + bw / 2, by + (bh - bfs * 0.72) / 2, str(seq))
+    c.drawCentredString(x + bw / 2, by + (bh - bfs * 0.72) / 2, str(label))
     c.setFillColor(black)
     return bw
 
@@ -420,8 +426,12 @@ _LEGACY_FRAC_RE = re.compile(r"(?<![\w/])(\d+)\s*/\s*(\d+)(?![\w/])")
 
 def _legacy_to_tagged(statement: str) -> str:
     """Compatibilité générateurs builtin : « Calculer : 3/4 + 5/6 = ? » sans
-    balisage $ est converti vers le contrat balisé (fractions empilées)."""
-    if "$" in statement or ":" not in statement:
+    balisage $ est converti vers le contrat balisé (fractions empilées).
+
+    Réservé aux énoncés d'UNE ligne, qui sont sa seule provenance : le motif
+    « consigne : tout le reste » n'a aucun sens sur un énoncé mis en lignes, où
+    le « : » est celui d'une énumération et non celui d'un calcul isolé."""
+    if "$" in statement or ":" not in statement or "\n" in statement:
         return statement
     head, tail = statement.split(":", 1)
     tail = tail.strip().rstrip("?").rstrip().rstrip("=").rstrip()
@@ -434,46 +444,46 @@ def _legacy_to_tagged(statement: str) -> str:
     return f"{head.strip()} : ${latex}$"
 
 
-BLANK_TOKEN = "{{blank}}"
-# Case à remplir : 2 cm x 1 cm, dimension d'écriture manuscrite d'élève de
+BLANK_TOKEN = statement_mod.BLANK_TOKEN
+# Case à remplir : 20 x 8 mm, dimension d'écriture manuscrite d'élève de
 # collège — c'est une contrainte physique (la main), pas une proportion du
 # corps de texte : elle ne suit donc PAS font_size. C'est au contraire le
-# texte de ces énoncés qui grossit (BLANK_FONT_BOOST) pour rester en rapport.
+# texte qui grossit (BLANK_FONT_BOOST) pour rester en rapport avec sa case —
+# mais LIGNE PAR LIGNE, jamais tout l'énoncé : le contexte et la consigne
+# restent au corps du gabarit (c'est la taille « habituelle », celle que
+# l'enseignant a réglée), seules les phrases qui portent réellement une case
+# grandissent avec elle.
 BLANK_W = 20 * mm
-BLANK_H = 10 * mm
+BLANK_H = 8 * mm
 BLANK_FONT_BOOST = 2.0
 
 
-def _blank_statement_fs(response_type: str, statement: str,
-                        font_size: float) -> float:
-    """Corps de texte d'un exercice À TROUS — agrandi pour ne pas paraître
-    minuscule à côté de cases dimensionnées pour l'écriture manuscrite.
-
-    Le critère est la présence réelle de cases : les types multi_blank et
-    table_fill en portent par construction, short_text seulement s'il place un
-    {{blank}} dans son énoncé (sinon sa réponse est un cadre pleine largeur,
-    qui n'a aucune raison de faire grossir le texte)."""
-    has_blank = (response_type in ("multi_blank", "table_fill")
-                 or BLANK_TOKEN in (statement or ""))
-    return font_size + BLANK_FONT_BOOST if has_blank else font_size
+def _zone_font_size(response_type: str, font_size: float) -> float:
+    """Corps de texte de la ZONE de réponse. Seul table_fill s'écarte du
+    gabarit : ses libellés de ligne SONT les phrases à trous (« a. 7 × 8 = »),
+    ils suivent donc le corps agrandi des cases — exactement comme les phrases
+    à trous d'un énoncé, dont ils ne sont que la version en grille."""
+    return font_size + BLANK_FONT_BOOST if response_type == "table_fill" else font_size
 
 
-def _rich_layout(text: str, width: float, fs: float, math_fs: float | None = None,
-                 first_indent: float = 0.0, first_min_asc: float = 0.0) -> dict:
-    """Met en page un texte balisé $...$ : flot de mots et d'images maths.
-    Retourne {lines: [{segs, asc, desc, h, w, indent}], height} ; seg =
-    ("word", str) ou ("math", ImageReader, w, h, d) ou ("blank", w, asc, desc)
-    — case de réponse courte insérée en ligne (marqueur BLANK_TOKEN).
+def _seg_w(seg: tuple, fs: float) -> float:
+    if seg[0] == "word":
+        return stringWidth(seg[1], "Helvetica", fs)
+    if seg[0] == "blank":
+        return seg[1]
+    return seg[2]
 
-    `first_indent` réserve de la place en tête de 1re ligne (badge numéroté de
-    la carte exercice) : la ligne est raccourcie d'autant et décalée au dessin.
-    `first_min_asc` force une ascendante minimale sur cette 1re ligne pour que
-    le badge y tienne en entier."""
+
+def _seg_glue(seg: tuple) -> bool:
+    return bool(seg[-1])
+
+
+def _paragraph_segs(text: str, fs: float, math_fs: float) -> list[tuple]:
+    """Segments d'UNE ligne logique d'énoncé (elle peut encore se replier sur
+    plusieurs lignes de rendu). seg = ("word", texte, glue) |
+    ("math", img, w, h, d, glue) | ("blank", w, asc, desc, glue) ; glue = collé
+    au segment précédent SANS espace (ponctuation après une formule, etc.)."""
     from . import mathrender
-    math_fs = math_fs or fs
-    # seg = ("word", texte, glue) | ("math", img, w, h, d, glue) |
-    # ("blank", w, asc, desc, glue) ; glue = collé au segment précédent SANS
-    # espace (ponctuation après une formule, etc.)
     segs: list[tuple] = []
     prev_no_space = False  # le flux précédent se termine sans espace
 
@@ -508,69 +518,129 @@ def _rich_layout(text: str, width: float, fs: float, math_fs: float | None = Non
                     prev_no_space = False
         else:
             _emit_words(content)
+    return segs
 
-    space_w = stringWidth(" ", "Helvetica", fs)
 
-    def _seg_w(seg: tuple) -> float:
-        if seg[0] == "word":
-            return stringWidth(seg[1], "Helvetica", fs)
-        if seg[0] == "blank":
-            return seg[1]
-        return seg[2]
+def _rich_layout(text: str, width: float, fs: float, math_fs: float | None = None,
+                 first_indent: float = 0.0, first_min_asc: float = 0.0,
+                 blank_fs: float | None = None,
+                 sub_badge_color: Color | None = None) -> dict:
+    """Met en page un texte balisé $...$ : flot de mots et d'images maths.
+    Retourne {lines: [{segs, asc, desc, h, w, indent, fs, badge, badge_x}],
+    height} ; seg = ("word", str) ou ("math", ImageReader, w, h, d) ou
+    ("blank", w, asc, desc) — case de réponse courte insérée en ligne
+    (marqueur BLANK_TOKEN).
 
-    def _seg_glue(seg: tuple) -> bool:
-        return bool(seg[-1])
+    Le texte est d'abord découpé sur ses SAUTS DE LIGNE (§ services/statement) :
+    chacun est un saut DUR, jamais rejoué en espace. C'est la ligne logique, et
+    non l'énoncé entier, qui est ensuite l'unité de décision — deux réglages en
+    dépendent, et c'est pour ça qu'ils vivent ici plutôt que chez l'appelant :
 
-    raw_lines: list[list[tuple]] = []
-    cur: list[tuple] = []
-    cur_w = 0.0
-    avail = max(1.0, width - first_indent)   # 1re ligne : place du badge en moins
-    for seg in segs:
-        w = _seg_w(seg)
-        add = w if (not cur or _seg_glue(seg)) else w + space_w
-        if cur and cur_w + add > avail:
+    - `blank_fs` : corps de texte des lignes qui portent réellement une case à
+      remplir. Une phrase à trous est écrite à la taille de sa case, le reste de
+      l'énoncé garde le corps du gabarit.
+    - `sub_badge_color` : couleur des pastilles de sous-question. Une ligne qui
+      ouvre une sous-question (« a. », « b) »…) perd son étiquette du flot de
+      texte et la reçoit en pastille, le reste de la ligne étant mis en retrait
+      pendante sous elle.
+
+    `first_indent` réserve de la place en tête de 1re ligne (badge numéroté de
+    la carte exercice) : la ligne est raccourcie d'autant et décalée au dessin.
+    `first_min_asc` force une ascendante minimale sur cette 1re ligne pour que
+    le badge y tienne en entier."""
+    lines: list[dict] = []
+    total_h = 0.0
+
+    for p_idx, para in enumerate(statement_mod.lines(text or "")):
+        lead = first_indent if p_idx == 0 else 0.0
+        badge = None
+        if sub_badge_color is not None and (lab := statement_mod.subquestion_label(para)):
+            badge, para = lab
+        # le corps suit la case quand la ligne en porte une — décidé APRÈS
+        # l'étiquette, qui ne change pas la nature de la phrase
+        p_fs = blank_fs if (blank_fs and statement_mod.has_blank(para)) else fs
+        p_math_fs = math_fs or p_fs
+        badge_w = (_badge_metrics(p_fs)[0] + BADGE_GAP) if badge is not None else 0.0
+        # retrait PENDANT sous une pastille : les lignes suivantes de la
+        # sous-question s'alignent sur son texte, pas sous sa pastille
+        head_indent = lead + badge_w
+        cont_indent = head_indent if badge is not None else 0.0
+
+        segs = _paragraph_segs(para, p_fs, p_math_fs)
+        space_w = stringWidth(" ", "Helvetica", p_fs)
+
+        raw_lines: list[list[tuple]] = []
+        cur: list[tuple] = []
+        cur_w = 0.0
+        avail = max(1.0, width - head_indent)
+        for seg in segs:
+            w = _seg_w(seg, p_fs)
+            add = w if (not cur or _seg_glue(seg)) else w + space_w
+            if cur and cur_w + add > avail:
+                raw_lines.append(cur)
+                cur, cur_w = [seg], w
+                avail = max(1.0, width - cont_indent)
+            else:
+                cur.append(seg)
+                cur_w += add
+        if cur:
             raw_lines.append(cur)
-            cur, cur_w, avail = [seg], w, width
-        else:
-            cur.append(seg)
-            cur_w += add
-    if cur:
-        raw_lines.append(cur)
+        # une ligne logique vide de segments (étiquette seule) garde quand même
+        # sa pastille : sans ça, « a. » suivi d'une figure disparaîtrait
+        if not raw_lines and badge is not None:
+            raw_lines = [[]]
 
-    lines, total_h = [], 0.0
-    for i, line in enumerate(raw_lines):
-        asc, desc = fs * 0.78, fs * 0.24
-        if i == 0:
-            asc = max(asc, first_min_asc)
-        for seg in line:
-            if seg[0] == "math":
-                asc = max(asc, seg[3] - seg[4])
-                desc = max(desc, seg[4])
-            elif seg[0] == "blank":
-                asc = max(asc, seg[2])
-                desc = max(desc, seg[3])
-        lh = asc + desc + 2.2
-        n_spaces = sum(1 for j, s in enumerate(line) if j > 0 and not _seg_glue(s))
-        lines.append({"segs": line, "asc": asc, "desc": desc, "h": lh,
-                      "indent": first_indent if i == 0 else 0.0,
-                      "w": sum(_seg_w(s) for s in line) + space_w * n_spaces})
-        total_h += lh
+        for i, line in enumerate(raw_lines):
+            asc, desc = p_fs * 0.78, p_fs * 0.24
+            if p_idx == 0 and i == 0:
+                asc = max(asc, first_min_asc)
+            if badge is not None and i == 0:
+                asc = max(asc, _badge_min_asc(p_fs))
+            for seg in line:
+                if seg[0] == "math":
+                    asc = max(asc, seg[3] - seg[4])
+                    desc = max(desc, seg[4])
+                elif seg[0] == "blank":
+                    asc = max(asc, seg[2])
+                    desc = max(desc, seg[3])
+            lh = asc + desc + 2.2
+            n_spaces = sum(1 for j, s in enumerate(line) if j > 0 and not _seg_glue(s))
+            lines.append({
+                "segs": line, "asc": asc, "desc": desc, "h": lh, "fs": p_fs,
+                "indent": head_indent if i == 0 else cont_indent,
+                "w": sum(_seg_w(s, p_fs) for s in line) + space_w * n_spaces,
+                "badge": badge if i == 0 else None,
+                "badge_x": lead, "badge_color": sub_badge_color,
+            })
+            total_h += lh
     return {"lines": lines, "height": total_h}
 
 
-def _draw_rich(c: canvas.Canvas, x: float, y_top: float, layout: dict, fs: float,
+def _draw_rich(c: canvas.Canvas, x: float, y_top: float, layout: dict,
                color=black, centered: bool = False, width: float | None = None,
                font: str = "Helvetica", blanks: list | None = None) -> float:
     """Dessine un layout _rich_layout. Retourne le y sous la dernière ligne.
     `blanks`, si fourni, reçoit la géométrie PDF absolue (x_pt/y_pt/w_pt/h_pt)
-    de chaque case de réponse courte insérée en ligne (BLANK_TOKEN)."""
-    space_w = stringWidth(" ", font, fs)
+    de chaque case de réponse courte insérée en ligne (BLANK_TOKEN), dans
+    l'ordre de lecture — c'est l'ordre dont dépend l'appariement des cases d'un
+    multi_blank avec les réponses attendues.
+
+    Le corps de texte n'est PAS un paramètre : chaque ligne porte le sien
+    (line["fs"]), posé par _rich_layout au moment de la mesure. Redonner ici une
+    taille, c'était offrir de dessiner à un corps différent de celui qui a servi
+    à mesurer — l'écart classique entre « ce qu'on croit faire tenir » et « ce
+    qui tient » (cf. pages_needed)."""
     y = y_top
     for line in layout["lines"]:
+        fs = line["fs"]
+        space_w = stringWidth(" ", font, fs)
         y_base = y - line["asc"]
         cx = x + line.get("indent", 0.0)
         if centered and width:
             cx += (width - line["w"]) / 2
+        if line.get("badge"):
+            _draw_badge(c, x + line.get("badge_x", 0.0), y_base, fs,
+                        line["badge"], line["badge_color"])
         for j, seg in enumerate(line["segs"]):
             if j > 0 and not seg[-1]:
                 cx += space_w
@@ -618,27 +688,62 @@ def _figure_image(figure_json: dict | None, max_w: float, max_h: float):
     return (ImageReader(io.BytesIO(png)), w_pt * scale, h_pt * scale)
 
 
-_DISPLAY_RE = re.compile(r"^(.*?[:?])\s*\$([^$]+)\$\s*\??\s*$", re.DOTALL)
+# « consigne : $expr$ » sur UNE ligne -> l'expression passe en display.
+_DISPLAY_RE = re.compile(r"^(.*?[:?])\s*\$([^$]+)\$\s*\??\s*$")
+# ...ou l'expression occupe à elle seule la DERNIÈRE ligne, la consigne étant
+# au-dessus (« Calcule :\n$\dfrac{3}{4}+\dfrac{5}{6}$ »).
+_ONLY_MATH_RE = re.compile(r"^\$([^$]+)\$$")
+
+
+def _display_split(statement: str) -> tuple[str, str | None]:
+    """(corps, expression à mettre en valeur | None) — l'expression finale d'un
+    énoncé est centrée et agrandie.
+
+    Le motif est cherché sur la seule DERNIÈRE ligne : sur l'énoncé entier, un
+    « .*? » gourmand de sauts de ligne finissait par appareiller la consigne
+    d'en haut avec la formule d'en bas à travers toute une énumération, et
+    arrachait la dernière donnée de sa liste pour la centrer."""
+    lines = statement_mod.lines(statement)
+    if not lines:
+        return statement, None
+    head, last = lines[:-1], lines[-1].strip()
+    if (m := _DISPLAY_RE.match(last)) and "$" not in m.group(1):
+        return "\n".join(head + [m.group(1)]), m.group(2)
+    if head and (m := _ONLY_MATH_RE.match(last)):
+        return "\n".join(head), m.group(1)
+    return statement, None
 
 
 def _statement_layout(statement: str, width: float, font_size: float,
                       math_size: int, figure_json: dict | None = None,
                       first_indent: float = 0.0,
-                      first_min_asc: float = 0.0) -> dict:
+                      first_min_asc: float = 0.0,
+                      blank_fs: float | None = None,
+                      sub_badge_color: Color | None = None) -> dict:
     """Met en page un énoncé : texte riche + éventuelle expression finale mise
     en valeur (motif « consigne : $expr$ » -> centrée, plus grande) + figure.
     `first_indent`/`first_min_asc` réservent la place du badge numéroté en tête
-    de 1re ligne. Retourne {intro, display, figure, height}."""
-    statement = _legacy_to_tagged(statement or "")
+    de 1re ligne ; `blank_fs`/`sub_badge_color` sont passés tels quels à
+    _rich_layout (corps des phrases à trous, pastilles a./b./c.).
+    Retourne {intro, display, figure, height}."""
+    # Normalisation ici AUSSI, alors que la banque ne stocke déjà que du
+    # normalisé (exercise_gen._validate_exercise) : les exercices créés AVANT la
+    # mise en lignes y dorment toujours, sous-questions recollées, et rien ne les
+    # rejoue. C'est la MÊME fonction des deux côtés, pas une seconde règle de
+    # mise en lignes — et elle est idempotente, donc un énoncé déjà bien formé la
+    # traverse inchangé.
+    statement = _legacy_to_tagged(statement_mod.normalize(statement))
     display = None
-    body = statement
-    m = _DISPLAY_RE.match(statement.strip())
-    if m and "$" not in m.group(1):
-        im = _math_image(m.group(2), math_size)
+    body, expr = _display_split(statement)
+    if expr is not None:
+        im = _math_image(expr, math_size)
         if im is not None and im[1] <= width - 4:
-            body, display = m.group(1), im
+            display = im
+        else:
+            body = statement
     intro = _rich_layout(body, width, font_size, first_indent=first_indent,
-                         first_min_asc=first_min_asc)
+                         first_min_asc=first_min_asc, blank_fs=blank_fs,
+                         sub_badge_color=sub_badge_color)
     figure = _figure_image(figure_json, min(width, 62 * mm), 42 * mm)
     height = intro["height"]
     if display:
@@ -701,7 +806,8 @@ _MANUAL_DRAWING_H = 60.0 * mm
 
 
 def _table_geometry(w: float, col_labels: list | None, row_labels: list | None,
-                    cells: list[list[dict]], font_size: int) -> dict:
+                    cells: list[list[dict]], font_size: int,
+                    sub_badge_color: Color | None = None) -> dict:
     """Géométrie complète d'un tableau à remplir — UNE définition, partagée par
     la mesure (_table_zone_height) et le dessin (_draw_table_zone).
 
@@ -733,8 +839,12 @@ def _table_geometry(w: float, col_labels: list | None, row_labels: list | None,
                   + [lay["height"] + 2 * _TABLE_CELL_PAD for lay in col_lays])
               if col_labels else 0.0)
 
+    # un libellé de ligne EST une sous-question (« a. 4,8 + ... = 12,5 ») : il
+    # porte donc la même pastille a./b./c. qu'une sous-question d'énoncé — la
+    # grille sépare déjà les lignes, la pastille dit de quelle question il s'agit
     row_lays = [_rich_layout(str(lbl), max(8 * mm, rowlab_w - 2 * _TABLE_CELL_PAD),
-                             lab_fs) for lbl in (row_labels or [])]
+                             lab_fs, sub_badge_color=sub_badge_color)
+                for lbl in (row_labels or [])]
     row_hs = [max(_TABLE_ROW_MIN_H,
                   (row_lays[i]["height"] + 2 * _TABLE_CELL_PAD) if i < len(row_lays) else 0.0)
               for i in range(rows)]
@@ -745,8 +855,10 @@ def _table_geometry(w: float, col_labels: list | None, row_labels: list | None,
 
 
 def _table_zone_height(w: float, col_labels: list | None, row_labels: list | None,
-                       cells: list[list[dict]], font_size: int) -> float:
-    return _table_geometry(w, col_labels, row_labels, cells, font_size)["height"]
+                       cells: list[list[dict]], font_size: int,
+                       sub_badge_color: Color | None = None) -> float:
+    return _table_geometry(w, col_labels, row_labels, cells, font_size,
+                           sub_badge_color)["height"]
 
 
 def _matching_zone_height(left: list, right: list, font_size: int) -> float:
@@ -757,7 +869,8 @@ def _matching_zone_height(left: list, right: list, font_size: int) -> float:
 
 def _zone_height(response_type: str, choices: list[str], width: float,
                  font_size: int, grading: dict | None = None,
-                 inline: bool = False) -> float:
+                 inline: bool = False,
+                 sub_badge_color: Color | None = None) -> float:
     grading = grading or {}
     if response_type in ("qcm_single", "qcm_multiple"):
         _items, total_h, _ncols = _qcm_layout(choices, width - 2 * CARD_PAD, font_size)
@@ -772,7 +885,8 @@ def _zone_height(response_type: str, choices: list[str], width: float,
     if response_type == "table_fill":
         cells = grading.get("cells") or [[]]
         return _table_zone_height(width, grading.get("col_labels"),
-                                  grading.get("row_labels"), cells, font_size)
+                                  grading.get("row_labels"), cells, font_size,
+                                  sub_badge_color)
     if response_type == "matching":
         return _matching_zone_height(grading.get("left", []), grading.get("right", []),
                                      font_size)
@@ -794,8 +908,10 @@ def _cell_display_text(cell: dict) -> str:
 
 def _draw_table_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float,
                      col_labels: list | None, row_labels: list | None,
-                     cells: list[list[dict]], font_size: int) -> dict:
-    geo = _table_geometry(w, col_labels, row_labels, cells, font_size)
+                     cells: list[list[dict]], font_size: int,
+                     sub_badge_color: Color | None = None) -> dict:
+    geo = _table_geometry(w, col_labels, row_labels, cells, font_size,
+                          sub_badge_color)
     rows, cols = geo["rows"], geo["cols"]
     head_h, col_w, lab_fs = geo["head_h"], geo["col_w"], geo["lab_fs"]
     grid_x = x + CARD_PAD + geo["rowlab_w"]
@@ -811,7 +927,7 @@ def _draw_table_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float,
         for j, lay in enumerate(geo["col_lays"]):
             _draw_rich(c, grid_x + j * col_w + 1 * mm,
                        grid_top - (head_h - lay["height"]) / 2, lay,
-                       lab_fs, centered=True, width=col_w - 2 * mm)
+                       centered=True, width=col_w - 2 * mm)
         c.line(grid_x, grid_top - head_h, grid_x + grid_w, grid_top - head_h)
 
     cells_meta = []
@@ -825,7 +941,7 @@ def _draw_table_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float,
             c.line(grid_x, ry_top, grid_x + grid_w, ry_top)
         if i < len(geo["row_lays"]):
             lay = geo["row_lays"][i]
-            _draw_rich(c, x + CARD_PAD, ry_top - (row_h - lay["height"]) / 2, lay, lab_fs)
+            _draw_rich(c, x + CARD_PAD, ry_top - (row_h - lay["height"]) / 2, lay)
         for j in range(cols):
             cx = grid_x + j * col_w
             if j > 0:
@@ -843,7 +959,7 @@ def _draw_table_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float,
                 c.setFillColor(black)
                 lay = _rich_layout(_cell_display_text(cell), col_w - 2 * mm, lab_fs)
                 _draw_rich(c, cx + 1 * mm, ry_top - (row_h - lay["height"]) / 2, lay,
-                           lab_fs, centered=True, width=col_w - 2 * mm)
+                           centered=True, width=col_w - 2 * mm)
             else:
                 c.setStrokeColor(DROPOUT)
                 c.setLineWidth(0.7)
@@ -874,7 +990,7 @@ def _draw_matching_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float
     for i, label in enumerate(left):
         ly = top - i * row_h - row_h / 2
         lay = _rich_layout(label, col_w - p - 3 * mm, font_size)
-        _draw_rich(c, x + CARD_PAD, ly + lay["height"] / 2, lay, font_size)
+        _draw_rich(c, x + CARD_PAD, ly + lay["height"] / 2, lay)
         px, py = x + CARD_PAD + col_w - p - 1 * mm, ly - p / 2
         _pastille(px, py)
         left_pts.append({"index": i, "x_pt": px, "y_pt": py, "w_pt": p, "h_pt": p})
@@ -884,7 +1000,7 @@ def _draw_matching_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float
         py = ry - p / 2
         _pastille(px, py)
         lay = _rich_layout(label, col_w - p - 3 * mm, font_size)
-        _draw_rich(c, px + p + 2 * mm, ry + lay["height"] / 2, lay, font_size)
+        _draw_rich(c, px + p + 2 * mm, ry + lay["height"] / 2, lay)
         right_pts.append({"index": i, "x_pt": px, "y_pt": py, "w_pt": p, "h_pt": p})
     c.setFillColor(black)
     c.setStrokeColor(black)
@@ -893,7 +1009,8 @@ def _draw_matching_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float
 
 def _draw_answer_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float,
                       response_type: str, choices: list[str], font_size: int,
-                      grading: dict | None = None) -> dict:
+                      grading: dict | None = None,
+                      sub_badge_color: Color | None = None) -> dict:
     """Zone de réponse ÉLÈVE en saumon (dropout). Retourne la méta (positions
     des cases QCM, cellules de tableau, pastilles de points à relier…)."""
     grading = grading or {}
@@ -915,7 +1032,7 @@ def _draw_answer_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float,
             by = y_base + font_size * 0.35 - it["box"] / 2
             c.setStrokeColor(DROPOUT)
             c.rect(bx, by, it["box"], it["box"])
-            _draw_rich(c, bx + it["box"] + 1.6 * mm, row_top, it["lay"], font_size)
+            _draw_rich(c, bx + it["box"] + 1.6 * mm, row_top, it["lay"])
             c.setStrokeColor(DROPOUT)
             inner = 1.1 * mm
             boxes.append({"index": it["index"], "x_pt": bx + inner, "y_pt": by + inner,
@@ -924,7 +1041,7 @@ def _draw_answer_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float,
     elif response_type == "table_fill":
         meta = _draw_table_zone(c, x, y, w, h, grading.get("col_labels"),
                                 grading.get("row_labels"), grading.get("cells") or [],
-                                font_size)
+                                font_size, sub_badge_color)
     elif response_type == "matching":
         meta = _draw_matching_zone(c, x, y, w, h, grading.get("left", []),
                                    grading.get("right", []), font_size)
@@ -956,12 +1073,17 @@ def _exercise_card_h(layout: dict, zone_h: float, tpl: dict) -> float:
 def _draw_exercise_card(c: canvas.Canvas, x: float, y_top: float, w: float,
                         seq: int, layout: dict, zone_h: float,
                         level5: int, response_type: str, choices: list[str],
-                        tpl: dict, font_size: float,
+                        tpl: dict, font_size: float, zone_fs: float,
                         grading: dict | None = None) -> tuple[float, dict, dict]:
     """Carte exercice + bande de correction hors carte (§ correction).
-    `font_size` vient de _exercise_layout : c'est celui qui a servi à MESURER
-    `layout`/`zone_h`, le redériver ici les désaccorderait. Retourne
-    (hauteur totale, geo zone réponse, meta)."""
+    Retourne (hauteur totale, geo zone réponse, meta).
+
+    `font_size` est le corps du gabarit — celui sur lequel _exercise_layout a
+    dimensionné le badge numéroté et son retrait ; `zone_fs` celui qui a servi à
+    mesurer `zone_h`. Tous deux viennent de _exercise_layout et ne se redérivent
+    pas ici : les redériver, c'est les désaccorder de la mesure. Le corps de
+    l'énoncé, lui, n'est plus une affaire de carte du tout — chaque ligne porte
+    le sien (cf. _rich_layout)."""
     border = HexColor(tpl.get("border", "#C7CDD4"))
     radius = max(0.0, float(tpl.get("radius", 2.2))) * mm
     card_h = _exercise_card_h(layout, zone_h, tpl)
@@ -986,9 +1108,8 @@ def _draw_exercise_card(c: canvas.Canvas, x: float, y_top: float, w: float,
     inline_blanks: list = []
     first = layout["intro"]["lines"][0] if layout["intro"]["lines"] else None
     _draw_badge(c, x + CARD_PAD, ty - (first["asc"] if first else font_size * 0.78),
-                font_size, seq, level5)
-    line_y = _draw_rich(c, x + CARD_PAD, ty, layout["intro"], font_size,
-                        blanks=inline_blanks)
+                font_size, str(seq), _difficulty_color(level5))
+    line_y = _draw_rich(c, x + CARD_PAD, ty, layout["intro"], blanks=inline_blanks)
     if layout["display"]:
         img, dw, dh, _dd = layout["display"]
         c.drawImage(img, x + (w - dw) / 2, line_y - dh - 1 * mm, width=dw,
@@ -1021,7 +1142,7 @@ def _draw_exercise_card(c: canvas.Canvas, x: float, y_top: float, w: float,
                             "w_pt": b["w_pt"], "h_pt": b["h_pt"]} for b in inline_blanks]]}
     else:
         meta = _draw_answer_zone(c, x, zone_y, w, zone_h, response_type, choices,
-                                 font_size, grading)
+                                 zone_fs, grading, _difficulty_color(level5))
         zone_geo = {"x_pt": x, "y_pt": zone_y, "w_pt": w, "h_pt": zone_h}
 
     # bande de correction : HORS carte, collée (espace blanc visible, jamais
@@ -1180,10 +1301,10 @@ def _draw_lesson_card(c: canvas.Canvas, x: float, y_top: float, w: float,
                 icon_fn(c, gutter_x + 1.7 * mm, icon_y, size=3.2 * mm, color=style["border"])
                 txt_color = style["text"]
             font = "Helvetica-Oblique" if kind == "rappel" else "Helvetica"
-            _draw_rich(c, text_x, line_y, payload, part_fs, color=txt_color, font=font)
+            _draw_rich(c, text_x, line_y, payload, color=txt_color, font=font)
             line_y -= block_h + part_gap
             continue
-        _draw_rich(c, gutter_x + indent, line_y, payload, part_fs,
+        _draw_rich(c, gutter_x + indent, line_y, payload,
                    color=text_color, font="Helvetica")
         line_y -= payload["height"] + part_gap
     c.setFillColor(black)
@@ -1234,20 +1355,28 @@ def pages_needed(heights: list[float]) -> int:
 
 
 def _exercise_layout(item: dict, font_size: int, math_fs: int) -> tuple[dict, float, float]:
-    """(layout de l'énoncé, corps de texte, hauteur de zone réponse) d'un
+    """(layout de l'énoncé, corps de la zone de réponse, hauteur de zone) d'un
     exercice — UNE définition, appelée à l'identique par la mesure
     (estimate_item_height) et par le dessin (render_copy). Deux constructions
-    parallèles dériveraient, et c'est cet écart que test_page_fill traque."""
+    parallèles dériveraient, et c'est cet écart que test_page_fill traque.
+
+    L'énoncé est mis en page au corps du GABARIT : c'est _rich_layout qui
+    agrandit, ligne par ligne, les seules phrases portant une case à remplir
+    (blank_fs). La zone de réponse a son propre corps (_zone_font_size), d'où
+    les deux valeurs distinctes."""
     rtype = item["response_type"]
-    fs = _blank_statement_fs(rtype, item.get("statement", ""), font_size)
-    badge_w, _bh, _bfs = _badge_metrics(fs)
-    layout = _statement_layout(item["statement"], COL_W - 2 * CARD_PAD, fs, math_fs,
-                               item.get("figure"),
+    badge_w, _bh, _bfs = _badge_metrics(font_size)
+    layout = _statement_layout(item["statement"], COL_W - 2 * CARD_PAD, font_size,
+                               math_fs, item.get("figure"),
                                first_indent=badge_w + BADGE_GAP,
-                               first_min_asc=_badge_min_asc(fs))
-    zone_h = _zone_height(rtype, item.get("choices", []), COL_W, fs,
-                          item.get("grading"), item.get("inline", False))
-    return layout, fs, zone_h
+                               first_min_asc=_badge_min_asc(font_size),
+                               blank_fs=font_size + BLANK_FONT_BOOST,
+                               sub_badge_color=_difficulty_color(item.get("level5", 3)))
+    zone_fs = _zone_font_size(rtype, font_size)
+    zone_h = _zone_height(rtype, item.get("choices", []), COL_W, zone_fs,
+                          item.get("grading"), item.get("inline", False),
+                          _difficulty_color(item.get("level5", 3)))
+    return layout, zone_fs, zone_h
 
 
 def estimate_item_height(item: dict, font_size: int, math_fs: int,
@@ -1338,7 +1467,7 @@ def render_copy(pdf_canvas: canvas.Canvas, *, student_name: str, class_name: str
 
         seq += 1
         choices = item.get("choices", [])
-        layout, item_fs, zone_h = _exercise_layout(item, font_size, math_fs)
+        layout, zone_fs, zone_h = _exercise_layout(item, font_size, math_fs)
         card_h = _exercise_card_h(layout, zone_h, ex_tpl)
         place(card_h + gap)
         x = MARGIN + col * (col_w + COL_GAP)
@@ -1346,7 +1475,7 @@ def render_copy(pdf_canvas: canvas.Canvas, *, student_name: str, class_name: str
         _, zone_geo, meta = _draw_exercise_card(
             pdf_canvas, x, y_cursor, col_w, seq, layout, zone_h,
             item.get("level5", 3), item["response_type"], choices, ex_tpl,
-            item_fs, item.get("grading"))
+            font_size, zone_fs, item.get("grading"))
         zones.append({
             "item_id": item["item_id"], "page_index": page_idx,
             "page_id": pages_meta[page_idx]["page_id"],

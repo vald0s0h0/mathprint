@@ -595,7 +595,13 @@ def _gemini_mock(payload: dict) -> dict:
 
     "effort_points" est renseigné comme le ferait le vrai modèle (barème
     d'effort, § barème) : sans lui, le mode mock ne passerait que par le repli
-    de services.scoring et la chaîne de notation ne serait jamais exercée."""
+    de services.scoring et la chaîne de notation ne serait jamais exercée.
+
+    Les énoncés sont MIS EN LIGNES comme le vrai modèle (§ services/statement) :
+    un énoncé à liste pour le QCM, une phrase à trous pour la réponse écrite,
+    des sous-questions a./b. pour le problème. Des énoncés d'un seul tenant
+    laisseraient le saut de ligne, la pastille de sous-question et le corps
+    agrandi des phrases à trous hors de toute chaîne testée en mock."""
     import random
     rng = random.Random(f"{payload.get('competency_code')}-{payload.get('batch')}")
     count = int(payload.get("count", 5))
@@ -609,29 +615,32 @@ def _gemini_mock(payload: dict) -> dict:
             exercises.append({
                 "kind": "application",
                 "effort_points": 0.5,   # une addition à cocher : réponse immédiate
-                "statement": f"Coche le résultat de ${a} + {b}$.",
+                "statement": (f"Lina pose l'addition suivante :\n- premier terme : ${a}$\n"
+                              f"- second terme : ${b}$\nCoche le résultat de ${a} + {b}$."),
                 "correction": f"${a} + {b} = {good}$ (on additionne les unités puis les dizaines).",
                 "response_type": "qcm_single",
                 "choices": choices,
                 "answer": {"type": "choice", "correct": [choices.index(f"${good}$")]}})
-        elif i == 3:  # 1 réponse écrite
+        elif i == 3:  # 1 réponse écrite, en phrase à trous
             exercises.append({
                 "kind": "application",
                 "effort_points": 1,     # une multiplication à poser
-                "statement": f"Calcule ${a} \\times {b}$.",
+                "statement": (f"Un carton contient ${b}$ billes.\n"
+                              f"${a}$ cartons contiennent {{{{blank}}}} billes."),
                 "correction": f"${a} \\times {b} = {a * b}$.",
                 "response_type": "short_text",
                 "answer": {"type": "integer", "value": a * b}})
-        else:  # 1 problème rédigé
+        else:  # 1 problème rédigé, en sous-questions
             price, qty = rng.randint(2, 9), rng.randint(3, 8)
             total = price * qty
             exercises.append({
                 "kind": "probleme",
                 "effort_points": 3,     # deux étapes + une soustraction à rédiger
                 "statement": (f"Pour repeindre sa chambre, Sacha achète {qty} pots de "
-                              f"peinture à ${price}\\ \\text{{€}}$ l'unité. Il paie avec "
-                              "un billet de $50\\ \\text{€}$. Combien lui rend-on ? "
-                              "Détaille ton raisonnement."),
+                              f"peinture à ${price}\\ \\text{{€}}$ l'unité.\n"
+                              "Il paie avec un billet de $50\\ \\text{€}$.\n"
+                              "a. Calcule le prix total des pots.\n"
+                              "b. Combien lui rend-on ? Détaille ton raisonnement."),
                 "correction": (f"Prix total : ${qty} \\times {price} = {total}\\ \\text{{€}}$, "
                                f"puis $50 - {total} = {50 - total}\\ \\text{{€}}$ rendus."),
                 "response_type": "multiline_text",

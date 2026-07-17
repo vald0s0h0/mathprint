@@ -1,5 +1,11 @@
 // Rendu fiable des formules mathématiques via KaTeX.
 // Découpe sur $...$ (spans délimitant du LaTeX), renderise via KaTeX côté web.
+//
+// Les sauts de ligne de l'énoncé sont RENDUS (white-space: pre-wrap) : ils font
+// partie du texte (cf. backend services/statement.py), c'est eux qui séparent
+// une donnée de la suivante et une sous-question de la précédente. Sans ça, le
+// HTML les replie en espaces et l'aperçu de la banque montrerait un énoncé d'un
+// seul tenant là où la copie imprimée, elle, est bien mise en lignes.
 import { Box } from '@mantine/core'
 import katex from 'katex'
 import 'katex/dist/katex.min.css'
@@ -57,8 +63,12 @@ export default function MathText({ text, centered = false, size }: {
 
   // Heuristique optionnelle : si le texte contient ":", proposer une mise en valeur
   // (facultatif — conserver pour compatibilité avec l'ancienne UI, mais elle n'est plus
-  // nécessaire puisque le balisage LaTeX est explicite)
-  const colonIdx = text.indexOf(':')
+  // nécessaire puisque le balisage LaTeX est explicite).
+  // Réservée aux textes d'UNE ligne, seuls pour lesquels elle a été écrite : sur un
+  // énoncé mis en lignes, le premier ":" est celui d'une énumération, et « tout ce qui
+  // suit » est alors le corps de l'énoncé — pas une expression à mettre en valeur.
+  const singleLine = !text.includes('\n')
+  const colonIdx = singleLine ? text.indexOf(':') : -1
   const afterColon = colonIdx >= 0 ? text.slice(colonIdx + 1).trim() : ''
   const splittable = colonIdx >= 0 && afterColon.length > 0 && afterColon.length < 80
 
@@ -74,7 +84,7 @@ export default function MathText({ text, centered = false, size }: {
     )
 
     return (
-      <Box fz={size}>
+      <Box fz={size} style={{ whiteSpace: 'pre-wrap' }}>
         <Box component="span">{beforeColon} :</Box>
         <Box mt={4} ta={centered ? 'center' : 'left'}
           fz="1.25em" fw={500} style={{ letterSpacing: '0.02em' }}>
@@ -84,7 +94,7 @@ export default function MathText({ text, centered = false, size }: {
     )
   }
 
-  return <Box component="span" fz={size}>{elements}</Box>
+  return <Box component="span" fz={size} style={{ whiteSpace: 'pre-wrap' }}>{elements}</Box>
 }
 
 export { splitMathSpans, MathSpan }
