@@ -455,6 +455,78 @@ def finalize_batch(db: Session, batch: ScanBatch) -> dict:
     return {"evidence_created": n_evidence, "results_created": n_results}
 
 
+def _latest_ocr(db: Session, zone_id: str) -> OcrAttempt | None:
+    return (db.query(OcrAttempt).filter_by(zone_id=zone_id)
+            .order_by(OcrAttempt.created_at.desc()).first())
+
+
+def _zone_marks(db: Session, item: CopyItem, zone: ResponseZone,
+                decision: GradingDecision) -> dict | None:
+    """Marques par CHAMP de réponse pour l'overlay, selon le type et la réponse
+    de l'élève (§ améliorations overlay) :
+
+    - short_text : une coche/croix en haut à droite de la case ;
+    - table_fill / multi_blank : une coche/croix en haut à droite de CHAQUE
+      cellule (toutes marquées) ;
+    - qcm : si au moins une erreur, une case correction (vide/cochée) à gauche
+      de chaque case élève — cochée pour les bonnes réponses ;
+    - matching : si erreur, les traits de correction entre les bons points ;
+    - multiline_text : une coche/croix en bas à droite de la zone.
+
+    La géométrie vient de zone.meta_json (posée par pdfgen à la génération) ; les
+    copies imprimées AVANT cette évolution n'ont pas ces repères et retombent
+    silencieusement sur « rien à dessiner » (jamais d'erreur)."""
+    rtype = item.response_type
+    meta = zone.meta_json or {}
+    expected = item.expected_json or {}
+    full = decision.score >= decision.max_score
+
+    if rtype.startswith("qcm"):
+        if full:
+            return {"kind": "qcm", "any_error": False, "boxes": []}
+        correct = set(expected.get("correct", []))
+        boxes = [{**b["correction_box"], "should_check": b.get("index") in correct}
+                 for b in meta.get("boxes", []) if b.get("correction_box")]
+        return {"kind": "qcm", "any_error": True, "boxes": boxes}
+
+    if rtype in ("table_fill", "multi_blank"):
+        ocr = _latest_ocr(db, zone.id)
+        cell_texts = ((ocr.raw_json or {}).get("cells") if ocr else None) or []
+        oks = grader.cell_marks(item.grading_json, cell_texts)
+        exp_cells = expected.get("cells", [])
+        marks, k = [], 0
+        for ri, row in enumerate(meta.get("cells", [])):
+            for ci, cell in enumerate(row):
+                given = (ri < len(exp_cells) and ci < len(exp_cells[ri])
+                         and exp_cells[ri][ci].get("given"))
+                if given:
+                    continue
+                marks.append({**cell, "ok": oks[k] if k < len(oks) else False})
+                k += 1
+        return {"kind": "cells", "cells": marks}
+
+    if rtype == "matching":
+        if full:
+            return None  # tout relié juste : rien à surcharger
+        left = {p.get("index"): p for p in meta.get("left_points", [])}
+        right = {p.get("index"): p for p in meta.get("right_points", [])}
+        links = []
+        for pair in expected.get("pairs", []):
+            lp, rp = left.get(pair[0]), right.get(pair[1])
+            if lp and rp:
+                links.append({"x1": lp["x_pt"] + lp["w_pt"] / 2,
+                              "y1": lp["y_pt"] + lp["h_pt"] / 2,
+                              "x2": rp["x_pt"] + rp["w_pt"] / 2,
+                              "y2": rp["y_pt"] + rp["h_pt"] / 2})
+        return {"kind": "matching", "links": links}
+
+    if rtype == "multiline_text":
+        return {"kind": "single_br", "ok": full}
+    if rtype == "manual_drawing":
+        return None  # tracé libre : pas de champ à marquer automatiquement
+    return {"kind": "single_tr", "ok": full}  # short_text et repli
+
+
 def build_overlays(db: Session, batch: ScanBatch) -> str:
     """Génère, après finalisation (§5.6) :
     - correction_overlay.pdf : pages blanches, marques seules (à imprimer et
@@ -500,8 +572,12 @@ def build_overlays(db: Session, batch: ScanBatch) -> str:
             zdict = {"x_pt": zone.x_pt, "y_pt": zone.y_pt, "w_pt": zone.w_pt,
                      "h_pt": zone.h_pt, "score": earned,
                      "max_score": bareme, "full_credit": full,
+                     "response_type": item.response_type,
                      "strip": (zone.meta_json or {}).get("correction_strip"),
-                     "text": "" if full else item.correction}
+                     # corrigé (banque) affiché SEULEMENT si erreur, pour guider
+                     # l'élève à se corriger lui-même
+                     "text": "" if full else item.correction,
+                     "marks": _zone_marks(db, item, zone, decision)}
             zones.append(zdict)
             zones_by_page.setdefault(zone.page_id, []).append(zdict)
             if zone.page_id not in page_no:

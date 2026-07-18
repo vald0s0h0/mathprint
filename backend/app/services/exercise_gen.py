@@ -964,8 +964,9 @@ _JSON_CONTRACT = (
     '{"exercises":[{"kind":"application"|"probleme","effort_points":number '
     "(multiple de 0,5 entre 0,5 et 5, cf. BARÈME),"
     '"statement":str,"correction":str '
-    "(TRÈS SUCCINCTE : le résultat + 1-2 phrases d'explication au maximum, "
-    "jamais une résolution pas-à-pas),"
+    "(corrigé TRÈS SUCCINCT, 1 à 3 lignes au maximum, jamais une résolution "
+    "pas-à-pas ; formules en $...$ et sauts de ligne \\n comme dans statement ; "
+    "voir les consignes de rédaction pour son contenu),"
     '"response_type":"short_text"|"qcm_single"|"qcm_multiple"|"multi_blank"|'
     '"multiline_text"|"table_fill"|"matching"|"manual_drawing",'
     '"choices":[str]?,"answer":{"type":"integer"|"decimal"|"rational"|"expression"|'

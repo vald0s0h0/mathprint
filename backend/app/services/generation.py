@@ -199,6 +199,7 @@ def generate_assessment_job(db: Session, assessment: Assessment,
             db.flush()
             render_items.append({"kind": "exercise", "item_id": item.id,
                                  "statement": row.statement,
+                                 "correction": row.correction,
                                  "response_type": row.response_type,
                                  "choices": choices, "level5": row.difficulty_level,
                                  "figure": row.figure_json,

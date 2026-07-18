@@ -98,8 +98,15 @@ _ADMONITION_COLORS = {
 }
 
 CARD_PAD = 2.6 * mm
-STRIP_H = 6.5 * mm      # bande de correction (overlay)
+# Bande de correction (réservée à l'overlay) : sa hauteur n'est plus figée, elle
+# est ANTICIPÉE sur le TEXTE du corrigé de la banque (_correction_strip_layout)
+# pour que l'overlay puisse l'imprimer en entier, jamais coupé. STRIP_MIN_H est
+# le plancher (exercice sans corrigé, ou corrigé tenant sur une ligne courte).
+STRIP_MIN_H = 6.5 * mm
 STRIP_GAP = 0.4 * mm    # espace blanc visible entre la carte et sa bande de correction (rapproché)
+STRIP_PAD_V = 1.4 * mm  # inset vertical du texte corrigé dans la bande
+STRIP_NOTE_W = 17 * mm  # réserve droite pour la note de barème (imprimée en gros/gras)
+CORR_FS_DELTA = 1.0     # le corrigé s'imprime un cran plus petit que l'énoncé
 RADIUS = 2.2 * mm
 GAP = 3.5 * mm          # espace vertical entre deux cartes/rappels
 COL_W = (PAGE_W - 2 * MARGIN - COL_GAP) / 2
@@ -754,6 +761,17 @@ def _statement_layout(statement: str, width: float, font_size: float,
     return {"intro": intro, "display": display, "figure": figure, "height": height}
 
 
+# Correction QCM en overlay : à gauche de CHAQUE case élève, l'overlay peut
+# imprimer une case « correction » (vide ou cochée) disant la bonne réponse —
+# seulement si l'élève s'est trompé. Il faut donc réserver dès le sujet, à
+# gauche de la case élève, la place de cette case + une marge : les cases élève
+# sont décalées à droite d'autant (QCM_CORR_RESERVE), qu'elles soient corrigées
+# ou non (la géométrie du sujet ne dépend jamais de la copie).
+QCM_BOX = 2.0 * mm
+QCM_CORR_GAP = 2.0 * mm
+QCM_CORR_RESERVE = QCM_BOX + QCM_CORR_GAP
+
+
 def _qcm_layout(choices: list[str], width: float,
                 font_size: int) -> tuple[list[dict], float, int]:
     """Disposition en colonnes (remplies colonne par colonne). Les labels sont
@@ -764,19 +782,21 @@ def _qcm_layout(choices: list[str], width: float,
     nombre de colonnes, la 2de les remet en page à la largeur réelle de leur
     colonne. Une passe unique à `width` ignorait la place prise par la case à
     cocher et son blanc — le label, dessiné après la case, débordait alors de
-    la carte d'autant."""
-    box = 2.0 * mm
+    la carte d'autant. Le gutter gauche inclut QCM_CORR_RESERVE (place de la
+    case de correction overlay), pour que le label ne déborde pas non plus."""
+    box = QCM_BOX
+    gutter = box + QCM_CORR_RESERVE               # case correction + marge + case élève
     gap_x, gap_y, pad = 6.0 * mm, 1.6 * mm, 1.6 * mm
     n = len(choices)
-    solo_w = max(10 * mm, width - box - pad)     # label sur une seule colonne
+    solo_w = max(10 * mm, width - gutter - pad)     # label sur une seule colonne
     nat = [max((ln["w"] for ln in _rich_layout(ch, solo_w, font_size)["lines"]),
                default=0.0) for ch in choices]
-    item_w = box + pad + (max(nat) if nat else 0.0) + gap_x
+    item_w = gutter + pad + (max(nat) if nat else 0.0) + gap_x
     ncols = max(1, min(3, n, int(width // item_w) if item_w > 0 else 1))
     nrows = -(-n // ncols)  # ceil
 
     col_total = width / ncols
-    lab_w = max(10 * mm, col_total - box - pad - (gap_x if ncols > 1 else 0.0))
+    lab_w = max(10 * mm, col_total - gutter - pad - (gap_x if ncols > 1 else 0.0))
     items, max_h = [], 6.0 * mm
     lays = []
     for choice in choices:
@@ -1023,7 +1043,10 @@ def _draw_answer_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float,
         boxes = []
         top = y + h - 2 * mm
         for it in items:
-            bx = x + CARD_PAD + it["dx"]
+            # case ÉLÈVE décalée à droite de QCM_CORR_RESERVE : la place à sa
+            # gauche est réservée à la case de correction que l'overlay imprime
+            # (vide/cochée) en cas d'erreur.
+            bx = x + CARD_PAD + it["dx"] + QCM_CORR_RESERVE
             row_top = top - it["dy"]
             # La case se cale sur le TEXTE (centre de case sur la hauteur d'œil
             # de la 1re ligne du label), et non l'inverse : la poser à partir du
@@ -1036,8 +1059,11 @@ def _draw_answer_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float,
             _draw_rich(c, bx + it["box"] + 1.6 * mm, row_top, it["lay"])
             c.setStrokeColor(DROPOUT)
             inner = 1.1 * mm
+            corr_x = bx - QCM_CORR_GAP - it["box"]   # case correction (overlay)
             boxes.append({"index": it["index"], "x_pt": bx + inner, "y_pt": by + inner,
-                          "w_pt": it["box"] - 2 * inner, "h_pt": it["box"] - 2 * inner})
+                          "w_pt": it["box"] - 2 * inner, "h_pt": it["box"] - 2 * inner,
+                          "correction_box": {"x_pt": corr_x, "y_pt": by,
+                                             "w_pt": it["box"], "h_pt": it["box"]}})
         meta["boxes"] = boxes
     elif response_type == "table_fill":
         meta = _draw_table_zone(c, x, y, w, h, grading.get("col_labels"),
@@ -1061,18 +1087,38 @@ def _draw_answer_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float,
     return meta
 
 
-def _exercise_card_h(layout: dict, zone_h: float, tpl: dict) -> float:
+def _correction_strip_layout(correction: str, w: float,
+                             statement_fs: float) -> dict:
+    """Cadre corrigé sous une carte, dimensionné pour contenir le TEXTE du
+    corrigé de la banque — ANTICIPÉ à la composition du sujet pour que l'overlay
+    de correction puisse l'imprimer en entier (jamais coupé). Le corrigé est mis
+    en page comme un énoncé (flot riche : formules $...$ rasterisées, sauts de
+    ligne durs de services.statement), à un corps un cran plus petit que
+    l'énoncé (CORR_FS_DELTA). Une réserve droite (STRIP_NOTE_W) laisse la place à
+    la note de barème, imprimée en gros et gras. Retourne
+    {height, fs, text_w, lay} — `lay` sert au SUJET (mesure) ; l'overlay le
+    recompose à l'identique depuis le texte et `fs` stockés dans la méta."""
+    fs = max(6.0, statement_fs - CORR_FS_DELTA)
+    text_w = max(10 * mm, w - 2 * CARD_PAD - STRIP_NOTE_W)
+    lay = _rich_layout(statement_mod.normalize(correction or ""), text_w, fs)
+    height = max(STRIP_MIN_H, lay["height"] + 2 * STRIP_PAD_V)
+    return {"height": height, "fs": fs, "text_w": text_w, "lay": lay}
+
+
+def _exercise_card_h(layout: dict, zone_h: float, strip_h: float,
+                     tpl: dict) -> float:
     """Hauteur totale de l'unité (carte + espace + bande de correction),
     toujours placée d'un bloc (jamais coupée par saut de colonne/page).
 
     Plus de ligne de titre : le badge numéroté vit DANS la 1re ligne de
     l'énoncé (layout["intro"], dimensionnée par _badge_min_asc), et la hauteur
-    d'en-tête qu'elle coûtait est rendue au contenu."""
-    return layout["height"] + zone_h + STRIP_H + STRIP_GAP + 3 * CARD_PAD
+    d'en-tête qu'elle coûtait est rendue au contenu. `strip_h` est la hauteur de
+    la bande corrigé, anticipée sur son texte (_correction_strip_layout)."""
+    return layout["height"] + zone_h + strip_h + STRIP_GAP + 3 * CARD_PAD
 
 
 def _draw_exercise_card(c: canvas.Canvas, x: float, y_top: float, w: float,
-                        seq: int, layout: dict, zone_h: float,
+                        seq: int, layout: dict, zone_h: float, strip: dict,
                         level5: int, response_type: str, choices: list[str],
                         tpl: dict, font_size: float, zone_fs: float,
                         grading: dict | None = None) -> tuple[float, dict, dict]:
@@ -1081,16 +1127,18 @@ def _draw_exercise_card(c: canvas.Canvas, x: float, y_top: float, w: float,
 
     `font_size` est le corps du gabarit — celui sur lequel _exercise_layout a
     dimensionné le badge numéroté et son retrait ; `zone_fs` celui qui a servi à
-    mesurer `zone_h`. Tous deux viennent de _exercise_layout et ne se redérivent
-    pas ici : les redériver, c'est les désaccorder de la mesure. Le corps de
-    l'énoncé, lui, n'est plus une affaire de carte du tout — chaque ligne porte
-    le sien (cf. _rich_layout)."""
+    mesurer `zone_h` ; `strip` la bande corrigé (_correction_strip_layout, sa
+    hauteur anticipée sur le texte du corrigé). Tous viennent de
+    _exercise_layout et ne se redérivent pas ici : les redériver, c'est les
+    désaccorder de la mesure. Le corps de l'énoncé, lui, n'est plus une affaire
+    de carte du tout — chaque ligne porte le sien (cf. _rich_layout)."""
     border = HexColor(tpl.get("border", "#C7CDD4"))
     radius = max(0.0, float(tpl.get("radius", 2.2))) * mm
-    card_h = _exercise_card_h(layout, zone_h, tpl)
+    strip_h = strip["height"]
+    card_h = _exercise_card_h(layout, zone_h, strip_h, tpl)
     y = y_top - card_h                              # bas de l'unité entière (carte + strip)
-    card_bottom = y + STRIP_H + STRIP_GAP            # bas de la carte seule (strip exclue)
-    card_h_body = card_h - STRIP_H - STRIP_GAP
+    card_bottom = y + strip_h + STRIP_GAP            # bas de la carte seule (strip exclue)
+    card_h_body = card_h - strip_h - STRIP_GAP
 
     # ombre puis carte (la bordure s'arrête avant la bande de correction)
     if tpl.get("shadow", True):
@@ -1151,8 +1199,10 @@ def _draw_exercise_card(c: canvas.Canvas, x: float, y_top: float, w: float,
     # la géométrie reste réservée pour l'overlay de correction.
     c.setFillColor(black)
 
-    meta["correction_strip"] = {"x_pt": x + CARD_PAD, "y_pt": y + 1.2 * mm,
-                                "w_pt": w - 2 * CARD_PAD, "h_pt": STRIP_H - 2 * mm}
+    meta["correction_strip"] = {
+        "x_pt": x + CARD_PAD, "y_pt": y + STRIP_PAD_V,
+        "w_pt": w - 2 * CARD_PAD, "h_pt": strip_h - 2 * STRIP_PAD_V,
+        "fs": strip["fs"]}
     return card_h, zone_geo, meta
 
 
@@ -1355,16 +1405,18 @@ def pages_needed(heights: list[float]) -> int:
     return page_idx + 1
 
 
-def _exercise_layout(item: dict, font_size: int, math_fs: int) -> tuple[dict, float, float]:
-    """(layout de l'énoncé, corps de la zone de réponse, hauteur de zone) d'un
-    exercice — UNE définition, appelée à l'identique par la mesure
+def _exercise_layout(item: dict, font_size: int,
+                     math_fs: int) -> tuple[dict, float, float, dict]:
+    """(layout de l'énoncé, corps de la zone de réponse, hauteur de zone, bande
+    corrigé) d'un exercice — UNE définition, appelée à l'identique par la mesure
     (estimate_item_height) et par le dessin (render_copy). Deux constructions
     parallèles dériveraient, et c'est cet écart que test_page_fill traque.
 
     L'énoncé est mis en page au corps du GABARIT : c'est _rich_layout qui
     agrandit, ligne par ligne, les seules phrases portant une case à remplir
-    (blank_fs). La zone de réponse a son propre corps (_zone_font_size), d'où
-    les deux valeurs distinctes."""
+    (blank_fs). La zone de réponse a son propre corps (_zone_font_size). La
+    bande corrigé est dimensionnée sur le texte du corrigé (banque) pour que
+    l'overlay l'imprime en entier — d'où les valeurs distinctes."""
     rtype = item["response_type"]
     badge_w, _bh, _bfs = _badge_metrics(font_size)
     layout = _statement_layout(item["statement"], COL_W - 2 * CARD_PAD, font_size,
@@ -1377,7 +1429,8 @@ def _exercise_layout(item: dict, font_size: int, math_fs: int) -> tuple[dict, fl
     zone_h = _zone_height(rtype, item.get("choices", []), COL_W, zone_fs,
                           item.get("grading"), item.get("inline", False),
                           _difficulty_color(item.get("level5", 3)))
-    return layout, zone_fs, zone_h
+    strip = _correction_strip_layout(item.get("correction", ""), COL_W, font_size)
+    return layout, zone_fs, zone_h, strip
 
 
 def estimate_item_height(item: dict, font_size: int, math_fs: int,
@@ -1393,8 +1446,8 @@ def estimate_item_height(item: dict, font_size: int, math_fs: int,
         }
         lay = _lesson_layout(blocks, COL_W, fs)
         return _lesson_card_h(lay, lesson_tpl) + GAP
-    layout, _fs, zone_h = _exercise_layout(item, font_size, math_fs)
-    return _exercise_card_h(layout, zone_h, ex_tpl) + GAP
+    layout, _fs, zone_h, strip = _exercise_layout(item, font_size, math_fs)
+    return _exercise_card_h(layout, zone_h, strip["height"], ex_tpl) + GAP
 
 
 def render_copy(pdf_canvas: canvas.Canvas, *, student_name: str, class_name: str,
@@ -1468,13 +1521,13 @@ def render_copy(pdf_canvas: canvas.Canvas, *, student_name: str, class_name: str
 
         seq += 1
         choices = item.get("choices", [])
-        layout, zone_fs, zone_h = _exercise_layout(item, font_size, math_fs)
-        card_h = _exercise_card_h(layout, zone_h, ex_tpl)
+        layout, zone_fs, zone_h, strip = _exercise_layout(item, font_size, math_fs)
+        card_h = _exercise_card_h(layout, zone_h, strip["height"], ex_tpl)
         place(card_h + gap)
         x = MARGIN + col * (col_w + COL_GAP)
 
         _, zone_geo, meta = _draw_exercise_card(
-            pdf_canvas, x, y_cursor, col_w, seq, layout, zone_h,
+            pdf_canvas, x, y_cursor, col_w, seq, layout, zone_h, strip,
             item.get("level5", 3), item["response_type"], choices, ex_tpl,
             font_size, zone_fs, item.get("grading"))
         zones.append({
@@ -1501,6 +1554,82 @@ def _mark(c: canvas.Canvas, x: float, y: float, ok: bool, size: float = 2.4 * mm
         c.line(x, y, x + size * 0.8, y + size * 0.8)
         c.line(x, y + size * 0.8, x + size * 0.8, y)
     c.restoreState()
+
+
+def _draw_corr_checkbox(c: canvas.Canvas, b: dict, col):
+    """Case « correction » QCM imprimée par l'overlay à gauche de la case élève :
+    cochée si le choix est une bonne réponse, vide sinon — ne s'imprime que si
+    l'élève s'est trompé (décidé par l'appelant)."""
+    x, y, w, h = b["x_pt"], b["y_pt"], b["w_pt"], b["h_pt"]
+    c.setStrokeColor(col)
+    c.setLineWidth(0.9)
+    c.rect(x, y, w, h)
+    if b.get("should_check"):
+        _mark(c, x + w * 0.1, y + h * 0.1, True, size=w * 0.8)
+
+
+def _draw_zone_marks(c: canvas.Canvas, z: dict, col):
+    """Marques par CHAMP de réponse (coche/croix, cases correction, traits de
+    liaison) selon `z["marks"]` (posé par services.pipeline._zone_marks). Dessin
+    partagé par l'overlay (fond blanc) et l'aperçu copie+overlay (fond scanné)."""
+    marks = z.get("marks")
+    if not marks:
+        return
+    c.setStrokeColor(col)
+    c.setFillColor(col)
+    kind = marks.get("kind")
+    m = 0.6 * mm
+    if kind == "single_tr":       # short_text : coche/croix en HAUT à droite
+        _mark(c, z["x_pt"] + z["w_pt"] - m - 2.4 * mm,
+              z["y_pt"] + z["h_pt"] - m - 2.4 * mm, marks["ok"])
+    elif kind == "single_br":     # multiline_text : en BAS à droite de la zone
+        _mark(c, z["x_pt"] + z["w_pt"] - m - 2.4 * mm, z["y_pt"] + m, marks["ok"])
+    elif kind == "cells":         # table_fill/multi_blank : chaque cellule marquée
+        for cell in marks["cells"]:
+            _mark(c, cell["x_pt"] + cell["w_pt"] - 0.4 * mm - 1.9 * mm,
+                  cell["y_pt"] + cell["h_pt"] - 0.4 * mm - 1.9 * mm,
+                  cell["ok"], size=1.9 * mm)
+    elif kind == "qcm":
+        if marks.get("any_error"):
+            for b in marks.get("boxes", []):
+                _draw_corr_checkbox(c, b, col)
+    elif kind == "matching":
+        c.saveState()
+        c.setStrokeColor(col)
+        c.setLineWidth(1.0)
+        c.setDash(2.2, 1.8)
+        for ln in marks.get("links", []):
+            c.line(ln["x1"], ln["y1"], ln["x2"], ln["y2"])
+        c.restoreState()
+    c.setFillColor(col)
+
+
+def _draw_correction_strip(c: canvas.Canvas, z: dict, col):
+    """Bande de correction sous une carte : la note de barème à DROITE, en gros
+    et gras ; le corrigé (banque) à gauche — mis en page comme un énoncé (riche :
+    formules $...$, sauts de ligne), et imprimé SEULEMENT si l'élève s'est
+    trompé (z["text"] vide sinon). La hauteur a été anticipée à la génération
+    (_correction_strip_layout) pour que le corrigé ne soit jamais coupé."""
+    strip = z.get("strip")
+    score_txt = (f"{scoring.format_points(z['score'])}/"
+                 f"{scoring.format_points(z['max_score'])}")
+    if not strip:
+        # copie antérieure à la bande dimensionnée : repli minimal (note seule)
+        c.setFillColor(col)
+        c.setFont("Helvetica-Bold", 9)
+        c.drawRightString(z["x_pt"] + z["w_pt"], z["y_pt"] + z["h_pt"] + 1.5 * mm,
+                          score_txt)
+        return
+    sx, sy, sw, sh = strip["x_pt"], strip["y_pt"], strip["w_pt"], strip["h_pt"]
+    fs = float(strip.get("fs", 7.5))
+    c.setFillColor(col)
+    c.setFont("Helvetica-Bold", 11)
+    c.drawRightString(sx + sw, sy + sh / 2 - 11 * 0.34, score_txt)
+    if z.get("text"):
+        text_w = max(10 * mm, sw - STRIP_NOTE_W)
+        lay = _rich_layout(statement_mod.normalize(z["text"]), text_w, fs)
+        _draw_rich(c, sx, sy + sh, lay, color=col)
+    c.setFillColor(col)
 
 
 PROGRESS_GREEN = HexColor("#2E7D32")
@@ -1566,28 +1695,15 @@ def _draw_correction_marks(c: canvas.Canvas, page: dict, col):
         c.setFont("Helvetica", 8)
         for i, line in enumerate(_wrap(page["comment"], aw - 7 * mm, 8)[:2]):
             c.drawString(ax + 3.5 * mm, ay + ah - (i + 1) * 5 * mm - 3 * mm, line)
+    # points de BARÈME (cf. services.pipeline.build_overlays), en demis :
+    # « 1,5/2 » à la française, jamais « 1.5/2.0 » — lu par un élève de 5e sur
+    # sa copie. Marques par champ d'abord (coches/croix, cases correction,
+    # traits de liaison), puis la bande corrigé + note sous la carte.
     for z in page.get("page_zones", []):
-        strip = z.get("strip")
-        ok = bool(z.get("full_credit"))
-        # points de BARÈME (cf. services.pipeline.build_overlays), donc des
-        # demis : « 1,5/2 » à la française, jamais « 1.5/2.0 » — c'est lu
-        # par un élève de 5e sur sa copie.
-        score_txt = (f"{scoring.format_points(z['score'])}/"
-                     f"{scoring.format_points(z['max_score'])}")
-        if strip:
-            sx, sy, sw, _sh = strip["x_pt"], strip["y_pt"], strip["w_pt"], strip["h_pt"]
-            c.setFont("Helvetica-Bold", 8)
-            c.drawRightString(sx + sw - 1.5 * mm, sy + 1.6 * mm, score_txt)
-            _mark(c, sx + sw - 15 * mm, sy + 1.4 * mm, ok)
-            if z.get("text"):
-                c.setFont("Helvetica", 7.5)
-                line = _wrap(z["text"], sw - 24 * mm, 7.5)[0]
-                c.drawString(sx + 1.5 * mm, sy + 1.6 * mm, line)
-        else:
-            _mark(c, z["x_pt"] + z["w_pt"] - 16 * mm, z["y_pt"] + z["h_pt"] + 1.5 * mm, ok)
-            c.setFont("Helvetica", 9)
-            c.drawString(z["x_pt"] + z["w_pt"] - 12 * mm,
-                         z["y_pt"] + z["h_pt"] + 1.5 * mm, score_txt)
+        _draw_zone_marks(c, z, col)
+        _draw_correction_strip(c, z, col)
+        c.setFillColor(col)
+        c.setStrokeColor(col)
 
 
 def render_overlay(path: str, *, copies_annotations: list[dict],

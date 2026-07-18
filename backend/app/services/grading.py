@@ -59,6 +59,43 @@ def _extract_answer_side(s: str, variable: str | None) -> str:
     return s
 
 
+def _cell_ok(exp_cell: dict, raw_cell: str) -> bool | None:
+    """Une cellule de tableau à remplir est-elle juste ? None si illisible
+    (parse impossible). Source unique de la comparaison par cellule, partagée
+    par la NOTATION (grade, comparator table_cells) et le MARQUAGE de l'overlay
+    (cell_marks) : deux règles dériveraient."""
+    norm = normalize(raw_cell or "")
+    ctype = exp_cell["type"]
+    if ctype == "text":
+        return norm.casefold() == normalize(str(exp_cell["value"])).casefold()
+    if ctype == "expression":
+        try:
+            got_e = parse_expr(norm, transformations=TRANSFORMS)
+            want_e = parse_expr(normalize(str(exp_cell["value"])), transformations=TRANSFORMS)
+            return sympy.simplify(got_e - want_e) == 0
+        except Exception:
+            return None
+    got = _parse_number(norm)
+    if got is None:
+        return None
+    if ctype == "rational":
+        num, den = exp_cell["value"]
+        return got == Fraction(int(num), int(den))
+    return got == Fraction(str(exp_cell["value"]))
+
+
+def cell_marks(grading: dict, cell_texts: list[str] | None) -> list[bool]:
+    """Justesse par cellule NON-donnée (ordre row-major), pour marquer chaque
+    champ d'un tableau/multi_blank en overlay (case check/X). Une cellule
+    illisible OU absente de l'OCR est comptée fausse : « toutes les champs de
+    réponse doivent être marqués », jamais laissés sans signe."""
+    flat = [c for row in (grading.get("cells") or []) for c in row
+            if not c.get("given")]
+    marks = [bool(_cell_ok(exp, raw)) for exp, raw in zip(flat, cell_texts or [])]
+    marks += [False] * (len(flat) - len(marks))
+    return marks
+
+
 def grade(expected: dict, grading: dict, ocr_text: str, ocr_confidence: float,
           selected_choices: list[int] | None = None,
           cell_texts: list[str] | None = None,
@@ -104,27 +141,10 @@ def grade(expected: dict, grading: dict, ocr_text: str, ocr_confidence: float,
             return result
         score = 0.0
         for exp_cell, raw_cell in zip(flat_expected, cell_texts):
-            norm = normalize(raw_cell or "")
-            if exp_cell["type"] == "text":
-                ok = norm.casefold() == normalize(str(exp_cell["value"])).casefold()
-            elif exp_cell["type"] == "expression":
-                try:
-                    got_e = parse_expr(norm, transformations=TRANSFORMS)
-                    want_e = parse_expr(normalize(str(exp_cell["value"])), transformations=TRANSFORMS)
-                    ok = sympy.simplify(got_e - want_e) == 0
-                except Exception:
-                    result.update(tier="D", reason_code="table_cell_unreadable")
-                    return result
-            else:
-                got = _parse_number(norm)
-                if got is None:
-                    result.update(tier="D", reason_code="table_cell_unreadable")
-                    return result
-                if exp_cell["type"] == "rational":
-                    num, den = exp_cell["value"]
-                    ok = got == Fraction(int(num), int(den))
-                else:
-                    ok = got == Fraction(str(exp_cell["value"]))
+            ok = _cell_ok(exp_cell, raw_cell)
+            if ok is None:
+                result.update(tier="D", reason_code="table_cell_unreadable")
+                return result
             score += 1.0 if ok else 0.0
         tier = "A" if score == len(flat_expected) else "B"
         result.update(tier=tier, score=score, confidence=1.0,
