@@ -444,7 +444,8 @@ def copy_pdf(assessment_id: str, copy_id: str, db: Session = Depends(get_db)):
 @router.get("/{assessment_id}/files/{name}")
 def get_file(assessment_id: str, name: str, db: Session = Depends(get_db)):
     allowed = {"subject_batch.pdf": "generated", "copy_manifest.json": "generated",
-               "generation_report.json": "generated", "correction_overlay.pdf": "overlays"}
+               "generation_report.json": "generated", "correction_overlay.pdf": "overlays",
+               "correction_review.pdf": "overlays"}
     if name not in allowed:
         raise HTTPException(404)
     path = settings.data_dir / "assessments" / assessment_id / allowed[name] / name

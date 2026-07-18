@@ -175,6 +175,17 @@ export default function SettingsPage() {
     refresh()
   }
 
+  async function saveShortcut(field: string, value: string) {
+    const key = (value || '').trim().slice(0, 1).toLowerCase()
+    if (!key) return
+    const cur = system.correction_shortcuts ?? {}
+    await api.post('/api/settings/system', {
+      key: 'correction_shortcuts', value: { ...cur, [field]: key },
+    })
+    notifications.show({ color: 'green', message: 'Raccourci enregistré' })
+    refresh()
+  }
+
   async function syncMathalea() {
     try {
       const r = await api.post<{ created: number; updated: number; competency_mapped: number }>(
@@ -382,24 +393,52 @@ export default function SettingsPage() {
         </Tabs.Panel>
 
         <Tabs.Panel value="pedagogie" pt="md">
-          <Card withBorder maw={640}>
-            <Table>
-              <Table.Tbody>
-                <Table.Tr>
-                  <Table.Td>Seuil de courbe d'oubli (probabilité de rappel)</Table.Td>
-                  <Table.Td>{system.forgetting_threshold?.value ?? 0.8}</Table.Td>
-                </Table.Tr>
-                <Table.Tr>
-                  <Table.Td>Variation automatique max du niveau (1-10) par cycle de révision</Table.Td>
-                  <Table.Td>±1</Table.Td>
-                </Table.Tr>
-                <Table.Tr>
-                  <Table.Td>Répartition entraînement</Table.Td>
-                  <Table.Td>60 % consolidation / 30 % cible / 10 % défi</Table.Td>
-                </Table.Tr>
-              </Table.Tbody>
-            </Table>
-          </Card>
+          <Stack maw={640}>
+            <Card withBorder>
+              <Text fw={600} mb={4}>Raccourcis de correction manuelle</Text>
+              <Text size="xs" c="dimmed" mb="sm">
+                Une touche attribue une fraction des points de l'exercice dans la
+                modale « Corriger manuellement » (les touches s'affichent sur les
+                boutons). Une seule lettre par action.
+              </Text>
+              <Group grow>
+                <TextInput label="Tous les points" maxLength={1}
+                  key={`f-${system.correction_shortcuts?.full ?? 'f'}`}
+                  defaultValue={system.correction_shortcuts?.full ?? 'f'}
+                  onBlur={(e) => saveShortcut('full', e.currentTarget.value)} />
+                <TextInput label="2⁄3 des points" maxLength={1}
+                  key={`d-${system.correction_shortcuts?.two_thirds ?? 'd'}`}
+                  defaultValue={system.correction_shortcuts?.two_thirds ?? 'd'}
+                  onBlur={(e) => saveShortcut('two_thirds', e.currentTarget.value)} />
+                <TextInput label="1⁄3 des points" maxLength={1}
+                  key={`s-${system.correction_shortcuts?.one_third ?? 's'}`}
+                  defaultValue={system.correction_shortcuts?.one_third ?? 's'}
+                  onBlur={(e) => saveShortcut('one_third', e.currentTarget.value)} />
+                <TextInput label="0 point" maxLength={1}
+                  key={`q-${system.correction_shortcuts?.zero ?? 'q'}`}
+                  defaultValue={system.correction_shortcuts?.zero ?? 'q'}
+                  onBlur={(e) => saveShortcut('zero', e.currentTarget.value)} />
+              </Group>
+            </Card>
+            <Card withBorder>
+              <Table>
+                <Table.Tbody>
+                  <Table.Tr>
+                    <Table.Td>Seuil de courbe d'oubli (probabilité de rappel)</Table.Td>
+                    <Table.Td>{system.forgetting_threshold?.value ?? 0.8}</Table.Td>
+                  </Table.Tr>
+                  <Table.Tr>
+                    <Table.Td>Variation automatique max du niveau (1-10) par cycle de révision</Table.Td>
+                    <Table.Td>±1</Table.Td>
+                  </Table.Tr>
+                  <Table.Tr>
+                    <Table.Td>Répartition entraînement</Table.Td>
+                    <Table.Td>60 % consolidation / 30 % cible / 10 % défi</Table.Td>
+                  </Table.Tr>
+                </Table.Tbody>
+              </Table>
+            </Card>
+          </Stack>
         </Tabs.Panel>
 
         <Tabs.Panel value="documents" pt="md">

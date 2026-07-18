@@ -2,13 +2,13 @@
 // file de validation clavier. Le dépôt d'un scan ne demande plus de choisir
 // l'évaluation : le QR signé de chaque page identifie le sujet.
 import {
-  Alert, Badge, Button, Card, Checkbox, FileButton, Group, Kbd, Modal,
+  Badge, Button, Card, Checkbox, Divider, FileButton, Group, Kbd, Modal,
   NumberInput, Select, Stack, Text, Title, Tooltip,
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
 import { Eye, FlaskConical, Inbox, ScanLine, Upload } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { api } from '../api'
+import { api, getToken } from '../api'
 import MathText from '../components/MathText'
 import PdfPreviewModal from '../components/PdfPreview'
 import PrintButton from '../components/PrintButton'
@@ -29,7 +29,12 @@ type Review = {
   expected: Record<string, unknown>; correction: string; ocr_text: string
   selected_choices: number[]; ocr_confidence: number | null; reason_code: string
   proposed_score: number; max_score: number
+  bareme_points: number; zone_id: string | null; has_scan: boolean
+  group_key: string; group_label: string; response_type: string; sequence: number
 }
+// raccourcis de correction manuelle (paramétrables, cf. Réglages → Pédagogie)
+type Shortcuts = { full: string; two_thirds: string; one_third: string; zero: string }
+const DEFAULT_SHORTCUTS: Shortcuts = { full: 'f', two_thirds: 'd', one_third: 's', zero: 'q' }
 type Assessment = { id: string; title: string; status: string; grade_level: string }
 type SandboxResult = {
   filename: string; status: string; pages_added: number
@@ -65,6 +70,36 @@ function SegmentBar({ segments }: { segments: Segment[] }) {
   )
 }
 
+// points à la française pour l'affichage (1,5 — et 2 plutôt que 2,0)
+const fmtPts = (v: number) => (Math.round(v * 100) / 100).toString().replace('.', ',')
+
+// image du crop scanné de la zone de réponse : chargée via fetch + token puis
+// blob (une balise <img> n'envoie pas nos en-têtes d'auth), comme PdfFrame.
+function ScanImage({ reviewId }: { reviewId: string }) {
+  const [url, setUrl] = useState<string | null>(null)
+  const [failed, setFailed] = useState(false)
+  useEffect(() => {
+    let revoke: string | null = null
+    setUrl(null); setFailed(false)
+    fetch(`/api/scans/reviews/${reviewId}/scan`, { headers: { Authorization: `Bearer ${getToken()}` } })
+      .then((r) => (r.ok ? r.blob() : Promise.reject(new Error(`${r.status}`))))
+      .then((b) => { revoke = URL.createObjectURL(b); setUrl(revoke) })
+      .catch(() => setFailed(true))
+    return () => { if (revoke) URL.revokeObjectURL(revoke) }
+  }, [reviewId])
+  if (failed) return (
+    <Text size="xs" c="dimmed" p="sm">
+      Zone non scannée (vide, ou lot simulé) — rien à visualiser ici.
+    </Text>
+  )
+  if (!url) return <Text size="xs" c="dimmed" p="sm">Chargement du scan…</Text>
+  return (
+    <img src={url} alt="Scan de la réponse de l'élève"
+      style={{ maxWidth: '100%', maxHeight: 260, objectFit: 'contain',
+        border: '1px solid var(--mantine-color-gray-3)', borderRadius: 4, background: '#fff' }} />
+  )
+}
+
 export default function Corrections() {
   const [batches, setBatches] = useState<Batch[]>([])
   const [assessments, setAssessments] = useState<Assessment[]>([])
@@ -78,7 +113,15 @@ export default function Corrections() {
   const [mockAssessment, setMockAssessment] = useState<string | null>(null)
   const [sandboxUploading, setSandboxUploading] = useState(false)
   const [sandboxResults, setSandboxResults] = useState<SandboxResult[]>([])
+  const [shortcuts, setShortcuts] = useState<Shortcuts>(DEFAULT_SHORTCUTS)
   const { cycle, matches, mockMode } = useAppState()
+
+  // raccourcis de correction paramétrés (Réglages → Pédagogie), repli défauts
+  useEffect(() => {
+    api.get<Record<string, Partial<Shortcuts>>>('/api/settings/system')
+      .then((s) => setShortcuts({ ...DEFAULT_SHORTCUTS, ...(s.correction_shortcuts ?? {}) }))
+      .catch(() => {})
+  }, [])
 
   const refresh = useCallback(() => {
     api.get<Batch[]>('/api/scans/batches').then(setBatches)
@@ -146,25 +189,30 @@ export default function Corrections() {
     setReviews(rs); setReviewBatch(b); setIdx(0)
   }
 
-  async function resolve(action: string, score?: number) {
+  async function resolve(action: string, extra?: { score?: number; ratio?: number }) {
     const r = reviews[idx]
     if (!r) return
-    await api.post(`/api/scans/reviews/${r.review_id}/resolve`,
-      { action, score: score ?? null })
+    await api.post(`/api/scans/reviews/${r.review_id}/resolve`, { action, ...extra })
     const rest = reviews.filter((_, i) => i !== idx)
     setReviews(rest)
     setIdx(Math.min(idx, rest.length - 1))
     setScoreInput('')
     if (!rest.length) { setReviewBatch(null); refresh() }
   }
+  // barème attribué par fraction (1 = tous / 2⁄3 / 1⁄3 / 0) — le backend
+  // applique le ratio au max_score interne pour que earned = ratio × barème
+  const resolveRatio = (ratio: number) => resolve('set_ratio', { ratio })
 
-  // raccourcis clavier : A accepter, 0 zéro point (§6.7)
+  // raccourcis clavier de correction manuelle (paramétrés dans les réglages)
   useEffect(() => {
     if (!reviewBatch) return
     const h = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement).tagName === 'INPUT') return
-      if (e.key === 'a' || e.key === 'A') resolve('accept')
-      if (e.key === '0') resolve('set_score', 0)
+      const k = e.key.toLowerCase()
+      if (k === shortcuts.full) resolveRatio(1)
+      else if (k === shortcuts.two_thirds) resolveRatio(2 / 3)
+      else if (k === shortcuts.one_third) resolveRatio(1 / 3)
+      else if (k === shortcuts.zero) resolveRatio(0)
     }
     window.addEventListener('keydown', h)
     return () => window.removeEventListener('keydown', h)
@@ -203,6 +251,9 @@ export default function Corrections() {
   }, [batches, matches])
 
   const cur = reviews[idx]
+  // revues restantes du même exercice (les revues sont déjà triées par exercice
+  // côté backend : le prof enchaîne tout un lot d'exercices identiques)
+  const groupRemaining = cur ? reviews.filter((x) => x.group_key === cur.group_key) : []
 
   return (
     <Stack gap="lg">
@@ -342,9 +393,9 @@ export default function Corrections() {
                           )}
                         </FileButton>
                       )}
-                      {b.pending_reviews > 0 && (
+                      {(b.pending_reviews > 0 || b.error) && (
                         <Button size="xs" color="orange" onClick={() => openReviews(b)}>
-                          Valider ({b.pending_reviews})
+                          Corriger manuellement{b.pending_reviews ? ` (${b.pending_reviews})` : ''}
                         </Button>
                       )}
                       {!awaitingScan && b.status !== 'finalized' && b.status !== 'overlay_ready' && !b.pending_reviews && (
@@ -395,49 +446,66 @@ export default function Corrections() {
       </Modal>
 
       <Modal opened={!!reviewBatch} onClose={() => { setReviewBatch(null); refresh() }}
-        title={<Text fw={650}>Validation — {reviews.length} restante(s)</Text>} size="lg">
+        title={<Text fw={650}>Correction manuelle — {reviews.length} restante(s)</Text>} size="xl">
         {cur ? (
           <Stack>
-            <Group justify="space-between">
-              <Badge color="orange" variant="light">
-                {CATEGORY_LABELS[cur.category] ?? cur.category}
-              </Badge>
-              <Text size="sm" c="dimmed">{cur.student}</Text>
-            </Group>
-            <Card withBorder>
-              <MathText text={cur.statement} centered />
-              <Group mt="md" grow align="flex-start">
-                <div>
-                  <Text size="xs" c="dimmed" fw={600} tt="uppercase">Lecture OCR</Text>
-                  <Text ff="monospace" mt={2}>{cur.ocr_text || (cur.selected_choices.length
-                    ? `cases ${cur.selected_choices.join(', ')}` : '∅')}</Text>
-                  {cur.ocr_confidence != null &&
-                    <Text size="xs" c="dimmed">confiance {(cur.ocr_confidence * 100).toFixed(0)} %</Text>}
-                </div>
-                <div>
-                  <Text size="xs" c="dimmed" fw={600} tt="uppercase">Réponse attendue</Text>
-                  <Text ff="monospace" mt={2}>
-                    {JSON.stringify(cur.expected.value ?? cur.expected.correct)}
-                  </Text>
-                  <Text size="xs" c="dimmed">{cur.correction}</Text>
-                </div>
+            <Group justify="space-between" wrap="nowrap">
+              <Group gap="xs" wrap="nowrap">
+                <Badge variant="filled" color="indigo">{cur.group_label}</Badge>
+                <Badge color="orange" variant="light">
+                  {CATEGORY_LABELS[cur.category] ?? cur.category}
+                </Badge>
+                <Text size="xs" c="dimmed">
+                  {groupRemaining.length} élève(s) restant(s) sur cet exercice
+                </Text>
               </Group>
-              <Alert mt="sm" color="yellow" p="xs">
-                Motif : {cur.reason_code} — proposition {cur.proposed_score}/{cur.max_score}
-              </Alert>
+              <Text size="sm" fw={600}>{cur.student}</Text>
+            </Group>
+            <Card withBorder padding="sm">
+              <MathText text={cur.statement} centered />
             </Card>
+            {/* scan de l'élève + réponse attendue, côte à côte pour corriger vite */}
+            <Group grow align="stretch">
+              <Card withBorder padding="xs">
+                <Text size="xs" c="dimmed" fw={600} tt="uppercase" mb={4}>Scan de l'élève</Text>
+                <ScanImage reviewId={cur.review_id} />
+              </Card>
+              <Card withBorder padding="xs">
+                <Text size="xs" c="dimmed" fw={600} tt="uppercase" mb={4}>Réponse attendue</Text>
+                <Text ff="monospace">
+                  {JSON.stringify(cur.expected.value ?? cur.expected.correct ?? cur.expected)}
+                </Text>
+                {cur.correction && <Text size="sm" mt={4}>{cur.correction}</Text>}
+                <Divider my="xs" />
+                <Text size="xs" c="dimmed" fw={600} tt="uppercase" mb={2}>Lecture OCR / CV</Text>
+                <Text ff="monospace">{cur.ocr_text || (cur.selected_choices.length
+                  ? `cases ${cur.selected_choices.join(', ')}` : '∅')}</Text>
+                {cur.ocr_confidence != null &&
+                  <Text size="xs" c="dimmed">confiance {(cur.ocr_confidence * 100).toFixed(0)} %</Text>}
+                <Text size="xs" c="dimmed" mt={4}>Motif : {cur.reason_code}</Text>
+              </Card>
+            </Group>
             <Group>
-              <Button color="green" onClick={() => resolve('accept')}>
-                Accepter <Kbd ml={6}>A</Kbd>
+              <Button color="green" onClick={() => resolveRatio(1)}>
+                Tous les points — {fmtPts(cur.bareme_points)} <Kbd ml={6}>{shortcuts.full.toUpperCase()}</Kbd>
               </Button>
-              <Button color="red" variant="light" onClick={() => resolve('set_score', 0)}>
-                0 point <Kbd ml={6}>0</Kbd>
+              <Button color="teal" variant="light" onClick={() => resolveRatio(2 / 3)}>
+                2⁄3 — {fmtPts(cur.bareme_points * 2 / 3)} <Kbd ml={6}>{shortcuts.two_thirds.toUpperCase()}</Kbd>
               </Button>
-              <NumberInput placeholder="points" w={90} min={0} max={cur.max_score}
-                value={scoreInput} onChange={(v) => setScoreInput(v === '' ? '' : Number(v))} />
-              <Button variant="light" disabled={scoreInput === ''}
-                onClick={() => resolve('set_score', Number(scoreInput))}>
-                Attribuer
+              <Button color="orange" variant="light" onClick={() => resolveRatio(1 / 3)}>
+                1⁄3 — {fmtPts(cur.bareme_points / 3)} <Kbd ml={6}>{shortcuts.one_third.toUpperCase()}</Kbd>
+              </Button>
+              <Button color="red" variant="light" onClick={() => resolveRatio(0)}>
+                0 point <Kbd ml={6}>{shortcuts.zero.toUpperCase()}</Kbd>
+              </Button>
+            </Group>
+            <Group>
+              <NumberInput placeholder="points" w={120} min={0} max={cur.bareme_points} step={0.5}
+                decimalScale={2} value={scoreInput}
+                onChange={(v) => setScoreInput(v === '' ? '' : Number(v))} />
+              <Button variant="light" disabled={scoreInput === '' || !cur.bareme_points}
+                onClick={() => resolveRatio(Number(scoreInput) / cur.bareme_points)}>
+                Attribuer ces points
               </Button>
               <Button variant="subtle" color="gray" onClick={() => resolve('cancel_item')}>
                 Annuler la question

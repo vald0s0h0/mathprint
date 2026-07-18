@@ -27,6 +27,7 @@ import io
 import json
 import re
 from datetime import date
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -1538,6 +1539,57 @@ def _draw_appreciation_content(c: canvas.Canvas, geo: dict, progress: list[dict]
     c.setFillColor(black)
 
 
+def _draw_correction_marks(c: canvas.Canvas, page: dict, col):
+    """Dessine les marques de correction d'une page (nom, note, appréciation,
+    scores par exercice) dans la couleur d'encre `col`. Partagé par l'overlay
+    (fond blanc) et l'aperçu « copie + overlay » (fond = scan recalé)."""
+    geo = header_geometry(page.get("assessment_type", "control"))
+    c.setFillColor(col)
+    c.setStrokeColor(col)
+    # nom de l'élève sous le QR : l'élève vérifie que la correction est la sienne
+    c.setFont("Helvetica-Bold", 8.5)
+    c.drawRightString(PAGE_W - MARGIN, PAGE_H - MARGIN - QR_MAIN - 4 * mm,
+                      f"Correction — {page.get('student', '')}")
+    if page.get("note") is not None and geo["note"]["visible"]:
+        nx, ny, nw, nh = geo["note"]["x"], geo["note"]["y"], geo["note"]["w"], geo["note"]["h"]
+        # centrée dans le cadre imprimé, sous son libellé « NOTE »
+        band_bottom, band_h = ny + HEADER_PAD_V, nh - 2 * HEADER_PAD_V
+        c.setFont("Helvetica-Bold", 15)
+        c.drawCentredString(nx + nw / 2, band_bottom + (band_h - 6 * mm) / 2 - 5,
+                            str(page["note"]))
+    if page.get("progress") or page.get("synthesis"):
+        _draw_appreciation_content(c, geo, page.get("progress") or [],
+                                   page.get("synthesis") or "")
+    elif page.get("comment"):
+        ax, ay, aw, ah = geo["appreciation"]["x"], geo["appreciation"]["y"], \
+            geo["appreciation"]["w"], geo["appreciation"]["h"]
+        c.setFont("Helvetica", 8)
+        for i, line in enumerate(_wrap(page["comment"], aw - 7 * mm, 8)[:2]):
+            c.drawString(ax + 3.5 * mm, ay + ah - (i + 1) * 5 * mm - 3 * mm, line)
+    for z in page.get("page_zones", []):
+        strip = z.get("strip")
+        ok = bool(z.get("full_credit"))
+        # points de BARÈME (cf. services.pipeline.build_overlays), donc des
+        # demis : « 1,5/2 » à la française, jamais « 1.5/2.0 » — c'est lu
+        # par un élève de 5e sur sa copie.
+        score_txt = (f"{scoring.format_points(z['score'])}/"
+                     f"{scoring.format_points(z['max_score'])}")
+        if strip:
+            sx, sy, sw, _sh = strip["x_pt"], strip["y_pt"], strip["w_pt"], strip["h_pt"]
+            c.setFont("Helvetica-Bold", 8)
+            c.drawRightString(sx + sw - 1.5 * mm, sy + 1.6 * mm, score_txt)
+            _mark(c, sx + sw - 15 * mm, sy + 1.4 * mm, ok)
+            if z.get("text"):
+                c.setFont("Helvetica", 7.5)
+                line = _wrap(z["text"], sw - 24 * mm, 7.5)[0]
+                c.drawString(sx + 1.5 * mm, sy + 1.6 * mm, line)
+        else:
+            _mark(c, z["x_pt"] + z["w_pt"] - 16 * mm, z["y_pt"] + z["h_pt"] + 1.5 * mm, ok)
+            c.setFont("Helvetica", 9)
+            c.drawString(z["x_pt"] + z["w_pt"] - 12 * mm,
+                         z["y_pt"] + z["h_pt"] + 1.5 * mm, score_txt)
+
+
 def render_overlay(path: str, *, copies_annotations: list[dict],
                    color: str | None = None):
     """Overlay de correction (§5.6) : pages blanches, annotations seules,
@@ -1547,51 +1599,27 @@ def render_overlay(path: str, *, copies_annotations: list[dict],
     col = HexColor(color or settings.correction_color)
     c = canvas.Canvas(path, pagesize=A4)
     for page in copies_annotations:
-        geo = header_geometry(page.get("assessment_type", "control"))
-        c.setFillColor(col)
-        c.setStrokeColor(col)
-        # nom de l'élève sous le QR : l'élève vérifie que la correction est la sienne
-        c.setFont("Helvetica-Bold", 8.5)
-        c.drawRightString(PAGE_W - MARGIN, PAGE_H - MARGIN - QR_MAIN - 4 * mm,
-                          f"Correction — {page.get('student', '')}")
-        if page.get("note") is not None and geo["note"]["visible"]:
-            nx, ny, nw, nh = geo["note"]["x"], geo["note"]["y"], geo["note"]["w"], geo["note"]["h"]
-            # centrée dans le cadre imprimé, sous son libellé « NOTE »
-            band_bottom, band_h = ny + HEADER_PAD_V, nh - 2 * HEADER_PAD_V
-            c.setFont("Helvetica-Bold", 15)
-            c.drawCentredString(nx + nw / 2, band_bottom + (band_h - 6 * mm) / 2 - 5,
-                                str(page["note"]))
-        if page.get("progress") or page.get("synthesis"):
-            _draw_appreciation_content(c, geo, page.get("progress") or [],
-                                       page.get("synthesis") or "")
-        elif page.get("comment"):
-            ax, ay, aw, ah = geo["appreciation"]["x"], geo["appreciation"]["y"], \
-                geo["appreciation"]["w"], geo["appreciation"]["h"]
-            c.setFont("Helvetica", 8)
-            for i, line in enumerate(_wrap(page["comment"], aw - 7 * mm, 8)[:2]):
-                c.drawString(ax + 3.5 * mm, ay + ah - (i + 1) * 5 * mm - 3 * mm, line)
-        for z in page.get("page_zones", []):
-            strip = z.get("strip")
-            ok = bool(z.get("full_credit"))
-            # points de BARÈME (cf. services.pipeline.build_overlays), donc des
-            # demis : « 1,5/2 » à la française, jamais « 1.5/2.0 » — c'est lu
-            # par un élève de 5e sur sa copie.
-            score_txt = (f"{scoring.format_points(z['score'])}/"
-                         f"{scoring.format_points(z['max_score'])}")
-            if strip:
-                sx, sy, sw, _sh = strip["x_pt"], strip["y_pt"], strip["w_pt"], strip["h_pt"]
-                c.setFont("Helvetica-Bold", 8)
-                c.drawRightString(sx + sw - 1.5 * mm, sy + 1.6 * mm, score_txt)
-                _mark(c, sx + sw - 15 * mm, sy + 1.4 * mm, ok)
-                if z.get("text"):
-                    c.setFont("Helvetica", 7.5)
-                    line = _wrap(z["text"], sw - 24 * mm, 7.5)[0]
-                    c.drawString(sx + 1.5 * mm, sy + 1.6 * mm, line)
-            else:
-                _mark(c, z["x_pt"] + z["w_pt"] - 16 * mm, z["y_pt"] + z["h_pt"] + 1.5 * mm, ok)
-                c.setFont("Helvetica", 9)
-                c.drawString(z["x_pt"] + z["w_pt"] - 12 * mm,
-                             z["y_pt"] + z["h_pt"] + 1.5 * mm, score_txt)
+        _draw_correction_marks(c, page, col)
+        c.showPage()
+    c.save()
+
+
+def render_copy_review(path: str, *, review_pages: list[dict],
+                       color: str | None = None):
+    """Aperçu « copie + overlay » : chaque page porte en FOND l'image scannée
+    recalée de l'élève (canonique A4, mêmes coordonnées que l'overlay) puis les
+    marques de correction par-dessus — pour vérifier d'un coup d'œil ce qui a
+    été identifié et corrigé. Repli page blanche si pas de scan (lot simulé)."""
+    col = HexColor(color or settings.correction_color)
+    c = canvas.Canvas(path, pagesize=A4)
+    for page in review_pages:
+        bg = page.get("background")
+        if bg and Path(bg).exists():
+            try:
+                c.drawImage(ImageReader(bg), 0, 0, width=PAGE_W, height=PAGE_H)
+            except Exception:
+                pass
+        _draw_correction_marks(c, page, col)
         c.showPage()
     c.save()
 

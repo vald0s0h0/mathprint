@@ -25,7 +25,7 @@ from . import grading as grader
 from . import providers, scoring
 from .appreciation import build_appreciation
 from .forgetting import apply_evidence
-from .pdfgen import render_overlay
+from .pdfgen import render_copy_review, render_overlay
 from .runtime_settings import mock_enabled
 from .security import verify_page_payload
 
@@ -168,6 +168,11 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
     for i, res in analyses:
         page, copy = page_index[res.page_id]
         student = db.get(Student, copy.student_id)
+        # page recalée persistée : sert de FOND à l'aperçu « copie + overlay »
+        # (services.pdfgen.render_copy_review), sans re-rastériser le scan.
+        if res.warped is not None:
+            (derived_dir / f"page-{res.page_id}.png").write_bytes(
+                worker_cv.encode_png(res.warped))
         zones = db.query(ResponseZone).filter_by(page_id=page.id).all()
         for zone in zones:
             item = db.get(CopyItem, zone.item_id)
@@ -438,22 +443,43 @@ def finalize_batch(db: Session, batch: ScanBatch) -> dict:
         copy.status = "finalized"
     assessment.status = "finalized"
     _set_status(db, batch, "finalized", evidence=n_evidence, results=n_results)
+    # Overlays générés dès la finalisation : les aperçus (overlay, copie +
+    # overlay) sont ainsi immédiatement disponibles, sans attendre un clic
+    # « Créer l'overlay » (qui reste pour régénérer/imprimer). Défensif — un
+    # aléa de rendu ne doit pas bloquer la finalisation : les résultats et
+    # preuves de compétence sont déjà écrits, l'overlay est régénérable.
+    try:
+        build_overlays(db, batch)
+    except Exception:
+        pass
     return {"evidence_created": n_evidence, "results_created": n_results}
 
 
 def build_overlays(db: Session, batch: ScanBatch) -> str:
-    """Génère correction_overlay.pdf après finalisation (§5.6)."""
+    """Génère, après finalisation (§5.6) :
+    - correction_overlay.pdf : pages blanches, marques seules (à imprimer et
+      surimposer physiquement sur la copie via les fiduciels) ;
+    - correction_review.pdf : scan recalé de l'élève EN FOND + marques (aperçu
+      « copie + overlay », pour relire la correction à l'écran).
+    """
     assessment = db.get(Assessment, batch.assessment_id)
     out_dir = settings.data_dir / "assessments" / assessment.id / "overlays"
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "correction_overlay.pdf"
+    review_path = out_dir / "correction_review.pdf"
+    derived_dir = settings.data_dir / "assessments" / assessment.id / "scans" / "derived"
 
     copies = db.query(Copy).filter_by(assessment_id=assessment.id).all()
     pages_annotations = []
+    review_pages = []
     for copy in copies:
         student = db.get(Student, copy.student_id)
         items = db.query(CopyItem).filter_by(copy_id=copy.id).order_by(CopyItem.sequence).all()
         zones = []
+        # zones regroupées par page du document (pour l'aperçu copie+overlay,
+        # une page PDF = une page scannée), et n° de page pour l'ordre
+        zones_by_page: dict[str, list] = {}
+        page_no: dict[str, int] = {}
         for item in items:
             resp = db.query(StudentResponse).filter_by(copy_item_id=item.id).first()
             zone = db.query(ResponseZone).filter_by(item_id=item.id).first()
@@ -471,11 +497,16 @@ def build_overlays(db: Session, batch: ScanBatch) -> str:
             bareme = scoring.item_bareme(item.grading_json, item.response_type)
             earned = scoring.earned_points(decision.score, decision.max_score, bareme)
             full = decision.score >= decision.max_score
-            zones.append({"x_pt": zone.x_pt, "y_pt": zone.y_pt, "w_pt": zone.w_pt,
-                          "h_pt": zone.h_pt, "score": earned,
-                          "max_score": bareme, "full_credit": full,
-                          "strip": (zone.meta_json or {}).get("correction_strip"),
-                          "text": "" if full else item.correction})
+            zdict = {"x_pt": zone.x_pt, "y_pt": zone.y_pt, "w_pt": zone.w_pt,
+                     "h_pt": zone.h_pt, "score": earned,
+                     "max_score": bareme, "full_credit": full,
+                     "strip": (zone.meta_json or {}).get("correction_strip"),
+                     "text": "" if full else item.correction}
+            zones.append(zdict)
+            zones_by_page.setdefault(zone.page_id, []).append(zdict)
+            if zone.page_id not in page_no:
+                dp = db.get(DocumentPage, zone.page_id)
+                page_no[zone.page_id] = dp.page_no if dp else 0
             db.add(Annotation(copy_id=copy.id, page_id=zone.page_id, zone_id=zone.id,
                               content="" if full else item.correction,
                               color=settings.correction_color,
@@ -509,17 +540,27 @@ def build_overlays(db: Session, batch: ScanBatch) -> str:
         if result is not None:
             comment = (f"Score {scoring.format_points(result.points_earned)}/"
                        f"{scoring.format_points(result.points_total)} points")
+        header = {"note": note, "progress": appreciation.get("progress"),
+                  "synthesis": appreciation.get("synthesis"), "comment": comment}
+        student_name = f"{student.first_name} {student.last_name}"
         pages_annotations.append({
-            "student": f"{student.first_name} {student.last_name}",
-            "assessment_type": assessment.type,
-            "page_zones": zones, "note": note,
-            "progress": appreciation.get("progress"),
-            "synthesis": appreciation.get("synthesis"),
-            "comment": comment,
+            "student": student_name, "assessment_type": assessment.type,
+            "page_zones": zones, **header,
         })
+        # une page d'aperçu par page scannée de la copie ; l'en-tête (note,
+        # appréciation) n'est porté que par la première page
+        for k, page_id in enumerate(sorted(zones_by_page, key=lambda p: page_no.get(p, 0))):
+            bg = derived_dir / f"page-{page_id}.png"
+            review_pages.append({
+                "student": student_name, "assessment_type": assessment.type,
+                "page_zones": zones_by_page[page_id],
+                "background": str(bg) if bg.exists() else None,
+                **(header if k == 0 else {}),
+            })
 
     from .runtime_settings import get_setting
     color = (get_setting(db, "correction_color") or {}).get("value")
     render_overlay(str(path), copies_annotations=pages_annotations, color=color)
+    render_copy_review(str(review_path), review_pages=review_pages, color=color)
     _set_status(db, batch, "overlay_ready", path=str(path))
     return str(path)

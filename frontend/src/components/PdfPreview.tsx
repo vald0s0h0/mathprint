@@ -15,19 +15,30 @@ export type PreviewEntry = {
 export function PdfFrame({ src, height = '70vh' }: { src: string; height?: string }) {
   // le PDF passe par fetch avec le token puis blob URL (l'iframe n'envoie pas nos en-têtes)
   const [url, setUrl] = useState<string | null>(null)
+  const [failed, setFailed] = useState(false)
   useEffect(() => {
     let revoke: string | null = null
+    setUrl(null)
+    setFailed(false)
     fetch(src, { headers: { Authorization: `Bearer ${getToken()}` } })
       .then((r) => (r.ok ? r.blob() : Promise.reject(new Error(`${r.status}`))))
       .then((b) => {
         revoke = URL.createObjectURL(b)
         setUrl(revoke)
       })
-      .catch(() => setUrl(null))
+      .catch(() => setFailed(true))
     return () => {
       if (revoke) URL.revokeObjectURL(revoke)
     }
   }, [src])
+  // ne jamais rester bloqué sur « Chargement… » : un 404 (overlay pas encore
+  // généré, lot non finalisé) donne un message explicite
+  if (failed) return (
+    <Text c="dimmed" p="md">
+      Aperçu non disponible — ce document n'existe pas encore (le lot n'est
+      peut-être pas corrigé ni finalisé).
+    </Text>
+  )
   if (!url) return <Text c="dimmed" p="md">Chargement du PDF…</Text>
   return <iframe src={url} style={{ width: '100%', height, border: 'none' }} title="Aperçu PDF" />
 }
@@ -37,7 +48,7 @@ export default function PdfPreviewModal({
 }: { assessmentId: string | null; opened: boolean; onClose: () => void }) {
   const [entries, setEntries] = useState<PreviewEntry[]>([])
   const [idx, setIdx] = useState(0)
-  const [mode, setMode] = useState<'copy' | 'batch' | 'overlay'>('copy')
+  const [mode, setMode] = useState<'copy' | 'batch' | 'overlay' | 'review'>('copy')
 
   useEffect(() => {
     if (opened && assessmentId) {
@@ -56,6 +67,7 @@ export default function PdfPreviewModal({
     if (!assessmentId) return ''
     if (mode === 'batch') return `/api/assessments/${assessmentId}/files/subject_batch.pdf`
     if (mode === 'overlay') return `/api/assessments/${assessmentId}/files/correction_overlay.pdf`
+    if (mode === 'review') return `/api/assessments/${assessmentId}/files/correction_review.pdf`
     return cur ? `/api/assessments/${assessmentId}/copies/${cur.copy_id}/pdf` : ''
   }, [assessmentId, mode, cur])
 
@@ -74,6 +86,8 @@ export default function PdfPreviewModal({
             onClick={() => setMode('batch')}>Lot complet</Button>
           <Button size="xs" variant={mode === 'overlay' ? 'filled' : 'light'}
             onClick={() => setMode('overlay')}>Overlay correction</Button>
+          <Button size="xs" variant={mode === 'review' ? 'filled' : 'light'}
+            onClick={() => setMode('review')}>Copie + Overlay</Button>
         </Group>
         {mode === 'copy' && (
           <Group gap="xs">

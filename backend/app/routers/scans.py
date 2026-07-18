@@ -4,6 +4,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -11,12 +12,11 @@ from ..config import settings
 from ..db import SessionLocal, get_db
 from ..deps import current_user
 from ..models import (
-    Assessment, Copy, CopyItem, DocumentPage, FileObject, GradingDecision,
-    ManualReview, OcrAttempt, ScanBatch, SchoolClass, Student, StudentResponse,
-    User,
+    Assessment, Copy, CopyItem, GradingDecision, ManualReview, OcrAttempt,
+    ResponseZone, ScanBatch, SchoolClass, Student, StudentResponse, User,
 )
 from ..services import sandbox as sandbox_service
-from ..services import scoring
+from ..services import scan_intake, scoring
 from ..services.pipeline import PHASES, build_overlays, finalize_batch, process_batch
 
 router = APIRouter(prefix="/api/scans", tags=["scans"], dependencies=[Depends(current_user)])
@@ -50,29 +50,19 @@ def _run_pipeline(batch_id: str):
         db.close()
 
 
-def _detect_assessment(db: Session, content: bytes, ext: str) -> str | None:
-    """Identifie le sujet depuis le QR signé d'une page : le QR suffit, aucun
-    choix manuel d'évaluation n'est nécessaire au dépôt (§5.3)."""
+def _raster_bytes(ext: str, content: bytes):
+    """Rastérise un fichier déposé (PDF page par page, ou image isolée) en une
+    liste d'images BGR, via un fichier temporaire (worker_cv lit un chemin)."""
     from ..services import worker_cv
-    from ..services.security import verify_page_payload
 
     tmp_dir = settings.data_dir / "scans" / "tmp"
     tmp_dir.mkdir(parents=True, exist_ok=True)
-    tmp = tmp_dir / f"detect-{uuid.uuid4().hex}{ext}"
+    tmp = tmp_dir / f"in-{uuid.uuid4().hex}{ext}"
     tmp.write_bytes(content)
     try:
-        for img in worker_cv.raster_any(str(tmp)):
-            for text, _quad in worker_cv._detect_qrcodes(img):
-                page_id = verify_page_payload(text)
-                if not page_id:
-                    continue
-                page = db.get(DocumentPage, page_id)
-                copy = db.get(Copy, page.copy_id) if page else None
-                if copy:
-                    return copy.assessment_id
+        return worker_cv.raster_any(str(tmp))
     finally:
         tmp.unlink(missing_ok=True)
-    return None
 
 
 @router.post("/batches")
@@ -80,48 +70,66 @@ async def create_batch(tasks: BackgroundTasks, assessment_id: str | None = None,
                        file: UploadFile | None = None,
                        db: Session = Depends(get_db),
                        user: User = Depends(current_user)):
+    """Dépôt d'un scan (ou lot simulé sans fichier). Le scan s'ACCUMULE dans
+    l'unique ScanBatch du sujet (règle « un sujet = une correction = une
+    ligne », cf. services.scan_intake) — jamais un second batch."""
     content = await file.read() if file is not None else None
-    sniffed = _sniff_file(content) if content is not None else None
-    if content is not None and sniffed is None:
-        raise HTTPException(400, "Format non reconnu — PDF, JPEG, PNG ou HEIC uniquement")
-    ext, mime = sniffed if sniffed else (".pdf", "application/pdf")
-    if not assessment_id:
-        if content is None:
+
+    # lot simulé (mode mock) : aucun fichier, sujet obligatoire
+    if content is None:
+        if not assessment_id:
             raise HTTPException(422, "Déposer un scan, ou préciser une évaluation "
                                      "pour un lot simulé")
-        assessment_id = _detect_assessment(db, content, ext)
+        if not db.get(Assessment, assessment_id):
+            raise HTTPException(404, "Évaluation inconnue")
+        batch = scan_intake.get_or_create_batch(db, assessment_id, user.id)
+        db.commit()
+        tasks.add_task(_run_pipeline, batch.id)
+        return {"id": batch.id, "assessment_id": assessment_id}
+
+    sniffed = _sniff_file(content)
+    if sniffed is None:
+        raise HTTPException(400, "Format non reconnu — PDF, JPEG, PNG ou HEIC uniquement")
+    ext, _mime = sniffed
+    images = _raster_bytes(ext, content)
+    if not images:
+        raise HTTPException(422, "Scan illisible")
+
+    # sujet identifié par le QR signé d'une page (sauf dépôt ciblé « en attente
+    # de scan » où le sujet est déjà connu)
+    if not assessment_id:
+        assessment_id = scan_intake.detect_assessment(db, images)
         if not assessment_id:
             raise HTTPException(422, "Aucun QR MathPrint reconnu dans ce scan — "
                                      "vérifier qu'il s'agit bien de copies générées ici")
     if not db.get(Assessment, assessment_id):
         raise HTTPException(404, "Évaluation inconnue")
-    batch = ScanBatch(assessment_id=assessment_id, uploaded_by=user.id)
-    db.add(batch)
-    db.flush()
-    if content is not None:
-        d = settings.data_dir / "assessments" / assessment_id / "scans" / "original"
-        d.mkdir(parents=True, exist_ok=True)
-        path = d / f"{batch.id}{ext}"
-        path.write_bytes(content)  # scan original immuable (RM-002)
-        fo = FileObject(owner_type="scan_batch", owner_id=batch.id, storage_path=str(path),
-                        sha256=hashlib.sha256(content).hexdigest(), mime=mime, size=len(content))
-        db.add(fo)
-        db.flush()
-        batch.source_file_id = fo.id
+
+    r = scan_intake.attach_scan(db, assessment_id, images, user.id)
+    batch = db.get(ScanBatch, r["batch_id"])
+    if not batch.source_file_id:
+        # aucune page reconnue et batch vierge : ne pas laisser un lot fantôme
+        # (qui basculerait à tort sur le chemin mock)
+        db.delete(batch)
+        db.commit()
+        raise HTTPException(422, "Aucune page MathPrint reconnue dans ce scan")
     db.commit()
     tasks.add_task(_run_pipeline, batch.id)
-    return {"id": batch.id, "assessment_id": assessment_id}
+    return {"id": batch.id, "assessment_id": assessment_id,
+            "pages_added": r["pages_added"],
+            "duplicates_rejected": r["duplicates_rejected"],
+            "blocked_pages": r["blocked_pages"]}
 
 
 @router.post("/sandbox")
 async def sandbox_upload(tasks: BackgroundTasks, files: list[UploadFile],
                          db: Session = Depends(get_db),
                          user: User = Depends(current_user)):
-    """Bac à sable (§5c) : dépôt en vrac de PDFs/images mélangés, traité page
-    par page — chaque page est identifiée et associée à son sujet
-    individuellement, les doublons (page déjà enregistrée) sont rejetés
-    automatiquement et silencieusement. Un ScanBatch normal est créé par
-    sujet identifié, puis traité par le pipeline existant sans modification."""
+    """Bac à sable (§5c) : dépôt en vrac de PDFs/images mélangés. Traité page
+    par page, mais REGROUPÉ GLOBALEMENT par sujet sur tout le dépôt (plusieurs
+    fichiers d'un même sujet → une seule correction) ; doublons rejetés
+    silencieusement. Réinjecté dans le pipeline existant sans modification."""
+    recognized: list[tuple[str, str, bytes]] = []
     results = []
     for f in files:
         content = await f.read()
@@ -131,10 +139,11 @@ async def sandbox_upload(tasks: BackgroundTasks, files: list[UploadFile],
                             "duplicates_rejected": 0, "blocked_pages": 0, "batches_created": []})
             continue
         ext, _mime = sniffed
-        r = sandbox_service.ingest_file(db, f.filename or "scan", ext, content, user.id)
-        results.append(r)
-        for batch_id in r.get("batches_created", []):
-            tasks.add_task(_run_pipeline, batch_id)
+        recognized.append((f.filename or "scan", ext, content))
+    out = sandbox_service.ingest_files(db, recognized, user.id)
+    results.extend(out["results"])
+    for batch_id in out["batch_ids"]:
+        tasks.add_task(_run_pipeline, batch_id)
     return {"results": results}
 
 
@@ -245,6 +254,11 @@ def list_reviews(batch_id: str, category: str | None = None, db: Session = Depen
         student = db.get(Student, copy.student_id)
         ocr = (db.query(OcrAttempt).filter_by(zone_id=resp.zone_id)
                .order_by(OcrAttempt.created_at.desc()).first())
+        # exercices identiques = même entrée catalogue ET même énoncé figé
+        # (RM-014) — le professeur corrige un lot d'exercices identiques d'un
+        # coup ; on regroupe donc dessus, en montrant le crop scanné de chaque
+        # élève et le barème réel de l'exercice.
+        sig = hashlib.sha1(item.statement.encode()).hexdigest()[:8]
         out.append({
             "review_id": r.id, "category": r.category,
             "student": f"{student.last_name} {student.first_name}",
@@ -254,13 +268,57 @@ def list_reviews(batch_id: str, category: str | None = None, db: Session = Depen
             "ocr_confidence": ocr.confidence if ocr else None,
             "reason_code": decision.reason_code,
             "proposed_score": decision.score, "max_score": decision.max_score,
+            # barème réel (points professeur) de l'exercice, pour l'affichage
+            "bareme_points": scoring.item_bareme(item.grading_json, item.response_type),
+            "zone_id": resp.zone_id,
+            # a un crop scanné exploitable ? (chemin réel ; mock n'en a pas)
+            "has_scan": _zone_crop_path(copy.assessment_id, resp.zone_id).exists()
+                        if resp.zone_id else False,
+            "group_key": f"{item.catalog_id}|{sig}",
+            "group_label": f"Ex. {item.sequence}",
+            "response_type": item.response_type,
+            "sequence": item.sequence,
         })
+    # exercices identiques consécutifs (group_key), puis par élève : le prof
+    # enchaîne tout un lot d'exercices identiques avant de passer au suivant
+    out.sort(key=lambda x: (x["sequence"], x["group_key"], x["student"]))
     return out
 
 
+def _zone_crop_path(assessment_id: str, zone_id: str):
+    return (settings.data_dir / "assessments" / assessment_id / "scans" /
+            "derived" / f"{zone_id}.png")
+
+
+@router.get("/reviews/{review_id}/scan")
+def review_scan(review_id: str, db: Session = Depends(get_db)):
+    """Crop scanné (recalé, dropout appliqué) de la zone de réponse de l'élève —
+    pour voir précisément ce que le moteur n'a pas su identifier. 404 si absent
+    (lot simulé, ou zone sans encre)."""
+    r = db.get(ManualReview, review_id)
+    if not r:
+        raise HTTPException(404)
+    decision = db.get(GradingDecision, r.decision_id)
+    resp = db.get(StudentResponse, decision.response_id) if decision else None
+    if not resp or not resp.zone_id:
+        raise HTTPException(404, "Aucune zone scannée")
+    item = db.get(CopyItem, resp.copy_item_id)
+    copy = db.get(Copy, item.copy_id) if item else None
+    if not copy:
+        raise HTTPException(404)
+    path = _zone_crop_path(copy.assessment_id, resp.zone_id)
+    if not path.exists():
+        raise HTTPException(404, "Crop indisponible")
+    return FileResponse(path, media_type="image/png")
+
+
 class ResolveIn(BaseModel):
-    action: str          # accept | set_score | cancel_item | correct_ocr | rescan
+    action: str          # accept | set_score | set_ratio | cancel_item | correct_ocr | rescan
     score: float | None = None
+    # fraction du barème attribuée par un raccourci (1 = tous les points,
+    # 2/3, 1/3, 0) — appliquée au max_score interne, si bien que
+    # earned_points = ratio × barème exactement (cf. services.scoring)
+    ratio: float | None = None
     corrected_text: str | None = None
     note: str = ""
 
@@ -279,6 +337,10 @@ def resolve_review(review_id: str, body: ResolveIn, db: Session = Depends(get_db
         if body.score is None:
             raise HTTPException(422, "score requis")
         score = min(max(0.0, body.score), old.max_score)
+    elif body.action == "set_ratio":
+        if body.ratio is None:
+            raise HTTPException(422, "ratio requis")
+        score = min(max(0.0, body.ratio), 1.0) * old.max_score
     elif body.action == "cancel_item":
         score = 0.0
     if body.corrected_text is not None:
