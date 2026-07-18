@@ -28,10 +28,11 @@ def _base_url() -> str:
 
 
 def _mock_enabled(db: Session | None) -> bool:
-    if db is None:
-        return False
-    from .runtime_settings import mock_enabled
-    return mock_enabled(db)
+    """Repli déterministe hors-ligne du chemin de génération interne : le
+    service MathALÉA réel n'est plus déployé, donc tout appel passant un `db`
+    (chemin interne) utilise l'exercice simulé. Sans `db` (appel direct de
+    test), le vrai chemin HTTP est exercé."""
+    return db is not None
 
 
 # Même garde-fou que providers._post_with_deadline : le timeout httpx est par

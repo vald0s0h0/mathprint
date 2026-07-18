@@ -80,9 +80,9 @@ export default function Setup({ onDone }: { onDone: () => void }) {
               <Accordion.Panel>
                 <Stack gap="xs">
                   <Text size="xs" c="dimmed">
-                    Sans clé, ces services restent en mode simulé (mock) ; vous
-                    pourrez les ajouter ou les changer plus tard dans
-                    Paramètres → API.
+                    Sans clé, ces services tournent sur un repli hors-ligne
+                    (données factices) ; vous pourrez les ajouter ou les changer
+                    plus tard dans Paramètres → API.
                   </Text>
                   <TextInput label="Mathpix (app_id:app_key)" value={mathpix}
                     onChange={(e) => setMathpix(e.target.value)} />

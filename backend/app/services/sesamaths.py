@@ -365,7 +365,7 @@ def _adapt_series(db: Session, blocks: list[dict], series_range: dict, chapter_c
     """Appel 2 (texte) : regroupe les blocs typés d'UNE Série (toutes pages
     confondues) en exercices, résout, choisit le format. Un seul modèle
     (settings.claude_adapt_model) — un 2e modèle de repli ("qui corrige")
-    ajoutait de la complexité sans fiabiliser (cf. 17/07) ; en mode mock,
+    ajoutait de la complexité sans fiabiliser (cf. 17/07) ;
     _cached_adapt réessaie déjà sur 429/troncature avec un budget de tokens
     croissant, ce qui reste (résilience réseau, pas une 2e opinion)."""
     if not blocks:

@@ -28,6 +28,11 @@ Reste propre à la création (le pool est infini) :
     la banque atteigne `settings.gemini_bank_target` (30) — 6 appels si tout
     passe, davantage si la validation en recale (nombre d'appels non borné a
     priori, seulement plafonné par `settings.gemini_max_batches`) ;
+  - PUIS un appel DÉDIÉ (prompt _FILLER_INTRO) crée `settings.gemini_filler_target`
+    (5) petites cartes de REMPLISSAGE (kind="filler", cible totale 35) : un seul
+    calcul / un QCM court, exclues de la sélection normale et réservées aux trous
+    de bas de page (services.generation) ; best-effort, un échec n'empêche pas
+    le sujet ;
   - anti-doublon à deux niveaux : les énoncés déjà produits sont renvoyés au
     modèle à chaque lot (« n'en produis aucun équivalent »), ET tout candidat
     dupliqué est rejeté déterministiquement (exercise_gen._dedup_key) — la
@@ -74,6 +79,15 @@ PROMPT_VERSION = "gemini-exgen-3-layout"
 SOURCE = "gemini"
 # Seul niveau produit : la difficulté n'est pas évaluée (cf. en-tête).
 GENERATED_LEVEL = 3
+
+# Exercices COURTS de remplissage : petites cartes (un seul calcul, un énoncé
+# très court, un QCM) créées par un appel Gemini DÉDIÉ (prompt _FILLER_INTRO),
+# stockées avec kind=FILLER_KIND et EXCLUES de la sélection normale — elles ne
+# servent qu'à combler les trous de bas de page (services.generation). Formats
+# volontairement bornés aux petites cartes : ni tableau, ni rédaction, ni
+# sous-questions.
+FILLER_KIND = "filler"
+FILLER_RESPONSE_TYPES = {"short_text", "qcm_single", "qcm_multiple"}
 
 # Formats refusés dans cette pipeline : leur correction n'est jamais
 # automatique (matching = détection de trait manuscrit, manual_drawing =
@@ -218,6 +232,78 @@ _INTRO = (
 )
 
 
+# Prompt du 2e appel, DÉDIÉ aux exercices courts de remplissage. Même ancrage
+# (compétence, manuel, contraintes OCR) que _INTRO, mais une composition
+# radicalement différente : QUE des petites cartes, pour boucher les trous de
+# bas de page sans jamais y mettre une grande carte qui déborderait.
+_FILLER_INTRO = (
+    "Tu es professeur agrégé de mathématiques en collège français.\n\n"
+    "Crée §COUNT§ exercices TRÈS COURTS pour une classe de §GRADE§ sur la "
+    "compétence « §COMPETENCY§ », chapitre « §CHAPTER§ », domaine « §DOMAIN§ ».\n\n"
+
+    "# À quoi ils servent — LIS-LE BIEN\n"
+    "Ce sont des exercices de REMPLISSAGE : de toutes petites cartes qui "
+    "viennent combler les trous de bas de page laissés par les grands "
+    "exercices. Ils doivent donc être VISUELLEMENT PETITS et se traiter en "
+    "quelques secondes. Un seul geste mental par exercice : un calcul isolé, "
+    "une conversion, une question de cours à trancher. JAMAIS un problème, "
+    "jamais plusieurs étapes, jamais de sous-questions.\n\n"
+
+    "# Périmètre exact de la compétence visée\n"
+    "Les compétences voisines ci-dessous NE sont PAS à traiter : elles situent "
+    "la compétence visée (« ⇦ CIBLE ») pour que tes exercices tombent "
+    "exactement dessus. Les §COUNT§ exercices portent TOUS sur la SEULE "
+    "compétence cible.\n"
+    "§COMPETENCY_TREE§\n\n"
+
+    "# LE MANUEL DE LA CLASSE — TA RÉFÉRENCE\n"
+    "Texte OCR des pages du manuel de §GRADE§ (Sésamath) sur cette compétence : "
+    "ta référence pour le PROGRAMME (ne va pas au-delà de ce qui y est traité) "
+    "et le NIVEAU (taille des nombres, vocabulaire). Le texte est brut (OCR) : "
+    "ignore les fragments de mise en page, une suite de « ... » est une case à "
+    "remplir (pas un texte à recopier), et RÉSOUS toi-même ce que tu reprends. "
+    "N'utilise aucun exercice s'appuyant sur une figure.\n"
+    "§MANUAL_CONTEXT§\n\n"
+
+    "# Correction automatique (contraintes non négociables)\n"
+    "Imprimés sur copie, remplis à la main, scannés et corrigés "
+    "AUTOMATIQUEMENT : la réponse attendue doit être COURTE et n'avoir qu'UNE "
+    "SEULE écriture naturelle ; jamais de phrase libre ni de réponse "
+    "ambiguë.\n\n"
+
+    "# Composition OBLIGATOIRE — QUE des petites cartes\n"
+    "- utilise UNIQUEMENT ces formats : \"short_text\" (une seule case réponse, "
+    "un calcul ou une valeur), \"qcm_single\" ou \"qcm_multiple\" ;\n"
+    "- INTERDITS ici : \"multiline_text\", \"table_fill\", \"multi_blank\", "
+    "\"matching\", \"manual_drawing\", et toute géométrie ;\n"
+    "- UNE seule case de réponse par exercice (pour un short_text) ; pas de "
+    "sous-questions a./b./c. ;\n"
+    "- énoncé d'UNE phrase courte, idéalement une seule ligne ; pour un calcul, "
+    "l'expression seule suffit (ex. « Calcule $7 \\times 8$. ») ;\n"
+    "- QCM : 3 ou 4 choix courts, distracteurs = erreurs classiques d'élèves "
+    "(résultat d'une faute plausible), jamais des nombres au hasard.\n\n"
+
+    "# Contraintes de rédaction\n"
+    "- respecter le programme français de §GRADE§, difficulté MOYENNE ; "
+    "n'évalue ni ne renvoie aucun niveau de difficulté ;\n"
+    "- donner à chaque exercice son barème \"effort_points\" (cf. BARÈME) : ces "
+    "cartes sont courtes, donc leur effort est FAIBLE (le plus souvent 0,5) ;\n"
+    "- des nombres qui donnent des résultats simples (calcul de tête ou posé) ;\n"
+    "- VÉRIFIER chaque résultat deux fois avant de répondre ;\n"
+    "- rédiger \"correction\" pour l'ÉLÈVE (pas le professeur) : PAS le résultat "
+    "ni la solution, mais un GUIDE d'auto-correction TRÈS COURT (1 à 2 lignes), "
+    "affiché seulement en cas d'erreur — rappelle la règle et LE PIÈGE PRÉCIS "
+    "de CET exercice. Formules en LaTeX $...$ ;\n"
+    "- l'énoncé ne révèle JAMAIS la réponse ;\n"
+    "- à l'intérieur du lot, ne réutilise jamais deux fois le même calcul ni le "
+    "même contexte.\n\n"
+
+    "# Exercices déjà en banque\n"
+    "\"already_created\" liste les énoncés DÉJÀ créés : aucun des tiens ne doit "
+    "leur être équivalent (ni le même calcul avec d'autres nombres).\n\n"
+)
+
+
 def _competency_tree(db: Session, competency: Competency) -> str:
     """Toutes les compétences du domaine, groupées par chapitre, la cible
     marquée — donne au modèle les FRONTIÈRES de la compétence visée (ce qui
@@ -272,32 +358,46 @@ def _manual_context(blocks: list[dict]) -> str:
     return "\n".join(lines).strip()
 
 
-def _system_prompt(db: Session, competency: Competency, grade: str, count: int,
-                   manual_context: str) -> str:
+def _fill_placeholders(template: str, db: Session, competency: Competency,
+                       grade: str, count: int, manual_context: str) -> str:
     # .replace (et non .format) : le prompt contient des accolades littérales
     # (schéma JSON, marqueur {{blank}})
-    intro = (_INTRO
-             .replace("§COUNT§", str(count))
-             .replace("§GRADE§", grade)
-             .replace("§COMPETENCY§", _competency_name(competency))
-             .replace("§CHAPTER§", f"{competency.chapter_code} {competency.chapter_name}".strip())
-             .replace("§DOMAIN§", f"{competency.domain_code} {competency.domain_name}".strip())
-             .replace("§COMPETENCY_TREE§", _competency_tree(db, competency))
-             # en dernier : le texte du manuel est le SEUL fragment non maîtrisé
-             # du prompt (OCR d'un PDF). S'il contenait « §COMPETENCY_TREE§ » ou
-             # tout autre marqueur, un .replace ultérieur l'interpréterait.
-             .replace("§MANUAL_CONTEXT§", manual_context))
+    return (template
+            .replace("§COUNT§", str(count))
+            .replace("§GRADE§", grade)
+            .replace("§COMPETENCY§", _competency_name(competency))
+            .replace("§CHAPTER§", f"{competency.chapter_code} {competency.chapter_name}".strip())
+            .replace("§DOMAIN§", f"{competency.domain_code} {competency.domain_name}".strip())
+            .replace("§COMPETENCY_TREE§", _competency_tree(db, competency))
+            # en dernier : le texte du manuel est le SEUL fragment non maîtrisé
+            # du prompt (OCR d'un PDF). S'il contenait « §COMPETENCY_TREE§ » ou
+            # tout autre marqueur, un .replace ultérieur l'interpréterait.
+            .replace("§MANUAL_CONTEXT§", manual_context))
+
+
+def _system_prompt(db: Session, competency: Competency, grade: str, count: int,
+                   manual_context: str) -> str:
+    intro = _fill_placeholders(_INTRO, db, competency, grade, count, manual_context)
+    return intro + exercise_gen.format_contract(exercise_gen._GEMINI_FORMAT_INTRO)
+
+
+def _system_prompt_filler(db: Session, competency: Competency, grade: str,
+                          count: int, manual_context: str) -> str:
+    intro = _fill_placeholders(_FILLER_INTRO, db, competency, grade, count, manual_context)
     return intro + exercise_gen.format_contract(exercise_gen._GEMINI_FORMAT_INTRO)
 
 
 # ================================================================ candidats
 
-def _reject_reason(item: dict) -> str | None:
+def _reject_reason(item: dict, filler: bool = False) -> str | None:
     """Refus propres à cette pipeline, EN PLUS de _validate_exercise (jamais à
-    la place). None = rien à redire ici."""
+    la place). None = rien à redire ici. `filler` : lot d'exercices courts —
+    les formats sont bornés aux petites cartes (cf. FILLER_RESPONSE_TYPES)."""
     rtype = item.get("response_type")
     if rtype in FORBIDDEN_RESPONSE_TYPES:
         return f"format non corrigeable automatiquement : {rtype!r}"
+    if filler and rtype not in FILLER_RESPONSE_TYPES:
+        return f"format trop long pour une carte de remplissage : {rtype!r}"
     if item.get("figure"):
         # Le prompt l'interdit ; s'il en produit une quand même, l'exercice
         # s'appuie dessus (« la figure ci-contre ») — la retirer casserait
@@ -308,18 +408,19 @@ def _reject_reason(item: dict) -> str | None:
 
 
 def _to_candidate(item: dict, competency: Competency, db: Session,
-                  existing_norms: set[str]) -> dict | None:
+                  existing_norms: set[str], filler: bool = False) -> dict | None:
     if not isinstance(item, dict):
         return None
     item = dict(item)
     item.pop("difficulty", None)   # niveau non évalué par le LLM : toujours 3
     item.pop("source_blocks", None)  # champ Sésamaths, sans objet ici
 
-    reason = _reject_reason(item)
+    reason = _reject_reason(item, filler=filler)
     if reason is None:
         valid = exercise_gen._validate_exercise(item, competency, db, existing_norms)
         if valid is not None:
             valid["difficulty"] = GENERATED_LEVEL
+            valid["kind"] = FILLER_KIND if filler else valid.get("kind", "application")
             return valid
         reason = exercise_gen.diagnose_rejection(item, competency)
     # pourquoi, et pas seulement combien : un « 5 renvoyés, 0 validés » est
@@ -331,11 +432,14 @@ def _to_candidate(item: dict, competency: Competency, db: Session,
 
 def _generate_batch(db: Session, competency: Competency, grade: str, batch: int,
                     already_created: list[str], existing_norms: set[str],
-                    manual_context: str) -> list[dict]:
-    """Un appel Gemini = un lot de `settings.gemini_batch_size` exercices, dont
-    on ne garde que ceux qui passent la validation déterministe."""
-    count = settings.gemini_batch_size
-    system = _system_prompt(db, competency, grade, count, manual_context)
+                    manual_context: str, *, count: int | None = None,
+                    filler: bool = False) -> list[dict]:
+    """Un appel Gemini = un lot d'exercices, dont on ne garde que ceux qui
+    passent la validation déterministe. `filler` bascule sur le prompt des
+    petites cartes (_FILLER_INTRO) et borne les formats acceptés."""
+    count = count if count is not None else settings.gemini_batch_size
+    system = (_system_prompt_filler(db, competency, grade, count, manual_context)
+              if filler else _system_prompt(db, competency, grade, count, manual_context))
     payload = {"grade_level": grade, "competency_code": competency.code,
                "competency_label": _competency_name(competency),
                "chapter": f"{competency.chapter_code} {competency.chapter_name}".strip(),
@@ -343,7 +447,7 @@ def _generate_batch(db: Session, competency: Competency, grade: str, batch: int,
                # copie : l'appelant continue d'alimenter sa liste lot après lot,
                # le payload d'un appel ne doit pas bouger sous ses pieds
                "count": count, "batch": batch, "already_created": list(already_created)}
-    correlation_id = f"gemini-{competency.code}-b{batch}"
+    correlation_id = f"gemini-{competency.code}-{'f' if filler else 'b'}{batch}"
 
     data = None
     for budget in _TOKEN_BUDGETS:
@@ -368,22 +472,44 @@ def _generate_batch(db: Session, competency: Competency, grade: str, batch: int,
             break
 
     items = (data or {}).get("exercises") or []
-    cands = [c for c in (_to_candidate(i, competency, db, existing_norms) for i in items)
-             if c is not None]
-    logger.info("Gemini : lot %s pour %s — %s exercice(s) validé(s) sur %s renvoyé(s)",
-                batch, competency.code, len(cands), len(items))
+    cands = [c for c in (_to_candidate(i, competency, db, existing_norms, filler=filler)
+                         for i in items) if c is not None]
+    logger.info("Gemini : lot %s%s pour %s — %s exercice(s) validé(s) sur %s renvoyé(s)",
+                "filler-" if filler else "", batch, competency.code, len(cands), len(items))
     return cands
 
 
 # ================================================================ banque
 
 def _bank_rows(db: Session, competency: Competency, level: int) -> list[GeneratedExercise]:
+    """Exercices CLASSIQUES actifs (kind ≠ filler) : ceux qu'un sujet enchaîne
+    normalement. Les cartes de remplissage en sont EXCLUES — elles ne servent
+    qu'à boucher les trous, via filler_rows/services.generation."""
     return (db.query(GeneratedExercise)
             .filter(GeneratedExercise.competency_id == competency.id,
                     GeneratedExercise.difficulty_level == level,
                     GeneratedExercise.status == "active",
-                    GeneratedExercise.source == SOURCE)
+                    GeneratedExercise.source == SOURCE,
+                    GeneratedExercise.kind != FILLER_KIND)
             .all())
+
+
+def _filler_rows(db: Session, competency: Competency, level: int) -> list[GeneratedExercise]:
+    return (db.query(GeneratedExercise)
+            .filter(GeneratedExercise.competency_id == competency.id,
+                    GeneratedExercise.difficulty_level == level,
+                    GeneratedExercise.status == "active",
+                    GeneratedExercise.source == SOURCE,
+                    GeneratedExercise.kind == FILLER_KIND)
+            .all())
+
+
+def filler_rows(db: Session, competency: Competency, level: int) -> list[GeneratedExercise]:
+    """Cartes de remplissage (kind=filler) déjà en banque pour ce niveau. Ne
+    déclenche AUCUNE génération : elles sont créées par ensure_bank en même
+    temps que les exercices classiques. Vide si la banque n'a pas encore été
+    constituée, ou pour une source sans remplissage (Sésamaths)."""
+    return _filler_rows(db, competency, level)
 
 
 def ensure_bank(db: Session, competency: Competency, level: int) -> list[GeneratedExercise]:
@@ -451,10 +577,14 @@ def ensure_bank(db: Session, competency: Competency, level: int) -> list[Generat
 
     # Pas de filtre status="active" : un exercice RETIRÉ doit rester
     # définitivement « vu », sinon il est recréé à l'identique au prochain
-    # appel (cf. même règle côté Sésamaths).
+    # appel (cf. même règle côté Sésamaths). Les cartes de remplissage sont
+    # EXCLUES de cette comptabilité : elles ont leur propre pool et leur propre
+    # appel (_ensure_filler) ; les compter ici décalerait le n° de lot classique
+    # et gonflerait "already_created".
     seen = (db.query(GeneratedExercise)
             .filter(GeneratedExercise.competency_id == competency.id,
-                    GeneratedExercise.source == SOURCE).all())
+                    GeneratedExercise.source == SOURCE,
+                    GeneratedExercise.kind != FILLER_KIND).all())
     existing_norms = {
         exercise_gen._dedup_key(ex.statement, ex.expected_json,
                                 (ex.grading_json or {}).get("choices"))
@@ -523,4 +653,60 @@ def ensure_bank(db: Session, competency: Competency, level: int) -> list[Generat
                        level, total, target)
     logger.info("Gemini : banque %s niveau %s prête : %s variante(s) (%s créée(s) "
                 "à l'instant)", competency.code, level, total, len(added))
+
+    # 2e appel DÉDIÉ : petites cartes de remplissage (kind=filler), en plus des
+    # exercices classiques. Best-effort — un échec ici ne compromet jamais le
+    # sujet (les trous resteront simplement vides, comme avant).
+    _ensure_filler(db, competency, grade, level, manual_context)
     return rows + added
+
+
+def _ensure_filler(db: Session, competency: Competency, grade: str, level: int,
+                   manual_context: str) -> list[GeneratedExercise]:
+    """Complète la banque de remplissage jusqu'à `settings.gemini_filler_target`
+    en UN appel Gemini dédié (prompt court). Best-effort : toute erreur est
+    journalisée et avalée — le remplissage est un bonus, pas un prérequis."""
+    target = settings.gemini_filler_target
+    have = _filler_rows(db, competency, level)
+    # UN seul appel de remplissage par compétence×niveau : dès qu'il existe la
+    # moindre carte courte, on ne rappelle plus le modèle (le remplissage est un
+    # bonus, pas un contenu qu'on paie à re-compléter sujet après sujet).
+    if have:
+        return have
+    # dédup contre TOUT ce qui existe déjà pour la compétence (classiques inclus)
+    seen = (db.query(GeneratedExercise)
+            .filter(GeneratedExercise.competency_id == competency.id,
+                    GeneratedExercise.source == SOURCE).all())
+    existing_norms = {
+        exercise_gen._dedup_key(ex.statement, ex.expected_json,
+                                (ex.grading_json or {}).get("choices"))
+        for ex in seen}
+    already_created = [ex.statement for ex in seen]
+    next_variant = 10_000                       # plage de variantes réservée au filler
+    batch = 1000                                # index distinct des lots classiques (0..N)
+
+    try:
+        cands = _generate_batch(db, competency, grade, batch, already_created,
+                                existing_norms, manual_context,
+                                count=target - len(have), filler=True)
+    except Exception as e:
+        logger.warning("Gemini : remplissage %s en échec (ignoré) : %s",
+                       competency.code, e)
+        return have
+    for cand in cands:
+        db.add(GeneratedExercise(
+            competency_id=competency.id, difficulty_level=level, variant=next_variant,
+            statement=cand["statement"], correction=cand["correction"],
+            response_type=cand["response_type"],
+            expected_json=cand["expected"], grading_json=cand["grading"],
+            model=settings.gemini_model, prompt_version=PROMPT_VERSION,
+            status="active", verifier_model="", verifier_verdict_json={},
+            quality_json={}, figure_json=cand.get("figure_json"), source=SOURCE,
+            kind=FILLER_KIND))
+        next_variant += 1
+    db.flush()
+    result = _filler_rows(db, competency, level)
+    logger.info("Gemini : remplissage %s niveau %s — %s carte(s) courte(s) en "
+                "stock (%s créée(s) à l'instant)", competency.code, level,
+                len(result), len(cands))
+    return result

@@ -1076,6 +1076,25 @@ def bank_rows_near_level(db: Session, competency: Competency, level: int,
     raise ValueError(f"Aucun exercice disponible pour {competency.code}")
 
 
+def filler_bank_rows(db: Session, competency: Competency, level: int,
+                     source: str = "sesamaths") -> list[GeneratedExercise]:
+    """Cartes de remplissage (petites : un calcul, un QCM court) pour combler
+    les bas de page — cf. services.generation. Propres à la CRÉATION Gemini
+    (pool infini) : la source Sésamaths, finie, n'en a pas. Ne déclenche AUCUNE
+    génération : le remplissage est créé par gemini_gen.ensure_bank en même
+    temps que les exercices classiques, donc déjà en banque au moment de
+    composer le sujet. Retourne [] si rien (source sans remplissage, ou banque
+    pas encore constituée)."""
+    if source == "sesamaths":
+        return []
+    from .gemini_gen import filler_rows
+    for candidate in sorted(range(1, 6), key=lambda l: abs(l - level)):
+        rows = filler_rows(db, competency, candidate)
+        if rows:
+            return rows
+    return []
+
+
 def pick_exercise(db: Session, competency: Competency, level: int,
                   seed: int) -> GeneratedExercise:
     """Choisit un exercice de banque, en générant si nécessaire."""

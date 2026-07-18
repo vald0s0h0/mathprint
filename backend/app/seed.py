@@ -11,21 +11,14 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session
 
-from .config import settings
 from .models import (
     Competency, CompetencyEvidence, CompetencyFramework, CompetencyStateHistory,
     ExerciseCatalog, ExerciseCompetency, GeneratedExercise, LessonSnippet,
-    SchoolClass, SchoolYear, Student, StudentCompetencyState,
+    SchoolYear, StudentCompetencyState,
 )
 from .services.exercises import GENERATORS
-from .services.security import new_pseudonym
 
 COMPETENCIES_JSON = Path(__file__).resolve().parent / "data" / "competencies_fr.json"
-
-MOCK_STUDENTS = [
-    ("Martin", "Léa"), ("Dubois", "Noah"), ("Bernard", "Chloé"),
-    ("Petit", "Adam"), ("Robert", "Inès"),
-]
 
 # Rattachement des exercices builtin aux compétences officielles, par recherche
 # de mots-clés dans les libellés (robuste à une ré-extraction du programme).
@@ -168,13 +161,4 @@ def seed(db: Session):
 
     by_grade = seed_frameworks(db)
     seed_exercises(db, by_grade)
-
-    if settings.mock_mode:
-        cls = SchoolClass(school_year_id=year.id, name="5e Mock", grade_level="5e",
-                          is_mock=True)
-        db.add(cls)
-        db.flush()
-        for last, first in MOCK_STUDENTS:
-            db.add(Student(class_id=cls.id, first_name=first, last_name=last,
-                           llm_pseudonym=new_pseudonym()))
     db.commit()

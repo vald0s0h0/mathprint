@@ -3,10 +3,10 @@
 // l'évaluation : le QR signé de chaque page identifie le sujet.
 import {
   Badge, Button, Card, Checkbox, Divider, FileButton, Group, Kbd, Modal,
-  NumberInput, Select, Stack, Text, Title, Tooltip,
+  NumberInput, Stack, Text, Title, Tooltip,
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
-import { Eye, FlaskConical, Inbox, ScanLine, Upload } from 'lucide-react'
+import { Eye, Inbox, ScanLine, Upload } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api, getToken } from '../api'
 import MathText from '../components/MathText'
@@ -35,7 +35,6 @@ type Review = {
 // raccourcis de correction manuelle (paramétrables, cf. Réglages → Pédagogie)
 type Shortcuts = { full: string; two_thirds: string; one_third: string; zero: string }
 const DEFAULT_SHORTCUTS: Shortcuts = { full: 'f', two_thirds: 'd', one_third: 's', zero: 'q' }
-type Assessment = { id: string; title: string; status: string; grade_level: string }
 type SandboxResult = {
   filename: string; status: string; pages_added: number
   duplicates_rejected: number; blocked_pages: number; batches_created: string[]
@@ -89,7 +88,7 @@ function ScanImage({ reviewId }: { reviewId: string }) {
   }, [reviewId])
   if (failed) return (
     <Text size="xs" c="dimmed" p="sm">
-      Zone non scannée (vide, ou lot simulé) — rien à visualiser ici.
+      Zone non scannée (vide, ou sans scan) — rien à visualiser ici.
     </Text>
   )
   if (!url) return <Text size="xs" c="dimmed" p="sm">Chargement du scan…</Text>
@@ -102,19 +101,16 @@ function ScanImage({ reviewId }: { reviewId: string }) {
 
 export default function Corrections() {
   const [batches, setBatches] = useState<Batch[]>([])
-  const [assessments, setAssessments] = useState<Assessment[]>([])
   const [reviews, setReviews] = useState<Review[]>([])
   const [reviewBatch, setReviewBatch] = useState<Batch | null>(null)
   const [previewId, setPreviewId] = useState<string | null>(null)
   const [idx, setIdx] = useState(0)
   const [scoreInput, setScoreInput] = useState<number | ''>('')
   const [uploading, setUploading] = useState(false)
-  const [mockOpen, setMockOpen] = useState(false)
-  const [mockAssessment, setMockAssessment] = useState<string | null>(null)
   const [sandboxUploading, setSandboxUploading] = useState(false)
   const [sandboxResults, setSandboxResults] = useState<SandboxResult[]>([])
   const [shortcuts, setShortcuts] = useState<Shortcuts>(DEFAULT_SHORTCUTS)
-  const { cycle, matches, mockMode } = useAppState()
+  const { cycle, matches } = useAppState()
 
   // raccourcis de correction paramétrés (Réglages → Pédagogie), repli défauts
   useEffect(() => {
@@ -125,7 +121,6 @@ export default function Corrections() {
 
   const refresh = useCallback(() => {
     api.get<Batch[]>('/api/scans/batches').then(setBatches)
-    api.get<Assessment[]>('/api/assessments').then(setAssessments)
   }, [])
   useEffect(() => {
     refresh()
@@ -174,14 +169,6 @@ export default function Corrections() {
     } finally {
       setSandboxUploading(false)
     }
-  }
-
-  async function simulateMock() {
-    if (!mockAssessment) return
-    await api.post(`/api/scans/batches?assessment_id=${mockAssessment}`)
-    notifications.show({ color: 'green', message: 'Lot simulé créé' })
-    setMockOpen(false); setMockAssessment(null)
-    refresh()
   }
 
   async function openReviews(b: Batch) {
@@ -264,12 +251,6 @@ export default function Corrections() {
             Déposez le PDF scanné — le QR de chaque page l'associe au bon sujet.
           </Text>
         </div>
-        {mockMode && (
-          <Button variant="light" color="grape" leftSection={<FlaskConical size={16} />}
-            onClick={() => setMockOpen(true)}>
-            Simuler un lot
-          </Button>
-        )}
       </Group>
 
       <Card withBorder padding="md">
@@ -427,23 +408,6 @@ export default function Corrections() {
 
       <PdfPreviewModal assessmentId={previewId} opened={!!previewId}
         onClose={() => setPreviewId(null)} />
-
-      {/* simulation mock : la seule action qui demande de choisir un sujet */}
-      <Modal opened={mockOpen} onClose={() => setMockOpen(false)}
-        title={<Text fw={650}>Simuler un lot (démo)</Text>}>
-        <Stack>
-          <Text size="sm" c="dimmed">
-            Génère des réponses d'élèves simulées pour exercer toute la chaîne de
-            correction, sans scanner. Choisir le sujet à simuler :
-          </Text>
-          <Select placeholder="Évaluation générée"
-            data={assessments.filter((a) =>
-              !['draft', 'queued', 'generating', 'error'].includes(a.status) && matches(a.grade_level))
-              .map((a) => ({ value: a.id, label: a.title }))}
-            value={mockAssessment} onChange={setMockAssessment} />
-          <Button onClick={simulateMock} disabled={!mockAssessment}>Lancer la simulation</Button>
-        </Stack>
-      </Modal>
 
       <Modal opened={!!reviewBatch} onClose={() => { setReviewBatch(null); refresh() }}
         title={<Text fw={650}>Correction manuelle — {reviews.length} restante(s)</Text>} size="xl">

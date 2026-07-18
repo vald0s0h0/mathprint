@@ -14,9 +14,9 @@ import { useAppState } from '../state/AppState'
 type Dash = {
   pending_reviews: number
   recent_batches: { id: string; status: string; assessment_title: string; grade_level: string; created_at: string }[]
-  classes: { id: string; name: string; grade_level: string; students: number; avg_mastery: number; due_competencies: number; is_mock: boolean }[]
+  classes: { id: string; name: string; grade_level: string; students: number; avg_mastery: number; due_competencies: number }[]
   assessments_draft: number
-  system: { mock_mode: boolean; version: string }
+  system: { version: string }
 }
 type Costs = Record<string, { day_eur: number; month_eur: number; calls_month: number }>
 
@@ -121,7 +121,6 @@ export default function Dashboard() {
                   <Group gap={6} wrap="nowrap">
                     <Text fw={600} size="sm">{c.name}</Text>
                     <Badge size="xs" variant="light">{c.grade_level}</Badge>
-                    {c.is_mock && <Badge size="xs" variant="light" color="grape">démo</Badge>}
                   </Group>
                   <Group gap={8} wrap="nowrap">
                     <Text size="xs" c="dimmed">{c.students} élèves</Text>

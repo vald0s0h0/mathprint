@@ -76,6 +76,11 @@ class Settings(BaseSettings):
     # le besoin d'UN sujet fait rappeler le modèle à chaque sujet, et lui fait
     # recréer à l'aveugle des exercices proches de ceux déjà en banque.
     gemini_bank_target: int = 30
+    # exercices COURTS de remplissage (kind="filler") créés en UN appel dédié,
+    # en plus des 30 exercices classiques : servent à combler les trous de bas
+    # de page laissés par les grandes cartes (services.generation). Banque
+    # cible totale = 30 + 5 = 35.
+    gemini_filler_target: int = 5
     gemini_batch_size: int = 5            # exercices demandés par appel
     # garde-fou : au-delà, on garde ce qu'on a plutôt que d'enchaîner les
     # appels payants pour une compétence sur laquelle le modèle patine.
@@ -140,7 +145,6 @@ class Settings(BaseSettings):
     # été appliquée sur le NAS.
     build_sha: str = "dev"
     build_time: str = ""
-    mock_mode: bool = True               # classe mock + fournisseurs simulés (désactivable dans Réglages)
     correction_color: str = "#C62828"
     dropout_color: str = "#F5B7A8"       # rouge saumon clair
 

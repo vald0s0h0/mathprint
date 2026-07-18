@@ -1,8 +1,9 @@
 // Paramètres (§9.6) : Mon compte, API, Imprimantes, Calibration, Pédagogie,
-// Documents (éditeur de templates), Système (dont mode démo désactivable).
+// Documents (éditeur de templates), Système, Données.
 import {
-  ActionIcon, Alert, Badge, Button, Card, ColorInput, FileButton, Group, Modal,
-  PasswordInput, Stack, Switch, Table, Tabs, Text, TextInput, Title,
+  Accordion, ActionIcon, Alert, Badge, Button, Card, ColorInput, FileButton,
+  Group, Loader, Modal, PasswordInput, SimpleGrid, Stack, Table, Tabs, Text,
+  TextInput, Title,
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
 import {
@@ -12,7 +13,6 @@ import {
 import { useEffect, useState } from 'react'
 import { api, getToken } from '../api'
 import TemplateEditor from '../components/TemplateEditor'
-import { useAppState } from '../state/AppState'
 
 type Me = { id: string; email: string; display_name: string; role: string }
 type Provider = { provider: string; secret_preview: string; active: boolean }
@@ -21,10 +21,6 @@ type PrintersInfo = {
   network: { name: string; uri: string; status: string }[]
 }
 type Build = { sha: string; time: string }
-type ClassRow = {
-  id: string; name: string; grade_level: string; school_year: string | null
-  is_mock: boolean; archived: boolean; student_count: number; assessment_count: number
-}
 type StudentRow = {
   id: string; first_name: string; last_name: string; class_name: string
   active: boolean; copy_count: number
@@ -37,13 +33,23 @@ type CorrectionRow = {
   id: string; assessment_title: string; class_name: string; status: string
   page_count: number; created_at: string
 }
+type OrphanRow = { label: string; count: number }
+type Overview = {
+  totals: { classes: number; students: number; assessments: number
+    corrections: number; bank_exercises: number; orphans: number }
+  classes: { id: string; name: string; grade_level: string; archived: boolean
+    students: number; assessments: number; corrections: number }[]
+  orphans: OrphanRow[]
+}
+type ClassDetail = { students: StudentRow[]; assessments: AssessmentRow[]
+  corrections: CorrectionRow[] }
 type DeleteKind = 'classes' | 'students' | 'assessments' | 'corrections'
 type SystemStatus = {
   version: string; build?: Build
   database: { ok: boolean; url_scheme: string }
   mathalea: { status?: string; mathaleaVersion?: string; exercises?: number }
   disk: { total_gb: number; free_gb: number; alert: boolean }
-  mock_mode: boolean; last_backup: string | null
+  last_backup: string | null
 }
 
 export default function SettingsPage() {
@@ -62,15 +68,15 @@ export default function SettingsPage() {
   const [netName, setNetName] = useState('')
   const [netUri, setNetUri] = useState('')
   const [webBuild, setWebBuild] = useState<Build | null>(null)
-  const [dataClasses, setDataClasses] = useState<ClassRow[]>([])
-  const [dataStudents, setDataStudents] = useState<StudentRow[]>([])
-  const [dataAssessments, setDataAssessments] = useState<AssessmentRow[]>([])
-  const [dataCorrections, setDataCorrections] = useState<CorrectionRow[]>([])
+  const [overview, setOverview] = useState<Overview | null>(null)
+  const [classDetail, setClassDetail] = useState<Record<string, ClassDetail>>({})
+  const [openClasses, setOpenClasses] = useState<string[]>([])
   const [confirmTarget, setConfirmTarget] = useState<{ kind: DeleteKind; id: string; label: string } | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [purgeConfirmOpen, setPurgeConfirmOpen] = useState(false)
   const [purging, setPurging] = useState(false)
-  const { refreshSystem } = useAppState()
+  const [orphansPurgeOpen, setOrphansPurgeOpen] = useState(false)
+  const [purgingOrphans, setPurgingOrphans] = useState(false)
 
   function refresh() {
     api.get<Me>('/api/auth/me').then(setMe)
@@ -86,12 +92,37 @@ export default function SettingsPage() {
   }
   useEffect(refresh, [])
 
-  // onglet Données : réservé au rôle admin côté API — silencieux si 403
-  function refreshData() {
-    api.get<ClassRow[]>('/api/data/classes').then(setDataClasses).catch(() => {})
-    api.get<StudentRow[]>('/api/data/students').then(setDataStudents).catch(() => {})
-    api.get<AssessmentRow[]>('/api/data/assessments').then(setDataAssessments).catch(() => {})
-    api.get<CorrectionRow[]>('/api/data/corrections').then(setDataCorrections).catch(() => {})
+  // onglet Données : réservé au rôle admin côté API — silencieux si 403.
+  // Vue compactée : on ne tire que l'agrégat par classe ; le détail d'une classe
+  // (élèves/sujets/corrections) se charge à l'ouverture (loadClassDetail).
+  function refreshData(reopen: string[] = openClasses) {
+    api.get<Overview>('/api/data/overview')
+      .then((o) => { setOverview(o); reopen.forEach(loadClassDetail) })
+      .catch(() => {})
+  }
+
+  function loadClassDetail(classId: string) {
+    Promise.all([
+      api.get<StudentRow[]>(`/api/data/students?class_id=${classId}`),
+      api.get<AssessmentRow[]>(`/api/data/assessments?class_id=${classId}`),
+      api.get<CorrectionRow[]>(`/api/data/corrections?class_id=${classId}`),
+    ]).then(([students, assessments, corrections]) =>
+      setClassDetail((d) => ({ ...d, [classId]: { students, assessments, corrections } })))
+      .catch(() => {})
+  }
+
+  async function purgeOrphans() {
+    setPurgingOrphans(true)
+    try {
+      const r = await api.post<{ deleted: number }>('/api/data/orphans/purge')
+      notifications.show({ color: 'green', message: `${r.deleted} ligne(s) orpheline(s) supprimée(s)` })
+      setOrphansPurgeOpen(false)
+      refreshData()
+    } catch (e) {
+      notifications.show({ color: 'red', message: (e as Error).message })
+    } finally {
+      setPurgingOrphans(false)
+    }
   }
   useEffect(refreshData, [])
 
@@ -155,18 +186,6 @@ export default function SettingsPage() {
     await api.post('/api/settings/providers', { provider, secret, active: true })
     notifications.show({ color: 'green', message: `${provider} enregistré` })
     refresh()
-  }
-
-  async function setMock(enabled: boolean) {
-    await api.post('/api/settings/system', { key: 'mock_mode', value: { enabled } })
-    notifications.show({
-      color: 'blue',
-      message: enabled
-        ? 'Mode démo activé — la classe de démonstration réapparaît'
-        : 'Mode démo désactivé — toutes les données de démonstration sont masquées',
-    })
-    refresh()
-    refreshSystem() // met à jour le badge « démo » global et les boutons de simulation
   }
 
   async function saveColor(key: string, value: string) {
@@ -514,37 +533,66 @@ export default function SettingsPage() {
                 </Group>
               ))}
             </Card>
-            <Card withBorder>
-              <Group justify="space-between" align="flex-start">
-                <div>
-                  <Group gap={6}>
-                    <FlaskConical size={16} />
-                    <Text fw={600}>Mode démonstration</Text>
-                  </Group>
-                  <Text size="sm" c="dimmed" maw={480}>
-                    Classe fictive « 5e Mock » et fournisseurs simulés pour découvrir
-                    l'application sans clé API ni scanner. Une fois désactivé, plus
-                    aucune donnée ni bouton de démonstration n'apparaît.
-                  </Text>
-                </div>
-                <Switch checked={system.mock_mode?.enabled ?? false}
-                  onChange={(e) => setMock(e.currentTarget.checked)}
-                  label={system.mock_mode?.enabled ? 'Activé' : 'Désactivé'} />
-              </Group>
-            </Card>
           </Stack>
         </Tabs.Panel>
 
         <Tabs.Panel value="donnees" pt="md">
           <Stack>
             <Alert color="red" variant="light" icon={<AlertTriangle size={16} />}>
-              Suppression définitive et irréversible — aucune corbeille. Pour les classes et
-              sujets, tout ce qui en dépend (élèves, copies, scans, PDF/images sur le disque)
-              disparaît avec.
+              Suppression définitive et irréversible — aucune corbeille. Supprimer une classe
+              ou un sujet emporte tout ce qui en dépend (élèves, copies, corrections, scans,
+              overlays, PDF/images sur le disque) : aucune donnée orpheline n'est laissée.
             </Alert>
 
+            {overview && (
+              <SimpleGrid cols={{ base: 3, sm: 6 }} spacing="xs">
+                {[
+                  ['Classes', overview.totals.classes],
+                  ['Élèves', overview.totals.students],
+                  ['Sujets', overview.totals.assessments],
+                  ['Corrections', overview.totals.corrections],
+                  ['Banque', overview.totals.bank_exercises],
+                  ['Orphelins', overview.totals.orphans],
+                ].map(([label, n]) => (
+                  <Card key={label as string} withBorder padding="xs"
+                    style={label === 'Orphelins' && (n as number) > 0
+                      ? { borderColor: 'var(--mantine-color-orange-5)' } : undefined}>
+                    <Text size="xl" fw={700} lh={1.1}
+                      c={label === 'Orphelins' && (n as number) > 0 ? 'orange' : undefined}>{n}</Text>
+                    <Text size="xs" c="dimmed">{label}</Text>
+                  </Card>
+                ))}
+              </SimpleGrid>
+            )}
+
+            <Card withBorder style={overview && overview.totals.orphans > 0
+              ? { borderColor: 'var(--mantine-color-orange-5)' } : undefined}>
+              <Group justify="space-between" align="flex-start">
+                <div>
+                  <Text fw={600} mb={2}>Données orphelines</Text>
+                  {overview && overview.orphans.length === 0 ? (
+                    <Text size="sm" c="dimmed">Aucune donnée orpheline — la base est propre.</Text>
+                  ) : (
+                    <Stack gap={2}>
+                      {overview?.orphans.map((o) => (
+                        <Text key={o.label} size="xs" c="dimmed">
+                          <b>{o.count}</b> — {o.label}
+                        </Text>
+                      ))}
+                    </Stack>
+                  )}
+                </div>
+                {overview && overview.totals.orphans > 0 && (
+                  <Button color="orange" variant="outline" size="xs"
+                    leftSection={<Trash2 size={14} />} onClick={() => setOrphansPurgeOpen(true)}>
+                    Nettoyer ({overview.totals.orphans})
+                  </Button>
+                )}
+              </Group>
+            </Card>
+
             <Card withBorder style={{ borderColor: 'var(--mantine-color-red-6)' }}>
-              <Text fw={600} mb={2}>Banque d'exercices (Sésamaths)</Text>
+              <Text fw={600} mb={2}>Banque d'exercices</Text>
               <Text size="sm" c="dimmed" mb="sm">
                 Supprime TOUS les exercices de la banque (quelle que soit leur source) ainsi
                 que l'état d'extraction Sésamaths déjà en cache — pour repartir d'une banque
@@ -557,125 +605,112 @@ export default function SettingsPage() {
               </Button>
             </Card>
 
-            <Card withBorder>
-              <Text fw={600} mb="xs">Classes ({dataClasses.length})</Text>
-              <Table striped>
-                <Table.Thead>
-                  <Table.Tr>
-                    <Table.Th>Nom</Table.Th><Table.Th>Cycle</Table.Th>
-                    <Table.Th>Élèves</Table.Th><Table.Th>Sujets</Table.Th><Table.Th /></Table.Tr>
-                </Table.Thead>
-                <Table.Tbody>
-                  {dataClasses.map((c) => (
-                    <Table.Tr key={c.id}>
-                      <Table.Td>{c.name} {c.archived && <Badge size="xs" ml={6} color="gray">archivée</Badge>}
-                        {c.is_mock && <Badge size="xs" ml={6} color="grape">démo</Badge>}</Table.Td>
-                      <Table.Td>{c.grade_level}</Table.Td>
-                      <Table.Td>{c.student_count}</Table.Td>
-                      <Table.Td>{c.assessment_count}</Table.Td>
-                      <Table.Td>
-                        <ActionIcon color="red" variant="subtle" onClick={() => setConfirmTarget({
-                          kind: 'classes', id: c.id,
-                          label: `la classe « ${c.name} » (${c.student_count} élève(s), ${c.assessment_count} sujet(s))`,
-                        })}>
-                          <Trash2 size={15} />
-                        </ActionIcon>
-                      </Table.Td>
-                    </Table.Tr>
-                  ))}
-                </Table.Tbody>
-              </Table>
-            </Card>
-
-            <Card withBorder>
-              <Text fw={600} mb="xs">Élèves ({dataStudents.length})</Text>
-              <Table striped>
-                <Table.Thead>
-                  <Table.Tr>
-                    <Table.Th>Nom</Table.Th><Table.Th>Classe</Table.Th>
-                    <Table.Th>Copies</Table.Th><Table.Th>Actif</Table.Th><Table.Th /></Table.Tr>
-                </Table.Thead>
-                <Table.Tbody>
-                  {dataStudents.map((s) => (
-                    <Table.Tr key={s.id}>
-                      <Table.Td>{s.last_name} {s.first_name}</Table.Td>
-                      <Table.Td>{s.class_name}</Table.Td>
-                      <Table.Td>{s.copy_count}</Table.Td>
-                      <Table.Td>{s.active
-                        ? <Badge size="xs" color="green" variant="light">oui</Badge>
-                        : <Badge size="xs" color="gray" variant="light">désactivé</Badge>}</Table.Td>
-                      <Table.Td>
-                        <ActionIcon color="red" variant="subtle" onClick={() => setConfirmTarget({
-                          kind: 'students', id: s.id,
-                          label: `l'élève « ${s.last_name} ${s.first_name} » (${s.copy_count} copie(s))`,
-                        })}>
-                          <Trash2 size={15} />
-                        </ActionIcon>
-                      </Table.Td>
-                    </Table.Tr>
-                  ))}
-                </Table.Tbody>
-              </Table>
-            </Card>
-
-            <Card withBorder>
-              <Text fw={600} mb="xs">Sujets ({dataAssessments.length})</Text>
-              <Table striped>
-                <Table.Thead>
-                  <Table.Tr>
-                    <Table.Th>Titre</Table.Th><Table.Th>Classe</Table.Th><Table.Th>Statut</Table.Th>
-                    <Table.Th>Copies</Table.Th><Table.Th>Lots scannés</Table.Th><Table.Th /></Table.Tr>
-                </Table.Thead>
-                <Table.Tbody>
-                  {dataAssessments.map((a) => (
-                    <Table.Tr key={a.id}>
-                      <Table.Td>{a.title}</Table.Td>
-                      <Table.Td>{a.class_name}</Table.Td>
-                      <Table.Td><Badge size="xs" variant="light">{a.status}</Badge></Table.Td>
-                      <Table.Td>{a.copy_count}</Table.Td>
-                      <Table.Td>{a.scan_batch_count}</Table.Td>
-                      <Table.Td>
-                        <ActionIcon color="red" variant="subtle" onClick={() => setConfirmTarget({
-                          kind: 'assessments', id: a.id,
-                          label: `le sujet « ${a.title} » (${a.copy_count} copie(s), ${a.scan_batch_count} lot(s) scanné(s))`,
-                        })}>
-                          <Trash2 size={15} />
-                        </ActionIcon>
-                      </Table.Td>
-                    </Table.Tr>
-                  ))}
-                </Table.Tbody>
-              </Table>
-            </Card>
-
-            <Card withBorder>
-              <Text fw={600} mb="xs">Corrections ({dataCorrections.length})</Text>
-              <Table striped>
-                <Table.Thead>
-                  <Table.Tr>
-                    <Table.Th>Sujet</Table.Th><Table.Th>Classe</Table.Th><Table.Th>Statut</Table.Th>
-                    <Table.Th>Pages</Table.Th><Table.Th /></Table.Tr>
-                </Table.Thead>
-                <Table.Tbody>
-                  {dataCorrections.map((b) => (
-                    <Table.Tr key={b.id}>
-                      <Table.Td>{b.assessment_title}</Table.Td>
-                      <Table.Td>{b.class_name}</Table.Td>
-                      <Table.Td><Badge size="xs" variant="light">{b.status}</Badge></Table.Td>
-                      <Table.Td>{b.page_count}</Table.Td>
-                      <Table.Td>
-                        <ActionIcon color="red" variant="subtle" onClick={() => setConfirmTarget({
-                          kind: 'corrections', id: b.id,
-                          label: `la correction du sujet « ${b.assessment_title} » (${b.page_count} page(s) scannée(s))`,
-                        })}>
-                          <Trash2 size={15} />
-                        </ActionIcon>
-                      </Table.Td>
-                    </Table.Tr>
-                  ))}
-                </Table.Tbody>
-              </Table>
-            </Card>
+            <Text fw={600} size="sm" mt="xs">Par classe</Text>
+            <Accordion multiple variant="separated" value={openClasses}
+              onChange={(v) => {
+                const opened = v as string[]
+                opened.filter((id) => !classDetail[id]).forEach(loadClassDetail)
+                setOpenClasses(opened)
+              }}>
+              {overview?.classes.map((c) => {
+                const d = classDetail[c.id]
+                return (
+                  <Accordion.Item key={c.id} value={c.id}>
+                    <Accordion.Control>
+                      <Group gap={8} wrap="nowrap">
+                        <Text fw={600} size="sm">{c.name}</Text>
+                        <Badge size="xs" variant="light">{c.grade_level}</Badge>
+                        {c.archived && <Badge size="xs" color="gray">archivée</Badge>}
+                        <Text size="xs" c="dimmed">
+                          {c.students} élève(s) · {c.assessments} sujet(s) · {c.corrections} correction(s)
+                        </Text>
+                      </Group>
+                    </Accordion.Control>
+                    <Accordion.Panel>
+                      <Group justify="flex-end" mb="xs">
+                        <Button color="red" variant="light" size="compact-xs"
+                          leftSection={<Trash2 size={13} />}
+                          onClick={() => setConfirmTarget({
+                            kind: 'classes', id: c.id,
+                            label: `la classe « ${c.name} » (${c.students} élève(s), ${c.assessments} sujet(s), et toutes leurs corrections)`,
+                          })}>
+                          Supprimer la classe entière
+                        </Button>
+                      </Group>
+                      {!d ? <Group justify="center" p="md"><Loader size="sm" /></Group> : (
+                        <Stack gap="md">
+                          <div>
+                            <Text size="xs" fw={600} c="dimmed" mb={4}>Élèves ({d.students.length})</Text>
+                            <Table>
+                              <Table.Tbody>
+                                {d.students.map((s) => (
+                                  <Table.Tr key={s.id}>
+                                    <Table.Td>{s.last_name} {s.first_name}</Table.Td>
+                                    <Table.Td w={70}>{s.copy_count} copie(s)</Table.Td>
+                                    <Table.Td w={80}>{s.active
+                                      ? <Badge size="xs" color="green" variant="light">actif</Badge>
+                                      : <Badge size="xs" color="gray" variant="light">inactif</Badge>}</Table.Td>
+                                    <Table.Td w={36}>
+                                      <ActionIcon color="red" variant="subtle" onClick={() => setConfirmTarget({
+                                        kind: 'students', id: s.id,
+                                        label: `l'élève « ${s.last_name} ${s.first_name} » (${s.copy_count} copie(s))`,
+                                      })}><Trash2 size={14} /></ActionIcon>
+                                    </Table.Td>
+                                  </Table.Tr>
+                                ))}
+                                {d.students.length === 0 && <Table.Tr><Table.Td><Text size="xs" c="dimmed">Aucun élève.</Text></Table.Td></Table.Tr>}
+                              </Table.Tbody>
+                            </Table>
+                          </div>
+                          <div>
+                            <Text size="xs" fw={600} c="dimmed" mb={4}>Sujets ({d.assessments.length})</Text>
+                            <Table>
+                              <Table.Tbody>
+                                {d.assessments.map((a) => (
+                                  <Table.Tr key={a.id}>
+                                    <Table.Td>{a.title}</Table.Td>
+                                    <Table.Td w={90}><Badge size="xs" variant="light">{a.status}</Badge></Table.Td>
+                                    <Table.Td w={130}>{a.copy_count} copie(s) · {a.scan_batch_count} corr.</Table.Td>
+                                    <Table.Td w={36}>
+                                      <ActionIcon color="red" variant="subtle" onClick={() => setConfirmTarget({
+                                        kind: 'assessments', id: a.id,
+                                        label: `le sujet « ${a.title} » (${a.copy_count} copie(s), ${a.scan_batch_count} correction(s), scans et overlays)`,
+                                      })}><Trash2 size={14} /></ActionIcon>
+                                    </Table.Td>
+                                  </Table.Tr>
+                                ))}
+                                {d.assessments.length === 0 && <Table.Tr><Table.Td><Text size="xs" c="dimmed">Aucun sujet.</Text></Table.Td></Table.Tr>}
+                              </Table.Tbody>
+                            </Table>
+                          </div>
+                          <div>
+                            <Text size="xs" fw={600} c="dimmed" mb={4}>Corrections ({d.corrections.length})</Text>
+                            <Table>
+                              <Table.Tbody>
+                                {d.corrections.map((b) => (
+                                  <Table.Tr key={b.id}>
+                                    <Table.Td>{b.assessment_title}</Table.Td>
+                                    <Table.Td w={90}><Badge size="xs" variant="light">{b.status}</Badge></Table.Td>
+                                    <Table.Td w={80}>{b.page_count} page(s)</Table.Td>
+                                    <Table.Td w={36}>
+                                      <ActionIcon color="red" variant="subtle" onClick={() => setConfirmTarget({
+                                        kind: 'corrections', id: b.id,
+                                        label: `la correction du sujet « ${b.assessment_title} » (${b.page_count} page(s) scannée(s), scans et overlays)`,
+                                      })}><Trash2 size={14} /></ActionIcon>
+                                    </Table.Td>
+                                  </Table.Tr>
+                                ))}
+                                {d.corrections.length === 0 && <Table.Tr><Table.Td><Text size="xs" c="dimmed">Aucune correction.</Text></Table.Td></Table.Tr>}
+                              </Table.Tbody>
+                            </Table>
+                          </div>
+                        </Stack>
+                      )}
+                    </Accordion.Panel>
+                  </Accordion.Item>
+                )
+              })}
+            </Accordion>
           </Stack>
         </Tabs.Panel>
       </Tabs>
@@ -706,6 +741,26 @@ export default function SettingsPage() {
           <Group justify="flex-end">
             <Button variant="subtle" onClick={() => setPurgeConfirmOpen(false)}>Annuler</Button>
             <Button color="red" loading={purging} onClick={purgeBank}>Purger toute la banque</Button>
+          </Group>
+        </Stack>
+      </Modal>
+
+      <Modal opened={orphansPurgeOpen} onClose={() => setOrphansPurgeOpen(false)}
+        title={<Text fw={650}>Nettoyer les données orphelines</Text>}>
+        <Stack>
+          <Text size="sm">
+            Supprimer définitivement toutes les lignes pointant vers un parent disparu
+            (et les fichiers orphelins sur le disque) ?
+          </Text>
+          <Text size="xs" c="dimmed">
+            N'affecte que des restes incohérents — jamais une donnée encore rattachée à une
+            classe, un élève ou un sujet existant.
+          </Text>
+          <Group justify="flex-end">
+            <Button variant="subtle" onClick={() => setOrphansPurgeOpen(false)}>Annuler</Button>
+            <Button color="orange" loading={purgingOrphans} onClick={purgeOrphans}>
+              Nettoyer
+            </Button>
           </Group>
         </Stack>
       </Modal>

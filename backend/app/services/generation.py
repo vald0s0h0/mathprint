@@ -121,7 +121,11 @@ def generate_assessment_job(db: Session, assessment: Assessment,
     # l'insertion des zones) ET sans QR signé (page illisible au scan même si
     # on rattrapait la ligne DocumentPage après coup).
     PAGE_RESERVE = 6
-    MAX_FILL_ATTEMPTS = 10
+    # plafond d'essais de remplissage PAR PASSE (classiques puis courts) : assez
+    # haut pour vraiment remplir des pages (10 était trop bas — un tour de
+    # compétences suffisait à l'épuiser, d'où des bas de page vides), la vraie
+    # borne étant la stagnation (plus rien ne tient dans la place restante).
+    MAX_FILL_ATTEMPTS = 80
     total_non_qcm = 0
 
     for s_idx, student in enumerate(students):
@@ -153,21 +157,34 @@ def generate_assessment_job(db: Session, assessment: Assessment,
         # distribution.exercise_identity)
         picked_keys: set[str] = set()
 
-        def _add_item(seq: int, comp_id: str, item_seed: int) -> bool:
+        def _add_item(seq: int, comp_id: str, item_seed: int,
+                      filler: bool = False) -> bool:
             nonlocal total_non_qcm
             comp = competencies[comp_id]
             try:
-                bank, _ = exercise_gen.bank_rows_near_level(
-                    db, comp, level5, source=exercise_source)
-                row = distribution.pick_balanced_exercise(
-                    bank, kind_counts, target_mix, item_seed, exclude_keys=picked_keys)
+                if filler:
+                    # petites cartes (un calcul, un QCM court) pour combler les
+                    # trous de bas de page : jamais répétées (None = épuisées)
+                    rows = exercise_gen.filler_bank_rows(
+                        db, comp, level5, source=exercise_source)
+                    row = distribution.pick_unused_exercise(
+                        rows, item_seed, exclude_keys=picked_keys)
+                    if row is None:
+                        return False
+                else:
+                    bank, _ = exercise_gen.bank_rows_near_level(
+                        db, comp, level5, source=exercise_source)
+                    row = distribution.pick_balanced_exercise(
+                        bank, kind_counts, target_mix, item_seed, exclude_keys=picked_keys)
             except Exception as e:
                 logger.warning("%s (%s) : %s", comp.code, student.llm_pseudonym, e)
                 warnings.append(f"{comp.code} ({student.llm_pseudonym}) : {e}")
                 return False
 
+            # une carte de remplissage ne traîne jamais de rappel de leçon :
+            # elle est là pour occuper un petit trou, pas pour enseigner
             lesson_snippet_id = None
-            if (comp.id in lesson_targets and comp.id not in lessons_added
+            if (not filler and comp.id in lesson_targets and comp.id not in lessons_added
                     and len(lessons_added) < settings.max_lessons_per_copy):
                 try:
                     snippet = exercise_gen.ensure_lesson(db, comp, level)
@@ -206,7 +223,11 @@ def generate_assessment_job(db: Session, assessment: Assessment,
                                  "grading": grading_json,
                                  "inline": bool((row.expected_json or {}).get("inline")),
                                  "_identity": identity,
-                                 "_bucket": distribution.exercise_bucket(row)})
+                                 # les cartes de remplissage ne passent pas par le
+                                 # tirage équilibré (kind_counts), donc pas de
+                                 # bucket à décrémenter si elles sont retirées —
+                                 # sinon on fausserait le mix des exercices classiques
+                                 "_bucket": None if filler else distribution.exercise_bucket(row)})
             if not row.response_type.startswith("qcm"):
                 total_non_qcm += 1
             return True
@@ -231,27 +252,50 @@ def generate_assessment_job(db: Session, assessment: Assessment,
                 ri, ex_tpl_font_size, math_fs, tpl["exercise"], tpl["lesson"])
                 for ri in items]
 
-        fill_seq = len(priority)
-        fill_attempts = 0
-        while fill_attempts < MAX_FILL_ATTEMPTS and priority:
-            comp_id = priority[fill_seq % len(priority)]
-            fill_attempts += 1
-            before = len(render_items)
-            if not _add_item(fill_seq, comp_id, seed * 100 + fill_seq):
-                fill_seq += 1
-                continue
-            if pdfgen.pages_needed(_heights(render_items)) > max_pages:
-                for ri in render_items[before:]:
-                    if ri.get("item_id"):
-                        db.query(CopyItem).filter_by(id=ri["item_id"]).delete()
-                        if not ri["response_type"].startswith("qcm"):
-                            total_non_qcm -= 1
-                        if ri.get("_bucket"):
-                            kind_counts[ri["_bucket"]] = max(0, kind_counts.get(ri["_bucket"], 0) - 1)
-                        picked_keys.discard(ri.get("_identity"))
-                db.flush()
-                del render_items[before:]
-            fill_seq += 1
+        def _rollback(before: int) -> None:
+            nonlocal total_non_qcm
+            for ri in render_items[before:]:
+                if ri.get("item_id"):
+                    db.query(CopyItem).filter_by(id=ri["item_id"]).delete()
+                    if not ri["response_type"].startswith("qcm"):
+                        total_non_qcm -= 1
+                    if ri.get("_bucket"):
+                        kind_counts[ri["_bucket"]] = max(0, kind_counts.get(ri["_bucket"], 0) - 1)
+                    picked_keys.discard(ri.get("_identity"))
+            db.flush()
+            del render_items[before:]
+
+        def _fill(start_seq: int, *, filler: bool) -> int:
+            """Ajoute des exercices en boucle tant qu'ils tiennent dans
+            max_pages. `filler`=False remplit au MAXIMUM avec des exercices
+            classiques ; =True comble ensuite les trous restants avec des
+            petites cartes. Un item qui déborde est retiré (une carte plus
+            petite peut encore tenir) ; on s'arrête après quelques tours
+            complets sans le moindre ajout (place résiduelle inexploitable)."""
+            seq = start_seq
+            attempts = stagnant = 0
+            stop_stagnant = 2 * max(1, len(priority))
+            while attempts < MAX_FILL_ATTEMPTS and stagnant < stop_stagnant:
+                comp_id = priority[seq % len(priority)]
+                attempts += 1
+                before = len(render_items)
+                if not _add_item(seq, comp_id, seed * 100 + seq, filler=filler):
+                    seq += 1
+                    stagnant += 1
+                    continue
+                if pdfgen.pages_needed(_heights(render_items)) > max_pages:
+                    _rollback(before)
+                    stagnant += 1
+                else:
+                    stagnant = 0
+                seq += 1
+            return seq
+
+        if priority:
+            # 1) remplir au maximum avec les exercices classiques (grandes cartes) ;
+            # 2) combler les trous de bas de page restants avec les cartes courtes.
+            next_seq = _fill(len(priority), filler=False)
+            _fill(next_seq, filler=True)
 
         _set_progress(db, job, round(5 + 90 * (s_idx + 1) / max(1, len(students))),
                      f"Copie {s_idx + 1}/{len(students)} ({student.llm_pseudonym})")

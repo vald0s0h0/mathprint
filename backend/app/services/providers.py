@@ -123,8 +123,20 @@ def _supports_assistant_prefill(model: str | None) -> bool:
 
 
 def _mock_enabled(db: Session, cfg: ProviderConfig | None) -> bool:
-    from .runtime_settings import mock_enabled
-    return mock_enabled(db) or cfg is None or not cfg.encrypted_secret
+    """Repli hors-ligne déterministe : actif dès qu'aucune clé API n'est
+    configurée pour ce fournisseur. C'est ce qui fait tourner la suite de
+    tests sans réseau. En production, configurer les clés (Paramètres →
+    Fournisseurs) suffit à l'écarter — il n'existe plus de « mode mock »
+    global."""
+    return cfg is None or not cfg.encrypted_secret
+
+
+def offline(db: Session, provider: str) -> bool:
+    """Vrai quand ce fournisseur n'a pas de clé configurée et tourne donc sur
+    son repli déterministe (hors-ligne/tests). Sert au pipeline à ne fournir
+    d'indice OCR (`expected_hint`) que dans ce cas — jamais face à un vrai
+    Mathpix, qui doit lire l'écriture de l'élève sans biais."""
+    return _mock_enabled(db, _config(db, provider))
 
 
 def _provider_for_model(model: str) -> str:

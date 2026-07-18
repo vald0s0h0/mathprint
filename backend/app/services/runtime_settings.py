@@ -1,52 +1,17 @@
 """Réglages persistés en base (system_settings), avec repli sur la config env.
 
-Le mode mock est pilotable depuis Paramètres → Système : la valeur en base
-prime sur MATHPRINT_MOCK_MODE. Quand il est désactivé, les classes mock sont
-archivées et plus aucune donnée simulée n'apparaît dans l'application.
+Les fournisseurs LLM/OCR basculent sur un repli déterministe hors-ligne dès
+qu'aucune clé n'est configurée (cf. providers._mock_enabled) — il n'existe
+plus de « mode mock » global ni de classe fictive.
 """
 from sqlalchemy.orm import Session
 
-from ..config import settings
-from ..models import SchoolClass, SchoolYear, Student, SystemSetting
+from ..models import SystemSetting
 
 
 def get_setting(db: Session, key: str) -> dict | None:
     row = db.get(SystemSetting, key)
     return row.value_json if row else None
-
-
-def mock_enabled(db: Session) -> bool:
-    v = get_setting(db, "mock_mode")
-    if v is not None and "enabled" in v:
-        return bool(v["enabled"])
-    return settings.mock_mode
-
-
-def apply_mock_mode(db: Session, enabled: bool):
-    """Archive/désarchive les classes mock pour qu'aucune trace ne subsiste
-    quand le mode est désactivé (et réapparaisse s'il est réactivé)."""
-    from ..models import now
-    from .security import new_pseudonym
-
-    mock_classes = db.query(SchoolClass).filter_by(is_mock=True).all()
-    if not enabled:
-        for c in mock_classes:
-            c.archived_at = c.archived_at or now()
-        return
-    if mock_classes:
-        for c in mock_classes:
-            c.archived_at = None
-        return
-    # aucune classe mock : en recréer une (même contenu que le seed initial)
-    from ..seed import MOCK_STUDENTS
-    year = db.query(SchoolYear).filter_by(active=True).first()
-    cls = SchoolClass(school_year_id=year.id if year else None,
-                      name="5e Mock", grade_level="5e", is_mock=True)
-    db.add(cls)
-    db.flush()
-    for last, first in MOCK_STUDENTS:
-        db.add(Student(class_id=cls.id, first_name=first, last_name=last,
-                       llm_pseudonym=new_pseudonym()))
 
 
 # ---------------------------------------------------------------- templates

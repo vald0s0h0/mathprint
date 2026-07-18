@@ -70,22 +70,12 @@ async def create_batch(tasks: BackgroundTasks, assessment_id: str | None = None,
                        file: UploadFile | None = None,
                        db: Session = Depends(get_db),
                        user: User = Depends(current_user)):
-    """Dépôt d'un scan (ou lot simulé sans fichier). Le scan s'ACCUMULE dans
-    l'unique ScanBatch du sujet (règle « un sujet = une correction = une
-    ligne », cf. services.scan_intake) — jamais un second batch."""
+    """Dépôt d'un scan. Le scan s'ACCUMULE dans l'unique ScanBatch du sujet
+    (règle « un sujet = une correction = une ligne », cf. services.scan_intake)
+    — jamais un second batch."""
     content = await file.read() if file is not None else None
-
-    # lot simulé (mode mock) : aucun fichier, sujet obligatoire
     if content is None:
-        if not assessment_id:
-            raise HTTPException(422, "Déposer un scan, ou préciser une évaluation "
-                                     "pour un lot simulé")
-        if not db.get(Assessment, assessment_id):
-            raise HTTPException(404, "Évaluation inconnue")
-        batch = scan_intake.get_or_create_batch(db, assessment_id, user.id)
-        db.commit()
-        tasks.add_task(_run_pipeline, batch.id)
-        return {"id": batch.id, "assessment_id": assessment_id}
+        raise HTTPException(422, "Déposer un scan (PDF, JPEG, PNG ou HEIC)")
 
     sniffed = _sniff_file(content)
     if sniffed is None:
@@ -109,7 +99,7 @@ async def create_batch(tasks: BackgroundTasks, assessment_id: str | None = None,
     batch = db.get(ScanBatch, r["batch_id"])
     if not batch.source_file_id:
         # aucune page reconnue et batch vierge : ne pas laisser un lot fantôme
-        # (qui basculerait à tort sur le chemin mock)
+        # (qui basculerait à tort sur le chemin sans-scan)
         db.delete(batch)
         db.commit()
         raise HTTPException(422, "Aucune page MathPrint reconnue dans ce scan")
@@ -271,7 +261,7 @@ def list_reviews(batch_id: str, category: str | None = None, db: Session = Depen
             # barème réel (points professeur) de l'exercice, pour l'affichage
             "bareme_points": scoring.item_bareme(item.grading_json, item.response_type),
             "zone_id": resp.zone_id,
-            # a un crop scanné exploitable ? (chemin réel ; mock n'en a pas)
+            # a un crop scanné exploitable ? (un lot sans scan n'en a pas)
             "has_scan": _zone_crop_path(copy.assessment_id, resp.zone_id).exists()
                         if resp.zone_id else False,
             "group_key": f"{item.catalog_id}|{sig}",
@@ -294,7 +284,7 @@ def _zone_crop_path(assessment_id: str, zone_id: str):
 def review_scan(review_id: str, db: Session = Depends(get_db)):
     """Crop scanné (recalé, dropout appliqué) de la zone de réponse de l'élève —
     pour voir précisément ce que le moteur n'a pas su identifier. 404 si absent
-    (lot simulé, ou zone sans encre)."""
+    (lot sans scan, ou zone sans encre)."""
     r = db.get(ManualReview, review_id)
     if not r:
         raise HTTPException(404)

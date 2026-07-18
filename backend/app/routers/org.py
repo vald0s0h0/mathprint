@@ -75,7 +75,6 @@ def list_classes(db: Session = Depends(get_db)):
     years = {y.id: y.label for y in db.query(SchoolYear).all()}
     return [{"id": c.id, "name": c.name, "grade_level": c.grade_level,
              "school_year": years.get(c.school_year_id),
-             "is_mock": c.is_mock,
              "student_count": len([s for s in c.students if s.active])}
             for c in db.query(SchoolClass).filter(SchoolClass.archived_at.is_(None)).all()]
 

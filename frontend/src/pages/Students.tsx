@@ -14,7 +14,7 @@ import { masteryColor } from '../utils/mastery'
 
 type Cls = {
   id: string; name: string; grade_level: string; school_year: string | null
-  student_count: number; is_mock: boolean
+  student_count: number
 }
 type StudentRow = {
   id: string; first_name: string; last_name: string; pseudonym: string
@@ -200,7 +200,6 @@ export default function Students() {
                   <Text fw={600} size="sm">{c.name}</Text>
                   <Group gap={4}>
                     <Badge size="xs" variant="light">{c.grade_level}</Badge>
-                    {c.is_mock && <Badge size="xs" variant="light" color="grape">démo</Badge>}
                   </Group>
                 </Group>
                 <Text size="xs" c="dimmed">

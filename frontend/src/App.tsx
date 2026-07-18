@@ -3,7 +3,7 @@ import {
   SegmentedControl, Text, Title, Tooltip, useComputedColorScheme, useMantineColorScheme,
 } from '@mantine/core'
 import {
-  FlaskConical, GraduationCap, LayoutDashboard, Library, LogOut, Moon,
+  GraduationCap, LayoutDashboard, Library, LogOut, Moon,
   ScanLine, Settings as SettingsIcon, Sun, Target, Users, FileText,
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
@@ -49,15 +49,13 @@ export default function App() {
   const navigate = useNavigate()
   const authed = !!getToken()
   const [needsSetup, setNeedsSetup] = useState<boolean | null>(null)
-  const { cycle, setCycle, mockMode, refreshSystem, activeJobs } = useAppState()
+  const { cycle, setCycle, activeJobs } = useAppState()
 
   useEffect(() => {
     api.get<{ needs_setup: boolean }>('/api/setup/status')
       .then((r) => setNeedsSetup(r.needs_setup))
       .catch(() => setNeedsSetup(false))
   }, [])
-
-  useEffect(() => { if (authed) refreshSystem() }, [authed, refreshSystem])
 
   if (needsSetup === null) return null
   if (needsSetup) return <Setup onDone={() => setNeedsSetup(false)} />
@@ -101,13 +99,6 @@ export default function App() {
                   ))}
                 </Menu.Dropdown>
               </Menu>
-            )}
-            {mockMode && (
-              <Tooltip label="Mode démonstration actif — désactivable dans Paramètres → Système">
-                <Badge variant="light" color="grape" leftSection={<FlaskConical size={12} />}>
-                  démo
-                </Badge>
-              </Tooltip>
             )}
             <ThemeToggle />
             <Tooltip label="Déconnexion">

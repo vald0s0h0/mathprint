@@ -1,5 +1,5 @@
 // État global léger : filtre Cycle (le professeur travaille par cycle, jamais
-// plusieurs à la fois) + mode mock (pilote l'affichage des outils de démo).
+// plusieurs à la fois) + suivi des jobs de génération de fond.
 //
 // Vocabulaire (partout dans l'UI) :
 // - CYCLE  : niveau scolaire 6e / 5e / 4e / 3e (grade_level) ;
@@ -21,15 +21,12 @@ type AppState = {
   setCycle: (c: Cycle) => void
   /** true si l'élément (classe, sujet, lot…) appartient au cycle filtré */
   matches: (grade?: string | null) => boolean
-  mockMode: boolean
-  refreshSystem: () => void
   /** sujets en file de génération de fond (assistant, étape finale) */
   activeJobs: GenerationJob[]
 }
 
 const Ctx = createContext<AppState>({
-  cycle: 'all', setCycle: () => {}, matches: () => true,
-  mockMode: false, refreshSystem: () => {}, activeJobs: [],
+  cycle: 'all', setCycle: () => {}, matches: () => true, activeJobs: [],
 })
 
 export function AppStateProvider({ children }: { children: React.ReactNode }) {
@@ -37,7 +34,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     const saved = localStorage.getItem('mathprint_cycle')
     return (saved === '6e' || saved === '5e' || saved === '4e' || saved === '3e') ? saved : 'all'
   })
-  const [mockMode, setMockMode] = useState(false)
   const [activeJobs, setActiveJobs] = useState<GenerationJob[]>([])
 
   const setCycle = useCallback((c: Cycle) => {
@@ -50,15 +46,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     [cycle],
   )
 
-  const refreshSystem = useCallback(() => {
-    if (!getToken()) return
-    api.get<Record<string, { enabled?: boolean }>>('/api/settings/system')
-      .then((s) => setMockMode(!!s.mock_mode?.enabled))
-      .catch(() => {})
-  }, [])
-
-  useEffect(refreshSystem, [refreshSystem])
-
   useEffect(() => {
     if (!getToken()) return
     const poll = () => {
@@ -70,7 +57,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   return (
-    <Ctx.Provider value={{ cycle, setCycle, matches, mockMode, refreshSystem, activeJobs }}>
+    <Ctx.Provider value={{ cycle, setCycle, matches, activeJobs }}>
       {children}
     </Ctx.Provider>
   )

@@ -104,7 +104,11 @@ CARD_PAD = 2.6 * mm
 # le plancher (exercice sans corrigé, ou corrigé tenant sur une ligne courte).
 STRIP_MIN_H = 6.5 * mm
 STRIP_GAP = 0.4 * mm    # espace blanc visible entre la carte et sa bande de correction (rapproché)
-STRIP_PAD_V = 1.4 * mm  # inset vertical du texte corrigé dans la bande
+# marge HAUTE fine (le corrigé colle à SA carte) et marge BASSE plus large (nette
+# séparation d'avec la carte suivante) : le corrigé ne peut plus se confondre avec
+# l'exercice du dessous. La marge basse effective = STRIP_PAD_BOT + GAP inter-carte.
+STRIP_PAD_TOP = 0.8 * mm
+STRIP_PAD_BOT = 2.2 * mm
 STRIP_NOTE_W = 17 * mm  # réserve droite pour la note de barème (imprimée en gros/gras)
 CORR_FS_DELTA = 1.0     # le corrigé s'imprime un cran plus petit que l'énoncé
 RADIUS = 2.2 * mm
@@ -1101,7 +1105,7 @@ def _correction_strip_layout(correction: str, w: float,
     fs = max(6.0, statement_fs - CORR_FS_DELTA)
     text_w = max(10 * mm, w - 2 * CARD_PAD - STRIP_NOTE_W)
     lay = _rich_layout(statement_mod.normalize(correction or ""), text_w, fs)
-    height = max(STRIP_MIN_H, lay["height"] + 2 * STRIP_PAD_V)
+    height = max(STRIP_MIN_H, lay["height"] + STRIP_PAD_TOP + STRIP_PAD_BOT)
     return {"height": height, "fs": fs, "text_w": text_w, "lay": lay}
 
 
@@ -1200,8 +1204,8 @@ def _draw_exercise_card(c: canvas.Canvas, x: float, y_top: float, w: float,
     c.setFillColor(black)
 
     meta["correction_strip"] = {
-        "x_pt": x + CARD_PAD, "y_pt": y + STRIP_PAD_V,
-        "w_pt": w - 2 * CARD_PAD, "h_pt": strip_h - 2 * STRIP_PAD_V,
+        "x_pt": x + CARD_PAD, "y_pt": y + STRIP_PAD_BOT,
+        "w_pt": w - 2 * CARD_PAD, "h_pt": strip_h - STRIP_PAD_TOP - STRIP_PAD_BOT,
         "fs": strip["fs"]}
     return card_h, zone_geo, meta
 

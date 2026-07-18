@@ -52,7 +52,6 @@ class SchoolClass(Base):
     name: Mapped[str] = mapped_column(String)
     grade_level: Mapped[str] = mapped_column(String, default="5e")  # 6e/5e/4e/3e
     teacher_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
-    is_mock: Mapped[bool] = mapped_column(Boolean, default=False)
     archived_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     students: Mapped[list["Student"]] = relationship(back_populates="school_class")
 

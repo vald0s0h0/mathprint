@@ -5,9 +5,9 @@ uploaded → split → identified → registered → cropped → ocr_complete �
 
 Deux chemins :
 - lot avec fichier PDF déposé : chemin réel (worker_cv : raster, QR, homographie,
-  crops, dropout, QCM) ; l'OCR texte passe par Mathpix (ou son mock sans clé) ;
-- lot simulé (mode mock, sans fichier) : zones traitées comme si elles avaient
-  été recadrées, pour exercer tout le chemin décisionnel (tiers A-E).
+  crops, dropout, QCM) ; l'OCR texte passe par Mathpix (ou son repli sans clé) ;
+- lot sans fichier (batch créé sans scan, cas des tests) : zones traitées comme si
+  elles avaient été recadrées, pour exercer tout le chemin décisionnel (tiers A-E).
 """
 import hashlib
 from datetime import datetime, timezone
@@ -26,7 +26,6 @@ from . import providers, scoring
 from .appreciation import build_appreciation
 from .forgetting import apply_evidence
 from .pdfgen import render_copy_review, render_overlay
-from .runtime_settings import mock_enabled
 from .security import verify_page_payload
 
 PHASES = ["uploaded", "split", "identified", "registered", "cropped",
@@ -122,6 +121,9 @@ def _wrong_answer(right: str, h: int) -> str:
 def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
     from . import worker_cv  # import tardif : OpenCV chargé seulement si nécessaire
 
+    # sans clé Mathpix, l'OCR tourne sur son repli déterministe : on lui souffle
+    # alors la réponse attendue pour simuler une lecture ; jamais avec une vraie clé.
+    ocr_offline = providers.offline(db, "mathpix")
     src = db.get(FileObject, batch.source_file_id)
     if not src or not Path(src.storage_path).exists():
         raise ValueError("Fichier scan introuvable")
@@ -235,7 +237,7 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
                             confs.append(1.0)
                             continue
                         hint = None
-                        if mock_enabled(db) and ri < len(expected_cells) and ci < len(expected_cells[ri]):
+                        if ocr_offline and ri < len(expected_cells) and ci < len(expected_cells[ri]):
                             hint = str(expected_cells[ri][ci]["value"])
                         ocr_c = providers.mathpix_ocr(db, worker_cv.encode_png(cfiltered),
                                                       f"{corr_id}-c{ri}-{ci}", expected_hint=hint)
@@ -257,7 +259,7 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
                         db, item=item, zone=zone, student=student,
                         ocr_text="", conf=1.0, selected=None, corr_id=corr_id)
                 else:
-                    hint = _expected_as_text(item.expected_json) if mock_enabled(db) else None
+                    hint = _expected_as_text(item.expected_json) if ocr_offline else None
                     ocr = providers.mathpix_ocr(db, crop_path.read_bytes(), corr_id,
                                                 expected_hint=hint)
                     db.add(OcrAttempt(zone_id=zone.id, provider="mathpix",
@@ -273,7 +275,7 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
     return n_review
 
 
-# --------------------------------------------------------------- chemin mock
+# ----------------------------------------------- chemin sans scan (tests)
 
 def _process_mock(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
     copies = db.query(Copy).filter_by(assessment_id=assessment.id).all()

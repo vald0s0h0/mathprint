@@ -120,6 +120,22 @@ def pick_balanced_exercise(rows: list[GeneratedExercise], counts: dict[str, int]
     return row
 
 
+def pick_unused_exercise(rows: list[GeneratedExercise], seed: int,
+                         exclude_keys: set[str] | None = None) -> GeneratedExercise | None:
+    """Un exercice NON encore servi dans la copie (identité hors exclude_keys),
+    déterministe par seed ; None si tous sont déjà servis. Contrairement à
+    pick_balanced_exercise, ne se replie PAS sur l'ensemble complet : l'appelant
+    (remplissage de bas de page) préfère s'arrêter plutôt que de répéter une
+    même petite carte sur la copie d'un élève."""
+    if not rows:
+        return None
+    available = ([r for r in rows if exercise_identity(r) not in exclude_keys]
+                 if exclude_keys else list(rows))
+    if not available:
+        return None
+    return available[seed % len(available)]
+
+
 def _fresh_plan(student: Student) -> dict | None:
     """Plan post-correction (services.appreciation) si présent et pas plus
     vieux que next_plan_max_age_days, sinon None."""

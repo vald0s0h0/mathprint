@@ -17,7 +17,6 @@ from ..models import (
     SystemSetting, User,
 )
 from ..services.forgetting import recall_probability
-from ..services.runtime_settings import apply_mock_mode, mock_enabled
 
 router = APIRouter(prefix="/api", tags=["misc"], dependencies=[Depends(current_user)])
 
@@ -112,7 +111,6 @@ def set_provider(body: ProviderIn, db: Session = Depends(get_db)):
 @router.get("/settings/system")
 def get_system_settings(db: Session = Depends(get_db)):
     rows = {r.key: r.value_json for r in db.query(SystemSetting).all()}
-    rows["mock_mode"] = {"enabled": mock_enabled(db)}
     rows.setdefault("forgetting_threshold", {"value": settings.forgetting_threshold})
     rows.setdefault("correction_color", {"value": settings.correction_color})
     rows.setdefault("dropout_color", {"value": settings.dropout_color})
@@ -134,8 +132,6 @@ def set_system_setting(body: SettingIn, db: Session = Depends(get_db),
     row.value_json = body.value
     row.version = (row.version or 0) + 1  # None tant que la ligne n'est pas flushée
     row.updated_by = user.id
-    if body.key == "mock_mode":
-        apply_mock_mode(db, bool(body.value.get("enabled")))
     db.commit()
     return {"ok": True}
 
@@ -214,7 +210,7 @@ def costs(db: Session = Depends(get_db)):
 
 @router.get("/dashboard")
 def dashboard(db: Session = Depends(get_db)):
-    # les lots des classes archivées (dont les classes mock désactivées) sont exclus
+    # les lots des classes archivées sont exclus
     batches = (db.query(ScanBatch)
                .join(Assessment, ScanBatch.assessment_id == Assessment.id)
                .join(SchoolClass, Assessment.class_id == SchoolClass.id)
@@ -232,8 +228,7 @@ def dashboard(db: Session = Depends(get_db)):
         avg = sum(st.mastery for st in states) / len(states) if states else 0
         classes.append({"id": c.id, "name": c.name, "grade_level": c.grade_level,
                         "students": len(student_ids),
-                        "avg_mastery": round(avg, 2), "due_competencies": due,
-                        "is_mock": c.is_mock})
+                        "avg_mastery": round(avg, 2), "due_competencies": due})
 
     assessments = {a.id: a for a in db.query(Assessment).all()}
     class_grades = {c.id: c.grade_level for c in db.query(SchoolClass).all()}
@@ -249,6 +244,6 @@ def dashboard(db: Session = Depends(get_db)):
                             "created_at": str(b.created_at)} for b in batches],
         "classes": classes,
         "assessments_draft": db.query(Assessment).filter_by(status="draft").count(),
-        "system": {"mock_mode": mock_enabled(db), "data_dir": str(settings.data_dir),
+        "system": {"data_dir": str(settings.data_dir),
                    "version": __version__, "build_sha": settings.build_sha},
     }

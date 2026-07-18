@@ -55,7 +55,7 @@ def list_assessments(db: Session = Depends(get_db)):
     for a in db.query(Assessment).order_by(Assessment.created_at.desc()).all():
         cls = db.get(SchoolClass, a.class_id)
         if cls and cls.archived_at is not None:
-            continue  # classes archivées (dont mock désactivé) : aucune trace
+            continue  # classes archivées : aucune trace
         out.append({"id": a.id, "title": a.title, "type": a.type, "status": a.status,
                     "class_name": cls.name if cls else "?",
                     "class_id": a.class_id,

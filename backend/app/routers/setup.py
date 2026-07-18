@@ -27,7 +27,8 @@ class SetupIn(BaseModel):
     email: str
     display_name: str = ""
     password: str
-    # clés optionnelles parmi ALLOWED_PROVIDERS ; toute absente/vide reste en mode mock
+    # clés optionnelles parmi ALLOWED_PROVIDERS ; toute absente/vide laisse le
+    # fournisseur sur son repli déterministe hors-ligne
     providers: dict[str, ProviderSetupIn] = {}
 
 
