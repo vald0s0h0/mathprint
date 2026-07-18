@@ -96,21 +96,21 @@ def test_ensure_bank_gemini_calls_llm_until_target_then_stops(db_session, monkey
     comp = _seed_domain(db_session)
     gemini_gen.ensure_bank(db_session, comp, level=3)
 
-    # cible 30 / lots de 5 = 6 appels classiques (et PAS un de plus), PUIS un
+    # cible 15 / lots de 5 = 3 appels classiques (et PAS un de plus), PUIS un
     # unique appel dédié aux petites cartes de remplissage
-    classic = calls[:6]
-    assert [c["batch"] for c in classic] == [0, 1, 2, 3, 4, 5]
+    classic = calls[:3]
+    assert [c["batch"] for c in classic] == [0, 1, 2]
     assert all(c["count"] == settings.gemini_batch_size for c in classic)
     # chaque lot connaît les énoncés de tous les précédents (anti-doublon côté
     # prompt ; le dédoublonnage déterministe reste le filet, cf. _dedup_key)
     assert classic[0]["already_created"] == []
     assert len(classic[1]["already_created"]) == 5
-    assert len(classic[5]["already_created"]) == 25
-    # le 7e et dernier appel est le lot de remplissage : un index de lot distinct
-    # (jamais 0..5) et il connaît déjà les 30 exercices classiques
-    assert len(calls) == 7
-    assert calls[6]["batch"] not in range(6)
-    assert len(calls[6]["already_created"]) == 30
+    assert len(classic[2]["already_created"]) == 10
+    # le 4e et dernier appel est le lot de remplissage : un index de lot distinct
+    # (jamais 0..2) et il connaît déjà les 15 exercices classiques
+    assert len(calls) == 4
+    assert calls[3]["batch"] not in range(3)
+    assert len(calls[3]["already_created"]) == 15
 
 
 def test_ensure_bank_gemini_full_bank_creates_nothing_and_reads_no_manual(
@@ -294,8 +294,8 @@ def test_gemini_grounds_every_batch_in_the_manual_ocr_text(db_session, monkeypat
     gemini_gen.ensure_bank(db_session, comp, level=3)
 
     ocr = gemini_gen._manual_context(sesamaths.ensure_series_ocr(db_session, comp))
-    # 6 lots classiques + 1 lot de remplissage : le contexte manuel ancre CHACUN
-    assert ocr and len(systems) == 7
+    # 3 lots classiques + 1 lot de remplissage : le contexte manuel ancre CHACUN
+    assert ocr and len(systems) == 4
     assert all(ocr in s for s in systems)
 
 

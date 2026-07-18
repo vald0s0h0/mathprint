@@ -44,11 +44,20 @@ export function PdfFrame({ src, height = '70vh' }: { src: string; height?: strin
 }
 
 export default function PdfPreviewModal({
-  assessmentId, opened, onClose,
-}: { assessmentId: string | null; opened: boolean; onClose: () => void }) {
+  assessmentId, opened, onClose, initialMode = 'copy',
+}: {
+  assessmentId: string | null; opened: boolean; onClose: () => void
+  // vue ouverte par défaut : « review » (copie + overlay) pour relire une
+  // correction avant impression, « copy » pour prévisualiser un sujet.
+  initialMode?: 'copy' | 'batch' | 'overlay' | 'review'
+}) {
   const [entries, setEntries] = useState<PreviewEntry[]>([])
   const [idx, setIdx] = useState(0)
-  const [mode, setMode] = useState<'copy' | 'batch' | 'overlay' | 'review'>('copy')
+  const [mode, setMode] = useState<'copy' | 'batch' | 'overlay' | 'review'>(initialMode)
+
+  useEffect(() => {
+    if (opened) setMode(initialMode)
+  }, [opened, initialMode])
 
   useEffect(() => {
     if (opened && assessmentId) {

@@ -128,6 +128,25 @@ def test_normalize_accepts_windows_line_endings():
     assert statement.normalize("Un.\r\nDeux.") == "Un.\nDeux."
 
 
+def test_normalize_repairs_a_blank_marker_stuck_inside_a_formula():
+    """Le rapport de bug : le modèle a glissé la case dans une formule, où
+    « blank » s'imprimait en italique au lieu d'une case. On ressort la case du
+    $...$ en marqueur propre (« $85blank$ » -> « $85${{blank}} »)."""
+    got = statement.normalize("Le nombre $85blank$ est divisible par 5 mais pas par 10.")
+    assert got == "Le nombre $85${{blank}} est divisible par 5 mais pas par 10."
+    assert statement.BLANK_TOKEN in got
+
+
+def test_normalize_repairs_bare_and_single_brace_blank_markers():
+    assert statement.normalize("Il reste 85blank croissants.") == \
+        "Il reste 85{{blank}} croissants."
+    assert statement.normalize("Il reste {blank} croissants.") == \
+        "Il reste {{blank}} croissants."
+    # un « {{blank}} » déjà correct n'est pas retouché, et « blanket » non plus
+    assert statement.normalize("Une case {{blank}} propre.") == "Une case {{blank}} propre."
+    assert statement.normalize("Le mot blanket reste intact.") == "Le mot blanket reste intact."
+
+
 def test_a_subquestion_always_opens_its_own_line():
     """« toujours sauter la ligne pour a, b, c » — même si le modèle l'oublie."""
     got = statement.normalize("Calcule les sommes suivantes. a) $2+3$ b) $4+5$ c) $6+7$")

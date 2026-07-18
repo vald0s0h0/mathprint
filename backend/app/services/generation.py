@@ -252,6 +252,31 @@ def generate_assessment_job(db: Session, assessment: Assessment,
                 ri, ex_tpl_font_size, math_fs, tpl["exercise"], tpl["lesson"])
                 for ri in items]
 
+        def _pack(items: list[dict]) -> tuple[list[dict], list[float]]:
+            """Réordonne les cartes pour un remplissage colonne par colonne
+            efficace (First-Fit-Decreasing, cf. pdfgen.pack_reading_order) :
+            les grandes cartes d'abord, les petites comblant les bas de colonne,
+            au lieu du grand vide laissé par l'ordre de production du LLM. Chaque
+            rappel de leçon reste collé à l'exercice qu'il précède (unité
+            indissociable). Retourne (cartes réordonnées, leurs hauteurs)."""
+            hs = _heights(items)
+            units: list[tuple[list[dict], list[float]]] = []
+            i = 0
+            while i < len(items):
+                if items[i].get("kind") == "lesson" and i + 1 < len(items):
+                    units.append(([items[i], items[i + 1]], [hs[i], hs[i + 1]]))
+                    i += 2
+                else:
+                    units.append(([items[i]], [hs[i]]))
+                    i += 1
+            order = pdfgen.pack_reading_order([sum(h) for _, h in units])
+            packed_items: list[dict] = []
+            packed_h: list[float] = []
+            for k in order:
+                packed_items.extend(units[k][0])
+                packed_h.extend(units[k][1])
+            return packed_items, packed_h
+
         def _rollback(before: int) -> None:
             nonlocal total_non_qcm
             for ri in render_items[before:]:
@@ -283,7 +308,11 @@ def generate_assessment_job(db: Session, assessment: Assessment,
                     seq += 1
                     stagnant += 1
                     continue
-                if pdfgen.pages_needed(_heights(render_items)) > max_pages:
+                # nombre de pages une fois les cartes réordonnées (FFD) : c'est
+                # ce placement-là que render_copy réalise en bout de chaîne, donc
+                # ce qui décide du débordement — pas l'ordre de production brut,
+                # qui gaspille des bas de colonne et remplirait donc moins.
+                if pdfgen.pages_needed(_pack(render_items)[1]) > max_pages:
                     _rollback(before)
                     stagnant += 1
                 else:
@@ -296,6 +325,19 @@ def generate_assessment_job(db: Session, assessment: Assessment,
             # 2) combler les trous de bas de page restants avec les cartes courtes.
             next_seq = _fill(len(priority), filler=False)
             _fill(next_seq, filler=True)
+
+        # Ordre DÉFINITIF des cartes : le remplissage colonne par colonne (FFD)
+        # est figé ici, une fois toutes les cartes choisies. On renumérote alors
+        # les exercices dans l'ordre de LECTURE ainsi obtenu, pour que le badge
+        # imprimé et le « Ex. N » de la correction manuelle (routers.scans)
+        # restent alignés.
+        render_items, _ = _pack(render_items)
+        seq_no = 0
+        for ri in render_items:
+            if ri.get("kind") == "exercise" and ri.get("item_id"):
+                seq_no += 1
+                db.query(CopyItem).filter_by(id=ri["item_id"]).update({"sequence": seq_no})
+        db.flush()
 
         _set_progress(db, job, round(5 + 90 * (s_idx + 1) / max(1, len(students))),
                      f"Copie {s_idx + 1}/{len(students)} ({student.llm_pseudonym})")

@@ -25,11 +25,11 @@ Reste propre à la création (le pool est infini) :
   - pas de cache LLM : rappeler le modèle avec le même prompt doit produire des
     exercices NEUFS, c'est le but même de la boucle ;
   - appels par lots de `settings.gemini_batch_size` (5), répétés jusqu'à ce que
-    la banque atteigne `settings.gemini_bank_target` (30) — 6 appels si tout
+    la banque atteigne `settings.gemini_bank_target` (15) — 3 appels si tout
     passe, davantage si la validation en recale (nombre d'appels non borné a
     priori, seulement plafonné par `settings.gemini_max_batches`) ;
   - PUIS un appel DÉDIÉ (prompt _FILLER_INTRO) crée `settings.gemini_filler_target`
-    (5) petites cartes de REMPLISSAGE (kind="filler", cible totale 35) : un seul
+    (5) petites cartes de REMPLISSAGE (kind="filler", cible totale 20) : un seul
     calcul / un QCM court, exclues de la sélection normale et réservées aux trous
     de bas de page (services.generation) ; best-effort, un échec n'empêche pas
     le sujet ;
@@ -180,6 +180,24 @@ _INTRO = (
     "attendre des réponses de natures différentes (un entier, une fraction, "
     "une expression…) — c'est particulièrement utile pour les problèmes.\n\n"
 
+    "# Énoncés efficaces — AUCUNE répétition entre l'énoncé et les réponses\n"
+    "L'énoncé et les réponses (choix de QCM, cases à remplir) forment UN tout : "
+    "une information donnée d'un côté ne se répète JAMAIS de l'autre. Un QCM "
+    "affiche déjà ses choix sous l'énoncé — ces choix FONT PARTIE de l'énoncé, "
+    "ne les récris donc pas une deuxième fois dans \"statement\". Chaque nombre, "
+    "chaque donnée n'apparaît qu'UNE seule fois. En particulier, quand la "
+    "consigne porte sur une liste d'éléments que l'élève doit cocher, cette "
+    "liste EST la liste des \"choices\" — ne la duplique pas dans l'énoncé.\n"
+    "MAUVAIS (la liste est écrite deux fois) :\n"
+    "  statement = « Voici une liste de nombres :\\n- 54\\n- 84\\n- 112\\n- 120\\n"
+    "- 136\\nCoche tous les nombres divisibles à la fois par 3 et par 4. »\n"
+    "  choices  = [\"54\", \"84\", \"112\", \"120\", \"136\"]\n"
+    "BON (la liste n'est que dans les choix) :\n"
+    "  statement = « Coche tous les nombres divisibles à la fois par 3 et par 4. »\n"
+    "  choices  = [\"54\", \"84\", \"112\", \"120\", \"136\"]\n"
+    "De même, ne répète pas dans l'énoncé une valeur qui sera la réponse "
+    "attendue d'une case, ni un intitulé déjà porté par un choix.\n\n"
+
     "# Contraintes de rédaction\n"
     "- respecter le programme français de §GRADE§ ;\n"
     "- viser une difficulté MOYENNE, pour un élève médian de §GRADE§ ; "
@@ -281,7 +299,13 @@ _FILLER_INTRO = (
     "- énoncé d'UNE phrase courte, idéalement une seule ligne ; pour un calcul, "
     "l'expression seule suffit (ex. « Calcule $7 \\times 8$. ») ;\n"
     "- QCM : 3 ou 4 choix courts, distracteurs = erreurs classiques d'élèves "
-    "(résultat d'une faute plausible), jamais des nombres au hasard.\n\n"
+    "(résultat d'une faute plausible), jamais des nombres au hasard ;\n"
+    "- AUCUNE répétition entre l'énoncé et les réponses : les choix d'un QCM "
+    "s'affichent déjà sous l'énoncé, ne les récris pas dans \"statement\" ; si "
+    "la consigne porte sur une liste à cocher, cette liste EST la liste des "
+    "\"choices\", pas du texte de l'énoncé (ex. « Coche les multiples de 4. » + "
+    "choices=[\"12\",\"18\",\"20\",\"30\"], et surtout PAS la même liste écrite "
+    "dans l'énoncé).\n\n"
 
     "# Contraintes de rédaction\n"
     "- respecter le programme français de §GRADE§, difficulté MOYENNE ; "
@@ -513,9 +537,9 @@ def filler_rows(db: Session, competency: Competency, level: int) -> list[Generat
 
 
 def ensure_bank(db: Session, competency: Competency, level: int) -> list[GeneratedExercise]:
-    """Garantit `settings.gemini_bank_target` (30) exercices actifs pour la
+    """Garantit `settings.gemini_bank_target` (15) exercices actifs pour la
     compétence, en enchaînant autant d'appels Gemini que nécessaire — banque
-    vide : 30 d'un coup (6 lots de 5) ; banque partielle : le complément
+    vide : 15 d'un coup (3 lots de 5) ; banque partielle : le complément
     seulement ; banque pleine : rien du tout, sans même lire le manuel.
 
     Remplir d'un coup, et pas au besoin d'un sujet, est délibéré : les sujets
@@ -540,7 +564,7 @@ def ensure_bank(db: Session, competency: Competency, level: int) -> list[Generat
 
     # Banque déjà pleine : on ne crée RIEN et on ne lit même pas le manuel. Les
     # exercices en stock serviront les prochains sujets — c'est tout l'intérêt
-    # de viser 30 d'un coup plutôt que de rappeler le modèle à chaque sujet.
+    # de viser 15 d'un coup plutôt que de rappeler le modèle à chaque sujet.
     target = settings.gemini_bank_target
     if len(rows) >= target:
         return rows

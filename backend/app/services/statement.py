@@ -31,6 +31,41 @@ import re
 
 BLANK_TOKEN = "{{blank}}"
 
+# Réparation des marqueurs de case mal formés. Le marqueur canonique est
+# « {{blank}} », en texte, hors de toute formule ; mais un LLM le mange parfois
+# (case perdue) et écrit la case comme le mot « blank » — souvent GLISSÉ dans
+# une formule ($85blank$), où KaTeX/mathtext l'affiche en italique au lieu
+# d'imprimer une case. « blank » n'ayant aucun sens légitime dans un énoncé de
+# maths en français, on le rétablit systématiquement en case propre.
+_BLANK_BRACES = re.compile(r"\{\{\s*blank\s*\}\}|\{\s*blank\s*\}", re.I)
+# « blank » collé à ce qui le précède (« 85blank ») : pas de frontière de mot à
+# gauche (un chiffre est un caractère de mot), on n'exige donc qu'une frontière
+# À DROITE (rien ou un non-lettre) pour ne pas confondre avec « blanket ».
+_BLANK_IN_MATH = re.compile(r"\$([^$]*?)blank(?![A-Za-z])([^$]*?)\$", re.I)
+# le mot « blank » resté nu dans le texte, hors du marqueur canonique déjà posé
+# (le « blank » de « {{blank}} » est précédé d'une accolade -> exclu).
+_BLANK_BARE = re.compile(r"(?<!\{)blank(?![A-Za-z])", re.I)
+
+
+def repair_blank_marker(text: str) -> str:
+    """Rétablit en « {{blank}} » toute case de réponse mal notée (accolades
+    simples, mot « blank » nu, ou case glissée dans une formule $...$).
+    Idempotent : un « {{blank}} » déjà correct n'est pas retouché."""
+    if not text or "blank" not in text.lower():
+        return text
+    text = _BLANK_BRACES.sub(BLANK_TOKEN, text)
+
+    def _extract(m: "re.Match") -> str:
+        before, after = m.group(1).strip(), m.group(2).strip()
+        out = f"${before}$" if before else ""
+        out += BLANK_TOKEN
+        if after:
+            out += f"${after}$"
+        return out
+
+    text = _BLANK_IN_MATH.sub(_extract, text)
+    return _BLANK_BARE.sub(BLANK_TOKEN, text)
+
 # Étiquette de sous-question EN TÊTE DE LIGNE, telle qu'on l'imprime en
 # pastille : une seule lettre a-h, un point ou une parenthèse, un espace.
 SUBQUESTION_RE = re.compile(r"^([a-h])\s*[.)]\s+(?=\S)")
@@ -99,9 +134,13 @@ def normalize(text: str) -> str:
       mesure de la ligne au rendu ;
     - lignes vides supprimées : le saut de ligne sépare, il n'aère pas ; deux
       sauts coûteraient une ligne blanche dans une carte déjà dense ;
-    - une sous-question par ligne, toujours (cf. `_break_subquestions`).
+    - une sous-question par ligne, toujours (cf. `_break_subquestions`) ;
+    - cases de réponse mal notées rétablies en `{{blank}}` (cf.
+      `repair_blank_marker`) : le LLM glisse parfois le mot « blank » dans une
+      formule au lieu du marqueur, la case ne s'imprimait alors pas.
     """
     text = (text or "").replace("\r\n", "\n").replace("\r", "\n")
+    text = repair_blank_marker(text)
     text = _break_subquestions(text)
     lines = [ln.strip() for ln in text.split("\n")]
     return "\n".join(ln for ln in lines if ln).strip()

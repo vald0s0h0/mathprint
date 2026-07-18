@@ -78,3 +78,33 @@ def test_pages_needed_counts_the_lost_bottom_of_column():
     # tient une par demi-colonne : 2 pages.
     column_h = pdfgen._top_of_page(0) - pdfgen._BOTTOM_LIMIT
     assert pdfgen.pages_needed([column_h * 0.6] * 4) == 2
+
+
+def test_pack_reading_order_never_worse_than_raw_order():
+    # Le remplissage colonne par colonne (FFD) ne doit JAMAIS déborder d'une
+    # page de plus que l'ordre brut — et le supprime souvent (les petites cartes
+    # comblent les bas de colonne au lieu de laisser un grand vide).
+    import random
+    col = pdfgen._top_of_page(1) - pdfgen._BOTTOM_LIMIT
+    random.seed(3)
+    for _ in range(200):
+        hs = [col * random.uniform(0.2, 0.7) for _ in range(random.randint(4, 10))]
+        raw = pdfgen.pages_needed(hs)
+        ffd = pdfgen.pages_needed([hs[i] for i in pdfgen.pack_reading_order(hs)])
+        assert ffd <= raw
+
+
+def test_pack_reading_order_is_reproduced_by_real_render_copy():
+    # L'ordre FFD, posé tel quel par le placement glouton de render_copy, doit
+    # retomber EXACTEMENT sur le nombre de pages simulé (invariant central) :
+    # un FFD ne laisse jamais un trou qu'une carte ultérieure aurait pu combler.
+    rubric = {"max_score": 2, "comparator": "rubric", "lines": 9,
+              "steps": [{"description": "Étape", "expected_text": "$1 + 1 = 2$", "points": 1}]}
+    items = []
+    for i in range(9):
+        items.append(_exercise(f"Calcule ${i} + {i}$."))
+        items.append(_exercise(f"Problème {i} : détaille ton raisonnement.",
+                               "multiline_text", grading=rubric))
+    order = pdfgen.pack_reading_order(_heights(items))
+    packed = [items[i] for i in order]
+    assert pdfgen.pages_needed(_heights(packed)) == _render_pages(packed)

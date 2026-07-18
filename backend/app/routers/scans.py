@@ -227,8 +227,80 @@ def _pending_reviews_query(db: Session, assessment_id: str):
                     ManualReview.resolved_at.is_(None)))
 
 
+def _latest_decision_for_response(db: Session, response_id: str) -> GradingDecision | None:
+    return (db.query(GradingDecision).filter_by(response_id=response_id)
+            .order_by(GradingDecision.created_at.desc()).first())
+
+
+def _open_review_for_response(db: Session, response_id: str) -> ManualReview | None:
+    """Revue professeur encore ouverte rattachée à une décision de cette réponse
+    (peu importe laquelle : les décisions sont append-only, la revue est posée
+    sur la décision automatique)."""
+    return (db.query(ManualReview)
+            .join(GradingDecision, ManualReview.decision_id == GradingDecision.id)
+            .filter(GradingDecision.response_id == response_id,
+                    ManualReview.resolved_at.is_(None))
+            .first())
+
+
+def _review_unit(db: Session, resp: StudentResponse, item: CopyItem, copy: Copy,
+                 student: Student, *, review: ManualReview | None = None,
+                 decision: GradingDecision | None = None) -> dict:
+    """Vue unifiée d'une réponse d'élève à corriger, que la correction soit
+    SIGNALÉE (une ManualReview ouverte) ou simplement RELUE par le professeur
+    (aucune revue, mais il veut vérifier/ajuster). Clé de correction = la réponse
+    (`response_id`), pas la revue : le professeur peut corriger n'importe quelle
+    réponse, pas seulement celles que le moteur a marquées.
+
+    Exercices identiques = même entrée catalogue ET même énoncé figé (RM-014) :
+    on regroupe dessus (`group_key`) pour enchaîner tout un lot d'un coup, en
+    montrant le crop scanné de chaque élève et le barème réel de l'exercice."""
+    if decision is None:
+        decision = _latest_decision_for_response(db, resp.id)
+    ocr = (db.query(OcrAttempt).filter_by(zone_id=resp.zone_id)
+           .order_by(OcrAttempt.created_at.desc()).first()) if resp.zone_id else None
+    sig = hashlib.sha1(item.statement.encode()).hexdigest()[:8]
+    bareme = scoring.item_bareme(item.grading_json, item.response_type)
+    earned = (scoring.earned_points(decision.score, decision.max_score, bareme)
+              if decision else 0.0)
+    full = bool(decision and decision.max_score and decision.score >= decision.max_score)
+    src = decision.source if decision else "auto"  # deterministic|deepseek|teacher
+    cancelled = bool(decision and src == "teacher" and not decision.max_score)
+    return {
+        "response_id": resp.id,
+        "review_id": review.id if review else None,
+        "flagged": review is not None,
+        "category": review.category if review else None,
+        "student": f"{student.last_name} {student.first_name}",
+        "statement": item.statement, "expected": item.expected_json,
+        "correction": item.correction,
+        "ocr_text": resp.final_text, "selected_choices": resp.selected_choices,
+        "ocr_confidence": ocr.confidence if ocr else None,
+        "reason_code": decision.reason_code if decision else "",
+        # source de la note actuelle, pour distinguer auto vs correction prof
+        "decision_source": src,
+        "proposed_score": decision.score if decision else 0.0,
+        "max_score": decision.max_score if decision else 0.0,
+        # points de barème actuellement attribués (ratio × barème)
+        "current_points": round(earned, 2),
+        "full_credit": full, "cancelled": cancelled,
+        # barème réel (points professeur) de l'exercice, pour l'affichage
+        "bareme_points": bareme,
+        "zone_id": resp.zone_id,
+        # a un crop scanné exploitable ? (un lot sans scan n'en a pas)
+        "has_scan": _zone_crop_path(copy.assessment_id, resp.zone_id).exists()
+                    if resp.zone_id else False,
+        "group_key": f"{item.catalog_id}|{sig}",
+        "group_label": f"Ex. {item.sequence}",
+        "response_type": item.response_type,
+        "sequence": item.sequence,
+    }
+
+
 @router.get("/batches/{batch_id}/reviews")
 def list_reviews(batch_id: str, category: str | None = None, db: Session = Depends(get_db)):
+    """Réponses SIGNALÉES (revue automatique ouverte) — le sous-ensemble que le
+    moteur n'a pas su trancher. Voir `list_items` pour toutes les réponses."""
     b = db.get(ScanBatch, batch_id)
     if not b:
         raise HTTPException(404)
@@ -242,36 +314,51 @@ def list_reviews(batch_id: str, category: str | None = None, db: Session = Depen
         item = db.get(CopyItem, resp.copy_item_id)
         copy = db.get(Copy, item.copy_id)
         student = db.get(Student, copy.student_id)
-        ocr = (db.query(OcrAttempt).filter_by(zone_id=resp.zone_id)
-               .order_by(OcrAttempt.created_at.desc()).first())
-        # exercices identiques = même entrée catalogue ET même énoncé figé
-        # (RM-014) — le professeur corrige un lot d'exercices identiques d'un
-        # coup ; on regroupe donc dessus, en montrant le crop scanné de chaque
-        # élève et le barème réel de l'exercice.
-        sig = hashlib.sha1(item.statement.encode()).hexdigest()[:8]
-        out.append({
-            "review_id": r.id, "category": r.category,
-            "student": f"{student.last_name} {student.first_name}",
-            "statement": item.statement, "expected": item.expected_json,
-            "correction": item.correction,
-            "ocr_text": resp.final_text, "selected_choices": resp.selected_choices,
-            "ocr_confidence": ocr.confidence if ocr else None,
-            "reason_code": decision.reason_code,
-            "proposed_score": decision.score, "max_score": decision.max_score,
-            # barème réel (points professeur) de l'exercice, pour l'affichage
-            "bareme_points": scoring.item_bareme(item.grading_json, item.response_type),
-            "zone_id": resp.zone_id,
-            # a un crop scanné exploitable ? (un lot sans scan n'en a pas)
-            "has_scan": _zone_crop_path(copy.assessment_id, resp.zone_id).exists()
-                        if resp.zone_id else False,
-            "group_key": f"{item.catalog_id}|{sig}",
-            "group_label": f"Ex. {item.sequence}",
-            "response_type": item.response_type,
-            "sequence": item.sequence,
-        })
+        out.append(_review_unit(db, resp, item, copy, student, review=r, decision=decision))
     # exercices identiques consécutifs (group_key), puis par élève : le prof
     # enchaîne tout un lot d'exercices identiques avant de passer au suivant
     out.sort(key=lambda x: (x["sequence"], x["group_key"], x["student"]))
+    return out
+
+
+@router.get("/batches/{batch_id}/items")
+def list_items(batch_id: str, scope: str = "flagged", db: Session = Depends(get_db)):
+    """File de correction du professeur.
+
+    - `scope=flagged` (défaut) : uniquement les réponses signalées par le moteur
+      (identique à `/reviews`) ;
+    - `scope=all` : TOUTES les réponses scannées du sujet, pour relire et ajuster
+      n'importe quelle note même si le moteur était sûr de lui (le professeur
+      reste maître de la correction, cf. demande « corriger manuellement »).
+
+    Dans les deux cas la clé de résolution est `response_id`."""
+    b = db.get(ScanBatch, batch_id)
+    if not b:
+        raise HTTPException(404)
+    if scope != "all":
+        return list_reviews(batch_id, None, db)
+
+    open_by_resp: dict[str, ManualReview] = {}
+    for r in _pending_reviews_query(db, b.assessment_id).all():
+        d = db.get(GradingDecision, r.decision_id)
+        if d:
+            open_by_resp[d.response_id] = r
+
+    out = []
+    copies = db.query(Copy).filter_by(assessment_id=b.assessment_id).all()
+    for copy in copies:
+        student = db.get(Student, copy.student_id)
+        items = (db.query(CopyItem).filter_by(copy_id=copy.id)
+                 .order_by(CopyItem.sequence).all())
+        for item in items:
+            resp = db.query(StudentResponse).filter_by(copy_item_id=item.id).first()
+            if not resp:
+                continue  # exercice non scanné pour cet élève : rien à corriger
+            out.append(_review_unit(db, resp, item, copy, student,
+                                    review=open_by_resp.get(resp.id)))
+    # signalés d'abord, puis exercice par exercice, puis par élève
+    out.sort(key=lambda x: (0 if x["flagged"] else 1, x["sequence"],
+                            x["group_key"], x["student"]))
     return out
 
 
@@ -302,6 +389,24 @@ def review_scan(review_id: str, db: Session = Depends(get_db)):
     return FileResponse(path, media_type="image/png")
 
 
+@router.get("/responses/{response_id}/scan")
+def response_scan(response_id: str, db: Session = Depends(get_db)):
+    """Crop scanné de la zone de réponse — même image que `review_scan`, mais
+    adressé par réponse (utilisé par la relecture « toutes les réponses », où il
+    n'y a pas forcément de revue ouverte)."""
+    resp = db.get(StudentResponse, response_id)
+    if not resp or not resp.zone_id:
+        raise HTTPException(404, "Aucune zone scannée")
+    item = db.get(CopyItem, resp.copy_item_id)
+    copy = db.get(Copy, item.copy_id) if item else None
+    if not copy:
+        raise HTTPException(404)
+    path = _zone_crop_path(copy.assessment_id, resp.zone_id)
+    if not path.exists():
+        raise HTTPException(404, "Crop indisponible")
+    return FileResponse(path, media_type="image/png")
+
+
 class ResolveIn(BaseModel):
     action: str          # accept | set_score | set_ratio | cancel_item | correct_ocr | rescan
     score: float | None = None
@@ -313,16 +418,16 @@ class ResolveIn(BaseModel):
     note: str = ""
 
 
-@router.post("/reviews/{review_id}/resolve")
-def resolve_review(review_id: str, body: ResolveIn, db: Session = Depends(get_db),
-                   user: User = Depends(current_user)):
-    r = db.get(ManualReview, review_id)
-    if not r or r.resolved_at:
-        raise HTTPException(404, "Revue introuvable ou déjà résolue")
-    old = db.get(GradingDecision, r.decision_id)
-    resp = db.get(StudentResponse, old.response_id)
+def _apply_resolution(db: Session, resp: StudentResponse, body: ResolveIn) -> dict:
+    """Enregistre une décision professeur (append-only, RM-006) sur une réponse,
+    et clôt la revue automatique éventuellement ouverte dessus. Partagé par la
+    correction des réponses signalées ET la relecture de toutes les réponses."""
+    old = _latest_decision_for_response(db, resp.id)
+    if old is None:
+        raise HTTPException(404, "Aucune décision à corriger pour cette réponse")
 
     score = old.score
+    max_score = old.max_score
     if body.action == "set_score":
         if body.score is None:
             raise HTTPException(422, "score requis")
@@ -332,24 +437,64 @@ def resolve_review(review_id: str, body: ResolveIn, db: Session = Depends(get_db
             raise HTTPException(422, "ratio requis")
         score = min(max(0.0, body.ratio), 1.0) * old.max_score
     elif body.action == "cancel_item":
+        # question annulée : hors barème (numérateur ET dénominateur, § barème)
         score = 0.0
+        max_score = 0.0
     if body.corrected_text is not None:
         resp.final_text = body.corrected_text
 
-    # décision professeur en append-only (RM-006)
-    new = GradingDecision(response_id=old.response_id, source="teacher",
-                          score=score if body.action != "cancel_item" else 0.0,
-                          max_score=old.max_score if body.action != "cancel_item" else 0.0,
+    new = GradingDecision(response_id=resp.id, source="teacher",
+                          score=score, max_score=max_score,
                           confidence=1.0, tier="D",
                           reason_code=f"teacher_{body.action}", status="validated",
                           evidence_json={"previous_decision": old.id, "note": body.note})
     old.status = "revised"
     db.add(new)
-    r.resolution = body.action
-    r.note = body.note
-    r.resolved_at = datetime.now(timezone.utc)
+    review = _open_review_for_response(db, resp.id)
+    if review is not None:
+        review.resolution = body.action
+        review.note = body.note
+        review.resolved_at = datetime.now(timezone.utc)
     db.commit()
     return {"ok": True}
+
+
+@router.post("/reviews/{review_id}/resolve")
+def resolve_review(review_id: str, body: ResolveIn, db: Session = Depends(get_db),
+                   user: User = Depends(current_user)):
+    r = db.get(ManualReview, review_id)
+    if not r or r.resolved_at:
+        raise HTTPException(404, "Revue introuvable ou déjà résolue")
+    old = db.get(GradingDecision, r.decision_id)
+    resp = db.get(StudentResponse, old.response_id)
+    return _apply_resolution(db, resp, body)
+
+
+@router.post("/responses/{response_id}/resolve")
+def resolve_response(response_id: str, body: ResolveIn, db: Session = Depends(get_db),
+                     user: User = Depends(current_user)):
+    """Corrige/ajuste une réponse par son id — voie de la relecture « toutes les
+    réponses » (le professeur reste maître de la note, même sans revue ouverte)."""
+    resp = db.get(StudentResponse, response_id)
+    if not resp:
+        raise HTTPException(404, "Réponse introuvable")
+    return _apply_resolution(db, resp, body)
+
+
+@router.post("/batches/{batch_id}/retry")
+def retry_batch(batch_id: str, tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    """Relance la correction d'un lot bloqué (erreur, ou pipeline interrompu
+    avant `graded`). `process_batch` est idempotent — il ne re-corrige pas une
+    réponse déjà notée et reprend là où il s'était arrêté — donc relancer est
+    sans risque. Bouton de déblocage côté professeur (§ « proposer une action
+    quand la pipeline est bloquée »)."""
+    b = db.get(ScanBatch, batch_id)
+    if not b:
+        raise HTTPException(404)
+    b.error = None
+    db.commit()
+    tasks.add_task(_run_pipeline, b.id)
+    return {"ok": True, "status": b.status}
 
 
 @router.post("/batches/{batch_id}/finalize")

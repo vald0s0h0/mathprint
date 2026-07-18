@@ -71,20 +71,23 @@ class Settings(BaseSettings):
     # d'équivalent côté Sésamaths : ce que la Série du manuel contient est
     # tout ce qu'on peut en extraire (ni plus ni moins), alors qu'ici on
     # appelle le LLM autant de fois que nécessaire.
-    # 30 (et non 10) : on remplit la banque D'UN COUP pour la compétence, et
-    # les sujets suivants y puisent sans plus rien payer. Une cible calée sur
-    # le besoin d'UN sujet fait rappeler le modèle à chaque sujet, et lui fait
-    # recréer à l'aveugle des exercices proches de ceux déjà en banque.
-    gemini_bank_target: int = 30
+    # On remplit la banque D'UN COUP pour la compétence, et les sujets suivants
+    # y puisent sans plus rien payer. Une cible calée sur le besoin d'UN sujet
+    # fait rappeler le modèle à chaque sujet, et lui fait recréer à l'aveugle des
+    # exercices proches de ceux déjà en banque.
+    # 15 (3 lots de 5) : cible resserrée depuis les 30 initiaux — 20 exercices en
+    # tout par compétence (15 classiques + 5 courts), ce qui suffit à remplir une
+    # copie sans répétition tout en divisant par deux la facture de création.
+    gemini_bank_target: int = 15
     # exercices COURTS de remplissage (kind="filler") créés en UN appel dédié,
-    # en plus des 30 exercices classiques : servent à combler les trous de bas
+    # en plus des 15 exercices classiques : servent à combler les trous de bas
     # de page laissés par les grandes cartes (services.generation). Banque
-    # cible totale = 30 + 5 = 35.
+    # cible totale = 15 + 5 = 20.
     gemini_filler_target: int = 5
     gemini_batch_size: int = 5            # exercices demandés par appel
     # garde-fou : au-delà, on garde ce qu'on a plutôt que d'enchaîner les
     # appels payants pour une compétence sur laquelle le modèle patine.
-    # 10 pour 30 exercices par lots de 5 : 6 lots parfaits suffiraient, la
+    # 10 pour 15 exercices par lots de 5 : 3 lots parfaits suffiraient, la
     # marge absorbe les exercices recalés par la validation.
     gemini_max_batches: int = 10
 

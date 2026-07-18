@@ -1409,6 +1409,44 @@ def pages_needed(heights: list[float]) -> int:
     return page_idx + 1
 
 
+def pack_reading_order(heights: list[float]) -> list[int]:
+    """Ordonne des cartes (hauteurs dans l'ordre d'origine) pour un remplissage
+    en colonnes SANS bas de colonne perdu, et retourne leurs index d'origine
+    dans l'ordre de LECTURE (haut→bas, colonne gauche puis droite, page par
+    page).
+
+    Le placement de `render_copy` est glouton en colonnes : il remplit la
+    colonne de gauche jusqu'en bas, passe à droite, puis change de page. Pris
+    dans l'ordre où le LLM les a produites, les cartes laissent alors un grand
+    vide en bas d'une colonne dès qu'une carte haute n'y rentre plus. On applique
+    donc un First-Fit-Decreasing : les cartes, DE LA PLUS HAUTE À LA PLUS BASSE,
+    sont affectées à la PREMIÈRE colonne (ordre de lecture) où elles tiennent —
+    les petites viennent ainsi combler les trous laissés par les grandes.
+
+    Rendu tel quel au placement glouton de `render_copy`, cet ordre reproduit
+    EXACTEMENT l'affectation : un FFD ne laisse jamais dans une colonne un trou
+    qu'une carte d'une colonne ultérieure aurait pu combler (sinon le premier
+    ajustement l'y aurait mise), donc poser les cartes séquentiellement retombe
+    sur les mêmes colonnes. `pages_needed` reste ainsi la mesure fidèle du rendu.
+    Les hauteurs de colonne diffèrent (la 1re page porte l'en-tête élève, cf.
+    `_top_of_page`), d'où une capacité par page."""
+    order = sorted(range(len(heights)), key=lambda i: heights[i], reverse=True)
+    cols: list[list[int]] = []      # index d'origine, par colonne (ordre de lecture)
+    used: list[float] = []          # hauteur déjà occupée dans chaque colonne
+    for i in order:
+        h = heights[i]
+        for b in range(len(cols)):
+            cap = _top_of_page(b // 2) - _BOTTOM_LIMIT   # 2 colonnes par page
+            if used[b] + h <= cap:
+                cols[b].append(i)
+                used[b] += h
+                break
+        else:
+            cols.append([i])        # aucune colonne existante : on en ouvre une
+            used.append(h)
+    return [i for col in cols for i in col]
+
+
 def _exercise_layout(item: dict, font_size: int,
                      math_fs: int) -> tuple[dict, float, float, dict]:
     """(layout de l'énoncé, corps de la zone de réponse, hauteur de zone, bande
