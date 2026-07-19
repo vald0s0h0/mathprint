@@ -695,7 +695,7 @@ export default function SettingsPage() {
                                     <Table.Td w={36}>
                                       <ActionIcon color="red" variant="subtle" onClick={() => setConfirmTarget({
                                         kind: 'corrections', id: b.id,
-                                        label: `la correction du sujet « ${b.assessment_title} » (${b.page_count} page(s) scannée(s), scans et overlays)`,
+                                        label: `la correction du sujet « ${b.assessment_title} » (${b.page_count} page(s) scannée(s) : scans, images recadrées, notes et copies corrigées)`,
                                       })}><Trash2 size={14} /></ActionIcon>
                                     </Table.Td>
                                   </Table.Tr>

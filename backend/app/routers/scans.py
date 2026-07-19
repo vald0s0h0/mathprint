@@ -15,9 +15,10 @@ from ..models import (
     Assessment, Copy, CopyItem, GradingDecision, ManualReview, OcrAttempt,
     ResponseZone, ScanBatch, SchoolClass, Student, StudentResponse, User,
 )
+from ..services import providers
 from ..services import sandbox as sandbox_service
 from ..services import scan_intake, scoring
-from ..services.pipeline import PHASES, build_overlays, finalize_batch, process_batch
+from ..services.pipeline import build_overlays, finalize_batch, process_batch
 
 router = APIRouter(prefix="/api/scans", tags=["scans"], dependencies=[Depends(current_user)])
 
@@ -37,6 +38,20 @@ def _sniff_file(content: bytes) -> tuple[str, str] | None:
     return None
 
 
+# Message unique du blocage « pas de clé Mathpix » — la correction lit
+# l'écriture manuscrite des élèves via Mathpix ; sans clé, le repli déterministe
+# ne fait que RECOPIER la réponse attendue (tout paraît juste), ce qui trompe le
+# professeur. On refuse donc le dépôt tant qu'aucune clé n'est configurée.
+MATHPIX_REQUIRED = ("La clé Mathpix est indispensable pour corriger ces copies. "
+                    "Configurez-la dans Paramètres → API avant de déposer un scan.")
+
+
+@router.get("/config")
+def scan_config(db: Session = Depends(get_db)):
+    """Capacités de correction visibles par le professeur (bannière/boutons)."""
+    return {"mathpix_configured": not providers.offline(db, "mathpix")}
+
+
 def _run_pipeline(batch_id: str):
     db = SessionLocal()
     try:
@@ -45,6 +60,24 @@ def _run_pipeline(batch_id: str):
     except Exception as e:
         batch = db.get(ScanBatch, batch_id)
         batch.error = str(e)
+        db.commit()
+    finally:
+        db.close()
+
+
+def _run_build_overlays(batch_id: str):
+    """Régénère UNIQUEMENT les copies corrigées d'un lot déjà finalisé (les
+    résultats/notes sont acquis) — bouton de déblocage quand seule la génération
+    des overlays a échoué. Ne repasse pas par l'OCR."""
+    db = SessionLocal()
+    try:
+        batch = db.get(ScanBatch, batch_id)
+        build_overlays(db, batch)
+        batch.error = None
+        db.commit()
+    except Exception as e:
+        batch = db.get(ScanBatch, batch_id)
+        batch.error = f"Copies corrigées non générées : {e}"
         db.commit()
     finally:
         db.close()
@@ -73,6 +106,8 @@ async def create_batch(tasks: BackgroundTasks, assessment_id: str | None = None,
     """Dépôt d'un scan. Le scan s'ACCUMULE dans l'unique ScanBatch du sujet
     (règle « un sujet = une correction = une ligne », cf. services.scan_intake)
     — jamais un second batch."""
+    if providers.offline(db, "mathpix"):
+        raise HTTPException(400, MATHPIX_REQUIRED)
     content = await file.read() if file is not None else None
     if content is None:
         raise HTTPException(422, "Déposer un scan (PDF, JPEG, PNG ou HEIC)")
@@ -119,6 +154,8 @@ async def sandbox_upload(tasks: BackgroundTasks, files: list[UploadFile],
     par page, mais REGROUPÉ GLOBALEMENT par sujet sur tout le dépôt (plusieurs
     fichiers d'un même sujet → une seule correction) ; doublons rejetés
     silencieusement. Réinjecté dans le pipeline existant sans modification."""
+    if providers.offline(db, "mathpix"):
+        raise HTTPException(400, MATHPIX_REQUIRED)
     recognized: list[tuple[str, str, bytes]] = []
     results = []
     for f in files:
@@ -187,19 +224,59 @@ def get_batch(batch_id: str, db: Session = Depends(get_db)):
     return _batch_view(db, b)
 
 
+def _business_steps(status: str, progress: dict | None, pending: int,
+                    error: str | None) -> list[dict]:
+    """Étapes MÉTIER de la correction, pour un visualiseur lisible par le
+    professeur — pas les 10 phases techniques internes. La règle de couleur est
+    simple et cohérente avec les actions proposées :
+
+    - vert  = fait ;
+    - bleu  = en cours (traitement automatique) ;
+    - orange = À VOUS : correction manuelle requise (la SEULE vraie halte) ;
+    - gris  = à venir ;
+    - rouge = bloqué (une erreur), sur l'étape où ça coince.
+
+    Le flux « coule » de gauche à droite : une fois la correction faite, la
+    validation puis les copies corrigées passent au vert automatiquement — il
+    n'y a jamais d'orange coincé au milieu avec du vert après."""
+    done = progress or {}
+    scanned = "split" in done or "uploaded" in done
+    read = "ocr_complete" in done
+    graded = "graded" in done
+    finalized = "finalized" in done
+    overlay = "overlay_ready" in done
+
+    if graded and not pending:
+        correct = "green"
+    elif pending:
+        correct = "orange"
+    elif read and not graded:
+        correct = "blue"      # notation automatique en cours
+    else:
+        correct = "gray"
+
+    steps = [
+        {"phase": "scan", "label": "Scan déposé",
+         "state": "green" if scanned else "blue"},
+        {"phase": "read", "label": "Lecture des copies",
+         "state": "green" if read else ("blue" if scanned else "gray")},
+        {"phase": "correct", "label": "Correction", "state": correct},
+        {"phase": "validate", "label": "Validation",
+         "state": "green" if finalized else ("blue" if (graded and not pending) else "gray")},
+        {"phase": "done", "label": "Copies corrigées",
+         "state": "green" if overlay else ("blue" if finalized else "gray")},
+    ]
+    if error:
+        for s in steps:
+            if s["state"] != "green":
+                s["state"] = "red"   # le blocage est sur la 1re étape non finie
+                break
+    return steps
+
+
 def _batch_view(db: Session, b: ScanBatch) -> dict:
     pending = _pending_reviews_query(db, b.assessment_id).count()
-    # barre segmentée par palier : vert ok, orange si intervention requise
-    segments = []
-    reached = True
-    for phase in PHASES:
-        done = phase in (b.progress_json or {})
-        color = "green" if done else ("orange" if reached and not done else "gray")
-        if phase == "review_pending" and pending:
-            color = "orange"
-        segments.append({"phase": phase, "state": color})
-        if not done:
-            reached = False
+    segments = _business_steps(b.status, b.progress_json, pending, b.error)
     assessment = db.get(Assessment, b.assessment_id)
     cls = db.get(SchoolClass, assessment.class_id) if assessment else None
     return {"id": b.id, "assessment_id": b.assessment_id, "status": b.status,
@@ -362,6 +439,66 @@ def list_items(batch_id: str, scope: str = "flagged", db: Session = Depends(get_
     return out
 
 
+@router.get("/batches/{batch_id}/summary")
+def batch_summary(batch_id: str, db: Session = Depends(get_db)):
+    """Récapitulatif AVANT validation, pour la modale « Valider la correction » :
+    par copie scannée, points de barème obtenus/total et note PRÉVISIONNELLE
+    (calculés sans rien persister), plus le nombre de réponses encore à corriger.
+    Le professeur vérifie tout — notes de chaque élève, restes à corriger — avant
+    de verrouiller la correction."""
+    b = db.get(ScanBatch, batch_id)
+    if not b:
+        raise HTTPException(404)
+    assessment = db.get(Assessment, b.assessment_id)
+    base = scoring.assessment_note_base(assessment) if assessment else 0
+
+    open_resp_ids: set[str] = set()
+    for r in _pending_reviews_query(db, b.assessment_id).all():
+        d = db.get(GradingDecision, r.decision_id)
+        if d:
+            open_resp_ids.add(d.response_id)
+
+    copies_out = []
+    total_pending = 0
+    copies = db.query(Copy).filter_by(assessment_id=b.assessment_id).all()
+    for copy in copies:
+        student = db.get(Student, copy.student_id)
+        items = (db.query(CopyItem).filter_by(copy_id=copy.id)
+                 .order_by(CopyItem.sequence).all())
+        earned = total = 0.0
+        graded = flagged = 0
+        has_resp = False
+        for item in items:
+            resp = db.query(StudentResponse).filter_by(copy_item_id=item.id).first()
+            if not resp:
+                continue
+            has_resp = True
+            if resp.id in open_resp_ids:
+                flagged += 1
+            dec = _latest_decision_for_response(db, resp.id)
+            if not dec or dec.status == "review_pending" or not dec.max_score:
+                continue  # non tranché ou question annulée : hors barème
+            bareme = scoring.item_bareme(item.grading_json, item.response_type)
+            earned += scoring.earned_points(dec.score, dec.max_score, bareme)
+            total += bareme
+            graded += 1
+        if not has_resp:
+            continue  # copie non scannée : rien à valider
+        total_pending += flagged
+        note = None
+        if base and total:
+            _, note = scoring.note_from_points(earned, total, base)
+        copies_out.append({
+            "student": f"{student.last_name} {student.first_name}",
+            "points_earned": round(earned, 2), "points_total": round(total, 2),
+            "note": note, "graded_items": graded, "flagged": flagged,
+        })
+    copies_out.sort(key=lambda c: c["student"])
+    return {"assessment_title": assessment.title if assessment else "?",
+            "note_base": base or None, "pending_reviews": total_pending,
+            "scanned_copies": len(copies_out), "copies": copies_out}
+
+
 def _zone_crop_path(assessment_id: str, zone_id: str):
     return (settings.data_dir / "assessments" / assessment_id / "scans" /
             "derived" / f"{zone_id}.png")
@@ -483,18 +620,45 @@ def resolve_response(response_id: str, body: ResolveIn, db: Session = Depends(ge
 
 @router.post("/batches/{batch_id}/retry")
 def retry_batch(batch_id: str, tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    """Relance la correction d'un lot bloqué (erreur, ou pipeline interrompu
-    avant `graded`). `process_batch` est idempotent — il ne re-corrige pas une
-    réponse déjà notée et reprend là où il s'était arrêté — donc relancer est
-    sans risque. Bouton de déblocage côté professeur (§ « proposer une action
-    quand la pipeline est bloquée »)."""
+    """Relance un lot bloqué — bouton de déblocage côté professeur (§ « proposer
+    une action quand la pipeline est bloquée »). Choisit AUTOMATIQUEMENT quoi
+    reprendre selon l'endroit du blocage :
+
+    - blocage après la validation (résultats acquis, seuls les overlays ont
+      échoué) → régénère uniquement les copies corrigées, sans refaire l'OCR ;
+    - blocage plus tôt (lecture/correction interrompue) → relance `process_batch`,
+      idempotent : il ne re-corrige pas une réponse déjà notée et reprend où il
+      s'était arrêté.
+    """
     b = db.get(ScanBatch, batch_id)
     if not b:
         raise HTTPException(404)
     b.error = None
     db.commit()
-    tasks.add_task(_run_pipeline, b.id)
+    progress = b.progress_json or {}
+    if "finalized" in progress and b.status != "overlay_ready":
+        tasks.add_task(_run_build_overlays, b.id)
+    else:
+        tasks.add_task(_run_pipeline, b.id)
     return {"ok": True, "status": b.status}
+
+
+@router.delete("/batches/{batch_id}")
+def reset_batch(batch_id: str, db: Session = Depends(get_db)):
+    """« Effacer la correction » / « Recommencer » : supprime définitivement ce
+    lot de scans et TOUT ce qui en dérive (réponses, décisions, revues, notes,
+    images recadrées, scan original, overlays) et remet les copies à « generated ».
+    Le sujet réapparaît « en attente de scan », prêt pour un nouveau dépôt propre.
+    Réservé à la correction du professeur ; identique à la suppression de l'onglet
+    Paramètres → Données (services.data_admin.delete_scan_batch)."""
+    from ..services import data_admin
+
+    b = db.get(ScanBatch, batch_id)
+    if not b:
+        raise HTTPException(404)
+    result = data_admin.delete_scan_batch(db, b)
+    db.commit()
+    return {"ok": True, **result}
 
 
 @router.post("/batches/{batch_id}/finalize")

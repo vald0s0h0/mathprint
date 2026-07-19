@@ -5,12 +5,13 @@
 // (relancer) quand la correction est bloquée. Le dépôt d'un scan ne demande pas
 // de choisir l'évaluation : le QR signé de chaque page identifie le sujet.
 import {
-  ActionIcon, Badge, Button, Card, Checkbox, Divider, FileButton, Group, Kbd,
-  Modal, NumberInput, SegmentedControl, Stack, Text, Title, Tooltip,
+  ActionIcon, Alert, Badge, Button, Card, Checkbox, Divider, FileButton, Group, Kbd,
+  Modal, NumberInput, SegmentedControl, Stack, Table, Text, Title, Tooltip,
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
 import {
-  Check, ChevronLeft, ChevronRight, Eye, Inbox, RefreshCw, ScanLine, Upload,
+  AlertTriangle, Check, ChevronLeft, ChevronRight, Eye, Inbox, RefreshCw, ScanLine,
+  Trash2, Upload,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api, getToken } from '../api'
@@ -19,7 +20,8 @@ import PdfPreviewModal from '../components/PdfPreview'
 import PrintButton from '../components/PrintButton'
 import { useAppState } from '../state/AppState'
 
-type Segment = { phase: string; state: 'green' | 'orange' | 'gray' }
+type SegState = 'green' | 'orange' | 'blue' | 'gray' | 'red'
+type Segment = { phase: string; label?: string; state: SegState }
 type Batch = {
   id: string; assessment_id: string; status: string; page_count: number
   assessment_title: string; assessment_type: string
@@ -49,12 +51,20 @@ type SandboxResult = {
   duplicates_rejected: number; blocked_pages: number; batches_created: string[]
 }
 type Scope = 'flagged' | 'all'
+// récapitulatif prévisionnel montré avant de verrouiller la correction
+type SummaryCopy = {
+  student: string; points_earned: number; points_total: number
+  note: number | null; graded_items: number; flagged: number
+}
+type BatchSummary = {
+  assessment_title: string; note_base: number | null; pending_reviews: number
+  scanned_copies: number; copies: SummaryCopy[]
+}
 
-const SEG_COLORS = { green: 'var(--mantine-color-green-6)', orange: 'var(--mantine-color-orange-6)', gray: 'var(--mantine-color-gray-4)' }
-const PHASE_LABELS: Record<string, string> = {
-  uploaded: 'déposé', split: 'découpé', identified: 'identifié', registered: 'recalé',
-  cropped: 'zones extraites', ocr_complete: 'OCR', graded: 'corrigé',
-  review_pending: 'validation', finalized: 'finalisé', overlay_ready: 'overlay',
+const SEG_COLORS: Record<SegState, string> = {
+  green: 'var(--mantine-color-green-6)', orange: 'var(--mantine-color-orange-6)',
+  blue: 'var(--mantine-color-blue-5)', gray: 'var(--mantine-color-gray-4)',
+  red: 'var(--mantine-color-red-6)',
 }
 const CATEGORY_LABELS: Record<string, string> = {
   rature: 'Rature', double_coche: 'Double coche', ocr_ambigu: 'OCR ambigu',
@@ -82,13 +92,27 @@ const STAGE_BADGE: Record<Stage, { label: string; color: string }> = {
   done: { label: 'prêt à imprimer', color: 'green' },
 }
 
+// Visualiseur des étapes MÉTIER de la correction : chaque étape porte son
+// libellé et sa couleur (vert = fait, bleu = en cours, orange = à corriger,
+// gris = à venir, rouge = bloqué). Une flèche montre que le flux avance.
 function SegmentBar({ segments }: { segments: Segment[] }) {
   return (
-    <Group gap={3} wrap="nowrap">
-      {segments.map((s) => (
-        <Tooltip key={s.phase} label={PHASE_LABELS[s.phase] ?? s.phase}>
-          <div style={{ width: 22, height: 7, borderRadius: 3, background: SEG_COLORS[s.state] }} />
-        </Tooltip>
+    <Group gap={6} wrap="wrap">
+      {segments.map((s, i) => (
+        <Group key={s.phase} gap={6} wrap="nowrap">
+          <Group gap={5} wrap="nowrap">
+            <div style={{
+              width: 9, height: 9, borderRadius: '50%', background: SEG_COLORS[s.state],
+              boxShadow: s.state === 'orange' || s.state === 'red'
+                ? `0 0 0 3px ${SEG_COLORS[s.state]}33` : undefined,
+            }} />
+            <Text size="xs" c={s.state === 'gray' ? 'dimmed' : undefined}
+              fw={s.state === 'orange' || s.state === 'red' ? 700 : 500}>
+              {s.label ?? s.phase}
+            </Text>
+          </Group>
+          {i < segments.length - 1 && <Text size="xs" c="dimmed">›</Text>}
+        </Group>
       ))}
     </Group>
   )
@@ -140,10 +164,15 @@ export default function Corrections() {
   const [items, setItems] = useState<Item[]>([])
   const [reviewBatch, setReviewBatch] = useState<Batch | null>(null)
   const [scope, setScope] = useState<Scope>('flagged')
+  const [validateBatch, setValidateBatch] = useState<Batch | null>(null)
+  const [summary, setSummary] = useState<BatchSummary | null>(null)
+  const [mathpixOk, setMathpixOk] = useState(true)
   const [previewId, setPreviewId] = useState<string | null>(null)
   const [idx, setIdx] = useState(0)
   const [scoreInput, setScoreInput] = useState<number | ''>('')
   const [uploading, setUploading] = useState(false)
+  const [resetTarget, setResetTarget] = useState<Batch | null>(null)
+  const [resetting, setResetting] = useState(false)
   const [sandboxUploading, setSandboxUploading] = useState(false)
   const [sandboxResults, setSandboxResults] = useState<SandboxResult[]>([])
   const [shortcuts, setShortcuts] = useState<Shortcuts>(DEFAULT_SHORTCUTS)
@@ -153,6 +182,10 @@ export default function Corrections() {
   useEffect(() => {
     api.get<Record<string, Partial<Shortcuts>>>('/api/settings/system')
       .then((s) => setShortcuts({ ...DEFAULT_SHORTCUTS, ...(s.correction_shortcuts ?? {}) }))
+      .catch(() => {})
+    // sans clé Mathpix, la correction est indisponible : on prévient et on bloque
+    api.get<{ mathpix_configured: boolean }>('/api/scans/config')
+      .then((c) => setMathpixOk(c.mathpix_configured))
       .catch(() => {})
   }, [])
 
@@ -278,13 +311,55 @@ export default function Corrections() {
     }
   }
 
+  // ouvre la modale de validation : récapitulatif prévisionnel (note de chaque
+  // élève, réponses encore à corriger) À VÉRIFIER avant de verrouiller
+  async function openValidate(b: Batch) {
+    setValidateBatch(b); setSummary(null)
+    try {
+      setSummary(await api.get<BatchSummary>(`/api/scans/batches/${b.id}/summary`))
+    } catch (e) {
+      notifications.show({ color: 'red', message: (e as Error).message })
+      setValidateBatch(null)
+    }
+  }
+  function closeValidate() { setValidateBatch(null); setSummary(null) }
+  async function confirmValidate() {
+    const b = validateBatch
+    closeValidate()
+    if (b) await finalize(b)
+  }
+
   async function finalize(b: Batch) {
     try {
-      const r = await api.post<{ evidence_created: number }>(`/api/scans/batches/${b.id}/finalize`)
-      notifications.show({ color: 'green', message: `Correction validée — ${r.evidence_created} preuve(s) de compétence, copies corrigées prêtes` })
+      const r = await api.post<{ evidence_created: number; overlay_error: string | null }>(
+        `/api/scans/batches/${b.id}/finalize`)
+      if (r.overlay_error) {
+        notifications.show({ color: 'orange', autoClose: 8000,
+          message: `Notes validées, mais copies corrigées non générées : ${r.overlay_error}. Utilisez « Relancer » pour réessayer.` })
+      } else {
+        notifications.show({ color: 'green', message: `Correction validée — ${r.evidence_created} preuve(s) de compétence, copies corrigées prêtes` })
+      }
       refresh()
     } catch (e) {
       notifications.show({ color: 'red', message: (e as Error).message })
+    }
+  }
+
+  // « Effacer la correction » / « Recommencer » : purge le lot (scans, images,
+  // notes, overlays) et remet le sujet en attente de scan. Confirmation requise.
+  async function resetCorrection() {
+    if (!resetTarget) return
+    setResetting(true)
+    try {
+      await api.del(`/api/scans/batches/${resetTarget.id}`)
+      notifications.show({ color: 'green', message: 'Correction effacée — vous pouvez re-déposer un scan propre' })
+      setResetTarget(null)
+      if (reviewBatch?.id === resetTarget.id) closeCorrection()
+      refresh()
+    } catch (e) {
+      notifications.show({ color: 'red', message: (e as Error).message })
+    } finally {
+      setResetting(false)
     }
   }
 
@@ -331,6 +406,16 @@ export default function Corrections() {
         </div>
       </Group>
 
+      {!mathpixOk && (
+        <Alert color="red" variant="light" icon={<AlertTriangle size={18} />}
+          title="Clé Mathpix requise pour corriger">
+          La correction lit l'écriture manuscrite des élèves via Mathpix. Tant
+          qu'aucune clé n'est configurée, le dépôt de scan est bloqué et aucune
+          copie ne peut être corrigée. Ajoutez la clé dans{' '}
+          <b>Paramètres → API</b>, puis revenez déposer vos scans.
+        </Alert>
+      )}
+
       <Card withBorder padding="md">
         <Group justify="space-between" align="flex-start" wrap="nowrap">
           <Group gap="xs" wrap="nowrap" align="flex-start">
@@ -344,15 +429,17 @@ export default function Corrections() {
               </Text>
             </div>
           </Group>
-          <FileButton onChange={uploadSandbox} multiple
-            accept="application/pdf,image/jpeg,image/png,image/heic,image/heif">
-            {(props) => (
-              <Button {...props} size="xs" variant="light" leftSection={<Upload size={14} />}
-                loading={sandboxUploading}>
-                Déposer en vrac
-              </Button>
-            )}
-          </FileButton>
+          <Tooltip label="Configurez d'abord la clé Mathpix (Paramètres → API)" disabled={mathpixOk}>
+            <FileButton onChange={uploadSandbox} multiple disabled={!mathpixOk}
+              accept="application/pdf,image/jpeg,image/png,image/heic,image/heif">
+              {(props) => (
+                <Button {...props} size="xs" variant="light" leftSection={<Upload size={14} />}
+                  loading={sandboxUploading} disabled={!mathpixOk}>
+                  Déposer en vrac
+                </Button>
+              )}
+            </FileButton>
+          </Tooltip>
         </Group>
         {sandboxResults.length > 0 && (
           <Stack gap={4} mt="sm">
@@ -444,27 +531,33 @@ export default function Corrections() {
                       )}
                     </Stack>
 
-                    {/* Action(s) logique(s) selon l'étape : un bouton principal qui
-                        indique la prochaine chose à faire, + déblocage si besoin. */}
-                    <Group gap="xs" wrap="nowrap">
+                    {/* Un bouton principal par étape indique la prochaine action ;
+                        « Corriger les copies » (ouvre la modale scan + réponse
+                        attendue) est TOUJOURS distinct de « Valider » (verrouille),
+                        et un déblocage/effacement est offert quand c'est utile. */}
+                    <Group gap="xs" wrap="nowrap" style={{ flexShrink: 0 }}>
                       {stage === 'awaiting' && (
-                        <FileButton onChange={(f) => upload(f, b.assessment_id)}
-                          accept="application/pdf,image/jpeg,image/png,image/heic,image/heif">
-                          {(props) => (
-                            <Button {...props} size="xs" leftSection={<Upload size={14} />} loading={uploading}>
-                              Déposer le scan
-                            </Button>
-                          )}
-                        </FileButton>
+                        <Tooltip label="Configurez d'abord la clé Mathpix (Paramètres → API)" disabled={mathpixOk}>
+                          <FileButton onChange={(f) => upload(f, b.assessment_id)} disabled={!mathpixOk}
+                            accept="application/pdf,image/jpeg,image/png,image/heic,image/heif">
+                            {(props) => (
+                              <Button {...props} size="xs" leftSection={<Upload size={14} />}
+                                loading={uploading} disabled={!mathpixOk}>
+                                Déposer le scan
+                              </Button>
+                            )}
+                          </FileButton>
+                        </Tooltip>
                       )}
 
                       {stage === 'processing' && (
                         <>
                           <Button size="xs" variant="light" loading disabled>Correction en cours…</Button>
                           <Tooltip label="Si la correction semble bloquée, relancez-la">
-                            <ActionIcon variant="subtle" color="gray" size="lg" onClick={() => retry(b)}>
-                              <RefreshCw size={16} />
-                            </ActionIcon>
+                            <Button size="xs" variant="subtle" color="gray"
+                              leftSection={<RefreshCw size={14} />} onClick={() => retry(b)}>
+                              Relancer
+                            </Button>
                           </Tooltip>
                         </>
                       )}
@@ -473,43 +566,59 @@ export default function Corrections() {
                         <>
                           <Button size="xs" color="orange" leftSection={<RefreshCw size={14} />}
                             onClick={() => retry(b)}>
-                            Relancer la correction
+                            Relancer
                           </Button>
-                          {b.pending_reviews > 0 && (
-                            <Button size="xs" variant="light" color="orange"
-                              onClick={() => openCorrection(b, 'flagged')}>
-                              Corriger ({b.pending_reviews})
-                            </Button>
-                          )}
+                          <Button size="xs" variant="light" onClick={() => openCorrection(b, 'all')}>
+                            Corriger les copies
+                          </Button>
                           <FileButton onChange={(f) => upload(f, b.assessment_id)}
                             accept="application/pdf,image/jpeg,image/png,image/heic,image/heif">
                             {(props) => (
                               <Button {...props} size="xs" variant="subtle" leftSection={<Upload size={14} />}
                                 loading={uploading}>
-                                Re-déposer le scan
+                                Re-déposer
                               </Button>
                             )}
                           </FileButton>
+                          <Button size="xs" variant="subtle" color="red"
+                            leftSection={<Trash2 size={14} />} onClick={() => setResetTarget(b)}>
+                            Effacer
+                          </Button>
                         </>
                       )}
 
                       {stage === 'review' && (
-                        <Button size="xs" color="orange" onClick={() => openCorrection(b, 'flagged')}>
-                          Corriger ({b.pending_reviews})
-                        </Button>
+                        <>
+                          <Button size="xs" color="orange" leftSection={<ScanLine size={14} />}
+                            onClick={() => openCorrection(b, 'flagged')}>
+                            Corriger les copies ({b.pending_reviews})
+                          </Button>
+                          <Tooltip label="Effacer cette correction et re-scanner depuis zéro">
+                            <ActionIcon variant="subtle" color="red" size="lg" onClick={() => setResetTarget(b)}>
+                              <Trash2 size={16} />
+                            </ActionIcon>
+                          </Tooltip>
+                        </>
                       )}
 
                       {stage === 'validate' && (
                         <>
-                          <Tooltip multiline w={240}
-                            label="Verrouille les notes, calcule la note de chaque élève et prépare les copies corrigées à imprimer.">
-                            <Button size="xs" leftSection={<Check size={14} />} onClick={() => finalize(b)}>
+                          <Button size="xs" leftSection={<ScanLine size={14} />}
+                            onClick={() => openCorrection(b, 'all')}>
+                            Corriger les copies
+                          </Button>
+                          <Tooltip multiline w={250}
+                            label="Ouvre un récapitulatif (note de chaque élève, réponses restant à corriger) à vérifier avant de verrouiller et générer les copies corrigées.">
+                            <Button size="xs" color="green" leftSection={<Check size={14} />}
+                              onClick={() => openValidate(b)}>
                               Valider la correction
                             </Button>
                           </Tooltip>
-                          <Button size="xs" variant="light" onClick={() => openCorrection(b, 'all')}>
-                            Revoir la correction
-                          </Button>
+                          <Tooltip label="Effacer cette correction et re-scanner depuis zéro">
+                            <ActionIcon variant="subtle" color="red" size="lg" onClick={() => setResetTarget(b)}>
+                              <Trash2 size={16} />
+                            </ActionIcon>
+                          </Tooltip>
                         </>
                       )}
 
@@ -520,15 +629,16 @@ export default function Corrections() {
                               file="correction_overlay.pdf" label="Imprimer les copies corrigées" />
                           ) : (
                             <Button size="xs" variant="light" onClick={() => createOverlay(b)}>
-                              Générer l'overlay
+                              Générer les copies corrigées
                             </Button>
                           )}
                           <Button size="xs" variant="subtle" leftSection={<Eye size={14} />}
                             onClick={() => setPreviewId(b.assessment_id)}>
                             Aperçu
                           </Button>
-                          <Button size="xs" variant="subtle" onClick={() => openCorrection(b, 'all')}>
-                            Revoir
+                          <Button size="xs" variant="subtle" leftSection={<ScanLine size={14} />}
+                            onClick={() => openCorrection(b, 'all')}>
+                            Corriger
                           </Button>
                           <Tooltip label="Recalculer les notes et régénérer les copies corrigées après un ajustement">
                             <ActionIcon variant="subtle" color="gray" size="lg" onClick={() => finalize(b)}>
@@ -548,6 +658,101 @@ export default function Corrections() {
 
       <PdfPreviewModal assessmentId={previewId} opened={!!previewId} initialMode="review"
         onClose={() => setPreviewId(null)} />
+
+      <Modal opened={!!resetTarget} onClose={() => setResetTarget(null)}
+        title={<Text fw={650}>Effacer la correction</Text>}>
+        <Stack>
+          <Text size="sm">
+            Effacer définitivement la correction de « {resetTarget?.assessment_title} » ?
+          </Text>
+          <Text size="xs" c="dimmed">
+            Supprime les scans, les images recadrées, les notes attribuées et les
+            copies corrigées (overlays) de ce lot. Le sujet lui-même, ses copies
+            et son barème sont conservés : il repasse « en attente de scan », prêt
+            pour un nouveau dépôt.
+          </Text>
+          <Group justify="flex-end">
+            <Button variant="subtle" onClick={() => setResetTarget(null)}>Annuler</Button>
+            <Button color="red" loading={resetting} onClick={resetCorrection}>
+              Effacer la correction
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+
+      <Modal opened={!!validateBatch} onClose={closeValidate} size="lg"
+        title={<Text fw={650}>Valider la correction — {validateBatch?.assessment_title}</Text>}>
+        {!summary ? (
+          <Text c="dimmed" py="md">Calcul du récapitulatif…</Text>
+        ) : (
+          <Stack>
+            {summary.pending_reviews > 0 && (
+              <Alert color="orange" variant="light" icon={<AlertTriangle size={18} />}>
+                <Group justify="space-between" wrap="nowrap">
+                  <Text size="sm">
+                    Il reste <b>{summary.pending_reviews}</b> réponse(s) à corriger.
+                    Terminez la correction avant de valider.
+                  </Text>
+                  <Button size="xs" color="orange" style={{ flexShrink: 0 }}
+                    onClick={() => { const b = validateBatch; closeValidate(); if (b) openCorrection(b, 'flagged') }}>
+                    Corriger les copies
+                  </Button>
+                </Group>
+              </Alert>
+            )}
+            <Text size="sm" c="dimmed">
+              {summary.scanned_copies} copie(s) scannée(s)
+              {summary.note_base ? ` · noté sur ${summary.note_base}` : ' · entraînement (non noté)'}.
+              Vérifiez les notes ci-dessous : valider les verrouille, calcule la note
+              de chaque élève et génère les copies corrigées à imprimer.
+            </Text>
+            <div style={{ maxHeight: '46vh', overflowY: 'auto' }}>
+              <Table stickyHeader highlightOnHover>
+                <Table.Thead>
+                  <Table.Tr>
+                    <Table.Th>Élève</Table.Th>
+                    <Table.Th w={110} ta="center">À corriger</Table.Th>
+                    <Table.Th w={110} ta="right">Points</Table.Th>
+                    <Table.Th w={80} ta="right">Note</Table.Th>
+                  </Table.Tr>
+                </Table.Thead>
+                <Table.Tbody>
+                  {summary.copies.map((c) => (
+                    <Table.Tr key={c.student}>
+                      <Table.Td>{c.student}</Table.Td>
+                      <Table.Td ta="center">
+                        {c.flagged > 0
+                          ? <Badge size="sm" color="orange" variant="light">{c.flagged}</Badge>
+                          : <Text size="sm" c="dimmed">—</Text>}
+                      </Table.Td>
+                      <Table.Td ta="right" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                        {fmtPts(c.points_earned)} / {fmtPts(c.points_total)}
+                      </Table.Td>
+                      <Table.Td ta="right" fw={600} style={{ fontVariantNumeric: 'tabular-nums' }}>
+                        {c.note != null && summary.note_base
+                          ? `${fmtPts(c.note)}/${summary.note_base}` : '—'}
+                      </Table.Td>
+                    </Table.Tr>
+                  ))}
+                  {summary.copies.length === 0 && (
+                    <Table.Tr><Table.Td colSpan={4}>
+                      <Text size="sm" c="dimmed">Aucune copie scannée à valider.</Text>
+                    </Table.Td></Table.Tr>
+                  )}
+                </Table.Tbody>
+              </Table>
+            </div>
+            <Group justify="flex-end">
+              <Button variant="subtle" onClick={closeValidate}>Annuler</Button>
+              <Button color="green" leftSection={<Check size={14} />}
+                disabled={summary.pending_reviews > 0 || summary.copies.length === 0}
+                onClick={confirmValidate}>
+                Valider et générer les copies corrigées
+              </Button>
+            </Group>
+          </Stack>
+        )}
+      </Modal>
 
       <Modal opened={!!reviewBatch} onClose={closeCorrection} size="xl"
         title={<Text fw={650}>Correction — {reviewBatch?.assessment_title}</Text>}>
@@ -654,7 +859,7 @@ export default function Corrections() {
               {reviewBatch && remainingFlagged === 0
                 && (reviewBatch.status === 'graded' || reviewBatch.status === 'review_pending') && (
                 <Button size="xs" color="green" leftSection={<Check size={14} />}
-                  onClick={() => { const b = reviewBatch; closeCorrection(); if (b) finalize(b) }}>
+                  onClick={() => { const b = reviewBatch; closeCorrection(); if (b) openValidate(b) }}>
                   Valider la correction
                 </Button>
               )}

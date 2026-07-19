@@ -445,16 +445,26 @@ def finalize_batch(db: Session, batch: ScanBatch) -> dict:
         copy.status = "finalized"
     assessment.status = "finalized"
     _set_status(db, batch, "finalized", evidence=n_evidence, results=n_results)
-    # Overlays générés dès la finalisation : les aperçus (overlay, copie +
-    # overlay) sont ainsi immédiatement disponibles, sans attendre un clic
-    # « Créer l'overlay » (qui reste pour régénérer/imprimer). Défensif — un
-    # aléa de rendu ne doit pas bloquer la finalisation : les résultats et
-    # preuves de compétence sont déjà écrits, l'overlay est régénérable.
+    # Enchaînement AUTOMATIQUE validation → copies corrigées : les résultats et
+    # preuves de compétence sont écrits, on génère dans la foulée l'overlay et
+    # l'aperçu « copie + overlay » (status → overlay_ready). Le professeur n'a
+    # donc qu'UNE action manuelle (valider) ; la suite coule toute seule.
+    #
+    # Une panne de rendu ne détruit pas la finalisation (résultats déjà en base,
+    # overlay régénérable), mais elle ne doit PAS être avalée en silence : sans
+    # signal, le professeur voyait « prêt à imprimer » sans aucun PDF. On la
+    # remonte donc sur batch.error — l'UI affiche alors « bloqué » avec un bouton
+    # de relance qui ne refait QUE les overlays (cf. scans.retry_batch).
+    batch.error = None
+    overlay_error = None
     try:
         build_overlays(db, batch)
-    except Exception:
-        pass
-    return {"evidence_created": n_evidence, "results_created": n_results}
+    except Exception as e:  # noqa: BLE001 — on veut remonter tout échec de rendu
+        overlay_error = f"Copies corrigées non générées : {e}"
+        batch.error = overlay_error
+        db.commit()
+    return {"evidence_created": n_evidence, "results_created": n_results,
+            "overlay_error": overlay_error}
 
 
 def _latest_ocr(db: Session, zone_id: str) -> OcrAttempt | None:

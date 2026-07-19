@@ -158,3 +158,121 @@ def test_retry_clears_error_and_reschedules(mock_db, tmp_path, monkeypatch):
     assert r["ok"] is True
     assert db.get(ScanBatch, batch.id).error is None
     assert len(tasks.tasks) == 1  # pipeline replanifié en tâche de fond
+    # pas encore finalisé → on relance tout le pipeline (OCR compris)
+    assert tasks.tasks[0].func is scans_router._run_pipeline
+
+
+def test_finalize_surfaces_overlay_error(mock_db, tmp_path, monkeypatch):
+    """Un échec de génération des copies corrigées n'est plus avalé en silence :
+    il est remonté sur batch.error (et dans le résultat), pour que l'UI affiche
+    « bloqué » avec un bouton de relance au lieu d'un « prêt » sans PDF."""
+    db = mock_db
+    monkeypatch.setattr(cfg, "data_dir", tmp_path)
+    a = _seed_manual(db)
+    batch = scan_intake.get_or_create_batch(db, a.id, None)
+    db.commit()
+    pipeline.process_batch(db, batch)
+    body = scans_router.ResolveIn(action="set_ratio", ratio=1.0)
+    for it in scans_router.list_items(batch.id, "all", db):
+        scans_router.resolve_response(it["response_id"], body, db, None)
+
+    def _boom(_db, _batch):
+        raise RuntimeError("rendu KO")
+
+    monkeypatch.setattr(pipeline, "build_overlays", _boom)
+    result = pipeline.finalize_batch(db, batch)
+    db.commit()
+
+    assert result["results_created"] == 2      # notes bien consolidées malgré tout
+    assert "rendu KO" in (result["overlay_error"] or "")
+    b = db.get(ScanBatch, batch.id)
+    assert b.error and "rendu KO" in b.error
+    assert b.status == "finalized"             # pas overlay_ready : bloc visible
+
+
+def test_retry_after_overlay_error_rebuilds_only_overlays(mock_db, tmp_path, monkeypatch):
+    """Relance d'un lot finalisé dont seuls les overlays ont échoué : retry ne
+    refait PAS l'OCR, il régénère uniquement les copies corrigées."""
+    from fastapi import BackgroundTasks
+
+    db = mock_db
+    monkeypatch.setattr(cfg, "data_dir", tmp_path)
+    a = _seed_manual(db)
+    batch = scan_intake.get_or_create_batch(db, a.id, None)
+    batch.status = "finalized"
+    batch.progress_json = {"finalized": {"done": True}}
+    batch.error = "Copies corrigées non générées : rendu KO"
+    db.commit()
+
+    tasks = BackgroundTasks()
+    r = scans_router.retry_batch(batch.id, tasks, db)
+    assert r["ok"] is True
+    assert db.get(ScanBatch, batch.id).error is None
+    assert tasks.tasks[0].func is scans_router._run_build_overlays
+
+
+def test_scan_config_flags_missing_mathpix(mock_db):
+    """Sans clé Mathpix configurée, la correction se déclare indisponible (l'UI
+    bloque le dépôt et affiche la bannière)."""
+    db = mock_db
+    assert scans_router.scan_config(db) == {"mathpix_configured": False}
+
+
+def test_batch_summary_previews_notes(mock_db, tmp_path, monkeypatch):
+    """La modale « Valider » a de quoi tout vérifier : avant correction, les
+    réponses sont signalées et non notées ; après, chaque copie a ses points et
+    sa note prévisionnelle, sans rien persister."""
+    db = mock_db
+    monkeypatch.setattr(cfg, "data_dir", tmp_path)
+    a = _seed_manual(db)
+    batch = scan_intake.get_or_create_batch(db, a.id, None)
+    db.commit()
+    pipeline.process_batch(db, batch)
+
+    before = scans_router.batch_summary(batch.id, db)
+    assert before["note_base"] == 20
+    assert before["scanned_copies"] == 2
+    assert before["pending_reviews"] == 2                 # manual_drawing → à corriger
+    assert all(c["flagged"] == 1 and c["note"] is None for c in before["copies"])
+
+    body = scans_router.ResolveIn(action="set_ratio", ratio=1.0)
+    for it in scans_router.list_items(batch.id, "all", db):
+        scans_router.resolve_response(it["response_id"], body, db, None)
+
+    after = scans_router.batch_summary(batch.id, db)
+    assert after["pending_reviews"] == 0
+    assert all(c["flagged"] == 0 for c in after["copies"])
+    for c in after["copies"]:
+        assert abs(c["points_earned"] - 1.5) < 1e-6      # plein barème 1,5
+        assert c["note"] == 20                           # sans-faute → 20/20
+    # récapitulatif purement lecteur : aucune consolidation n'a été écrite
+    from app.models import CopyResult
+    assert db.query(CopyResult).count() == 0
+
+
+def test_reset_batch_purges_correction(mock_db, tmp_path, monkeypatch):
+    """« Effacer la correction » : supprime le lot et ses réponses/décisions,
+    remet les copies à « generated », sans toucher aux copies (CopyItem) ni au
+    sujet — le lot disparaît, prêt pour un nouveau dépôt."""
+    from app.models import Copy, StudentResponse
+    from app.services.security import sign_page
+
+    db = mock_db
+    monkeypatch.setattr(cfg, "data_dir", tmp_path)
+    a = _seed_manual(db)
+    # scan « reconnu » : pages signées → ScannedPage.page_id renseigné, ce dont
+    # dépend delete_scan_batch pour retrouver zones/réponses à purger
+    for page in db.query(DocumentPage).all():
+        page.qr_payload = sign_page(page.id)
+    db.commit()
+    batch = scan_intake.get_or_create_batch(db, a.id, None)
+    db.commit()
+    pipeline.process_batch(db, batch)
+    assert db.query(StudentResponse).count() == 2
+
+    r = scans_router.reset_batch(batch.id, db)
+    assert r["ok"] is True
+    assert db.get(ScanBatch, batch.id) is None
+    assert db.query(StudentResponse).count() == 0
+    assert all(c.status == "generated"
+               for c in db.query(Copy).filter_by(assessment_id=a.id).all())

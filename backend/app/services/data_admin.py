@@ -177,11 +177,19 @@ def delete_scan_batch(db: Session, batch: ScanBatch) -> dict:
         derived_dir = settings.data_dir / "assessments" / assessment.id / "scans" / "derived"
         for zid in zone_ids:
             (derived_dir / f"{zid}.png").unlink(missing_ok=True)
+        # fonds « copie + overlay » recadrés (une image par page scannée) —
+        # sinon ils survivent à la correction supprimée
+        for pid in page_ids:
+            (derived_dir / f"page-{pid}.png").unlink(missing_ok=True)
         remaining = (db.query(ScanBatch)
                      .filter(ScanBatch.assessment_id == assessment.id, ScanBatch.id != batch.id)
                      .count())
-        if remaining == 0 and assessment.status == "finalized":
-            assessment.status = "printed"
+        if remaining == 0:
+            # plus aucun lot : le sujet n'a plus de correction. On retire les
+            # overlays (copies corrigées, toujours régénérables) et on ramène le
+            # sujet à « imprimé » pour qu'il réapparaisse « en attente de scan ».
+            if assessment.status == "finalized":
+                assessment.status = "printed"
             shutil.rmtree(settings.data_dir / "assessments" / assessment.id / "overlays",
                           ignore_errors=True)
 
