@@ -7,9 +7,15 @@ copie) ne créent qu'UNE correction, pas une par fichier — toutes les pages
 retenues s'accumulent dans l'unique ScanBatch du sujet (cf. services.scan_intake,
 règle « un sujet = une correction = une ligne »).
 
-Les doublons sont rejetés à deux niveaux, silencieusement (décision produit, pas
-de file de validation) : fichier identique déjà déposé (sha256), et page déjà
-enregistrée (page_id, dédup globale au sein du dépôt + inter-dépôts)."""
+Les doublons sont rejetés silencieusement (décision produit, pas de file de
+validation) sur la SEULE autorité du `page_id` (page déjà enregistrée, dédup
+globale au sein du dépôt + inter-dépôts). On ne bloque JAMAIS sur le sha256 du
+fichier : ce verrou survivait à la suppression d'une correction (SandboxUpload
+n'est rattaché à aucun batch, donc data_admin ne peut pas le nettoyer), si bien
+qu'un prof ayant supprimé une correction par erreur ne pouvait plus redéposer le
+même fichier. Le page_id, lui, est remis à zéro par la suppression (ScannedPage
+supprimée), donc il reflète fidèlement ce qui est réellement enregistré. Le
+sha256 reste enregistré à titre d'historique (SandboxUpload)."""
 import hashlib
 import uuid
 from collections import defaultdict
@@ -37,18 +43,9 @@ def ingest_files(db: Session, files: list[tuple[str, str, bytes]],
 
     for filename, ext, content in files:
         sha = hashlib.sha256(content).hexdigest()
-        dup_file = (db.query(SandboxUpload)
-                    .filter(SandboxUpload.sha256 == sha, SandboxUpload.status != "error")
-                    .first())
         upload = SandboxUpload(uploaded_by=uploaded_by, original_filename=filename, sha256=sha)
         db.add(upload)
         db.flush()
-
-        if dup_file:
-            upload.status = "duplicate_rejected"
-            results.append({"filename": filename, "status": "duplicate_file", "pages_added": 0,
-                            "duplicates_rejected": 0, "blocked_pages": 0, "batches_created": []})
-            continue
 
         tmp_dir = settings.data_dir / "scans" / "sandbox_tmp"
         tmp_dir.mkdir(parents=True, exist_ok=True)
@@ -79,6 +76,17 @@ def ingest_files(db: Session, files: list[tuple[str, str, bytes]],
             # reprend fidèlement (cf. scan_intake.classify_page).
             kept_by_assessment[aid].append(warped if warped is not None else img)
             n_added += 1
+
+        # Un fichier n'est un « doublon » que si TOUTES ses pages sont déjà
+        # enregistrées (page_already_registered) — jamais sur le seul sha256 du
+        # fichier. Après suppression d'une correction, ses pages ne sont plus
+        # enregistrées : le même fichier redéposé repasse alors normalement.
+        if n_added == 0 and n_dup > 0 and n_blocked == 0:
+            upload.status = "duplicate_rejected"
+            results.append({"filename": filename, "status": "duplicate_file", "pages_added": 0,
+                            "duplicates_rejected": n_dup, "blocked_pages": 0,
+                            "batches_created": []})
+            continue
         upload.status = "processed"
         results.append({"filename": filename, "status": "processed", "pages_added": n_added,
                         "duplicates_rejected": n_dup, "blocked_pages": n_blocked,

@@ -110,3 +110,44 @@ def test_sandbox_multiple_files_same_subject_one_batch(mock_db, tmp_path, monkey
     added = sum(r["pages_added"] for r in out["results"])
     dups = sum(r["duplicates_rejected"] for r in out["results"])
     assert added == 1 and dups == 1
+
+
+def test_sandbox_same_file_reuploadable_after_correction_deleted(mock_db, tmp_path, monkeypatch):
+    """Après suppression d'une correction, redéposer LE MÊME fichier doit
+    repasser : on ne bloque plus sur le sha256 du fichier (qui survivait à la
+    suppression), seul le page_id fait autorité — et il est remis à zéro avec la
+    correction. Cf. bug « scans refusés en doublon après suppression »."""
+    from app.services import data_admin
+
+    db = mock_db
+    a, pages = _seed(db)
+    monkeypatch.setattr(scan_intake.settings, "data_dir", tmp_path)
+    monkeypatch.setattr(data_admin.settings, "data_dir", tmp_path)
+    _patch_classify(monkeypatch, db, pages)
+
+    # 1er dépôt : la page est retenue, un batch est créé
+    monkeypatch.setattr(sandbox.worker_cv, "raster_any", lambda _path: [_img(1)])
+    out1 = sandbox.ingest_files(db, [("copie.jpg", ".jpg", b"same-bytes")], "u")
+    assert sum(r["pages_added"] for r in out1["results"]) == 1
+    batch = db.query(ScanBatch).filter_by(assessment_id=a.id).first()
+
+    # le pipeline enregistre la page (dédup page_id = page_already_registered)
+    from app.models import ScannedPage
+    db.add(ScannedPage(batch_id=batch.id, source_index=0, page_id=pages[1], status="registered"))
+    db.commit()
+    assert scan_intake.page_already_registered(db, pages[1])
+
+    # redéposer le même fichier tel quel : rejeté en doublon (pages enregistrées)
+    out_dup = sandbox.ingest_files(db, [("copie.jpg", ".jpg", b"same-bytes")], "u")
+    assert out_dup["results"][0]["status"] == "duplicate_file"
+    assert sum(r["pages_added"] for r in out_dup["results"]) == 0
+
+    # le prof supprime la correction (erreur) puis redépose LE MÊME fichier
+    data_admin.delete_scan_batch(db, batch)
+    db.commit()
+    assert not scan_intake.page_already_registered(db, pages[1])
+
+    out2 = sandbox.ingest_files(db, [("copie.jpg", ".jpg", b"same-bytes")], "u")
+    assert sum(r["pages_added"] for r in out2["results"]) == 1, \
+        "le même fichier doit être accepté une fois la correction supprimée"
+    assert len(out2["batch_ids"]) == 1

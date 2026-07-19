@@ -35,6 +35,39 @@ function splitMathSpans(text: string): Array<[string, boolean]> {
   return spans
 }
 
+// Case de réponse insérée dans le fil du texte (cf. backend services/statement.py).
+// Le PDF l'imprime en case à remplir ; l'aperçu web doit faire pareil, sinon le
+// marqueur littéral « {{blank}} » s'affiche tel quel dans la banque et les aperçus.
+const BLANK_TOKEN = '{{blank}}'
+
+/** Case de réponse vide, dessinée en ligne à la place du marqueur {{blank}}. */
+function BlankBox() {
+  return (
+    <Box component="span" aria-label="case à remplir" style={{
+      display: 'inline-block', width: '2.6em', height: '1.05em',
+      border: '1px solid var(--mantine-color-gray-5)', borderRadius: 2,
+      margin: '0 0.12em', verticalAlign: '-0.18em',
+    }} />
+  )
+}
+
+/** Texte brut (hors formule) pouvant contenir des marqueurs {{blank}} : chaque
+ *  marqueur devient une case à remplir, le reste est rendu tel quel. */
+function TextSpan({ content }: { content: string }) {
+  if (!content.includes(BLANK_TOKEN)) return <span>{content}</span>
+  const parts = content.split(BLANK_TOKEN)
+  return (
+    <>
+      {parts.map((part, i) => (
+        <React.Fragment key={i}>
+          {part && <span>{part}</span>}
+          {i < parts.length - 1 && <BlankBox />}
+        </React.Fragment>
+      ))}
+    </>
+  )
+}
+
 /** Rendu d'un span LaTeX, fallback texte brut si erreur (ne devrait jamais arriver). */
 function MathSpan({ latex }: { latex: string }) {
   try {
@@ -57,7 +90,7 @@ export default function MathText({ text, centered = false, size }: {
     isMath ? (
       <MathSpan key={i} latex={content} />
     ) : (
-      <span key={i}>{content}</span>
+      <TextSpan key={i} content={content} />
     )
   )
 
@@ -79,13 +112,13 @@ export default function MathText({ text, centered = false, size }: {
       isMath ? (
         <MathSpan key={i} latex={content} />
       ) : (
-        <span key={i}>{content}</span>
+        <TextSpan key={i} content={content} />
       )
     )
 
     return (
       <Box fz={size} style={{ whiteSpace: 'pre-wrap' }}>
-        <Box component="span">{beforeColon} :</Box>
+        <Box component="span"><TextSpan content={beforeColon} /> :</Box>
         <Box mt={4} ta={centered ? 'center' : 'left'}
           fz="1.25em" fw={500} style={{ letterSpacing: '0.02em' }}>
           {afterElements}

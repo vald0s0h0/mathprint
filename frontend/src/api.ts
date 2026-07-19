@@ -34,11 +34,19 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
     throw new ApiError(401, 'Session expirée')
   }
   if (!res.ok) {
-    let msg = res.statusText
+    let msg = ''
     try {
       const data = await res.json()
-      msg = data.detail || JSON.stringify(data)
-    } catch { /* garder statusText */ }
+      const detail = data?.detail
+      if (typeof detail === 'string') msg = detail
+      // 422 FastAPI : detail est une LISTE d'objets {loc, msg, type}
+      else if (Array.isArray(detail)) msg = detail.map((d) => d?.msg || JSON.stringify(d)).join(' ; ')
+      else if (detail != null) msg = JSON.stringify(detail)
+      else if (data != null && Object.keys(data).length) msg = JSON.stringify(data)
+    } catch { /* corps non-JSON : proxy, page HTML, ou vide */ }
+    // res.statusText est VIDE en HTTP/2 : sans repli, la notif s'affichait sans
+    // texte (« cadre vide »). On garantit toujours un message lisible.
+    if (!msg) msg = res.statusText || `Erreur ${res.status}`
     throw new ApiError(res.status, msg)
   }
   return res.json()
