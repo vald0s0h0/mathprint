@@ -60,8 +60,9 @@ def _patch_classify(monkeypatch, db, pages):
     tag_to_page = {tag: pid for tag, pid in pages.items()}
 
     def fake_classify(_db, img):
+        # (page_id, assessment_id, image recalée) — ici l'image sert de « recalée »
         pid = tag_to_page.get(int(img[0, 0, 0]))
-        return (pid, scan_intake.page_assessment(_db, pid)) if pid else (None, None)
+        return (pid, scan_intake.page_assessment(_db, pid), img) if pid else (None, None, None)
 
     monkeypatch.setattr(scan_intake, "classify_page", fake_classify)
 

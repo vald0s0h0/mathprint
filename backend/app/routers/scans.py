@@ -4,6 +4,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -116,21 +117,24 @@ async def create_batch(tasks: BackgroundTasks, assessment_id: str | None = None,
     if sniffed is None:
         raise HTTPException(400, "Format non reconnu — PDF, JPEG, PNG ou HEIC uniquement")
     ext, _mime = sniffed
-    images = _raster_bytes(ext, content)
+    # rastérisation + identification = travail CV lourd et SYNCHRONE : on le sort
+    # de la boucle d'événements (threadpool) pour ne pas geler l'API (la liste des
+    # corrections doit rester réactive pendant le traitement du scan).
+    images = await run_in_threadpool(_raster_bytes, ext, content)
     if not images:
         raise HTTPException(422, "Scan illisible")
 
     # sujet identifié par le QR signé d'une page (sauf dépôt ciblé « en attente
     # de scan » où le sujet est déjà connu)
     if not assessment_id:
-        assessment_id = scan_intake.detect_assessment(db, images)
+        assessment_id = await run_in_threadpool(scan_intake.detect_assessment, db, images)
         if not assessment_id:
             raise HTTPException(422, "Aucun QR MathPrint reconnu dans ce scan — "
                                      "vérifier qu'il s'agit bien de copies générées ici")
     if not db.get(Assessment, assessment_id):
         raise HTTPException(404, "Évaluation inconnue")
 
-    r = scan_intake.attach_scan(db, assessment_id, images, user.id)
+    r = await run_in_threadpool(scan_intake.attach_scan, db, assessment_id, images, user.id)
     batch = db.get(ScanBatch, r["batch_id"])
     if not batch.source_file_id:
         # aucune page reconnue et batch vierge : ne pas laisser un lot fantôme
@@ -167,7 +171,10 @@ async def sandbox_upload(tasks: BackgroundTasks, files: list[UploadFile],
             continue
         ext, _mime = sniffed
         recognized.append((f.filename or "scan", ext, content))
-    out = sandbox_service.ingest_files(db, recognized, user.id)
+    # ingestion = raster + identification de chaque page (CV lourd, synchrone) :
+    # threadpool pour ne pas bloquer la boucle d'événements pendant le dépôt en
+    # vrac (sinon l'UI n'affiche plus rien le temps du traitement).
+    out = await run_in_threadpool(sandbox_service.ingest_files, db, recognized, user.id)
     results.extend(out["results"])
     for batch_id in out["batch_ids"]:
         tasks.add_task(_run_pipeline, batch_id)

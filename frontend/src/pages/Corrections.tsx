@@ -6,7 +6,7 @@
 // de choisir l'évaluation : le QR signé de chaque page identifie le sujet.
 import {
   ActionIcon, Alert, Badge, Button, Card, Checkbox, Divider, FileButton, Group, Kbd,
-  Modal, NumberInput, SegmentedControl, Stack, Table, Text, Title, Tooltip,
+  Loader, Modal, NumberInput, SegmentedControl, Stack, Table, Text, Title, Tooltip,
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
 import {
@@ -170,7 +170,7 @@ export default function Corrections() {
   const [previewId, setPreviewId] = useState<string | null>(null)
   const [idx, setIdx] = useState(0)
   const [scoreInput, setScoreInput] = useState<number | ''>('')
-  const [uploading, setUploading] = useState(false)
+  const [loaded, setLoaded] = useState(false)
   const [resetTarget, setResetTarget] = useState<Batch | null>(null)
   const [resetting, setResetting] = useState(false)
   const [sandboxUploading, setSandboxUploading] = useState(false)
@@ -190,30 +190,15 @@ export default function Corrections() {
   }, [])
 
   const refresh = useCallback(() => {
-    api.get<Batch[]>('/api/scans/batches').then(setBatches)
+    // le .then ne se déclenche qu'en cas de succès : un poll qui échoue ne vide
+    // jamais la liste déjà affichée (pas de « plus aucune donnée » transitoire).
+    api.get<Batch[]>('/api/scans/batches').then((r) => { setBatches(r); setLoaded(true) })
   }, [])
   useEffect(() => {
     refresh()
     const t = setInterval(refresh, 4000)
     return () => clearInterval(t)
   }, [refresh])
-
-  async function upload(file: File | null, assessmentId?: string) {
-    if (!file) return
-    setUploading(true)
-    try {
-      const fd = new FormData()
-      fd.append('file', file)
-      const qs = assessmentId ? `?assessment_id=${assessmentId}` : ''
-      await api.post(`/api/scans/batches${qs}`, fd)
-      notifications.show({ color: 'green', message: 'Scan déposé — correction en cours' })
-      refresh()
-    } catch (e) {
-      notifications.show({ color: 'red', message: (e as Error).message })
-    } finally {
-      setUploading(false)
-    }
-  }
 
   async function uploadSandbox(files: File[]) {
     if (!files.length) return
@@ -464,13 +449,23 @@ export default function Corrections() {
         )}
       </Card>
 
-      {groups.length === 0 && (
+      {!loaded && (
+        <Card withBorder padding="xl">
+          <Group justify="center" gap="sm">
+            <Loader size="sm" />
+            <Text size="sm" c="dimmed">Chargement des corrections…</Text>
+          </Group>
+        </Card>
+      )}
+
+      {loaded && groups.length === 0 && (
         <Card withBorder padding="xl">
           <Stack align="center" gap="xs">
             <ScanLine size={36} strokeWidth={1.4} opacity={0.5} />
             <Text fw={600}>Aucun lot de scans {cycle !== 'all' && `en ${cycle}`}</Text>
             <Text size="sm" c="dimmed" ta="center">
-              Après l'évaluation, scannez les copies en un seul PDF et déposez-le ici.
+              Après l'évaluation, scannez les copies et déposez-les dans le bac à
+              sable ci-dessus — chaque page est associée au bon sujet par son QR.
             </Text>
           </Stack>
         </Card>
@@ -537,17 +532,9 @@ export default function Corrections() {
                         et un déblocage/effacement est offert quand c'est utile. */}
                     <Group gap="xs" wrap="nowrap" style={{ flexShrink: 0 }}>
                       {stage === 'awaiting' && (
-                        <Tooltip label="Configurez d'abord la clé Mathpix (Paramètres → API)" disabled={mathpixOk}>
-                          <FileButton onChange={(f) => upload(f, b.assessment_id)} disabled={!mathpixOk}
-                            accept="application/pdf,image/jpeg,image/png,image/heic,image/heif">
-                            {(props) => (
-                              <Button {...props} size="xs" leftSection={<Upload size={14} />}
-                                loading={uploading} disabled={!mathpixOk}>
-                                Déposer le scan
-                              </Button>
-                            )}
-                          </FileButton>
-                        </Tooltip>
+                        <Text size="xs" c="dimmed" ta="right" style={{ maxWidth: 190 }}>
+                          Déposez le scan dans le <b>bac à sable</b> en haut de page.
+                        </Text>
                       )}
 
                       {stage === 'processing' && (
@@ -571,19 +558,12 @@ export default function Corrections() {
                           <Button size="xs" variant="light" onClick={() => openCorrection(b, 'all')}>
                             Corriger les copies
                           </Button>
-                          <FileButton onChange={(f) => upload(f, b.assessment_id)}
-                            accept="application/pdf,image/jpeg,image/png,image/heic,image/heif">
-                            {(props) => (
-                              <Button {...props} size="xs" variant="subtle" leftSection={<Upload size={14} />}
-                                loading={uploading}>
-                                Re-déposer
-                              </Button>
-                            )}
-                          </FileButton>
-                          <Button size="xs" variant="subtle" color="red"
-                            leftSection={<Trash2 size={14} />} onClick={() => setResetTarget(b)}>
-                            Effacer
-                          </Button>
+                          <Tooltip label="Effacer, puis re-déposez un scan propre dans le bac à sable">
+                            <Button size="xs" variant="subtle" color="red"
+                              leftSection={<Trash2 size={14} />} onClick={() => setResetTarget(b)}>
+                              Effacer
+                            </Button>
+                          </Tooltip>
                         </>
                       )}
 

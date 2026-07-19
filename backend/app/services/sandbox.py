@@ -67,7 +67,7 @@ def ingest_files(db: Session, files: list[tuple[str, str, bytes]],
 
         n_added = n_dup = n_blocked = 0
         for img in images:
-            page_id, aid = scan_intake.classify_page(db, img)
+            page_id, aid, warped = scan_intake.classify_page(db, img)
             if not page_id or not aid:
                 n_blocked += 1  # non identifiée : jamais devinée (RM-001)
                 continue
@@ -75,7 +75,9 @@ def ingest_files(db: Session, files: list[tuple[str, str, bytes]],
                 n_dup += 1  # copie déjà scannée : rejet silencieux
                 continue
             seen_page_ids.add(page_id)
-            kept_by_assessment[aid].append(img)
+            # image RECALÉE (canonique) et non la photo brute : le pipeline la
+            # reprend fidèlement (cf. scan_intake.classify_page).
+            kept_by_assessment[aid].append(warped if warped is not None else img)
             n_added += 1
         upload.status = "processed"
         results.append({"filename": filename, "status": "processed", "pages_added": n_added,

@@ -250,6 +250,41 @@ def test_batch_summary_previews_notes(mock_db, tmp_path, monkeypatch):
     assert db.query(CopyResult).count() == 0
 
 
+def test_unreadable_scan_blocks_with_clear_error(mock_db, tmp_path, monkeypatch):
+    """Scan sans aucune page reconnaissable (pas de QR/repères) : le lot ne file
+    PAS en silence vers un « corrigé » vide (0 réponse, overlays vides) — il se
+    bloque avec un message actionnable, pour que le professeur re-scanne net."""
+    import numpy as np
+    from app.models import FileObject, StudentResponse
+    from app.services import scan_intake
+
+    db = mock_db
+    monkeypatch.setattr(cfg, "data_dir", tmp_path)
+    a = _seed_manual(db)
+    batch = scan_intake.get_or_create_batch(db, a.id, None)
+    db.flush()
+
+    # deux pages blanches : rastérisables, mais aucun QR ni fiduciel à trouver
+    blank = np.full((400, 300, 3), 255, dtype=np.uint8)
+    pdf_bytes = scan_intake.encode_pages_to_pdf([blank, blank])
+    d = tmp_path / "assessments" / a.id / "scans" / "original"
+    d.mkdir(parents=True, exist_ok=True)
+    path = d / f"{batch.id}.pdf"
+    path.write_bytes(pdf_bytes)
+    fo = FileObject(owner_type="scan_batch", owner_id=batch.id, storage_path=str(path))
+    db.add(fo)
+    db.flush()
+    batch.source_file_id = fo.id
+    db.commit()
+
+    pipeline.process_batch(db, batch)
+
+    b = db.get(ScanBatch, batch.id)
+    assert b.error and "Aucune page reconnue" in b.error
+    assert b.status != "graded"                       # pas de faux « corrigé »
+    assert db.query(StudentResponse).count() == 0     # aucune réponse fabriquée
+
+
 def test_reset_batch_purges_correction(mock_db, tmp_path, monkeypatch):
     """« Effacer la correction » : supprime le lot et ses réponses/décisions,
     remet les copies à « generated », sans toucher aux copies (CopyItem) ni au

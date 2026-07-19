@@ -166,6 +166,18 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
     _set_status(db, batch, "identified", identified=identified, total=len(images))
     _set_status(db, batch, "registered")
 
+    # Aucune page reconnue : ne PAS filer en silence vers un lot « corrigé » vide
+    # (pas de réponse, pas d'overlay) — c'était le symptôme « rien à corriger,
+    # overlays vides » sans explication. On bloque avec un message actionnable.
+    if identified == 0:
+        batch.error = (
+            "Aucune page reconnue sur ce scan : le QR ou les repères de coin sont "
+            "illisibles. Rescannez les copies bien à plat, nettes et bien "
+            "éclairées (ou vérifiez qu'il s'agit de copies imprimées depuis "
+            "MathPrint), puis re-déposez.")
+        db.commit()
+        return 0
+
     n_review = 0
     for i, res in analyses:
         page, copy = page_index[res.page_id]
@@ -386,6 +398,10 @@ def process_batch(db: Session, batch: ScanBatch):
 
     if batch.source_file_id:
         n_review = _process_real(db, batch, assessment)
+        # scan illisible (aucune page reconnue) : _process_real a posé un message
+        # d'erreur clair et s'est arrêté — on ne marque pas « corrigé » un lot vide.
+        if batch.error:
+            return
     else:
         n_review = _process_mock(db, batch, assessment)
 

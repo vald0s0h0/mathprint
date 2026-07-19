@@ -72,14 +72,23 @@ def detect_assessment(db: Session, images: list[np.ndarray]) -> str | None:
     return None
 
 
-def classify_page(db: Session, img: np.ndarray) -> tuple[str | None, str | None]:
-    """(page_id, assessment_id) si la page est recalée (registered), sinon
-    (None, None). Recalage complet (QR + fiduciels + homographie) — une page non
-    identifiée n'est jamais devinée (RM-001)."""
+def classify_page(db: Session, img: np.ndarray
+                  ) -> tuple[str | None, str | None, np.ndarray | None]:
+    """(page_id, assessment_id, image RECALÉE) si la page est reconnue
+    (registered), sinon (None, None, None). Recalage complet (QR + fiduciels +
+    homographie) — une page non identifiée n'est jamais devinée (RM-001).
+
+    On renvoie l'image DÉJÀ RECALÉE sur le gabarit A4 canonique (`res.warped`)
+    pour qu'elle soit stockée telle quelle : le pipeline la reprend alors sans
+    avoir à ré-identifier une photo brute (perspective, cadrage, résolution du
+    téléphone) une deuxième fois. C'était la cause du « rien à corriger / overlays
+    vides » : la page passait l'identification au dépôt, mais l'image brute
+    ré-encodée en A4 (déformée, ré-échantillonnée) échouait au 2e passage du
+    worker, et tout le sujet finissait vide en silence."""
     res = worker_cv.analyze_page(img)
     if res.status != "registered" or not res.page_id:
-        return None, None
-    return res.page_id, page_assessment(db, res.page_id)
+        return None, None, None
+    return res.page_id, page_assessment(db, res.page_id), res.warped
 
 
 def get_or_create_batch(db: Session, assessment_id: str,
@@ -145,7 +154,7 @@ def attach_scan(db: Session, assessment_id: str, images: list[np.ndarray],
     seen: set[str] = set()
     n_dup = n_blocked = 0
     for img in images:
-        page_id, aid = classify_page(db, img)
+        page_id, aid, warped = classify_page(db, img)
         if not page_id or aid != assessment_id:
             # non identifiée, ou page d'un autre sujet : jamais attribuée ici
             n_blocked += 1
@@ -154,7 +163,9 @@ def attach_scan(db: Session, assessment_id: str, images: list[np.ndarray],
             n_dup += 1
             continue
         seen.add(page_id)
-        kept.append(img)
+        # on stocke l'image RECALÉE (canonique), pas la photo brute : le pipeline
+        # la reprend fidèlement, sans risque d'échec de ré-identification.
+        kept.append(warped if warped is not None else img)
     append_pages(db, batch, assessment_id, kept)
     return {"batch_id": batch.id, "pages_added": len(kept),
             "duplicates_rejected": n_dup, "blocked_pages": n_blocked}
