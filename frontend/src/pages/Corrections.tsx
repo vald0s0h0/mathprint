@@ -5,7 +5,7 @@
 // (relancer) quand la correction est bloquée. Le dépôt d'un scan ne demande pas
 // de choisir l'évaluation : le QR signé de chaque page identifie le sujet.
 import {
-  ActionIcon, Alert, Badge, Button, Card, Checkbox, Divider, FileButton, Group, Kbd,
+  ActionIcon, Alert, Badge, Box, Button, Card, Checkbox, Divider, FileButton, Group, Kbd,
   Loader, Modal, NumberInput, SegmentedControl, Stack, Table, Text, Title, Tooltip,
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
@@ -31,6 +31,15 @@ type Batch = {
   overlay_printed: boolean; overlay_distributed: boolean
   error: string | null; pending_reviews: number; segments: Segment[]; created_at: string
 }
+// une case à corriger d'un tableau / de cases à trous (table_fill, multi_blank) :
+// sa réponse attendue lisible, ce que l'OCR a lu, le verdict auto du moteur
+// (auto_ok) et le verdict éventuellement déjà posé par le professeur (teacher_ok).
+type Cell = {
+  index: number; label: string; expected_display: string
+  ocr_text: string; auto_ok: boolean | null; teacher_ok: boolean | null
+}
+// mode de correction manuelle piloté par le backend (cf. scans._grade_mode)
+type GradeMode = 'cells' | 'binary' | 'partial'
 // une réponse d'élève à (re)corriger : signalée par le moteur (flagged) ou
 // simplement relue par le professeur. Clé de résolution = response_id.
 type Item = {
@@ -42,6 +51,8 @@ type Item = {
   current_points: number; full_credit: boolean; cancelled: boolean
   bareme_points: number; zone_id: string | null; has_scan: boolean
   group_key: string; group_label: string; response_type: string; sequence: number
+  // correction manuelle : mode d'UI, réponse attendue lisible, détail par case
+  grade_mode: GradeMode; expected_display: string; cells: Cell[]
 }
 // raccourcis de correction manuelle (paramétrables, cf. Réglages → Pédagogie)
 type Shortcuts = { full: string; two_thirds: string; one_third: string; zero: string }
@@ -169,6 +180,10 @@ export default function Corrections() {
   const [mathpixOk, setMathpixOk] = useState(true)
   const [previewId, setPreviewId] = useState<string | null>(null)
   const [idx, setIdx] = useState(0)
+  // correction case par case (tableaux / cases à trous) : verdict Juste(true)/
+  // Faux(false)/à trancher(null) par case, + case « active » pour le clavier
+  const [cellVerdicts, setCellVerdicts] = useState<(boolean | null)[]>([])
+  const [cellCursor, setCellCursor] = useState(0)
   const [scoreInput, setScoreInput] = useState<number | ''>('')
   const [loaded, setLoaded] = useState(false)
   const [resetTarget, setResetTarget] = useState<Batch | null>(null)
@@ -269,18 +284,87 @@ export default function Corrections() {
   }
   const gradeRatio = (ratio: number) => grade('set_ratio', { ratio })
 
-  // raccourcis clavier de correction manuelle (paramétrés dans les réglages)
+  // (ré)initialise les verdicts par case quand on change d'exercice : on repart
+  // du verdict déjà posé par le professeur, sinon de celui du moteur (auto_ok) —
+  // ainsi seules les cases NON tranchées (null) demandent une action.
   useEffect(() => {
-    if (!reviewBatch || !items[idx]) return
+    const it = items[idx]
+    if (it && it.grade_mode === 'cells') {
+      const init = it.cells.map((c) => (c.teacher_ok != null ? c.teacher_ok : c.auto_ok))
+      setCellVerdicts(init)
+      const firstNull = init.findIndex((v) => v === null)
+      setCellCursor(firstNull >= 0 ? firstNull : 0)
+    } else {
+      setCellVerdicts([])
+      setCellCursor(0)
+    }
+  }, [idx, items])
+
+  // pose un verdict sur une case et avance sur la prochaine case à trancher
+  function markCell(index: number, val: boolean) {
+    const next = cellVerdicts.slice()
+    next[index] = val
+    setCellVerdicts(next)
+    const after = next.findIndex((v, i) => i > index && v === null)
+    setCellCursor(after >= 0 ? after : Math.min(index + 1, next.length - 1))
+  }
+
+  // enregistre les verdicts case par case : le backend recalcule le barème
+  // (points = nombre de cases justes) et rend l'overlay cohérent avec la note.
+  async function submitCells() {
+    const it = items[idx]
+    if (!it || it.grade_mode !== 'cells') return
+    if (cellVerdicts.some((v) => v === null)) {
+      notifications.show({ color: 'orange', message: 'Validez chaque case (Juste ou Faux) avant de continuer.' })
+      return
+    }
+    const verdicts = cellVerdicts.map((v) => !!v)
+    try {
+      await api.post(`/api/scans/responses/${it.response_id}/resolve`,
+        { action: 'set_cells', cell_verdicts: verdicts })
+    } catch (e) {
+      notifications.show({ color: 'red', message: (e as Error).message })
+      return
+    }
+    const correct = verdicts.filter(Boolean).length
+    setItems((prev) => prev.map((x, i) => i !== idx ? x : ({
+      ...x, decision_source: 'teacher', cancelled: false,
+      full_credit: correct === verdicts.length,
+      current_points: verdicts.length
+        ? Math.round((correct / verdicts.length) * x.bareme_points * 100) / 100 : 0,
+      cells: x.cells.map((c, ci) => ({ ...c, teacher_ok: verdicts[ci] })),
+    })))
+    setIdx((i) => Math.min(i + 1, items.length - 1))
+  }
+
+  // raccourcis clavier de correction manuelle (paramétrés dans les réglages).
+  // Le comportement dépend du MODE de la réponse courante : F/Q valident une
+  // case (mode cases) ou Juste/Faux (QCM), et pilotent le crédit partiel ailleurs.
+  useEffect(() => {
+    const it = items[idx]
+    if (!reviewBatch || !it) return
     const h = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement).tagName === 'INPUT') return
       const k = e.key.toLowerCase()
+      if (e.key === 'ArrowRight') { setIdx((i) => Math.min(i + 1, items.length - 1)); return }
+      if (e.key === 'ArrowLeft') { setIdx((i) => Math.max(i - 1, 0)); return }
+      if (it.grade_mode === 'cells') {
+        if (e.key === 'ArrowDown') setCellCursor((c) => Math.min(c + 1, it.cells.length - 1))
+        else if (e.key === 'ArrowUp') setCellCursor((c) => Math.max(c - 1, 0))
+        else if (k === shortcuts.full) markCell(cellCursor, true)
+        else if (k === shortcuts.zero) markCell(cellCursor, false)
+        else if (e.key === 'Enter' && !cellVerdicts.some((v) => v === null)) submitCells()
+        return
+      }
+      if (it.grade_mode === 'binary') {
+        if (k === shortcuts.full) gradeRatio(1)
+        else if (k === shortcuts.zero) gradeRatio(0)
+        return
+      }
       if (k === shortcuts.full) gradeRatio(1)
       else if (k === shortcuts.two_thirds) gradeRatio(2 / 3)
       else if (k === shortcuts.one_third) gradeRatio(1 / 3)
       else if (k === shortcuts.zero) gradeRatio(0)
-      else if (e.key === 'ArrowRight') setIdx((i) => Math.min(i + 1, items.length - 1))
-      else if (e.key === 'ArrowLeft') setIdx((i) => Math.max(i - 1, 0))
     }
     window.addEventListener('keydown', h)
     return () => window.removeEventListener('keydown', h)
@@ -770,53 +854,135 @@ export default function Corrections() {
               <Card withBorder padding="sm">
                 <MathText text={cur.statement} centered />
               </Card>
-              {/* scan de l'élève + réponse attendue, côte à côte pour corriger vite */}
-              <Group grow align="stretch">
-                <Card withBorder padding="xs">
-                  <Text size="xs" c="dimmed" fw={600} tt="uppercase" mb={4}>Scan de l'élève</Text>
-                  <ScanImage responseId={cur.response_id} />
-                </Card>
-                <Card withBorder padding="xs">
-                  <Text size="xs" c="dimmed" fw={600} tt="uppercase" mb={4}>Réponse attendue</Text>
-                  <Text ff="monospace">
-                    {JSON.stringify(cur.expected.value ?? cur.expected.correct ?? cur.expected)}
+              {/* copie scannée de l'élève : ce qu'il a réellement écrit */}
+              <Card withBorder padding="xs">
+                <Text size="xs" c="dimmed" fw={600} tt="uppercase" mb={4}>Scan de l'élève</Text>
+                <ScanImage responseId={cur.response_id} />
+              </Card>
+
+              {cur.grade_mode === 'cells' ? (
+                /* correction CASE PAR CASE : une case = une réponse attendue
+                   lisible + ce que l'OCR a lu (en petit) + Juste/Faux. Seules les
+                   cases non tranchées demandent une action ; le barème se recalcule. */
+                <Stack gap="xs">
+                  <Text size="xs" c="dimmed">
+                    Validez chaque case — <Kbd>{shortcuts.full.toUpperCase()}</Kbd> juste,{' '}
+                    <Kbd>{shortcuts.zero.toUpperCase()}</Kbd> faux, <Kbd>↑</Kbd>/<Kbd>↓</Kbd> pour
+                    changer de case. Le barème (0,5 pt/case juste) est calculé automatiquement.
                   </Text>
-                  {cur.correction && <Text size="sm" mt={4}>{cur.correction}</Text>}
-                  <Divider my="xs" />
-                  <Text size="xs" c="dimmed" fw={600} tt="uppercase" mb={2}>Lecture OCR / CV</Text>
-                  <Text ff="monospace">{cur.ocr_text || (cur.selected_choices.length
-                    ? `cases ${cur.selected_choices.join(', ')}` : '∅')}</Text>
-                  {cur.ocr_confidence != null &&
-                    <Text size="xs" c="dimmed">confiance {(cur.ocr_confidence * 100).toFixed(0)} %</Text>}
-                  {cur.reason_code && <Text size="xs" c="dimmed" mt={4}>Motif : {cur.reason_code}</Text>}
-                </Card>
-              </Group>
-              <Group>
-                <Button color="green" onClick={() => gradeRatio(1)}>
-                  Tous les points — {fmtPts(cur.bareme_points)} <Kbd ml={6}>{shortcuts.full.toUpperCase()}</Kbd>
-                </Button>
-                <Button color="teal" variant="light" onClick={() => gradeRatio(2 / 3)}>
-                  2⁄3 — {fmtPts(cur.bareme_points * 2 / 3)} <Kbd ml={6}>{shortcuts.two_thirds.toUpperCase()}</Kbd>
-                </Button>
-                <Button color="orange" variant="light" onClick={() => gradeRatio(1 / 3)}>
-                  1⁄3 — {fmtPts(cur.bareme_points / 3)} <Kbd ml={6}>{shortcuts.one_third.toUpperCase()}</Kbd>
-                </Button>
-                <Button color="red" variant="light" onClick={() => gradeRatio(0)}>
-                  0 point <Kbd ml={6}>{shortcuts.zero.toUpperCase()}</Kbd>
-                </Button>
-              </Group>
-              <Group>
-                <NumberInput placeholder="points" w={120} min={0} max={cur.bareme_points} step={0.5}
-                  decimalScale={2} value={scoreInput}
-                  onChange={(v) => setScoreInput(v === '' ? '' : Number(v))} />
-                <Button variant="light" disabled={scoreInput === '' || !cur.bareme_points}
-                  onClick={() => gradeRatio(Number(scoreInput) / cur.bareme_points)}>
-                  Attribuer ces points
-                </Button>
-                <Button variant="subtle" color="gray" onClick={() => grade('cancel_item')}>
-                  Annuler la question
-                </Button>
-              </Group>
+                  {cur.cells.map((c, ci) => {
+                    const v = cellVerdicts[ci]
+                    const active = ci === cellCursor
+                    const undecided = c.auto_ok === null && c.teacher_ok == null
+                    return (
+                      <Card key={c.index} withBorder padding="xs"
+                        onClick={() => setCellCursor(ci)}
+                        style={{
+                          cursor: 'pointer',
+                          borderColor: active ? 'var(--mantine-color-indigo-5)'
+                            : undecided ? 'var(--mantine-color-orange-4)' : undefined,
+                          boxShadow: active ? '0 0 0 2px var(--mantine-color-indigo-1)' : undefined,
+                        }}>
+                        <Group justify="space-between" wrap="nowrap" align="center">
+                          <div style={{ minWidth: 0, flex: 1 }}>
+                            {c.label && <Text size="xs" c="dimmed" lineClamp={1}>{c.label}</Text>}
+                            <Box fz="1.4rem" fw={600} style={{ lineHeight: 1.3 }}>
+                              <MathText text={c.expected_display || '—'} />
+                            </Box>
+                            <Text size="xs" c={undecided ? 'orange' : 'dimmed'} mt={2}>
+                              {undecided ? 'OCR illisible' : 'OCR a lu'} : {c.ocr_text || '∅'}
+                            </Text>
+                          </div>
+                          <Group gap={6} wrap="nowrap" style={{ flexShrink: 0 }}>
+                            <Button size="xs" color="green" variant={v === true ? 'filled' : 'light'}
+                              onClick={(e) => { e.stopPropagation(); markCell(ci, true) }}>
+                              Juste
+                            </Button>
+                            <Button size="xs" color="red" variant={v === false ? 'filled' : 'light'}
+                              onClick={(e) => { e.stopPropagation(); markCell(ci, false) }}>
+                              Faux
+                            </Button>
+                          </Group>
+                        </Group>
+                      </Card>
+                    )
+                  })}
+                  <Group justify="space-between">
+                    <Text size="xs"
+                      c={cellVerdicts.some((v) => v === null) ? 'orange' : 'green'}>
+                      {cellVerdicts.filter((v) => v === true).length} juste(s) ·{' '}
+                      {cellVerdicts.filter((v) => v === false).length} faux
+                      {cellVerdicts.some((v) => v === null)
+                        ? ` · ${cellVerdicts.filter((v) => v === null).length} à valider` : ''}
+                    </Text>
+                    <Button color="indigo" leftSection={<Check size={14} />}
+                      disabled={cellVerdicts.some((v) => v === null)} onClick={submitCells}>
+                      Valider les cases ({cellVerdicts.filter((v) => v === true).length}/{cellVerdicts.length})
+                      <Kbd ml={6}>↵</Kbd>
+                    </Button>
+                  </Group>
+                </Stack>
+              ) : (
+                /* réponse en un bloc : QCM (Juste/Faux) ou réponse rédigée
+                   (crédit partiel). Réponse attendue LISIBLE (pas de JSON brut),
+                   lecture OCR en petit pour ne pas la confondre avec l'attendu. */
+                <>
+                  <Card withBorder padding="sm">
+                    <Text size="xs" c="dimmed" fw={600} tt="uppercase" mb={4}>Réponse attendue</Text>
+                    <Box fz="1.4rem" fw={600} style={{ lineHeight: 1.35 }}>
+                      <MathText text={cur.expected_display || '—'} />
+                    </Box>
+                    <Text size="xs" c="dimmed" mt={6}>
+                      OCR / CV a lu : {cur.ocr_text || (cur.selected_choices.length
+                        ? `cases ${cur.selected_choices.join(', ')}` : '∅')}
+                      {cur.ocr_confidence != null && ` · confiance ${(cur.ocr_confidence * 100).toFixed(0)} %`}
+                    </Text>
+                    {cur.reason_code && <Text size="xs" c="dimmed">Motif : {cur.reason_code}</Text>}
+                  </Card>
+                  {cur.grade_mode === 'binary' ? (
+                    <Group>
+                      <Button color="green" onClick={() => gradeRatio(1)}>
+                        Juste — {fmtPts(cur.bareme_points)} <Kbd ml={6}>{shortcuts.full.toUpperCase()}</Kbd>
+                      </Button>
+                      <Button color="red" variant="light" onClick={() => gradeRatio(0)}>
+                        Faux — 0 point <Kbd ml={6}>{shortcuts.zero.toUpperCase()}</Kbd>
+                      </Button>
+                      <Button variant="subtle" color="gray" onClick={() => grade('cancel_item')}>
+                        Annuler la question
+                      </Button>
+                    </Group>
+                  ) : (
+                    <>
+                      <Group>
+                        <Button color="green" onClick={() => gradeRatio(1)}>
+                          Tous les points — {fmtPts(cur.bareme_points)} <Kbd ml={6}>{shortcuts.full.toUpperCase()}</Kbd>
+                        </Button>
+                        <Button color="teal" variant="light" onClick={() => gradeRatio(2 / 3)}>
+                          2⁄3 — {fmtPts(cur.bareme_points * 2 / 3)} <Kbd ml={6}>{shortcuts.two_thirds.toUpperCase()}</Kbd>
+                        </Button>
+                        <Button color="orange" variant="light" onClick={() => gradeRatio(1 / 3)}>
+                          1⁄3 — {fmtPts(cur.bareme_points / 3)} <Kbd ml={6}>{shortcuts.one_third.toUpperCase()}</Kbd>
+                        </Button>
+                        <Button color="red" variant="light" onClick={() => gradeRatio(0)}>
+                          0 point <Kbd ml={6}>{shortcuts.zero.toUpperCase()}</Kbd>
+                        </Button>
+                      </Group>
+                      <Group>
+                        <NumberInput placeholder="points" w={120} min={0} max={cur.bareme_points} step={0.5}
+                          decimalScale={2} value={scoreInput}
+                          onChange={(v) => setScoreInput(v === '' ? '' : Number(v))} />
+                        <Button variant="light" disabled={scoreInput === '' || !cur.bareme_points}
+                          onClick={() => gradeRatio(Number(scoreInput) / cur.bareme_points)}>
+                          Attribuer ces points
+                        </Button>
+                        <Button variant="subtle" color="gray" onClick={() => grade('cancel_item')}>
+                          Annuler la question
+                        </Button>
+                      </Group>
+                    </>
+                  )}
+                </>
+              )}
             </>
           ) : (
             <Text c="dimmed" py="md">

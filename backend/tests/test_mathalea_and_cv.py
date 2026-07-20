@@ -111,3 +111,52 @@ def test_dropout_preserves_blue_ink_removes_salmon():
     assert (out[15, 30] == 255).all(), "le cadre saumon doit être supprimé"
     assert (out[40, 30] != 255).any(), "l'encre bleue doit être conservée"
     assert ink_ratio(out) > 0.05
+
+
+def _qcm_box(idx, x_pt, y_pt, *, detect=True):
+    from app.services.pdfgen import QCM_BOX, QCM_DETECT_MARGIN
+    b = {"index": idx, "x_pt": x_pt, "y_pt": y_pt, "w_pt": QCM_BOX, "h_pt": QCM_BOX}
+    if detect:
+        dm = QCM_DETECT_MARGIN
+        b["detect"] = {"x_pt": x_pt - dm, "y_pt": y_pt - dm,
+                       "w_pt": QCM_BOX + 2 * dm, "h_pt": QCM_BOX + 2 * dm}
+    return b
+
+
+def _paint_mark(img, x_pt, y_pt, half=10):
+    """Coche bleue foncée centrée sur la case (déborde volontairement la petite
+    case de 2 mm mais reste dans la fenêtre de détection élargie)."""
+    from app.services import worker_cv as W
+    from app.services.pdfgen import QCM_BOX
+    cx, cy = W.pt_to_px(x_pt + QCM_BOX / 2, y_pt + QCM_BOX / 2)
+    cx, cy = int(cx), int(cy)
+    img[cy - half:cy + half, cx - half:cx + half] = (120, 40, 20)
+
+
+def test_detect_qcm_reads_overflowing_mark_in_enlarged_window():
+    """La coche qui déborde la case (2 mm) est captée par la fenêtre élargie ;
+    une case vide reste non sélectionnée."""
+    from app.services import worker_cv as W
+    img = np.full((500, 500, 3), 255, dtype=np.uint8)
+    marked = _qcm_box(0, 100, 780)
+    empty = _qcm_box(1, 100, 760)
+    _paint_mark(img, 100, 780)
+    selected, densities = W.detect_qcm(img, [marked, empty])
+    assert selected == [0], (selected, densities)
+    assert densities[0] > densities[1]
+
+
+def test_detect_qcm_fallback_window_when_meta_lacks_detect():
+    """Copies imprimées avant l'évolution : la méta ne porte pas `detect` et la
+    case stockée était dégénérée (largeur négative) ; le centre reste correct,
+    donc la fenêtre reconstruite capte quand même la coche."""
+    from app.services import worker_cv as W
+    from app.services.pdfgen import QCM_BOX
+    img = np.full((500, 500, 3), 255, dtype=np.uint8)
+    inner = 1.1 / 25.4 * 72  # ancienne marge intérieure (pt)
+    # ancienne géométrie dégénérée : x/y décalés, largeur négative, PAS de "detect"
+    old = {"index": 0, "x_pt": 100 + inner, "y_pt": 780 + inner,
+           "w_pt": QCM_BOX - 2 * inner, "h_pt": QCM_BOX - 2 * inner}
+    _paint_mark(img, 100, 780)   # coche centrée sur la vraie case
+    selected, _ = W.detect_qcm(img, [old])
+    assert selected == [0]

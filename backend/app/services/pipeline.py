@@ -204,7 +204,8 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
                 boxes = (zone.meta_json or {}).get("boxes", [])
                 selected, densities = worker_cv.detect_qcm(res.warped, boxes)
                 db.add(OcrAttempt(zone_id=zone.id, provider="cv_local",
-                                  raw_json={"densities": densities}, confidence=1.0))
+                                  raw_json={"densities": densities, "selected": selected},
+                                  confidence=1.0))
                 n_review += _decide_and_store(
                     db, item=item, zone=zone, student=student,
                     ocr_text="", conf=1.0, selected=selected, corr_id=corr_id)
@@ -496,8 +497,9 @@ def _zone_marks(db: Session, item: CopyItem, zone: ResponseZone,
     - short_text : une coche/croix en haut à droite de la case ;
     - table_fill / multi_blank : une coche/croix en haut à droite de CHAQUE
       cellule (toutes marquées) ;
-    - qcm : si au moins une erreur, une case correction (vide/cochée) à gauche
-      de chaque case élève — cochée pour les bonnes réponses ;
+    - qcm : une marque PAR CASE (coche si cochée à raison, croix si cochée à
+      tort, case correction cochée à gauche pour une bonne réponse oubliée) +
+      un récap coche/croix en bas à droite de la carte ;
     - matching : si erreur, les traits de correction entre les bons points ;
     - multiline_text : une coche/croix en bas à droite de la zone.
 
@@ -510,12 +512,30 @@ def _zone_marks(db: Session, item: CopyItem, zone: ResponseZone,
     full = decision.score >= decision.max_score
 
     if rtype.startswith("qcm"):
-        if full:
-            return {"kind": "qcm", "any_error": False, "boxes": []}
         correct = set(expected.get("correct", []))
-        boxes = [{**b["correction_box"], "should_check": b.get("index") in correct}
-                 for b in meta.get("boxes", []) if b.get("correction_box")]
-        return {"kind": "qcm", "any_error": True, "boxes": boxes}
+        resp = db.get(StudentResponse, decision.response_id)
+        selected = set(resp.selected_choices or []) if resp else set()
+        # crédit plein => la sélection VAUT les bonnes réponses : garantit des
+        # marques cohérentes avec la note même quand la lecture CV a échoué ou
+        # après une validation manuelle « Juste » (qui ne réécrit pas la sélection).
+        if full:
+            selected = set(correct)
+        boxes = []
+        for b in meta.get("boxes", []):
+            i = b.get("index")
+            is_correct, is_sel = i in correct, i in selected
+            if is_sel and is_correct:
+                state = "ok"        # coché à raison -> coche sur la case
+            elif is_sel:
+                state = "wrong"     # coché à tort -> croix sur la case
+            elif is_correct:
+                state = "missed"    # bonne réponse oubliée -> case correction cochée
+            else:
+                state = None        # non coché à raison -> rien
+            boxes.append({"index": i, "x_pt": b.get("x_pt"), "y_pt": b.get("y_pt"),
+                          "w_pt": b.get("w_pt"), "h_pt": b.get("h_pt"),
+                          "correction_box": b.get("correction_box"), "state": state})
+        return {"kind": "qcm", "any_error": not full, "boxes": boxes}
 
     if rtype in ("table_fill", "multi_blank"):
         ocr = _latest_ocr(db, zone.id)

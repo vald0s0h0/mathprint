@@ -29,6 +29,11 @@ class BudgetExceeded(Exception):
     pass
 
 
+class ProviderConfigError(Exception):
+    """Identifiants d'un provider absents ou mal formés (message actionnable
+    remonté tel quel sur batch.error, pas une erreur HTTP brute)."""
+
+
 class LLMTimeout(Exception):
     """Appel LLM sans réponse complète dans le délai total imparti."""
 
@@ -165,10 +170,20 @@ def mathpix_ocr(db: Session, image_bytes: bytes, correlation_id: str,
         _record(db, "mathpix", "mock", "ocr_text", units=1, cost=0.0, correlation_id=correlation_id)
         return {"latex": text, "text": text, "confidence": conf, "raw": {"mock": True}}
 
-    app_id, app_key = (cfg.encrypted_secret.split(":", 1) + [""])[:2]
+    # Mathpix v3/text exige DEUX identifiants — app_id ET app_key — envoyés en
+    # en-têtes séparés (une clé seule = 401). Le secret est stocké « app_id:app_key ».
+    # Sans le « : », on enverrait la clé comme app_id et un app_key vide → 401
+    # cryptique : on l'intercepte ici avec un message actionnable.
+    app_id, app_key = ((cfg.encrypted_secret or "").split(":", 1) + [""])[:2]
+    if not app_id.strip() or not app_key.strip():
+        raise ProviderConfigError(
+            "Identifiants Mathpix incomplets : renseignez « app_id:app_key » "
+            "dans Paramètres → Mathpix — les DEUX, séparés par « : ». Mathpix "
+            "exige app_id ET app_key ; la clé seule ne suffit pas (l'app_id est "
+            "un identifiant court, distinct de la clé, visible dans la console Mathpix).")
     r = _post_with_deadline(
         "https://api.mathpix.com/v3/text",
-        headers={"app_id": app_id, "app_key": app_key},
+        headers={"app_id": app_id.strip(), "app_key": app_key.strip()},
         json_body={
             "src": "data:image/png;base64," + __import__("base64").b64encode(image_bytes).decode(),
             "formats": ["text", "latex_styled"],
@@ -176,6 +191,10 @@ def mathpix_ocr(db: Session, image_bytes: bytes, correlation_id: str,
         },
         timeout=30, provider="Mathpix",
     )
+    if r.status_code in (401, 403):
+        raise ProviderConfigError(
+            f"Mathpix a refusé les identifiants ({r.status_code}) : vérifiez "
+            "app_id et app_key dans Paramètres → Mathpix (format « app_id:app_key »).")
     r.raise_for_status()
     data = r.json()
     _record(db, "mathpix", cfg.model or "v3/text", "ocr_text", units=1,

@@ -285,6 +285,86 @@ def test_unreadable_scan_blocks_with_clear_error(mock_db, tmp_path, monkeypatch)
     assert db.query(StudentResponse).count() == 0     # aucune réponse fabriquée
 
 
+def _seed_table_fill(db):
+    """Un table_fill scanné dont l'OCR a lu 1 case juste, 1 fausse, 1 illisible —
+    typiquement mis en revue (case illisible → tier D). Sert à la correction
+    CASE PAR CASE (set_cells)."""
+    from app.models import GradingDecision, ManualReview, OcrAttempt, StudentResponse
+
+    cls = SchoolClass(name="5B", grade_level="5e"); db.add(cls); db.flush()
+    a = Assessment(class_id=cls.id, title="Ctrl", type="control", note_base=20)
+    db.add(a); db.flush()
+    stu = Student(class_id=cls.id, first_name="E", last_name="X", llm_pseudonym="p")
+    db.add(stu); db.flush()
+    copy = Copy(assessment_id=a.id, student_id=stu.id, status="printed"); db.add(copy); db.flush()
+    page = DocumentPage(copy_id=copy.id, page_no=1); db.add(page); db.flush()
+    cells = [[{"type": "integer", "value": 5}, {"type": "integer", "value": 8}],
+             [{"type": "rational", "value": [1, 2]}, {"type": "text", "value": "oui", "given": True}]]
+    grading_json = {"comparator": "table_cells", "max_score": 3, "bareme_points": 1.5,
+                    "cells": cells, "row_labels": ["L1", "L2"], "col_labels": ["A", "B"]}
+    item = CopyItem(copy_id=copy.id, catalog_id="cat-1", sequence=1, difficulty=3,
+                    response_type="table_fill", statement="Complète.", correction="corr",
+                    expected_json={"type": "table", "rows": 2, "cols": 2, "cells": cells},
+                    grading_json=grading_json)
+    db.add(item); db.flush()
+    zone = ResponseZone(page_id=page.id, item_id=item.id, type="table",
+                        x_pt=50, y_pt=50, w_pt=100, h_pt=60, meta_json={})
+    db.add(zone); db.flush()
+    resp = StudentResponse(copy_item_id=item.id, zone_id=zone.id, final_text="")
+    db.add(resp); db.flush()
+    db.add(OcrAttempt(zone_id=zone.id, provider="mathpix",
+                      raw_json={"cells": ["5", "9", ""]}, confidence=0.4))
+    dec = GradingDecision(response_id=resp.id, source="deterministic", score=1, max_score=3,
+                          tier="D", reason_code="table_cell_unreadable", status="review_pending")
+    db.add(dec); db.flush()
+    db.add(ManualReview(decision_id=dec.id, category="ocr_ambigu"))
+    batch = ScanBatch(assessment_id=a.id, status="review_pending"); db.add(batch); db.flush()
+    db.commit()
+    return a, batch, resp, grading_json
+
+
+def test_cell_by_cell_correction(mock_db, tmp_path, monkeypatch):
+    """Correction manuelle CASE PAR CASE d'un tableau (demande § modale) :
+    - list_items expose chaque case avec sa réponse attendue LISIBLE (LaTeX), ce
+      que l'OCR a lu et le verdict auto du moteur (juste/faux/illisible) ;
+    - resolve set_cells recalcule le barème depuis les verdicts Juste/Faux ;
+    - les marques ✓/✗ de l'overlay restent cohérentes avec la note ;
+    - rouvrir montre les verdicts du professeur et la revue close."""
+    from app.models import OcrAttempt
+    from app.services import grading
+
+    db = mock_db
+    monkeypatch.setattr(cfg, "data_dir", tmp_path)
+    a, batch, resp, grading_json = _seed_table_fill(db)
+
+    it = scans_router.list_items(batch.id, "all", db)[0]
+    assert it["grade_mode"] == "cells"
+    assert [c["expected_display"] for c in it["cells"]] == ["$5$", "$8$", r"$\dfrac{1}{2}$"]
+    assert [c["ocr_text"] for c in it["cells"]] == ["5", "9", ""]
+    assert [c["auto_ok"] for c in it["cells"]] == [True, False, None]
+    assert [c["label"] for c in it["cells"]] == ["L1 · A", "L1 · B", "L2 · A"]
+    assert [c["teacher_ok"] for c in it["cells"]] == [None, None, None]
+
+    # le prof tranche : case 1 juste, case 2 finalement juste (OCR a mal lu),
+    # case 3 fausse → 2 justes / 3 → 2/3 × 1,5 = 1,0 pt
+    body = scans_router.ResolveIn(action="set_cells", cell_verdicts=[True, True, False])
+    scans_router.resolve_response(resp.id, body, db, None)
+    dec = scans_router._latest_decision_for_response(db, resp.id)
+    assert dec.source == "teacher" and dec.score == 2.0 and dec.max_score == 3.0
+    assert dec.evidence_json["cell_verdicts"] == [True, True, False]
+
+    # marques d'overlay dérivées du texte de cellule réécrit = verdicts du prof
+    tocr = (db.query(OcrAttempt).filter_by(zone_id=resp.zone_id)
+            .order_by(OcrAttempt.created_at.desc()).first())
+    assert grading.cell_marks(grading_json, tocr.raw_json["cells"]) == [True, True, False]
+
+    it2 = scans_router.list_items(batch.id, "all", db)[0]
+    assert it2["decision_source"] == "teacher"
+    assert abs(it2["current_points"] - 1.0) < 1e-6
+    assert [c["teacher_ok"] for c in it2["cells"]] == [True, True, False]
+    assert scans_router.list_items(batch.id, "flagged", db) == []
+
+
 def test_reset_batch_purges_correction(mock_db, tmp_path, monkeypatch):
     """« Effacer la correction » : supprime le lot et ses réponses/décisions,
     remet les copies à « generated », sans toucher aux copies (CopyItem) ni au

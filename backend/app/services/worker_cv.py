@@ -16,7 +16,8 @@ import cv2
 import numpy as np
 import pypdfium2 as pdfium
 
-from .pdfgen import FIDUCIAL_DICT, FIDUCIAL_IDS, MARGIN, PAGE_H, PAGE_W, QR_MAIN, QR_MINI
+from .pdfgen import (FIDUCIAL_DICT, FIDUCIAL_IDS, MARGIN, PAGE_H, PAGE_W,
+                     QCM_BOX, QCM_DETECT_MARGIN, QCM_DETECT_MARGIN_R, QR_MAIN, QR_MINI)
 from .security import verify_page_payload
 
 _FIDUCIAL_ROLE_BY_ID = {v: k for k, v in FIDUCIAL_IDS.items()}
@@ -235,13 +236,34 @@ def ink_ratio(crop_filtered: np.ndarray) -> float:
     return float(dark) / max(1, gray.size)
 
 
+def _detect_window(b: dict) -> dict:
+    """Fenêtre de détection reconstruite autour du CENTRE d'une case, pour les
+    copies dont la méta ne porte pas encore `detect` (le centre reste correct
+    même si la case stockée était dégénérée). Même fenêtre que pdfgen : case +
+    marge large (gauche/haut/bas), réduite à droite (label du choix)."""
+    cx = b["x_pt"] + b["w_pt"] / 2
+    cy = b["y_pt"] + b["h_pt"] / 2
+    left = QCM_BOX / 2 + QCM_DETECT_MARGIN
+    return {"x_pt": cx - left, "y_pt": cy - (QCM_BOX / 2 + QCM_DETECT_MARGIN),
+            "w_pt": QCM_BOX + QCM_DETECT_MARGIN + QCM_DETECT_MARGIN_R,
+            "h_pt": QCM_BOX + 2 * QCM_DETECT_MARGIN}
+
+
 def detect_qcm(warped: np.ndarray, boxes: list[dict],
-               threshold: float = 0.06) -> tuple[list[int] | None, list[float]]:
-    """Mesure la densité d'encre dans la zone intérieure de chaque case (§4.3).
-    Retourne (indices cochés, densités) ; None si lecture ambiguë."""
+               threshold: float = 0.035) -> tuple[list[int] | None, list[float]]:
+    """Mesure la densité d'encre dans une FENÊTRE ÉLARGIE autour de chaque case
+    (§4.3, détection robuste). La case imprimée (2 mm) est plus petite que la
+    tolérance de recalage ET que le geste de l'élève : mesurer pile dans la case
+    ratait les coches débordantes (et l'ancienne fenêtre « intérieure » était
+    même dégénérée). On lit donc `box["detect"]` (posée par pdfgen), ou à défaut
+    une fenêtre reconstruite autour du centre (copies imprimées avant l'évolution).
+    Retourne (indices cochés, densités) ; None si lecture ambiguë (densité proche
+    du seuil sans le franchir nettement)."""
     densities = []
     for b in boxes:
-        crop = crop_zone(warped, b["x_pt"], b["y_pt"], b["w_pt"], b["h_pt"], padding_pt=0)
+        win = b.get("detect") or _detect_window(b)
+        crop = crop_zone(warped, win["x_pt"], win["y_pt"], win["w_pt"], win["h_pt"],
+                         padding_pt=0)
         if crop.size == 0:
             densities.append(0.0)
             continue

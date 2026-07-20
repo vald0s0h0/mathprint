@@ -774,6 +774,19 @@ def _statement_layout(statement: str, width: float, font_size: float,
 QCM_BOX = 2.0 * mm
 QCM_CORR_GAP = 2.0 * mm
 QCM_CORR_RESERVE = QCM_BOX + QCM_CORR_GAP
+# Détection : la case imprimée (2 mm) est plus petite que la tolérance de
+# recalage ET que le geste de l'élève (la coche déborde souvent). On mesure donc
+# l'encre dans une FENÊTRE ÉLARGIE autour de la case (case + marge), posée ici
+# dans la méta et relue par worker_cv.detect_qcm. La marge est ASYMÉTRIQUE :
+# large à gauche/haut/bas (zone blanche), RÉDUITE à droite pour rester loin du
+# label du choix (encre noire, NON retirée par le dropout ; il commence à 1,6 mm
+# à droite de la case). Le corps de la coche, capté à gauche, suffit à décider.
+QCM_DETECT_MARGIN = 1.0 * mm
+QCM_DETECT_MARGIN_R = 0.5 * mm
+# Marqueurs d'overlay : les marques QCM (coche/croix par case + récap de carte)
+# sont volontairement 2 mm plus grandes que les marques de cellule (§ demande).
+CELL_MARK_SIZE = 1.9 * mm
+QCM_MARK_SIZE = CELL_MARK_SIZE + 2.0 * mm
 
 
 def _qcm_layout(choices: list[str], width: float,
@@ -1062,12 +1075,20 @@ def _draw_answer_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float,
             c.rect(bx, by, it["box"], it["box"])
             _draw_rich(c, bx + it["box"] + 1.6 * mm, row_top, it["lay"])
             c.setStrokeColor(DROPOUT)
-            inner = 1.1 * mm
-            corr_x = bx - QCM_CORR_GAP - it["box"]   # case correction (overlay)
-            boxes.append({"index": it["index"], "x_pt": bx + inner, "y_pt": by + inner,
-                          "w_pt": it["box"] - 2 * inner, "h_pt": it["box"] - 2 * inner,
+            box = it["box"]
+            corr_x = bx - QCM_CORR_GAP - box   # case correction (overlay), à gauche
+            dm, dmr = QCM_DETECT_MARGIN, QCM_DETECT_MARGIN_R
+            boxes.append({"index": it["index"],
+                          # géométrie de la case ÉLÈVE réellement imprimée : sert
+                          # au marquage d'overlay (coche/croix centrée sur la case)
+                          "x_pt": bx, "y_pt": by, "w_pt": box, "h_pt": box,
+                          # fenêtre de DÉTECTION élargie (robuste au recalage et à
+                          # la coche qui déborde), marge droite réduite (label) —
+                          # lue par worker_cv.detect_qcm
+                          "detect": {"x_pt": bx - dm, "y_pt": by - dm,
+                                     "w_pt": box + dm + dmr, "h_pt": box + 2 * dm},
                           "correction_box": {"x_pt": corr_x, "y_pt": by,
-                                             "w_pt": it["box"], "h_pt": it["box"]}})
+                                             "w_pt": box, "h_pt": box}})
         meta["boxes"] = boxes
     elif response_type == "table_fill":
         meta = _draw_table_zone(c, x, y, w, h, grading.get("col_labels"),
@@ -1610,6 +1631,17 @@ def _draw_corr_checkbox(c: canvas.Canvas, b: dict, col):
         _mark(c, x + w * 0.1, y + h * 0.1, True, size=w * 0.8)
 
 
+def _draw_box_mark(c: canvas.Canvas, b: dict, ok: bool, col):
+    """Coche (juste) ou croix (faux) CENTRÉE sur une case QCM élève, dessinée
+    plus grande que la case (QCM_MARK_SIZE) pour rester lisible malgré la petite
+    taille des cases (§ marqueurs QCM)."""
+    size = QCM_MARK_SIZE
+    cx = b["x_pt"] + b["w_pt"] / 2
+    cy = b["y_pt"] + b["h_pt"] / 2
+    c.setStrokeColor(col)
+    _mark(c, cx - size / 2, cy - size / 2, ok, size=size)
+
+
 def _draw_zone_marks(c: canvas.Canvas, z: dict, col):
     """Marques par CHAMP de réponse (coche/croix, cases correction, traits de
     liaison) selon `z["marks"]` (posé par services.pipeline._zone_marks). Dessin
@@ -1628,13 +1660,25 @@ def _draw_zone_marks(c: canvas.Canvas, z: dict, col):
         _mark(c, z["x_pt"] + z["w_pt"] - m - 2.4 * mm, z["y_pt"] + m, marks["ok"])
     elif kind == "cells":         # table_fill/multi_blank : chaque cellule marquée
         for cell in marks["cells"]:
-            _mark(c, cell["x_pt"] + cell["w_pt"] - 0.4 * mm - 1.9 * mm,
-                  cell["y_pt"] + cell["h_pt"] - 0.4 * mm - 1.9 * mm,
-                  cell["ok"], size=1.9 * mm)
+            _mark(c, cell["x_pt"] + cell["w_pt"] - 0.4 * mm - CELL_MARK_SIZE,
+                  cell["y_pt"] + cell["h_pt"] - 0.4 * mm - CELL_MARK_SIZE,
+                  cell["ok"], size=CELL_MARK_SIZE)
     elif kind == "qcm":
-        if marks.get("any_error"):
-            for b in marks.get("boxes", []):
-                _draw_corr_checkbox(c, b, col)
+        # marque PAR CASE selon l'état (posé par pipeline._zone_marks) :
+        #   ok     -> coche sur la case élève (coché à raison)
+        #   wrong  -> croix sur la case élève (coché à tort)
+        #   missed -> case correction cochée à gauche (bonne réponse oubliée)
+        for b in marks.get("boxes", []):
+            state = b.get("state")
+            if state == "ok":
+                _draw_box_mark(c, b, True, col)
+            elif state == "wrong":
+                _draw_box_mark(c, b, False, col)
+            elif state == "missed" and b.get("correction_box"):
+                _draw_corr_checkbox(c, {**b["correction_box"], "should_check": True}, col)
+        # récap de la CARTE en bas à droite : coche si zéro erreur, croix sinon
+        _mark(c, z["x_pt"] + z["w_pt"] - QCM_MARK_SIZE - m, z["y_pt"] + m,
+              not marks.get("any_error"), size=QCM_MARK_SIZE)
     elif kind == "matching":
         c.saveState()
         c.setStrokeColor(col)

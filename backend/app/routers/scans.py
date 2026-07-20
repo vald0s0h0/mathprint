@@ -16,6 +16,7 @@ from ..models import (
     Assessment, Copy, CopyItem, GradingDecision, ManualReview, OcrAttempt,
     ResponseZone, ScanBatch, SchoolClass, Student, StudentResponse, User,
 )
+from ..services import grading
 from ..services import providers
 from ..services import sandbox as sandbox_service
 from ..services import scan_intake, scoring
@@ -327,6 +328,102 @@ def _open_review_for_response(db: Session, response_id: str) -> ManualReview | N
             .first())
 
 
+# Mode de correction manuelle d'un exercice — pilote l'UI de la modale :
+#   cells   : tableau / cases à trous → validation CASE PAR CASE (Juste/Faux),
+#             le script recalcule le barème depuis les verdicts (RM correction) ;
+#   binary  : QCM → une seule décision Juste/Faux sur toute la réponse ;
+#   partial : réponse rédigée (raisonnement, formulation, réponse unique) →
+#             les 4 boutons de crédit partiel (tous / 2⁄3 / 1⁄3 / 0).
+def _grade_mode(response_type: str) -> str:
+    if response_type in ("table_fill", "multi_blank"):
+        return "cells"
+    if response_type.startswith("qcm"):
+        return "binary"
+    return "partial"
+
+
+def _fmt_value_latex(ctype: str, value) -> str:
+    """Réponse attendue en fragment LISIBLE (LaTeX $...$ rendu par KaTeX dans la
+    modale), pas un bout de JSON : le professeur valide d'un coup d'œil. Aligné
+    sur la normalisation FR du moteur (virgule décimale, \\dfrac)."""
+    if ctype == "rational":
+        try:
+            num, den = value
+        except (TypeError, ValueError):
+            return str(value)
+        return f"$\\dfrac{{{num}}}{{{den}}}$"
+    if ctype == "decimal":
+        v = int(value) if isinstance(value, float) and value.is_integer() else value
+        return f"${str(v).replace('.', '{,}')}$"
+    if ctype == "integer":
+        return f"${value}$"
+    if ctype == "expression":
+        v = str(value).strip()
+        return v if v.startswith("$") else f"${v}$"
+    return str(value)  # text : pas de maths
+
+
+def _expected_display(item: CopyItem) -> str:
+    """Réponse ATTENDUE d'une réponse « en un bloc » (QCM, réponse unique,
+    formulation, raisonnement), rendue lisible pour la validation manuelle —
+    uniquement la réponse attendue, pas tout le corrigé."""
+    exp = item.expected_json or {}
+    g = item.grading_json or {}
+    if item.response_type.startswith("qcm"):
+        choices = g.get("choices") or []
+        labels = [choices[i] for i in (exp.get("correct") or []) if 0 <= i < len(choices)]
+        return "  ·  ".join(labels)
+    t = exp.get("type")
+    if t in ("integer", "decimal", "rational", "expression", "text"):
+        return _fmt_value_latex(t, exp.get("value"))
+    # matching / tracé : pas de « valeur » ponctuelle → le corrigé fait foi
+    return item.correction or ""
+
+
+def _cell_units(item: CopyItem, ocr: OcrAttempt | None,
+                decision: GradingDecision | None) -> list[dict]:
+    """Une entrée PAR CASE à corriger d'un tableau / de cases à trous (cellules
+    « given » exclues, déjà imprimées et non notées). Chaque case porte sa
+    réponse attendue lisible, ce que l'OCR a cru lire, le verdict automatique du
+    moteur (`auto_ok`) et, s'il existe, le verdict déjà posé par le professeur
+    (`teacher_ok`). La modale ne met en validation QUE les cases non tranchées."""
+    exp_cells = (item.expected_json or {}).get("cells") or []
+    ocr_cells = ((ocr.raw_json or {}).get("cells") if ocr else None) or []
+    g = item.grading_json or {}
+    row_labels = g.get("row_labels") or []
+    col_labels = g.get("col_labels") or []
+    # verdicts professeur déjà enregistrés (set_cells) — pour rouvrir la modale
+    # sur SES choix, pas re-déduire d'un texte de cellule réécrit "" côté faux.
+    teacher = None
+    if decision and decision.source == "teacher":
+        teacher = (decision.evidence_json or {}).get("cell_verdicts")
+    out, k = [], 0
+    for ri, row in enumerate(exp_cells):
+        for ci, cell in enumerate(row):
+            if cell.get("given"):
+                continue
+            raw = ocr_cells[k] if k < len(ocr_cells) else ""
+            rl = row_labels[ri] if ri < len(row_labels) else None
+            cl = col_labels[ci] if ci < len(col_labels) else None
+            if rl and len(row) == 1:
+                label = str(rl)
+            elif rl and cl:
+                label = f"{rl} · {cl}"
+            elif cl or rl:
+                label = str(cl or rl)
+            else:
+                label = f"Case {k + 1}"
+            out.append({
+                "index": k, "label": label,
+                "expected_display": _fmt_value_latex(cell["type"], cell["value"]),
+                "ocr_text": raw or "",
+                "auto_ok": grading._cell_ok(cell, raw),
+                "teacher_ok": (teacher[k] if teacher and k < len(teacher) else None),
+            })
+            k += 1
+    return out
+
+
 def _review_unit(db: Session, resp: StudentResponse, item: CopyItem, copy: Copy,
                  student: Student, *, review: ManualReview | None = None,
                  decision: GradingDecision | None = None) -> dict:
@@ -378,6 +475,12 @@ def _review_unit(db: Session, resp: StudentResponse, item: CopyItem, copy: Copy,
         "group_label": f"Ex. {item.sequence}",
         "response_type": item.response_type,
         "sequence": item.sequence,
+        # correction manuelle : mode d'UI + réponse attendue LISIBLE (plus de
+        # JSON brut), et le détail CASE PAR CASE pour les tableaux/cases à trous
+        "grade_mode": _grade_mode(item.response_type),
+        "expected_display": _expected_display(item),
+        "cells": (_cell_units(item, ocr, decision)
+                  if item.response_type in ("table_fill", "multi_blank") else []),
     }
 
 
@@ -552,12 +655,16 @@ def response_scan(response_id: str, db: Session = Depends(get_db)):
 
 
 class ResolveIn(BaseModel):
-    action: str          # accept | set_score | set_ratio | cancel_item | correct_ocr | rescan
+    action: str          # accept | set_score | set_ratio | cancel_item | set_cells | correct_ocr | rescan
     score: float | None = None
     # fraction du barème attribuée par un raccourci (1 = tous les points,
     # 2/3, 1/3, 0) — appliquée au max_score interne, si bien que
     # earned_points = ratio × barème exactement (cf. services.scoring)
     ratio: float | None = None
+    # correction CASE PAR CASE d'un tableau / de cases à trous : un booléen par
+    # case NON-"given" (ordre ligne par ligne). Le script en déduit le barème
+    # (points = nombre de cases justes), le professeur ne saisit que Juste/Faux.
+    cell_verdicts: list[bool] | None = None
     corrected_text: str | None = None
     note: str = ""
 
@@ -572,6 +679,7 @@ def _apply_resolution(db: Session, resp: StudentResponse, body: ResolveIn) -> di
 
     score = old.score
     max_score = old.max_score
+    evidence = {"previous_decision": old.id, "note": body.note}
     if body.action == "set_score":
         if body.score is None:
             raise HTTPException(422, "score requis")
@@ -584,6 +692,29 @@ def _apply_resolution(db: Session, resp: StudentResponse, body: ResolveIn) -> di
         # question annulée : hors barème (numérateur ET dénominateur, § barème)
         score = 0.0
         max_score = 0.0
+    elif body.action == "set_cells":
+        # validation case par case : le barème se recalcule tout seul depuis les
+        # verdicts Juste/Faux du professeur (points = nombre de cases justes).
+        if body.cell_verdicts is None:
+            raise HTTPException(422, "cell_verdicts requis")
+        item = db.get(CopyItem, resp.copy_item_id)
+        flat = [c for row in ((item.expected_json or {}).get("cells") or [])
+                for c in row if not c.get("given")] if item else []
+        verdicts = [bool(v) for v in body.cell_verdicts]
+        if len(verdicts) != len(flat):
+            raise HTTPException(422, "nombre de cases incohérent avec l'exercice")
+        score = float(sum(verdicts))
+        max_score = float(len(verdicts))
+        evidence["cell_verdicts"] = verdicts
+        # réécrit le texte de CHAQUE case selon le verdict (juste → valeur
+        # canonique, faux → vide) pour que la marque ✓/✗ imprimée par l'overlay
+        # (dérivée du texte de cellule via grading.cell_marks) reste cohérente
+        # avec la note. Attempt « teacher » : devient le plus récent, fait foi.
+        if resp.zone_id:
+            corrected = [grading.cell_reference_text(c) if ok else ""
+                         for c, ok in zip(flat, verdicts)]
+            db.add(OcrAttempt(zone_id=resp.zone_id, provider="teacher",
+                              raw_json={"cells": corrected}, confidence=1.0))
     if body.corrected_text is not None:
         resp.final_text = body.corrected_text
 
@@ -591,7 +722,7 @@ def _apply_resolution(db: Session, resp: StudentResponse, body: ResolveIn) -> di
                           score=score, max_score=max_score,
                           confidence=1.0, tier="D",
                           reason_code=f"teacher_{body.action}", status="validated",
-                          evidence_json={"previous_decision": old.id, "note": body.note})
+                          evidence_json=evidence)
     old.status = "revised"
     db.add(new)
     review = _open_review_for_response(db, resp.id)

@@ -139,8 +139,14 @@ def test_render_overlay_draws_every_mark_kind_without_error():
          "full_credit": False, "strip": {**strip, "x_pt": 300, "y_pt": 360},
          "text": "Relis la bonne réponse.",
          "marks": {"kind": "qcm", "any_error": True, "boxes": [
-             {"x_pt": 300, "y_pt": 405, "w_pt": 5.7, "h_pt": 5.7, "should_check": True},
-             {"x_pt": 300, "y_pt": 395, "w_pt": 5.7, "h_pt": 5.7, "should_check": False}]}},
+             {"x_pt": 310, "y_pt": 425, "w_pt": 5.7, "h_pt": 5.7, "state": "wrong",
+              "correction_box": {"x_pt": 300, "y_pt": 425, "w_pt": 5.7, "h_pt": 5.7}},
+             {"x_pt": 310, "y_pt": 415, "w_pt": 5.7, "h_pt": 5.7, "state": "missed",
+              "correction_box": {"x_pt": 300, "y_pt": 415, "w_pt": 5.7, "h_pt": 5.7}},
+             {"x_pt": 310, "y_pt": 405, "w_pt": 5.7, "h_pt": 5.7, "state": "ok",
+              "correction_box": {"x_pt": 300, "y_pt": 405, "w_pt": 5.7, "h_pt": 5.7}},
+             {"x_pt": 310, "y_pt": 395, "w_pt": 5.7, "h_pt": 5.7, "state": None,
+              "correction_box": {"x_pt": 300, "y_pt": 395, "w_pt": 5.7, "h_pt": 5.7}}]}},
         {"x_pt": 300, "y_pt": 200, "w_pt": 120, "h_pt": 60, "score": 1, "max_score": 3,
          "full_credit": False, "strip": {**strip, "x_pt": 300, "y_pt": 160},
          "text": "Refais les liaisons.",
@@ -185,17 +191,22 @@ def test_zone_marks_qcm_shows_correct_boxes_only_on_error():
     resp = StudentResponse(copy_item_id=item.id, zone_id=zone.id, selected_choices=[0])
     db.add(resp); db.flush()
 
+    # élève a coché l'index 0 (faux) ; la bonne réponse est l'index 1
     wrong = GradingDecision(response_id=resp.id, source="deterministic", score=0,
                             max_score=1, status="auto", tier="A")
     marks = pipeline._zone_marks(db, item, zone, wrong)
     assert marks["kind"] == "qcm" and marks["any_error"] is True
-    checked = {b["should_check"] for b in marks["boxes"]}
-    # seule la case du bon choix (index 1) est cochée
-    assert [b["should_check"] for b in marks["boxes"]] == [False, True]
+    # case 0 cochée à tort -> croix ; case 1 (bonne réponse) oubliée -> correction
+    assert [b["state"] for b in marks["boxes"]] == ["wrong", "missed"]
 
+    # crédit plein : la sélection est forcée aux bonnes réponses -> que des coches,
+    # jamais de croix (corrige le bug « tout juste mais croix partout »)
     right = GradingDecision(response_id=resp.id, source="deterministic", score=1,
                             max_score=1, status="auto", tier="A")
-    assert pipeline._zone_marks(db, item, zone, right)["any_error"] is False
+    rmarks = pipeline._zone_marks(db, item, zone, right)
+    assert rmarks["any_error"] is False
+    assert [b["state"] for b in rmarks["boxes"]] == [None, "ok"]
+    assert "wrong" not in {b["state"] for b in rmarks["boxes"]}
 
 
 def test_render_copy_review_smoke_no_background():

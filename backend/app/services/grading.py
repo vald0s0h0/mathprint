@@ -84,6 +84,18 @@ def _cell_ok(exp_cell: dict, raw_cell: str) -> bool | None:
     return got == Fraction(str(exp_cell["value"]))
 
 
+def cell_reference_text(cell: dict) -> str:
+    """Texte canonique d'une cellule JUSTE — celui que `_cell_ok` reconnaît à
+    coup sûr. Sert à réécrire une cellule que le professeur valide « juste » en
+    correction manuelle, pour que la marque d'overlay (`cell_marks`, dérivée du
+    texte de cellule) reste cohérente avec la note attribuée. Miroir de
+    services.exercise_gen._cell_reference_text (côté génération), gardé ici pour
+    ne pas créer d'import circulaire (exercise_gen dépend déjà de grading)."""
+    if cell["type"] == "rational":
+        return f"{cell['value'][0]}/{cell['value'][1]}"
+    return str(cell["value"])
+
+
 def cell_marks(grading: dict, cell_texts: list[str] | None) -> list[bool]:
     """Justesse par cellule NON-donnée (ordre row-major), pour marquer chaque
     champ d'un tableau/multi_blank en overlay (case check/X). Une cellule
