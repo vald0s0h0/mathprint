@@ -1621,25 +1621,17 @@ def _mark(c: canvas.Canvas, x: float, y: float, ok: bool, size: float = 2.4 * mm
 
 def _draw_corr_checkbox(c: canvas.Canvas, b: dict, col):
     """Case « correction » QCM imprimée par l'overlay à gauche de la case élève :
-    cochée si le choix est une bonne réponse, vide sinon — ne s'imprime que si
-    l'élève s'est trompé (décidé par l'appelant)."""
+    REMPLIE (saturée) si le choix est une bonne réponse — elle affiche la réponse
+    ET montre à l'élève comment saturer la case pour une meilleure lecture — sinon
+    simple contour vide. Ne s'imprime que si l'élève s'est trompé (décidé par
+    l'appelant)."""
     x, y, w, h = b["x_pt"], b["y_pt"], b["w_pt"], b["h_pt"]
+    c.saveState()
     c.setStrokeColor(col)
+    c.setFillColor(col)
     c.setLineWidth(0.9)
-    c.rect(x, y, w, h)
-    if b.get("should_check"):
-        _mark(c, x + w * 0.1, y + h * 0.1, True, size=w * 0.8)
-
-
-def _draw_box_mark(c: canvas.Canvas, b: dict, ok: bool, col):
-    """Coche (juste) ou croix (faux) CENTRÉE sur une case QCM élève, dessinée
-    plus grande que la case (QCM_MARK_SIZE) pour rester lisible malgré la petite
-    taille des cases (§ marqueurs QCM)."""
-    size = QCM_MARK_SIZE
-    cx = b["x_pt"] + b["w_pt"] / 2
-    cy = b["y_pt"] + b["h_pt"] / 2
-    c.setStrokeColor(col)
-    _mark(c, cx - size / 2, cy - size / 2, ok, size=size)
+    c.rect(x, y, w, h, stroke=1, fill=1 if b.get("should_check") else 0)
+    c.restoreState()
 
 
 def _draw_zone_marks(c: canvas.Canvas, z: dict, col):
@@ -1664,18 +1656,18 @@ def _draw_zone_marks(c: canvas.Canvas, z: dict, col):
                   cell["y_pt"] + cell["h_pt"] - 0.4 * mm - CELL_MARK_SIZE,
                   cell["ok"], size=CELL_MARK_SIZE)
     elif kind == "qcm":
-        # marque PAR CASE selon l'état (posé par pipeline._zone_marks) :
-        #   ok     -> coche sur la case élève (coché à raison)
-        #   wrong  -> croix sur la case élève (coché à tort)
-        #   missed -> case correction cochée à gauche (bonne réponse oubliée)
-        for b in marks.get("boxes", []):
-            state = b.get("state")
-            if state == "ok":
-                _draw_box_mark(c, b, True, col)
-            elif state == "wrong":
-                _draw_box_mark(c, b, False, col)
-            elif state == "missed" and b.get("correction_box"):
-                _draw_corr_checkbox(c, {**b["correction_box"], "should_check": True}, col)
+        # AUCUNE marque par-dessus les cases de l'élève : sa copie reste intacte
+        # (coches et cases vides visibles). À gauche, la colonne « correction »
+        # AFFICHE LA RÉPONSE quand la carte comporte une erreur : case REMPLIE
+        # (saturée) pour une bonne réponse, contour vide sinon. Le verdict
+        # juste/faux n'apparaît qu'UNE fois par carte (récap en bas à droite).
+        if marks.get("any_error"):
+            for b in marks.get("boxes", []):
+                cb = b.get("correction_box")
+                if not cb:
+                    continue
+                is_correct = b.get("state") in ("ok", "missed")
+                _draw_corr_checkbox(c, {**cb, "should_check": is_correct}, col)
         # récap de la CARTE en bas à droite : coche si zéro erreur, croix sinon
         _mark(c, z["x_pt"] + z["w_pt"] - QCM_MARK_SIZE - m, z["y_pt"] + m,
               not marks.get("any_error"), size=QCM_MARK_SIZE)

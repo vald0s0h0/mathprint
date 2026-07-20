@@ -6,7 +6,7 @@
 // de choisir l'évaluation : le QR signé de chaque page identifie le sujet.
 import {
   ActionIcon, Alert, Badge, Box, Button, Card, Checkbox, Divider, FileButton, Group, Kbd,
-  Loader, Modal, NumberInput, SegmentedControl, Stack, Table, Text, Title, Tooltip,
+  Loader, Modal, NumberInput, SegmentedControl, SimpleGrid, Stack, Table, Text, Title, Tooltip,
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
 import {
@@ -53,6 +53,16 @@ type Item = {
   group_key: string; group_label: string; response_type: string; sequence: number
   // correction manuelle : mode d'UI, réponse attendue lisible, détail par case
   grade_mode: GradeMode; expected_display: string; cells: Cell[]
+}
+// Unité ATOMIQUE de correction manuelle : UNE case à trous, UN QCM, ou UNE
+// réponse rédigée. La file des réponses est aplatie en unités puis regroupée par
+// réponse attendue (mêmes cases enchaînées à travers exercices/élèves/sujets) —
+// le professeur ne voit qu'UNE réponse à la fois, support d'un OCR défaillant.
+type Unit = {
+  key: string; respId: string; mode: GradeMode
+  cellIndex: number | null   // null hors mode « cases »
+  expectedKey: string        // clé de regroupement = réponse attendue normalisée
+  attention: boolean         // avait besoin du professeur au chargement (OCR KO)
 }
 // raccourcis de correction manuelle (paramétrables, cf. Réglages → Pédagogie)
 type Shortcuts = { full: string; two_thirds: string; one_third: string; zero: string }
@@ -132,6 +142,50 @@ function SegmentBar({ segments }: { segments: Segment[] }) {
 // points à la française pour l'affichage (1,5 — et 2 plutôt que 2,0)
 const fmtPts = (v: number) => (Math.round(v * 100) / 100).toString().replace('.', ',')
 
+// clé de regroupement : réponse attendue normalisée (retire $, LaTeX léger,
+// accolades, espaces) pour rapprocher les cases IDENTIQUES à travers exercices,
+// élèves et sujets — « 8 » et « $8$ » deviennent la même clé.
+function normKey(s: string): string {
+  return (s || '').replace(/\$/g, '').replace(/\\[a-zA-Z]+/g, '')
+    .replace(/[{}\s]/g, '').toLowerCase()
+}
+
+// aplatit les réponses en UNITÉS et les regroupe : d'abord les cases (mode
+// cells), puis les QCM, puis les rédigées ; à mode égal, mêmes réponses
+// attendues consécutives. En scope « à vérifier » on ne garde que les cases où
+// l'OCR a échoué (auto_ok null) et les réponses signalées non corrigées.
+function buildUnits(items: Item[], scope: Scope): Unit[] {
+  const us: Unit[] = []
+  for (const it of items) {
+    if (it.grade_mode === 'cells') {
+      it.cells.forEach((c, ci) => {
+        // case VIDE (aucune encre → jamais envoyée à Mathpix) : compte faux et
+        // n'est JAMAIS montrée au professeur (§ demande). Son verdict false reste
+        // porté par les `verdicts` amorcés → set_cells de la réponse parente OK.
+        if (!c.ocr_text.trim() && c.teacher_ok == null) return
+        const undecided = c.auto_ok === null && c.teacher_ok == null
+        if (scope === 'flagged' && !undecided) return
+        us.push({
+          key: `${it.response_id}:${ci}`, respId: it.response_id, mode: 'cells',
+          cellIndex: ci, expectedKey: normKey(c.expected_display), attention: undecided,
+        })
+      })
+    } else {
+      const attention = it.flagged && it.decision_source !== 'teacher'
+      if (scope === 'flagged' && !attention) continue
+      us.push({
+        key: `${it.response_id}:-`, respId: it.response_id, mode: it.grade_mode,
+        cellIndex: null, expectedKey: normKey(it.expected_display), attention,
+      })
+    }
+  }
+  const rank: Record<GradeMode, number> = { cells: 0, binary: 1, partial: 2 }
+  us.sort((a, b) => rank[a.mode] - rank[b.mode]
+    || a.expectedKey.localeCompare(b.expectedKey)
+    || a.key.localeCompare(b.key))
+  return us
+}
+
 // image du crop scanné de la zone de réponse : chargée via fetch + token puis
 // blob (une balise <img> n'envoie pas nos en-têtes d'auth), comme PdfFrame.
 function ScanImage({ responseId }: { responseId: string }) {
@@ -180,10 +234,11 @@ export default function Corrections() {
   const [mathpixOk, setMathpixOk] = useState(true)
   const [previewId, setPreviewId] = useState<string | null>(null)
   const [idx, setIdx] = useState(0)
-  // correction case par case (tableaux / cases à trous) : verdict Juste(true)/
-  // Faux(false)/à trancher(null) par case, + case « active » pour le clavier
-  const [cellVerdicts, setCellVerdicts] = useState<(boolean | null)[]>([])
-  const [cellCursor, setCellCursor] = useState(0)
+  // file APLATIE en unités (une case / un QCM / une réponse rédigée), regroupées
+  // par réponse attendue ; + verdicts Juste(true)/Faux(false)/à trancher(null)
+  // par case et par réponse (set_cells exige des verdicts complets à l'envoi).
+  const [units, setUnits] = useState<Unit[]>([])
+  const [verdicts, setVerdicts] = useState<Record<string, (boolean | null)[]>>({})
   const [scoreInput, setScoreInput] = useState<number | ''>('')
   const [loaded, setLoaded] = useState(false)
   const [resetTarget, setResetTarget] = useState<Batch | null>(null)
@@ -240,7 +295,16 @@ export default function Corrections() {
 
   const loadItems = useCallback(async (b: Batch, s: Scope) => {
     const rs = await api.get<Item[]>(`/api/scans/batches/${b.id}/items?scope=${s}`)
-    setItems(rs); setIdx(0); setScoreInput('')
+    setItems(rs)
+    setUnits(buildUnits(rs, s))
+    // amorce les verdicts par case : verdict déjà posé par le prof, sinon celui
+    // du moteur (auto_ok) — seules les cases non tranchées (null) restent à faire
+    const vmap: Record<string, (boolean | null)[]> = {}
+    for (const it of rs)
+      if (it.grade_mode === 'cells')
+        vmap[it.response_id] = it.cells.map((c) => (c.teacher_ok != null ? c.teacher_ok : c.auto_ok))
+    setVerdicts(vmap)
+    setIdx(0); setScoreInput('')
   }, [])
 
   async function openCorrection(b: Batch, s: Scope) {
@@ -259,104 +323,88 @@ export default function Corrections() {
     await loadItems(reviewBatch, s)
   }
 
-  function closeCorrection() { setReviewBatch(null); setItems([]); refresh() }
+  function closeCorrection() {
+    setReviewBatch(null); setItems([]); setUnits([]); setVerdicts({}); refresh()
+  }
 
-  // enregistre la note (append-only côté serveur) et met à jour l'affichage de
-  // la réponse courante en place, puis passe à la suivante
-  async function grade(action: string, extra?: { ratio?: number }) {
-    const it = items[idx]
-    if (!it) return
+  const advance = useCallback(() => setIdx((i) => Math.min(i + 1, units.length - 1)), [units.length])
+
+  // corrige une réponse EN UN BLOC (QCM ou rédigée) par son id, met à jour la
+  // note affichée en place (append-only côté serveur), puis passe à la suivante.
+  async function gradeBlock(action: string, extra?: { ratio?: number }) {
+    const u = units[idx]
+    if (!u || u.mode === 'cells') return
+    const rid = u.respId
     try {
-      await api.post(`/api/scans/responses/${it.response_id}/resolve`, { action, ...extra })
+      await api.post(`/api/scans/responses/${rid}/resolve`, { action, ...extra })
     } catch (e) {
       notifications.show({ color: 'red', message: (e as Error).message })
       return
     }
     const r = Math.max(0, Math.min(1, extra?.ratio ?? 0))
-    setItems((prev) => prev.map((x, i) => i !== idx ? x : (
+    setItems((prev) => prev.map((x) => x.response_id !== rid ? x : (
       action === 'cancel_item'
         ? { ...x, decision_source: 'teacher', cancelled: true, full_credit: false, current_points: 0 }
         : { ...x, decision_source: 'teacher', cancelled: false, full_credit: r >= 0.999,
             current_points: Math.round(r * x.bareme_points * 100) / 100 }
     )))
     setScoreInput('')
-    setIdx((i) => Math.min(i + 1, items.length - 1))
+    advance()
   }
-  const gradeRatio = (ratio: number) => grade('set_ratio', { ratio })
+  const gradeRatio = (ratio: number) => gradeBlock('set_ratio', { ratio })
 
-  // (ré)initialise les verdicts par case quand on change d'exercice : on repart
-  // du verdict déjà posé par le professeur, sinon de celui du moteur (auto_ok) —
-  // ainsi seules les cases NON tranchées (null) demandent une action.
-  useEffect(() => {
-    const it = items[idx]
-    if (it && it.grade_mode === 'cells') {
-      const init = it.cells.map((c) => (c.teacher_ok != null ? c.teacher_ok : c.auto_ok))
-      setCellVerdicts(init)
-      const firstNull = init.findIndex((v) => v === null)
-      setCellCursor(firstNull >= 0 ? firstNull : 0)
-    } else {
-      setCellVerdicts([])
-      setCellCursor(0)
-    }
-  }, [idx, items])
-
-  // pose un verdict sur une case et avance sur la prochaine case à trancher
-  function markCell(index: number, val: boolean) {
-    const next = cellVerdicts.slice()
-    next[index] = val
-    setCellVerdicts(next)
-    const after = next.findIndex((v, i) => i > index && v === null)
-    setCellCursor(after >= 0 ? after : Math.min(index + 1, next.length - 1))
-  }
-
-  // enregistre les verdicts case par case : le backend recalcule le barème
+  // enregistre une réponse à cases dès que TOUTES ses cases sont tranchées
+  // (set_cells exige des verdicts complets) : le backend recalcule le barème
   // (points = nombre de cases justes) et rend l'overlay cohérent avec la note.
-  async function submitCells() {
-    const it = items[idx]
-    if (!it || it.grade_mode !== 'cells') return
-    if (cellVerdicts.some((v) => v === null)) {
-      notifications.show({ color: 'orange', message: 'Validez chaque case (Juste ou Faux) avant de continuer.' })
-      return
-    }
-    const verdicts = cellVerdicts.map((v) => !!v)
+  async function submitCellsFor(rid: string, arr: (boolean | null)[]) {
+    const verdictsB = arr.map((v) => !!v)
     try {
-      await api.post(`/api/scans/responses/${it.response_id}/resolve`,
-        { action: 'set_cells', cell_verdicts: verdicts })
+      await api.post(`/api/scans/responses/${rid}/resolve`,
+        { action: 'set_cells', cell_verdicts: verdictsB })
     } catch (e) {
       notifications.show({ color: 'red', message: (e as Error).message })
       return
     }
-    const correct = verdicts.filter(Boolean).length
-    setItems((prev) => prev.map((x, i) => i !== idx ? x : ({
+    const correct = verdictsB.filter(Boolean).length
+    setItems((prev) => prev.map((x) => x.response_id !== rid ? x : ({
       ...x, decision_source: 'teacher', cancelled: false,
-      full_credit: correct === verdicts.length,
-      current_points: verdicts.length
-        ? Math.round((correct / verdicts.length) * x.bareme_points * 100) / 100 : 0,
-      cells: x.cells.map((c, ci) => ({ ...c, teacher_ok: verdicts[ci] })),
+      full_credit: correct === verdictsB.length,
+      current_points: verdictsB.length
+        ? Math.round((correct / verdictsB.length) * x.bareme_points * 100) / 100 : 0,
+      cells: x.cells.map((c, ci) => ({ ...c, teacher_ok: verdictsB[ci] })),
     })))
-    setIdx((i) => Math.min(i + 1, items.length - 1))
+  }
+
+  // pose le verdict d'UNE case (unité courante) et avance ; dès que la réponse
+  // parente n'a plus aucune case en attente, elle est enregistrée automatiquement.
+  function markCellUnit(val: boolean) {
+    const u = units[idx]
+    if (!u || u.mode !== 'cells' || u.cellIndex == null) return
+    const rid = u.respId, ci = u.cellIndex
+    const arr = (verdicts[rid] ?? []).slice()
+    arr[ci] = val
+    setVerdicts((m) => ({ ...m, [rid]: arr }))
+    if (!arr.some((v) => v === null)) submitCellsFor(rid, arr)
+    advance()
   }
 
   // raccourcis clavier de correction manuelle (paramétrés dans les réglages).
-  // Le comportement dépend du MODE de la réponse courante : F/Q valident une
-  // case (mode cases) ou Juste/Faux (QCM), et pilotent le crédit partiel ailleurs.
+  // Navigation ←/→ d'une unité à l'autre ; le sens de F/Q dépend du MODE :
+  // case Juste/Faux, QCM Juste/Faux, ou crédit partiel (F/D/S/Q) pour une rédigée.
   useEffect(() => {
-    const it = items[idx]
-    if (!reviewBatch || !it) return
+    const u = units[idx]
+    if (!reviewBatch || !u) return
     const h = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement).tagName === 'INPUT') return
       const k = e.key.toLowerCase()
-      if (e.key === 'ArrowRight') { setIdx((i) => Math.min(i + 1, items.length - 1)); return }
+      if (e.key === 'ArrowRight') { setIdx((i) => Math.min(i + 1, units.length - 1)); return }
       if (e.key === 'ArrowLeft') { setIdx((i) => Math.max(i - 1, 0)); return }
-      if (it.grade_mode === 'cells') {
-        if (e.key === 'ArrowDown') setCellCursor((c) => Math.min(c + 1, it.cells.length - 1))
-        else if (e.key === 'ArrowUp') setCellCursor((c) => Math.max(c - 1, 0))
-        else if (k === shortcuts.full) markCell(cellCursor, true)
-        else if (k === shortcuts.zero) markCell(cellCursor, false)
-        else if (e.key === 'Enter' && !cellVerdicts.some((v) => v === null)) submitCells()
+      if (u.mode === 'cells') {
+        if (k === shortcuts.full) markCellUnit(true)
+        else if (k === shortcuts.zero) markCellUnit(false)
         return
       }
-      if (it.grade_mode === 'binary') {
+      if (u.mode === 'binary') {
         if (k === shortcuts.full) gradeRatio(1)
         else if (k === shortcuts.zero) gradeRatio(0)
         return
@@ -458,10 +506,25 @@ export default function Corrections() {
     return [...by.values()].sort((x, y) => x.cls.localeCompare(y.cls))
   }, [batches, matches])
 
-  const cur = items[idx]
-  // réponses encore à vérifier (signalées non résolues) dans la file chargée
-  const remainingFlagged = items.filter((x) => x.flagged && x.decision_source !== 'teacher').length
-  const flaggedTotal = items.filter((x) => x.flagged).length
+  // unité courante + la réponse (fraîche) et la case dont elle dérive
+  const cur = units[idx]
+  const curItem = cur ? items.find((x) => x.response_id === cur.respId) ?? null : null
+  const curCell = cur && cur.mode === 'cells' && curItem && cur.cellIndex != null
+    ? curItem.cells[cur.cellIndex] ?? null : null
+  const cellVal = cur && cur.mode === 'cells' && cur.cellIndex != null
+    ? verdicts[cur.respId]?.[cur.cellIndex] ?? null : null
+  // position dans le groupe des réponses attendues IDENTIQUES (cases enchaînées)
+  const sameGroup = cur ? units.filter((u) => u.mode === cur.mode && u.expectedKey === cur.expectedKey) : []
+  const samePos = cur ? sameGroup.findIndex((u) => u.key === cur.key) + 1 : 0
+
+  // une unité est « réglée » : case → verdict posé ; bloc → note passée en teacher
+  const unitResolved = (u: Unit): boolean => {
+    if (u.mode === 'cells' && u.cellIndex != null) return verdicts[u.respId]?.[u.cellIndex] != null
+    return items.find((x) => x.response_id === u.respId)?.decision_source === 'teacher'
+  }
+  // réponses encore à vérifier (unités qui réclamaient le prof, pas encore réglées)
+  const attentionUnits = units.filter((u) => u.attention)
+  const remaining = attentionUnits.filter((u) => !unitResolved(u)).length
 
   return (
     <Stack gap="lg">
@@ -825,16 +888,16 @@ export default function Corrections() {
             <SegmentedControl size="xs" value={scope}
               onChange={(v) => changeScope(v as Scope)}
               data={[
-                { label: `À vérifier${flaggedTotal ? ` (${remainingFlagged})` : ''}`, value: 'flagged' },
+                { label: `À vérifier${attentionUnits.length ? ` (${remaining})` : ''}`, value: 'flagged' },
                 { label: 'Toutes les réponses', value: 'all' },
               ]} />
-            {items.length > 0 && (
+            {units.length > 0 && (
               <Group gap={6} wrap="nowrap">
                 <ActionIcon variant="light" disabled={idx <= 0} onClick={() => setIdx((i) => i - 1)}>
                   <ChevronLeft size={16} />
                 </ActionIcon>
-                <Text size="xs" c="dimmed">{idx + 1} / {items.length}</Text>
-                <ActionIcon variant="light" disabled={idx >= items.length - 1}
+                <Text size="xs" c="dimmed">{idx + 1} / {units.length}</Text>
+                <ActionIcon variant="light" disabled={idx >= units.length - 1}
                   onClick={() => setIdx((i) => i + 1)}>
                   <ChevronRight size={16} />
                 </ActionIcon>
@@ -842,147 +905,110 @@ export default function Corrections() {
             )}
           </Group>
 
-          {cur ? (
+          {cur && curItem ? (
             <>
+              {/* en-tête minimal : à qui, l'état de la note, et le REGROUPEMENT par
+                  réponse attendue identique — PAS l'énoncé (la modale n'est qu'un
+                  support pour un OCR défaillant, case par case). */}
               <Group justify="space-between" wrap="nowrap">
                 <Group gap="xs" wrap="nowrap">
-                  <Badge variant="filled" color="indigo">{cur.group_label}</Badge>
-                  <ItemStatus it={cur} />
+                  <Badge variant="filled" color="indigo">{curItem.group_label}</Badge>
+                  <ItemStatus it={curItem} />
+                  {sameGroup.length > 1 && (
+                    <Badge variant="light" color="grape" size="sm">
+                      {samePos}/{sameGroup.length} même réponse
+                    </Badge>
+                  )}
                 </Group>
-                <Text size="sm" fw={600}>{cur.student}</Text>
+                <Text size="sm" fw={600}>{curItem.student}</Text>
               </Group>
-              <Card withBorder padding="sm">
-                <MathText text={cur.statement} centered />
-              </Card>
-              {/* copie scannée de l'élève : ce qu'il a réellement écrit */}
-              <Card withBorder padding="xs">
-                <Text size="xs" c="dimmed" fw={600} tt="uppercase" mb={4}>Scan de l'élève</Text>
-                <ScanImage responseId={cur.response_id} />
-              </Card>
 
-              {cur.grade_mode === 'cells' ? (
-                /* correction CASE PAR CASE : une case = une réponse attendue
-                   lisible + ce que l'OCR a lu (en petit) + Juste/Faux. Seules les
-                   cases non tranchées demandent une action ; le barème se recalcule. */
-                <Stack gap="xs">
-                  <Text size="xs" c="dimmed">
-                    Validez chaque case — <Kbd>{shortcuts.full.toUpperCase()}</Kbd> juste,{' '}
-                    <Kbd>{shortcuts.zero.toUpperCase()}</Kbd> faux, <Kbd>↑</Kbd>/<Kbd>↓</Kbd> pour
-                    changer de case. Le barème (0,5 pt/case juste) est calculé automatiquement.
+              {/* scan de l'élève À GAUCHE, réponse attendue À DROITE : ajuster vite
+                  un OCR défaillant sans le contexte de l'exercice. */}
+              <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
+                <Card withBorder padding="xs">
+                  <Text size="xs" c="dimmed" fw={600} tt="uppercase" mb={4}>Scan de l'élève</Text>
+                  <ScanImage responseId={cur.respId} />
+                </Card>
+                <Card withBorder padding="sm">
+                  <Text size="xs" c="dimmed" fw={600} tt="uppercase" mb={4}>
+                    Réponse attendue{curCell?.label ? ` — ${curCell.label}` : ''}
                   </Text>
-                  {cur.cells.map((c, ci) => {
-                    const v = cellVerdicts[ci]
-                    const active = ci === cellCursor
-                    const undecided = c.auto_ok === null && c.teacher_ok == null
-                    return (
-                      <Card key={c.index} withBorder padding="xs"
-                        onClick={() => setCellCursor(ci)}
-                        style={{
-                          cursor: 'pointer',
-                          borderColor: active ? 'var(--mantine-color-indigo-5)'
-                            : undecided ? 'var(--mantine-color-orange-4)' : undefined,
-                          boxShadow: active ? '0 0 0 2px var(--mantine-color-indigo-1)' : undefined,
-                        }}>
-                        <Group justify="space-between" wrap="nowrap" align="center">
-                          <div style={{ minWidth: 0, flex: 1 }}>
-                            {c.label && <Text size="xs" c="dimmed" lineClamp={1}>{c.label}</Text>}
-                            <Box fz="1.4rem" fw={600} style={{ lineHeight: 1.3 }}>
-                              <MathText text={c.expected_display || '—'} />
-                            </Box>
-                            <Text size="xs" c={undecided ? 'orange' : 'dimmed'} mt={2}>
-                              {undecided ? 'OCR illisible' : 'OCR a lu'} : {c.ocr_text || '∅'}
-                            </Text>
-                          </div>
-                          <Group gap={6} wrap="nowrap" style={{ flexShrink: 0 }}>
-                            <Button size="xs" color="green" variant={v === true ? 'filled' : 'light'}
-                              onClick={(e) => { e.stopPropagation(); markCell(ci, true) }}>
-                              Juste
-                            </Button>
-                            <Button size="xs" color="red" variant={v === false ? 'filled' : 'light'}
-                              onClick={(e) => { e.stopPropagation(); markCell(ci, false) }}>
-                              Faux
-                            </Button>
-                          </Group>
-                        </Group>
-                      </Card>
-                    )
-                  })}
-                  <Group justify="space-between">
-                    <Text size="xs"
-                      c={cellVerdicts.some((v) => v === null) ? 'orange' : 'green'}>
-                      {cellVerdicts.filter((v) => v === true).length} juste(s) ·{' '}
-                      {cellVerdicts.filter((v) => v === false).length} faux
-                      {cellVerdicts.some((v) => v === null)
-                        ? ` · ${cellVerdicts.filter((v) => v === null).length} à valider` : ''}
-                    </Text>
-                    <Button color="indigo" leftSection={<Check size={14} />}
-                      disabled={cellVerdicts.some((v) => v === null)} onClick={submitCells}>
-                      Valider les cases ({cellVerdicts.filter((v) => v === true).length}/{cellVerdicts.length})
-                      <Kbd ml={6}>↵</Kbd>
+                  <Box fz="1.7rem" fw={700} style={{ lineHeight: 1.3 }}>
+                    <MathText text={(cur.mode === 'cells' ? curCell?.expected_display
+                      : curItem.expected_display) || '—'} />
+                  </Box>
+                  <Text size="xs" c="dimmed" mt={8}>
+                    OCR / CV a lu : {cur.mode === 'cells'
+                      ? (curCell?.ocr_text || '∅')
+                      : (curItem.ocr_text || (curItem.selected_choices.length
+                          ? `cases ${curItem.selected_choices.join(', ')}` : '∅'))}
+                    {cur.mode !== 'cells' && curItem.ocr_confidence != null
+                      && ` · confiance ${(curItem.ocr_confidence * 100).toFixed(0)} %`}
+                  </Text>
+                  {cur.mode !== 'cells' && curItem.reason_code &&
+                    <Text size="xs" c="dimmed">Motif : {curItem.reason_code}</Text>}
+                </Card>
+              </SimpleGrid>
+
+              {/* actions — ordre gauche→droite : Faux … Juste (§ demande) */}
+              {cur.mode === 'cells' ? (
+                <Group>
+                  <Button color="red" variant={cellVal === false ? 'filled' : 'light'}
+                    onClick={() => markCellUnit(false)}>
+                    Faux <Kbd ml={6}>{shortcuts.zero.toUpperCase()}</Kbd>
+                  </Button>
+                  <Button color="green" variant={cellVal === true ? 'filled' : 'light'}
+                    onClick={() => markCellUnit(true)}>
+                    Juste <Kbd ml={6}>{shortcuts.full.toUpperCase()}</Kbd>
+                  </Button>
+                </Group>
+              ) : cur.mode === 'binary' ? (
+                <Group>
+                  <Button color="red" variant="light" onClick={() => gradeRatio(0)}>
+                    Faux — 0 point <Kbd ml={6}>{shortcuts.zero.toUpperCase()}</Kbd>
+                  </Button>
+                  <Button color="green" onClick={() => gradeRatio(1)}>
+                    Juste — {fmtPts(curItem.bareme_points)} <Kbd ml={6}>{shortcuts.full.toUpperCase()}</Kbd>
+                  </Button>
+                  <Button variant="subtle" color="gray" onClick={() => gradeBlock('cancel_item')}>
+                    Annuler la question
+                  </Button>
+                </Group>
+              ) : (
+                <>
+                  <Group>
+                    <Button color="red" variant="light" onClick={() => gradeRatio(0)}>
+                      Faux — 0 <Kbd ml={6}>{shortcuts.zero.toUpperCase()}</Kbd>
+                    </Button>
+                    <Button color="orange" variant="light" onClick={() => gradeRatio(1 / 3)}>
+                      1⁄3 — {fmtPts(curItem.bareme_points / 3)} <Kbd ml={6}>{shortcuts.one_third.toUpperCase()}</Kbd>
+                    </Button>
+                    <Button color="teal" variant="light" onClick={() => gradeRatio(2 / 3)}>
+                      2⁄3 — {fmtPts(curItem.bareme_points * 2 / 3)} <Kbd ml={6}>{shortcuts.two_thirds.toUpperCase()}</Kbd>
+                    </Button>
+                    <Button color="green" onClick={() => gradeRatio(1)}>
+                      Juste — {fmtPts(curItem.bareme_points)} <Kbd ml={6}>{shortcuts.full.toUpperCase()}</Kbd>
                     </Button>
                   </Group>
-                </Stack>
-              ) : (
-                /* réponse en un bloc : QCM (Juste/Faux) ou réponse rédigée
-                   (crédit partiel). Réponse attendue LISIBLE (pas de JSON brut),
-                   lecture OCR en petit pour ne pas la confondre avec l'attendu. */
-                <>
-                  <Card withBorder padding="sm">
-                    <Text size="xs" c="dimmed" fw={600} tt="uppercase" mb={4}>Réponse attendue</Text>
-                    <Box fz="1.4rem" fw={600} style={{ lineHeight: 1.35 }}>
-                      <MathText text={cur.expected_display || '—'} />
-                    </Box>
-                    <Text size="xs" c="dimmed" mt={6}>
-                      OCR / CV a lu : {cur.ocr_text || (cur.selected_choices.length
-                        ? `cases ${cur.selected_choices.join(', ')}` : '∅')}
-                      {cur.ocr_confidence != null && ` · confiance ${(cur.ocr_confidence * 100).toFixed(0)} %`}
-                    </Text>
-                    {cur.reason_code && <Text size="xs" c="dimmed">Motif : {cur.reason_code}</Text>}
-                  </Card>
-                  {cur.grade_mode === 'binary' ? (
-                    <Group>
-                      <Button color="green" onClick={() => gradeRatio(1)}>
-                        Juste — {fmtPts(cur.bareme_points)} <Kbd ml={6}>{shortcuts.full.toUpperCase()}</Kbd>
-                      </Button>
-                      <Button color="red" variant="light" onClick={() => gradeRatio(0)}>
-                        Faux — 0 point <Kbd ml={6}>{shortcuts.zero.toUpperCase()}</Kbd>
-                      </Button>
-                      <Button variant="subtle" color="gray" onClick={() => grade('cancel_item')}>
-                        Annuler la question
-                      </Button>
-                    </Group>
-                  ) : (
-                    <>
-                      <Group>
-                        <Button color="green" onClick={() => gradeRatio(1)}>
-                          Tous les points — {fmtPts(cur.bareme_points)} <Kbd ml={6}>{shortcuts.full.toUpperCase()}</Kbd>
-                        </Button>
-                        <Button color="teal" variant="light" onClick={() => gradeRatio(2 / 3)}>
-                          2⁄3 — {fmtPts(cur.bareme_points * 2 / 3)} <Kbd ml={6}>{shortcuts.two_thirds.toUpperCase()}</Kbd>
-                        </Button>
-                        <Button color="orange" variant="light" onClick={() => gradeRatio(1 / 3)}>
-                          1⁄3 — {fmtPts(cur.bareme_points / 3)} <Kbd ml={6}>{shortcuts.one_third.toUpperCase()}</Kbd>
-                        </Button>
-                        <Button color="red" variant="light" onClick={() => gradeRatio(0)}>
-                          0 point <Kbd ml={6}>{shortcuts.zero.toUpperCase()}</Kbd>
-                        </Button>
-                      </Group>
-                      <Group>
-                        <NumberInput placeholder="points" w={120} min={0} max={cur.bareme_points} step={0.5}
-                          decimalScale={2} value={scoreInput}
-                          onChange={(v) => setScoreInput(v === '' ? '' : Number(v))} />
-                        <Button variant="light" disabled={scoreInput === '' || !cur.bareme_points}
-                          onClick={() => gradeRatio(Number(scoreInput) / cur.bareme_points)}>
-                          Attribuer ces points
-                        </Button>
-                        <Button variant="subtle" color="gray" onClick={() => grade('cancel_item')}>
-                          Annuler la question
-                        </Button>
-                      </Group>
-                    </>
-                  )}
+                  <Group>
+                    <NumberInput placeholder="points" w={120} min={0} max={curItem.bareme_points} step={0.5}
+                      decimalScale={2} value={scoreInput}
+                      onChange={(v) => setScoreInput(v === '' ? '' : Number(v))} />
+                    <Button variant="light" disabled={scoreInput === '' || !curItem.bareme_points}
+                      onClick={() => gradeRatio(Number(scoreInput) / curItem.bareme_points)}>
+                      Attribuer ces points
+                    </Button>
+                    <Button variant="subtle" color="gray" onClick={() => gradeBlock('cancel_item')}>
+                      Annuler la question
+                    </Button>
+                  </Group>
                 </>
               )}
+              <Text size="xs" c="dimmed">
+                <Kbd>←</Kbd>/<Kbd>→</Kbd> pour naviguer{cur.mode === 'cells'
+                  ? ' · chaque case validée est enregistrée automatiquement (0,5 pt/case juste)' : ''}.
+              </Text>
             </>
           ) : (
             <Text c="dimmed" py="md">
@@ -994,15 +1020,15 @@ export default function Corrections() {
 
           <Divider />
           <Group justify="space-between">
-            <Text size="xs" c={remainingFlagged ? 'orange' : 'green'}>
-              {flaggedTotal === 0
+            <Text size="xs" c={remaining ? 'orange' : 'green'}>
+              {attentionUnits.length === 0
                 ? 'Aucune réponse à vérifier'
-                : remainingFlagged === 0
+                : remaining === 0
                   ? '✓ Toutes les réponses signalées ont été vérifiées'
-                  : `${remainingFlagged} réponse(s) signalée(s) encore à vérifier`}
+                  : `${remaining} réponse(s) signalée(s) encore à vérifier`}
             </Text>
             <Group gap="xs">
-              {reviewBatch && remainingFlagged === 0
+              {reviewBatch && remaining === 0
                 && (reviewBatch.status === 'graded' || reviewBatch.status === 'review_pending') && (
                 <Button size="xs" color="green" leftSection={<Check size={14} />}
                   onClick={() => { const b = reviewBatch; closeCorrection(); if (b) openValidate(b) }}>

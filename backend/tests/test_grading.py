@@ -96,6 +96,30 @@ def test_table_cells_unreadable_goes_to_review():
     assert r["tier"] == "D" and r["reason_code"] == "table_cell_unreadable"
 
 
+def test_table_cells_empty_counts_wrong_not_review():
+    # case laissée VIDE (pas d'encre → jamais envoyée à Mathpix) : compte FAUX,
+    # ne met PAS toute la réponse en revue (contraste avec "quatre" illisible).
+    cells = [[{"type": "integer", "value": 4}, {"type": "integer", "value": 9}]]
+    r = grade({"type": "table", "cells": cells},
+              {"max_score": 2, "comparator": "table_cells", "cells": cells},
+              "", 1.0, cell_texts=["4", ""])
+    assert r["score"] == 1 and r["tier"] == "B" and r["reason_code"] == "table_mismatch"
+
+
+def test_normalize_strips_mathpix_math_delimiters():
+    from app.services.grading import normalize
+    # Mathpix renvoie « \( 8 \) » : les délimiteurs doivent disparaître, sinon
+    # « \(8\) » ne parse pas (incident "Motif : parse_error" sur une réponse juste).
+    assert normalize(r"\( 8 \)") == "8"
+    assert normalize(r"\[3{,}5\]") == "3.5"
+
+
+def test_numeric_answer_with_mathpix_delimiters_is_accepted():
+    r = grade({"type": "integer", "value": 8},
+              {"max_score": 1, "comparator": "numeric"}, r"\( 8 \)", 0.99)
+    assert r["score"] == 1 and r["reason_code"] == "numeric_match"
+
+
 def test_matching_full_match():
     r = grade({"type": "matching", "pairs": [[0, 1], [1, 0]]},
               {"max_score": 2, "comparator": "matching"}, "", 1.0,

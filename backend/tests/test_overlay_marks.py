@@ -209,6 +209,54 @@ def test_zone_marks_qcm_shows_correct_boxes_only_on_error():
     assert "wrong" not in {b["state"] for b in rmarks["boxes"]}
 
 
+class _FakeCanvas:
+    """Canvas espion : enregistre les rect (avec leur remplissage) et compte les
+    line() — assez pour vérifier CE QUI est dessiné, sans rendre de PDF."""
+    def __init__(self):
+        self.rects = []      # (x, y, w, h, fill)
+        self.lines = 0
+    def saveState(self): pass
+    def restoreState(self): pass
+    def setStrokeColor(self, *a, **k): pass
+    def setFillColor(self, *a, **k): pass
+    def setLineWidth(self, *a, **k): pass
+    def setDash(self, *a, **k): pass
+    def rect(self, x, y, w, h, stroke=1, fill=0):
+        self.rects.append((x, y, w, h, fill))
+    def line(self, *a, **k):
+        self.lines += 1
+
+
+def test_qcm_overlay_fills_correct_boxes_and_marks_card_once():
+    # 3 cases : index 1 = bonne réponse oubliée (missed), index 0 coché à tort
+    # (wrong), index 2 ni coché ni correct (None). Carte en erreur.
+    z = {"x_pt": 300, "y_pt": 400, "w_pt": 120, "h_pt": 40,
+         "marks": {"kind": "qcm", "any_error": True, "boxes": [
+             {"state": "wrong", "correction_box": {"x_pt": 300, "y_pt": 425, "w_pt": 5, "h_pt": 5}},
+             {"state": "missed", "correction_box": {"x_pt": 300, "y_pt": 415, "w_pt": 5, "h_pt": 5}},
+             {"state": None, "correction_box": {"x_pt": 300, "y_pt": 405, "w_pt": 5, "h_pt": 5}}]}}
+    fc = _FakeCanvas()
+    pdfgen._draw_zone_marks(fc, z, pdfgen.black)
+    # une case correction par choix (colonne de gauche), aucune marque par-dessus
+    # les cases de l'élève -> les seules lignes sont le récap unique de la carte.
+    assert len(fc.rects) == 3
+    fills = {round(x): f for (x, y, w, h, f) in fc.rects}
+    # seule la bonne réponse (index 1, missed) est REMPLIE (saturée)
+    assert [f for (_x, _y, _w, _h, f) in fc.rects] == [0, 1, 0]
+    assert fc.lines > 0            # récap juste/faux dessiné (une fois)
+
+
+def test_qcm_overlay_no_correction_column_when_all_correct():
+    z = {"x_pt": 300, "y_pt": 400, "w_pt": 120, "h_pt": 40,
+         "marks": {"kind": "qcm", "any_error": False, "boxes": [
+             {"state": "ok", "correction_box": {"x_pt": 300, "y_pt": 425, "w_pt": 5, "h_pt": 5}},
+             {"state": None, "correction_box": {"x_pt": 300, "y_pt": 415, "w_pt": 5, "h_pt": 5}}]}}
+    fc = _FakeCanvas()
+    pdfgen._draw_zone_marks(fc, z, pdfgen.black)
+    assert fc.rects == []          # aucune colonne correction si la carte est juste
+    assert fc.lines > 0            # seul le récap (coche) est dessiné
+
+
 def test_render_copy_review_smoke_no_background():
     strip = {"x_pt": 40, "y_pt": 100, "w_pt": 250, "h_pt": 11, "fs": 8}
     zones = [{"x_pt": 40, "y_pt": 400, "w_pt": 120, "h_pt": 40, "score": 0,

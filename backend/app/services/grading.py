@@ -32,7 +32,13 @@ def normalize(raw: str) -> str:
     # \frac ET \dfrac (le \d optionnel absorbe le préfixe "d" de \dfrac,
     # sinon jamais reconnu alors que c'est la commande préférée du prompt)
     s = re.sub(r"\\d?frac\{([^}]*)\}\{([^}]*)\}", r"(\1)/(\2)", s)
-    s = s.replace("\\left", "").replace("\\right", "").replace("$", "")
+    # délimiteurs maths de Mathpix : « \( 8 \) », « \[ ... \] » (et $...$) — à
+    # retirer sinon `\(` reste collé au nombre et fait échouer le parse (incident
+    # « Réponse attendue 8 / OCR a lu \(8\) / Motif parse_error » : réponse juste
+    # rejetée). Même normalisation partagée par _cell_ok, donc corrige aussi les cases.
+    s = (s.replace("\\left", "").replace("\\right", "")
+         .replace("\\(", "").replace("\\)", "")
+         .replace("\\[", "").replace("\\]", "").replace("$", ""))
     s = re.sub(r"\\text\{[^}]*\}", "", s)
     s = re.sub(r"(?<=\d),(?=\d)", ".", s)   # virgule décimale non balisée (repli)
     s = re.sub(r"\s+", "", s)
@@ -65,6 +71,12 @@ def _cell_ok(exp_cell: dict, raw_cell: str) -> bool | None:
     par la NOTATION (grade, comparator table_cells) et le MARQUAGE de l'overlay
     (cell_marks) : deux règles dériveraient."""
     norm = normalize(raw_cell or "")
+    # case VIDE (aucune encre → jamais envoyée à Mathpix, § pipeline) = réponse
+    # non donnée = FAUSSE, jamais « illisible ». Un blanc ne doit pas envoyer
+    # toute la réponse en revue ni occuper le professeur (§ modale = support pour
+    # OCR défaillant, pas pour une case laissée vide).
+    if not norm:
+        return False
     ctype = exp_cell["type"]
     if ctype == "text":
         return norm.casefold() == normalize(str(exp_cell["value"])).casefold()

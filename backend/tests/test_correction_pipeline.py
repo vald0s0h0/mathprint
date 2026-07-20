@@ -286,9 +286,10 @@ def test_unreadable_scan_blocks_with_clear_error(mock_db, tmp_path, monkeypatch)
 
 
 def _seed_table_fill(db):
-    """Un table_fill scanné dont l'OCR a lu 1 case juste, 1 fausse, 1 illisible —
-    typiquement mis en revue (case illisible → tier D). Sert à la correction
-    CASE PAR CASE (set_cells)."""
+    """Un table_fill scanné dont l'OCR a lu 1 case juste, 1 fausse, 1 illisible
+    (encre présente mais non déchiffrée — « ? », PAS une case vide qui compterait
+    faux) — typiquement mis en revue (case illisible → tier D). Sert à la
+    correction CASE PAR CASE (set_cells)."""
     from app.models import GradingDecision, ManualReview, OcrAttempt, StudentResponse
 
     cls = SchoolClass(name="5B", grade_level="5e"); db.add(cls); db.flush()
@@ -313,7 +314,7 @@ def _seed_table_fill(db):
     resp = StudentResponse(copy_item_id=item.id, zone_id=zone.id, final_text="")
     db.add(resp); db.flush()
     db.add(OcrAttempt(zone_id=zone.id, provider="mathpix",
-                      raw_json={"cells": ["5", "9", ""]}, confidence=0.4))
+                      raw_json={"cells": ["5", "9", "?"]}, confidence=0.4))
     dec = GradingDecision(response_id=resp.id, source="deterministic", score=1, max_score=3,
                           tier="D", reason_code="table_cell_unreadable", status="review_pending")
     db.add(dec); db.flush()
@@ -340,7 +341,7 @@ def test_cell_by_cell_correction(mock_db, tmp_path, monkeypatch):
     it = scans_router.list_items(batch.id, "all", db)[0]
     assert it["grade_mode"] == "cells"
     assert [c["expected_display"] for c in it["cells"]] == ["$5$", "$8$", r"$\dfrac{1}{2}$"]
-    assert [c["ocr_text"] for c in it["cells"]] == ["5", "9", ""]
+    assert [c["ocr_text"] for c in it["cells"]] == ["5", "9", "?"]
     assert [c["auto_ok"] for c in it["cells"]] == [True, False, None]
     assert [c["label"] for c in it["cells"]] == ["L1 · A", "L1 · B", "L2 · A"]
     assert [c["teacher_ok"] for c in it["cells"]] == [None, None, None]
