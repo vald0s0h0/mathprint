@@ -60,6 +60,10 @@ def _run_pipeline(batch_id: str):
         batch = db.get(ScanBatch, batch_id)
         process_batch(db, batch)
     except Exception as e:
+        # rollback AVANT toute autre requête : si l'échec vient d'une écriture,
+        # la transaction est avortée (Postgres) et le db.get/commit qui suit
+        # re-lèverait, laissant le lot sans message d'erreur (cf. piège SQLite/PG).
+        db.rollback()
         batch = db.get(ScanBatch, batch_id)
         batch.error = str(e)
         db.commit()
@@ -78,6 +82,7 @@ def _run_build_overlays(batch_id: str):
         batch.error = None
         db.commit()
     except Exception as e:
+        db.rollback()  # transaction possiblement avortée (cf. piège SQLite/PG)
         batch = db.get(ScanBatch, batch_id)
         batch.error = f"Copies corrigées non générées : {e}"
         db.commit()
@@ -829,8 +834,19 @@ def overlays(batch_id: str, db: Session = Depends(get_db)):
         raise HTTPException(404)
     if b.status != "finalized" and "finalized" not in (b.progress_json or {}):
         raise HTTPException(409, "Finaliser le lot avant de générer les overlays")
-    path = build_overlays(db, b)
-    db.commit()
+    try:
+        path = build_overlays(db, b)
+        b.error = None
+        db.commit()
+    except Exception as e:  # noqa: BLE001
+        # même précaution qu'à la finalisation : un échec d'écriture avorte la
+        # transaction (Postgres), rollback obligatoire avant de tracer l'erreur,
+        # et on renvoie un message lisible plutôt qu'un 500 opaque.
+        db.rollback()
+        b = db.get(ScanBatch, batch_id)
+        b.error = f"Copies corrigées non générées : {e}"
+        db.commit()
+        raise HTTPException(500, b.error)
     return {"path": path, "download": f"/api/assessments/{b.assessment_id}/files/correction_overlay.pdf"}
 
 

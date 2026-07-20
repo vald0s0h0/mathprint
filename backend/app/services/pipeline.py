@@ -510,6 +510,15 @@ def finalize_batch(db: Session, batch: ScanBatch) -> dict:
         build_overlays(db, batch)
     except Exception as e:  # noqa: BLE001 — on veut remonter tout échec de rendu
         overlay_error = f"Copies corrigées non générées : {e}"
+        # Un échec de rendu qui provient d'une écriture en base (contrainte,
+        # type — cf. piège SQLite/Postgres) laisse la transaction AVORTÉE :
+        # sans rollback, le db.commit() ci-dessous re-lève (PendingRollbackError)
+        # et l'endpoint renvoie un 500 au lieu de dégrader proprement — c'est CE
+        # 500 que voyait le professeur en cliquant « Valider ». La finalisation
+        # (résultats, preuves) est déjà committée par _set_status plus haut ; le
+        # rollback ne défait donc QUE la tentative d'overlay, puis on persiste
+        # l'erreur sur batch.error dans une transaction propre.
+        db.rollback()
         batch.error = overlay_error
         db.commit()
     return {"evidence_created": n_evidence, "results_created": n_results,

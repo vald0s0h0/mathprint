@@ -190,6 +190,45 @@ def test_finalize_surfaces_overlay_error(mock_db, tmp_path, monkeypatch):
     assert b.status == "finalized"             # pas overlay_ready : bloc visible
 
 
+def test_finalize_survives_db_error_during_overlay(mock_db, tmp_path, monkeypatch):
+    """Régression du 500 « Valider la correction » : quand la génération des
+    copies corrigées échoue sur une ÉCRITURE en base (contrainte / type — cf.
+    piège SQLite/Postgres), la transaction est AVORTÉE. Sans rollback, le
+    db.commit() de repli re-lève (PendingRollbackError) et l'endpoint renvoie un
+    500 au lieu de dégrader — c'est ce que voyait le professeur. finalize_batch
+    doit rattraper proprement : lot finalisé, erreur lisible sur batch.error, la
+    finalisation (résultats) préservée."""
+    from app.models import ManualReview as _MR
+
+    db = mock_db
+    monkeypatch.setattr(cfg, "data_dir", tmp_path)
+    a = _seed_manual(db)
+    batch = scan_intake.get_or_create_batch(db, a.id, None)
+    db.commit()
+    pipeline.process_batch(db, batch)
+    body = scans_router.ResolveIn(action="set_ratio", ratio=1.0)
+    for it in scans_router.list_items(batch.id, "all", db):
+        scans_router.resolve_response(it["response_id"], body, db, None)
+
+    def _boom_db(_db, _batch):
+        # échec au MILIEU d'une écriture : NOT NULL violé -> transaction avortée
+        _db.add(_MR(decision_id=None, category="x"))
+        _db.flush()
+
+    monkeypatch.setattr(pipeline, "build_overlays", _boom_db)
+    # ne doit PAS lever (avant le fix : PendingRollbackError -> 500)
+    result = pipeline.finalize_batch(db, batch)
+    db.commit()
+
+    assert result["results_created"] == 2                 # notes préservées
+    assert result["overlay_error"]                        # échec remonté, pas avalé
+    b = db.get(ScanBatch, batch.id)
+    assert b.error and "Copies corrigées non générées" in b.error
+    assert b.status == "finalized"
+    # le repli n'a PAS laissé traîner l'objet invalide qui a fait échouer le rendu
+    assert db.query(_MR).filter(_MR.decision_id.is_(None)).count() == 0
+
+
 def test_retry_after_overlay_error_rebuilds_only_overlays(mock_db, tmp_path, monkeypatch):
     """Relance d'un lot finalisé dont seuls les overlays ont échoué : retry ne
     refait PAS l'OCR, il régénère uniquement les copies corrigées."""
