@@ -609,9 +609,14 @@ def batch_summary(batch_id: str, db: Session = Depends(get_db)):
             "scanned_copies": len(copies_out), "copies": copies_out}
 
 
-def _zone_crop_path(assessment_id: str, zone_id: str):
-    return (settings.data_dir / "assessments" / assessment_id / "scans" /
-            "derived" / f"{zone_id}.png")
+def _zone_crop_path(assessment_id: str, zone_id: str, cell: int | None = None):
+    """Crop scanné d'une zone de réponse, ou d'UNE case précise (`cell`) d'un
+    tableau / de cases à trous — la modale de correction manuelle ne montre que
+    la case concernée, pas tout le tableau (§ correction case par case)."""
+    derived = settings.data_dir / "assessments" / assessment_id / "scans" / "derived"
+    if cell is not None:
+        return derived / f"{zone_id}-c{cell}.png"
+    return derived / f"{zone_id}.png"
 
 
 @router.get("/reviews/{review_id}/scan")
@@ -637,10 +642,13 @@ def review_scan(review_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/responses/{response_id}/scan")
-def response_scan(response_id: str, db: Session = Depends(get_db)):
+def response_scan(response_id: str, cell: int | None = None,
+                  db: Session = Depends(get_db)):
     """Crop scanné de la zone de réponse — même image que `review_scan`, mais
     adressé par réponse (utilisé par la relecture « toutes les réponses », où il
-    n'y a pas forcément de revue ouverte)."""
+    n'y a pas forcément de revue ouverte). `cell` (index plat d'une case non
+    « given ») ne montre QUE cette case ; repli sur le tableau entier si le crop
+    par case n'existe pas (scans corrigés avant la découpe par case)."""
     resp = db.get(StudentResponse, response_id)
     if not resp or not resp.zone_id:
         raise HTTPException(404, "Aucune zone scannée")
@@ -648,7 +656,9 @@ def response_scan(response_id: str, db: Session = Depends(get_db)):
     copy = db.get(Copy, item.copy_id) if item else None
     if not copy:
         raise HTTPException(404)
-    path = _zone_crop_path(copy.assessment_id, resp.zone_id)
+    path = _zone_crop_path(copy.assessment_id, resp.zone_id, cell)
+    if cell is not None and not path.exists():
+        path = _zone_crop_path(copy.assessment_id, resp.zone_id)
     if not path.exists():
         raise HTTPException(404, "Crop indisponible")
     return FileResponse(path, media_type="image/png")

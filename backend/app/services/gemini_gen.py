@@ -75,7 +75,7 @@ from . import exercise_gen, providers, sesamaths
 
 logger = logging.getLogger(__name__)
 
-PROMPT_VERSION = "gemini-exgen-3-layout"
+PROMPT_VERSION = "gemini-exgen-4-tables"
 SOURCE = "gemini"
 # Seul niveau produit : la difficulté n'est pas évaluée (cf. en-tête).
 GENERATED_LEVEL = 3

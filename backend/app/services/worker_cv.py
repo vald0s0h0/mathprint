@@ -200,9 +200,15 @@ def analyze_page(img: np.ndarray) -> PageAnalysis:
         res.warnings.append("reprojection_error_high")
         return res
 
-    res.warped = cv2.warpPerspective(img, matrix, (w_px, h_px),
-                                     flags=cv2.INTER_LINEAR,
-                                     borderValue=(255, 255, 255))
+    warped = cv2.warpPerspective(img, matrix, (w_px, h_px),
+                                 flags=cv2.INTER_LINEAR,
+                                 borderValue=(255, 255, 255))
+    # Blanchiment du fond : les scans sont des photos iPhone (papier ni blanc ni
+    # uniformément éclairé). On normalise UNE fois par page — le reste du pipeline
+    # (détection QCM à seuils absolus, crops Mathpix, aperçu) retrouve le fond
+    # blanc qu'il suppose. L'original n'est jamais modifié (RM-002) ; `warped` est
+    # déjà un dérivé.
+    res.warped = flatten_background(warped)
     res.status = "registered"
     return res
 
@@ -236,6 +242,43 @@ def ink_ratio(crop_filtered: np.ndarray) -> float:
     return float(dark) / max(1, gray.size)
 
 
+# Blanchiment du fond (photos iPhone : papier jauni, éclairage inégal). On DIVISE
+# chaque canal par une carte de fond (illumination) estimée en basse résolution :
+# le papier -> blanc PARTOUT (suit teinte ET dégradé), l'encre reste
+# proportionnellement sombre — on ne SEUILLE jamais, donc une coche pâle survit.
+# Le fond sous une case saturée est reconstruit depuis le papier voisin (fermeture
+# morphologique à noyau large) -> une case entièrement noircie reste noire. Limite
+# connue : un aplat sombre PLUS GRAND que le noyau (~12 mm) verrait son centre
+# blanchi ; hors de portée d'une case QCM entourée de blanc et de texte.
+_FLATTEN_DOWN = 8            # sous-échantillonnage pour estimer le fond (vitesse)
+_FLATTEN_KERNEL_MM = 12.0    # noyau de fermeture, > plus gros aplat d'encre à garder
+
+
+def flatten_background(bgr: np.ndarray) -> np.ndarray:
+    """Retire le saumon (dropout) puis blanchit le fond par division par la carte
+    d'illumination. Idempotent sur une page déjà blanche (le fond y vaut ~255).
+    Une seule passe par page — sert la détection QCM ET l'OCR Mathpix."""
+    no_salmon = dropout_filter(bgr)
+    h, w = no_salmon.shape[:2]
+    down = _FLATTEN_DOWN
+    sw, sh = max(1, w // down), max(1, h // down)
+    small = cv2.resize(no_salmon, (sw, sh), interpolation=cv2.INTER_AREA)
+    k = max(3, int(round(_FLATTEN_KERNEL_MM / 25.4 * DPI / down)))
+    k += (k + 1) % 2  # impair
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+    out = np.empty_like(no_salmon)
+    for ch in range(no_salmon.shape[2]):
+        # fermeture : bouche les creux sombres (encre) plus petits que le noyau
+        # -> enveloppe claire = niveau du papier, par canal (corrige aussi le jauni)
+        bg_small = cv2.morphologyEx(small[..., ch], cv2.MORPH_CLOSE, kernel)
+        bg_small = cv2.GaussianBlur(bg_small, (0, 0), sigmaX=max(1.0, k / 2.0))
+        bg = cv2.resize(bg_small, (w, h), interpolation=cv2.INTER_LINEAR)
+        bg = np.maximum(bg.astype(np.float32), 1.0)
+        norm = no_salmon[..., ch].astype(np.float32) * 255.0 / bg
+        out[..., ch] = np.clip(norm, 0, 255).astype(np.uint8)
+    return out
+
+
 def _detect_window(b: dict) -> dict:
     """Fenêtre de détection reconstruite autour du CENTRE d'une case, pour les
     copies dont la méta ne porte pas encore `detect` (le centre reste correct
@@ -249,27 +292,104 @@ def _detect_window(b: dict) -> dict:
             "h_pt": QCM_BOX + 2 * QCM_DETECT_MARGIN}
 
 
-def detect_qcm(warped: np.ndarray, boxes: list[dict],
-               threshold: float = 0.035) -> tuple[list[int] | None, list[float]]:
-    """Mesure la densité d'encre dans une FENÊTRE ÉLARGIE autour de chaque case
-    (§4.3, détection robuste). La case imprimée (2 mm) est plus petite que la
-    tolérance de recalage ET que le geste de l'élève : mesurer pile dans la case
-    ratait les coches débordantes (et l'ancienne fenêtre « intérieure » était
-    même dégénérée). On lit donc `box["detect"]` (posée par pdfgen), ou à défaut
-    une fenêtre reconstruite autour du centre (copies imprimées avant l'évolution).
-    Retourne (indices cochés, densités) ; None si lecture ambiguë (densité proche
-    du seuil sans le franchir nettement)."""
+QCM_THRESHOLD = 0.035
+# Seuil ADAPTATIF par page : les élèves cochent de façons très différentes (trait
+# fin / gros trait / aplat noir), ce qui déplace la frontière vide↔coché d'une
+# copie à l'autre. On l'ajuste À LA PAGE, mais SEULEMENT si les densités de toutes
+# ses cases se séparent nettement en deux groupes (vides ~ blanc, cochées ~ encre)
+# — sinon le défaut absolu prime (cas « tout vide » / « tout coché » indécidables
+# par un tri), et un nuage qui enjambe le seuil sans coupure franche (« mal
+# isolé ») part en correction manuelle.
+_QCM_ADAPT_MIN = 3             # trop peu de cases -> pas d'adaptation
+_QCM_ADAPT_GAP_MIN = 0.02      # écart absolu mini entre les deux groupes
+_QCM_ADAPT_SEP = 3.0           # l'écart doit valoir >= 3x la dispersion intra-groupe
+_QCM_ADAPT_EMPTY_CEIL = 0.03   # le groupe bas doit friser le blanc (vraies cases vides)
+
+
+@dataclass
+class QcmThreshold:
+    """Seuil QCM d'une page. `band` = [lo, hi) : une case dont la densité y tombe
+    est AMBIGUË -> zone envoyée en correction manuelle."""
+    value: float
+    band: tuple[float, float]
+    adapted: bool
+    default: float = QCM_THRESHOLD
+
+
+def qcm_densities(warped: np.ndarray, boxes: list[dict]) -> list[float]:
+    """Densité d'encre dans la FENÊTRE ÉLARGIE de chaque case (§4.3). La case
+    imprimée (2 mm) est plus petite que la tolérance de recalage ET que le geste
+    de l'élève : on lit `box["detect"]` (posée par pdfgen), ou à défaut une
+    fenêtre reconstruite autour du centre (copies d'avant l'évolution)."""
     densities = []
     for b in boxes:
         win = b.get("detect") or _detect_window(b)
         crop = crop_zone(warped, win["x_pt"], win["y_pt"], win["w_pt"], win["h_pt"],
                          padding_pt=0)
-        if crop.size == 0:
-            densities.append(0.0)
-            continue
-        densities.append(ink_ratio(dropout_filter(crop)))
+        densities.append(0.0 if crop.size == 0 else ink_ratio(dropout_filter(crop)))
+    return densities
+
+
+def adapt_qcm_threshold(pooled: list[float],
+                        default: float = QCM_THRESHOLD) -> QcmThreshold:
+    """Seuil de décision pour UNE page, à partir des densités de TOUTES ses cases
+    QCM. Trie, cherche le plus grand écart : si les deux groupes sont bien
+    distincts (écart net + groupe bas proche du blanc), pose le seuil au milieu de
+    l'écart (il PRIME sur le défaut, avec une bande d'ambiguïté étroite car on est
+    sûr). Sinon garde le défaut ; si le nuage enjambe le seuil sans coupure nette,
+    élargit la bande d'ambiguïté -> les cases limites passent en revue."""
+    ds = sorted(pooled)
+    narrow = (default * 0.5, default)          # bande « défaut » (comportement antérieur)
+    if len(ds) < _QCM_ADAPT_MIN:
+        return QcmThreshold(default, narrow, False)
+    # Frontière vide->coché : le plus grand écart dont le groupe BAS frise encore le
+    # blanc (vraies cases vides). Le plus grand écart TOUT COURT tomberait parfois
+    # DANS le groupe coché (un aplat saturé à 0,5 loin des coches à 0,15) et
+    # scinderait les cochées à tort ; on ne considère donc que les coupures qui
+    # laissent en bas un groupe proche du papier (mean <= EMPTY_CEIL). Absence de
+    # tel groupe = pas de cases vides sur la page (« tout coché ») -> pas d'adaptation.
+    candidates = []
+    for i in range(len(ds) - 1):
+        lower = ds[:i + 1]
+        if sum(lower) / len(lower) <= _QCM_ADAPT_EMPTY_CEIL:
+            candidates.append((ds[i + 1] - ds[i], i))
+    if candidates:
+        gap, gi = max(candidates)
+        lo, hi = ds[gi], ds[gi + 1]
+        # On jauge l'écart contre la dispersion du groupe BAS (censé serré près du
+        # blanc) ; le groupe HAUT peut légitimement s'étaler sans casser la séparation.
+        spread_low = ds[gi] - ds[0]
+        if gap >= _QCM_ADAPT_GAP_MIN and gap >= _QCM_ADAPT_SEP * max(spread_low, 1e-6):
+            t = (lo + hi) / 2.0
+            # bande étroite au cœur de l'écart : aucune case n'y tombe -> pleine confiance
+            return QcmThreshold(t, (t - 0.25 * gap, t + 0.25 * gap), True)
+    # non séparable : nuage serré (tout vide / tout coché) -> le défaut tranche seul ;
+    # nuage étalé enjambant le seuil -> bande large -> revue des cases limites
+    if ds[0] < default <= ds[-1] and (ds[-1] - ds[0]) >= _QCM_ADAPT_GAP_MIN:
+        return QcmThreshold(default, (default * 0.5, default * 1.8), False)
+    return QcmThreshold(default, narrow, False)
+
+
+def select_qcm(boxes: list[dict], densities: list[float], thr: QcmThreshold
+               ) -> tuple[list[int] | None, list[float], list[int]]:
+    """Décision d'une zone avec le seuil (adaptatif) de la page. Le seuil adaptatif
+    PRIME ; renvoie aussi la sélection au seuil par DÉFAUT (traçabilité). None si
+    au moins une case est ambiguë (densité dans la bande) -> correction manuelle."""
+    lo, hi = thr.band
+    default_sel = [b["index"] for b, d in zip(boxes, densities) if d >= thr.default]
+    if any(lo <= d < hi for d in densities):
+        return None, densities, default_sel
+    selected = [b["index"] for b, d in zip(boxes, densities) if d >= thr.value]
+    return selected, densities, default_sel
+
+
+def detect_qcm(warped: np.ndarray, boxes: list[dict],
+               threshold: float = QCM_THRESHOLD) -> tuple[list[int] | None, list[float]]:
+    """Détection QCM à seuil fixe (une zone isolée, sans contexte de page).
+    Conservée pour les appels directs et les tests ; le pipeline passe désormais
+    par `qcm_densities` + `adapt_qcm_threshold` + `select_qcm` (seuil par page)."""
+    densities = qcm_densities(warped, boxes)
     selected = [b["index"] for b, d in zip(boxes, densities) if d >= threshold]
-    # ambiguïté : densité proche du seuil sans le franchir nettement
     borderline = [d for d in densities if threshold * 0.5 <= d < threshold]
     if borderline and not selected:
         return None, densities

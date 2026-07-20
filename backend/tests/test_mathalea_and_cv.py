@@ -160,3 +160,94 @@ def test_detect_qcm_fallback_window_when_meta_lacks_detect():
     _paint_mark(img, 100, 780)   # coche centrée sur la vraie case
     selected, _ = W.detect_qcm(img, [old])
     assert selected == [0]
+
+
+# --- Blanchiment du fond (photos iPhone : papier non blanc, éclairage inégal) ---
+
+def test_flatten_background_lifts_dark_paper_keeps_ink():
+    """Papier gris sombre (photo mal éclairée) : le fond monte au blanc — donc
+    une zone vide cesse d'être comptée comme encre — et une coche reste sombre."""
+    from app.services import worker_cv as W
+    img = np.full((300, 300, 3), 120, dtype=np.uint8)   # papier gris, pas blanc
+    img[140:160, 140:160] = 20                          # coche saturée
+    out = W.flatten_background(img)
+    assert out[10:40, 10:40].mean() > 230               # papier -> quasi blanc
+    assert out[150, 150].mean() < 90                    # la coche reste sombre
+    assert W.ink_ratio(img[10:60, 10:60]) > 0.9          # avant : tout < 128 = « encre »
+    assert W.ink_ratio(out[10:60, 10:60]) < 0.05         # après : zone vide ~ 0
+
+
+def test_flatten_background_flattens_illumination_gradient():
+    """Dégradé d'éclairage (sombre à gauche, clair à droite) aplani des deux côtés."""
+    from app.services import worker_cv as W
+    grad = np.linspace(90, 200, 320, dtype=np.float32)
+    img = np.repeat(grad[None, :], 320, axis=0)
+    img = np.stack([img, img, img], axis=-1).astype(np.uint8)
+    out = W.flatten_background(img)
+    assert out[:, 30:50].mean() > 220
+    assert out[:, -50:-30].mean() > 220
+
+
+def test_flatten_background_preserves_white_page_and_mark():
+    """Idempotence : une page déjà blanche n'est pas abîmée, la marque survit."""
+    from app.services import worker_cv as W
+    img = np.full((300, 300, 3), 255, dtype=np.uint8)
+    img[140:160, 140:160] = 25
+    out = W.flatten_background(img)
+    assert out[10:40, 10:40].mean() > 245
+    assert out[150, 150].mean() < 80
+
+
+# --- Seuil QCM adaptatif par page ---
+
+def test_adapt_qcm_threshold_splits_two_clear_groups():
+    from app.services.worker_cv import adapt_qcm_threshold
+    thr = adapt_qcm_threshold([0.001, 0.002, 0.15, 0.16, 0.5])
+    assert thr.adapted
+    assert 0.002 < thr.value < 0.15
+
+
+def test_adapt_qcm_threshold_adapts_to_faint_checks():
+    """Coches fines (~0,024) sous le seuil par défaut mais nettement au-dessus des
+    cases vides (~0,002) : le seuil de page DESCEND pour les capter."""
+    from app.services.worker_cv import adapt_qcm_threshold, QCM_THRESHOLD
+    thr = adapt_qcm_threshold([0.001, 0.002, 0.003, 0.024, 0.026, 0.028])
+    assert thr.adapted
+    assert 0.003 < thr.value < QCM_THRESHOLD
+
+
+def test_adapt_qcm_threshold_all_empty_keeps_default_no_review():
+    from app.services.worker_cv import adapt_qcm_threshold, select_qcm, QCM_THRESHOLD
+    dens = [0.001, 0.002, 0.003, 0.004]
+    thr = adapt_qcm_threshold(dens)
+    assert not thr.adapted and thr.value == QCM_THRESHOLD
+    boxes = [{"index": i} for i in range(4)]
+    selected, _, _ = select_qcm(boxes, dens, thr)
+    assert selected == []                                # tout vide, pas de revue
+
+
+def test_adapt_qcm_threshold_all_checked_keeps_default():
+    from app.services.worker_cv import adapt_qcm_threshold, QCM_THRESHOLD
+    thr = adapt_qcm_threshold([0.12, 0.15, 0.2, 0.5])
+    assert not thr.adapted and thr.value == QCM_THRESHOLD
+
+
+def test_select_qcm_poorly_isolated_goes_to_manual_review():
+    """Continuum enjambant le seuil, sans coupure nette -> bande large -> None."""
+    from app.services.worker_cv import adapt_qcm_threshold, select_qcm
+    dens = [0.02, 0.03, 0.04, 0.05]
+    thr = adapt_qcm_threshold(dens)
+    assert not thr.adapted
+    boxes = [{"index": i} for i in range(4)]
+    selected, _, _ = select_qcm(boxes, dens, thr)
+    assert selected is None
+
+
+def test_select_qcm_adaptive_overrides_default():
+    from app.services.worker_cv import adapt_qcm_threshold, select_qcm
+    dens = [0.001, 0.002, 0.003, 0.024, 0.026, 0.028]
+    thr = adapt_qcm_threshold(dens)
+    boxes = [{"index": i} for i in range(6)]
+    selected, _, default_sel = select_qcm(boxes, dens, thr)
+    assert default_sel == []                             # le défaut rate les coches fines
+    assert selected == [3, 4, 5]                          # l'adaptatif les prend

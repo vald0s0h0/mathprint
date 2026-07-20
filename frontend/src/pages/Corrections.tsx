@@ -188,18 +188,20 @@ function buildUnits(items: Item[], scope: Scope): Unit[] {
 
 // image du crop scanné de la zone de réponse : chargée via fetch + token puis
 // blob (une balise <img> n'envoie pas nos en-têtes d'auth), comme PdfFrame.
-function ScanImage({ responseId }: { responseId: string }) {
+function ScanImage({ responseId, cellIndex }: { responseId: string; cellIndex?: number | null }) {
   const [url, setUrl] = useState<string | null>(null)
   const [failed, setFailed] = useState(false)
   useEffect(() => {
     let revoke: string | null = null
     setUrl(null); setFailed(false)
-    fetch(`/api/scans/responses/${responseId}/scan`, { headers: { Authorization: `Bearer ${getToken()}` } })
+    // en mode « cases », ne montrer QUE la case corrigée (pas tout le tableau).
+    const q = cellIndex != null ? `?cell=${cellIndex}` : ''
+    fetch(`/api/scans/responses/${responseId}/scan${q}`, { headers: { Authorization: `Bearer ${getToken()}` } })
       .then((r) => (r.ok ? r.blob() : Promise.reject(new Error(`${r.status}`))))
       .then((b) => { revoke = URL.createObjectURL(b); setUrl(revoke) })
       .catch(() => setFailed(true))
     return () => { if (revoke) URL.revokeObjectURL(revoke) }
-  }, [responseId])
+  }, [responseId, cellIndex])
   if (failed) return (
     <Text size="xs" c="dimmed" p="sm">
       Zone non scannée (vide, ou lot sans scan) — rien à visualiser ici.
@@ -927,8 +929,11 @@ export default function Corrections() {
                   un OCR défaillant sans le contexte de l'exercice. */}
               <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
                 <Card withBorder padding="xs">
-                  <Text size="xs" c="dimmed" fw={600} tt="uppercase" mb={4}>Scan de l'élève</Text>
-                  <ScanImage responseId={cur.respId} />
+                  <Text size="xs" c="dimmed" fw={600} tt="uppercase" mb={4}>
+                    Scan de l'élève{cur.mode === 'cells' && curCell?.label ? ` — ${curCell.label}` : ''}
+                  </Text>
+                  <ScanImage responseId={cur.respId}
+                    cellIndex={cur.mode === 'cells' ? cur.cellIndex : null} />
                 </Card>
                 <Card withBorder padding="sm">
                   <Text size="xs" c="dimmed" fw={600} tt="uppercase" mb={4}>

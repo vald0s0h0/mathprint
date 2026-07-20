@@ -838,6 +838,9 @@ _TABLE_COL_W = BLANK_W + 2 * _TABLE_CELL_PAD     # colonne « confortable » : c
 _TABLE_MIN_COL_W = 10.0 * mm                     # plancher quand les colonnes sont nombreuses
 _TABLE_ROW_MIN_H = BLANK_H + 2 * _TABLE_CELL_PAD
 _TABLE_ROWLAB_MIN_W = 18.0 * mm
+_TABLE_ROWLAB_LABEL = 44.0 * mm    # largeur « confortable » de la colonne énoncé d'un tableau FIN
+_TABLE_BANK_GAP = 6.0 * mm         # séparation VISIBLE entre les deux bandes d'un tableau à 2 bandes
+_TABLE_TWO_BANK_MIN_ROWS = 6       # au-delà, un tableau fin passe à 2 bandes (2de moitié à côté)
 _MATCHING_PASTILLE = 2.2 * mm
 _MATCHING_COL_GAP = 10.0 * mm
 _MANUAL_DRAWING_H = 60.0 * mm
@@ -849,47 +852,69 @@ def _table_geometry(w: float, col_labels: list | None, row_labels: list | None,
     """Géométrie complète d'un tableau à remplir — UNE définition, partagée par
     la mesure (_table_zone_height) et le dessin (_draw_table_zone).
 
-    Le cas dominant est cols=1 : le générateur y met la sous-question entière
-    dans row_labels[i] (« a. 4,8 + ... = 12,5 ») et la grille ne porte qu'une
-    case. La largeur va donc en priorité au libellé, la colonne réponse étant
-    dimensionnée sur la case (20 mm) et non sur la place restante — c'est
-    l'inverse de l'ancienne règle (libellé figé à 15 mm), qui écrasait le
-    libellé sous une case démesurée."""
+    Le tableau est un vrai mini-tableau à cadre : la 1re colonne porte l'énoncé
+    (row_labels[i], sans pastille a./b./c.), les suivantes les cases à remplir.
+    Il est CENTRÉ dans la carte (jamais justifié à droite). Un tableau FIN
+    (≤ 2 colonnes) avec BEAUCOUP de lignes est coupé en DEUX BANDES posées côte
+    à côte (la 2de moitié des lignes à droite de la 1re) : moins de hauteur,
+    largeur mieux occupée — d'où deux petits tableaux visuellement séparés.
+
+    `sub_badge_color` n'est plus appliqué aux libellés de ligne (les pastilles
+    a./b./c. par ligne sont volontairement supprimées, § présentation)."""
     rows = len(cells)
     cols = max((len(r) for r in cells), default=0) or 1
     inner = w - 2 * CARD_PAD
     lab_fs = max(6, font_size - 1)
+    has_labels = bool(row_labels)
+    thin = cols <= 2
 
-    rowlab_w = 0.0
-    if row_labels:
-        room = inner - cols * _TABLE_MIN_COL_W       # place cessible au libellé
-        rowlab_w = max(0.0, min(room, max(_TABLE_ROWLAB_MIN_W,
-                                          inner - cols * _TABLE_COL_W)))
-    grid_w = inner - rowlab_w
-    col_w = grid_w / cols
+    # deux bandes ? tableau fin, assez de lignes, et la place d'y loger deux
+    # blocs « libellé + case » côte à côte.
+    banks = 2 if (thin and rows >= _TABLE_TWO_BANK_MIN_ROWS
+                  and inner >= 2 * (_TABLE_ROWLAB_MIN_W + cols * _TABLE_MIN_COL_W)
+                  + _TABLE_BANK_GAP) else 1
+    avail = inner if banks == 1 else (inner - _TABLE_BANK_GAP) / 2
 
-    # bandeau de tête dimensionné sur les libellés RÉELS : « Nombre manquant »
-    # sur une colonne de 22 mm passe à la ligne, et une hauteur figée le faisait
-    # retomber dans la 1re case.
+    # largeur d'une bande : compacte (centrée) pour un tableau fin, pleine
+    # largeur pour une grille de valeurs (≥ 3 colonnes).
+    want = _TABLE_ROWLAB_LABEL + cols * _TABLE_COL_W if thin else avail
+    bank_w = min(avail, want)
+    if has_labels:
+        rowlab_w = max(_TABLE_ROWLAB_MIN_W,
+                       min(bank_w - cols * _TABLE_MIN_COL_W, bank_w - cols * _TABLE_COL_W))
+    else:
+        rowlab_w = 0.0
+    col_w = (bank_w - rowlab_w) / cols
+    total_w = banks * bank_w + (banks - 1) * _TABLE_BANK_GAP
+
+    # bandeau de tête dimensionné sur les libellés RÉELS (répété dans chaque bande).
     col_lays = [_rich_layout(str(lbl), col_w - 2 * mm, lab_fs)
                 for lbl in (col_labels or [])]
     head_h = (max([_TABLE_HEAD_H]
                   + [lay["height"] + 2 * _TABLE_CELL_PAD for lay in col_lays])
               if col_labels else 0.0)
 
-    # un libellé de ligne EST une sous-question (« a. 4,8 + ... = 12,5 ») : il
-    # porte donc la même pastille a./b./c. qu'une sous-question d'énoncé — la
-    # grille sépare déjà les lignes, la pastille dit de quelle question il s'agit
-    row_lays = [_rich_layout(str(lbl), max(8 * mm, rowlab_w - 2 * _TABLE_CELL_PAD),
-                             lab_fs, sub_badge_color=sub_badge_color)
+    # libellés de ligne (énoncé de la case) — centrés, SANS pastille a./b./c.
+    row_lays = [_rich_layout(str(lbl), max(8 * mm, rowlab_w - 2 * _TABLE_CELL_PAD), lab_fs)
                 for lbl in (row_labels or [])]
     row_hs = [max(_TABLE_ROW_MIN_H,
                   (row_lays[i]["height"] + 2 * _TABLE_CELL_PAD) if i < len(row_lays) else 0.0)
               for i in range(rows)]
-    return {"rows": rows, "cols": cols, "head_h": head_h, "rowlab_w": rowlab_w,
-            "grid_w": grid_w, "col_w": col_w, "col_lays": col_lays,
+
+    # répartition des lignes par bande (indices d'origine conservés — l'ordre
+    # row-major de cells_meta doit rester aligné sur expected_json.cells).
+    if banks == 2:
+        n0 = -(-rows // 2)  # ceil : la 1re bande porte la moitié haute
+        bank_rows = [list(range(0, n0)), list(range(n0, rows))]
+    else:
+        bank_rows = [list(range(rows))]
+    body_h = max((head_h + sum(row_hs[i] for i in br)) for br in bank_rows) if bank_rows else head_h
+
+    return {"rows": rows, "cols": cols, "banks": banks, "head_h": head_h,
+            "rowlab_w": rowlab_w, "grid_w": col_w * cols, "col_w": col_w,
+            "bank_w": bank_w, "total_w": total_w, "col_lays": col_lays,
             "row_lays": row_lays, "row_hs": row_hs, "lab_fs": lab_fs,
-            "height": head_h + sum(row_hs) + 2 * mm}
+            "bank_rows": bank_rows, "height": body_h + 2 * mm}
 
 
 def _table_zone_height(w: float, col_labels: list | None, row_labels: list | None,
@@ -950,61 +975,77 @@ def _draw_table_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float,
                      sub_badge_color: Color | None = None) -> dict:
     geo = _table_geometry(w, col_labels, row_labels, cells, font_size,
                           sub_badge_color)
-    rows, cols = geo["rows"], geo["cols"]
+    cols = geo["cols"]
     head_h, col_w, lab_fs = geo["head_h"], geo["col_w"], geo["lab_fs"]
-    grid_x = x + CARD_PAD + geo["rowlab_w"]
-    grid_w = geo["grid_w"]
+    rowlab_w, bank_w = geo["rowlab_w"], geo["bank_w"]
+    inner = w - 2 * CARD_PAD
+    # tableau CENTRÉ dans la carte (jamais justifié à droite)
+    x0 = x + CARD_PAD + max(0.0, (inner - geo["total_w"]) / 2)
     grid_top = y + h - 1 * mm
-    grid_bottom = y + 1 * mm
 
-    c.setStrokeColor(CARD_BORDER)
-    c.setLineWidth(0.7)
-    c.rect(grid_x, grid_bottom, grid_w, grid_top - head_h - grid_bottom, stroke=1, fill=0)
-    if col_labels:
-        c.setFillColor(black)
-        for j, lay in enumerate(geo["col_lays"]):
-            _draw_rich(c, grid_x + j * col_w + 1 * mm,
-                       grid_top - (head_h - lay["height"]) / 2, lay,
-                       centered=True, width=col_w - 2 * mm)
-        c.line(grid_x, grid_top - head_h, grid_x + grid_w, grid_top - head_h)
+    # géométrie par INDICE D'ORIGINE : cells_meta[i][j] doit rester aligné sur
+    # expected_json.cells (correction case par case, OCR, overlay).
+    cells_meta = [[None] * cols for _ in range(geo["rows"])]
 
-    cells_meta = []
-    ry_top = grid_top - head_h
-    for i in range(rows):
-        row_h = geo["row_hs"][i]
-        row_meta = []
-        if i > 0:
-            c.setStrokeColor(CARD_BORDER)
-            c.setLineWidth(0.5)
-            c.line(grid_x, ry_top, grid_x + grid_w, ry_top)
-        if i < len(geo["row_lays"]):
-            lay = geo["row_lays"][i]
-            _draw_rich(c, x + CARD_PAD, ry_top - (row_h - lay["height"]) / 2, lay)
-        for j in range(cols):
-            cx = grid_x + j * col_w
-            if j > 0:
-                c.setStrokeColor(CARD_BORDER)
-                c.setLineWidth(0.5)
-                c.line(cx, grid_bottom, cx, grid_top - head_h)
-            # case centrée dans la cellule, plafonnée à la taille d'écriture
-            # manuscrite (BLANK_W x BLANK_H) — une cellule large ne l'étire pas
-            bw = min(BLANK_W, col_w - 2 * _TABLE_CELL_PAD)
-            bh = min(BLANK_H, row_h - 2 * _TABLE_CELL_PAD)
-            bx = cx + (col_w - bw) / 2
-            by = ry_top - row_h + (row_h - bh) / 2
-            cell = cells[i][j] if i < len(cells) and j < len(cells[i]) else None
-            if cell and cell.get("given"):
-                c.setFillColor(black)
-                lay = _rich_layout(_cell_display_text(cell), col_w - 2 * mm, lab_fs)
-                _draw_rich(c, cx + 1 * mm, ry_top - (row_h - lay["height"]) / 2, lay,
+    for b, rows_in_bank in enumerate(geo["bank_rows"]):
+        bank_x = x0 + b * (bank_w + _TABLE_BANK_GAP)
+        grid_x = bank_x + rowlab_w
+        bank_body_h = head_h + sum(geo["row_hs"][i] for i in rows_in_bank)
+        grid_bottom = grid_top - bank_body_h
+
+        # cadre saumon de TOUTE la bande (colonne énoncé + colonnes cases)
+        c.setStrokeColor(DROPOUT)
+        c.setLineWidth(0.7)
+        c.rect(bank_x, grid_bottom, bank_w, bank_body_h, stroke=1, fill=0)
+        c.setLineWidth(0.5)
+        if col_labels:
+            c.setFillColor(black)
+            for j, lay in enumerate(geo["col_lays"]):
+                _draw_rich(c, grid_x + j * col_w + 1 * mm,
+                           grid_top - (head_h - lay["height"]) / 2, lay,
                            centered=True, width=col_w - 2 * mm)
-            else:
+            c.setStrokeColor(DROPOUT)
+            c.line(bank_x, grid_top - head_h, bank_x + bank_w, grid_top - head_h)
+        # séparateurs verticaux (toute la hauteur) : colonne énoncé | cases, puis
+        # entre colonnes de cases.
+        c.setStrokeColor(DROPOUT)
+        if rowlab_w > 0:
+            c.line(grid_x, grid_bottom, grid_x, grid_top)
+        for j in range(1, cols):
+            c.line(grid_x + j * col_w, grid_bottom, grid_x + j * col_w, grid_top)
+
+        ry_top = grid_top - head_h
+        for local_i, i in enumerate(rows_in_bank):
+            row_h = geo["row_hs"][i]
+            if local_i > 0:
                 c.setStrokeColor(DROPOUT)
-                c.setLineWidth(0.7)
-                c.roundRect(bx, by, bw, bh, 0.8 * mm)
-            row_meta.append({"x_pt": bx, "y_pt": by, "w_pt": bw, "h_pt": bh})
-        cells_meta.append(row_meta)
-        ry_top -= row_h
+                c.setLineWidth(0.5)
+                c.line(bank_x, ry_top, bank_x + bank_w, ry_top)
+            # énoncé de la ligne : centré (H et V) dans la colonne énoncé
+            if rowlab_w > 0 and i < len(geo["row_lays"]):
+                lay = geo["row_lays"][i]
+                _draw_rich(c, bank_x + _TABLE_CELL_PAD, ry_top - (row_h - lay["height"]) / 2,
+                           lay, centered=True, width=rowlab_w - 2 * _TABLE_CELL_PAD)
+            for j in range(cols):
+                cx = grid_x + j * col_w
+                # case centrée dans la cellule, plafonnée à la taille d'écriture
+                # manuscrite (BLANK_W x BLANK_H) — une cellule large ne l'étire pas
+                bw = min(BLANK_W, col_w - 2 * _TABLE_CELL_PAD)
+                bh = min(BLANK_H, row_h - 2 * _TABLE_CELL_PAD)
+                bx = cx + (col_w - bw) / 2
+                by = ry_top - row_h + (row_h - bh) / 2
+                cell = cells[i][j] if i < len(cells) and j < len(cells[i]) else None
+                if cell and cell.get("given"):
+                    c.setFillColor(black)
+                    lay = _rich_layout(_cell_display_text(cell), col_w - 2 * mm, lab_fs)
+                    _draw_rich(c, cx + 1 * mm, ry_top - (row_h - lay["height"]) / 2, lay,
+                               centered=True, width=col_w - 2 * mm)
+                else:
+                    c.setStrokeColor(DROPOUT)
+                    c.setLineWidth(0.7)
+                    c.roundRect(bx, by, bw, bh, 0.8 * mm)
+                cells_meta[i][j] = {"x_pt": bx, "y_pt": by, "w_pt": bw, "h_pt": bh}
+            ry_top -= row_h
     c.setStrokeColor(black)
     c.setFillColor(black)
     return {"cells": cells_meta}

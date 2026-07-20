@@ -188,6 +188,19 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
             (derived_dir / f"page-{res.page_id}.png").write_bytes(
                 worker_cv.encode_png(res.warped))
         zones = db.query(ResponseZone).filter_by(page_id=page.id).all()
+        # Seuil QCM ADAPTATIF par page : on met en commun les densités de TOUTES
+        # les cases QCM de la page pour caler un seuil unique sur le style de coche
+        # de l'élève (trait fin / aplat), quand deux groupes se détachent nettement.
+        qcm_meta: dict[str, tuple[list, list[float]]] = {}
+        pooled: list[float] = []
+        for zone in zones:
+            zitem = db.get(CopyItem, zone.item_id)
+            if zitem.response_type.startswith("qcm"):
+                zboxes = (zone.meta_json or {}).get("boxes", [])
+                zdens = worker_cv.qcm_densities(res.warped, zboxes)
+                qcm_meta[zone.id] = (zboxes, zdens)
+                pooled.extend(zdens)
+        qcm_thr = worker_cv.adapt_qcm_threshold(pooled)
         for zone in zones:
             item = db.get(CopyItem, zone.item_id)
             if db.query(StudentResponse).filter_by(copy_item_id=item.id).first():
@@ -201,10 +214,17 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
             crop_path.write_bytes(worker_cv.encode_png(filtered))
 
             if item.response_type.startswith("qcm"):
-                boxes = (zone.meta_json or {}).get("boxes", [])
-                selected, densities = worker_cv.detect_qcm(res.warped, boxes)
+                boxes, densities = qcm_meta.get(
+                    zone.id, ((zone.meta_json or {}).get("boxes", []), None))
+                if densities is None:
+                    densities = worker_cv.qcm_densities(res.warped, boxes)
+                selected, densities, default_sel = worker_cv.select_qcm(
+                    boxes, densities, qcm_thr)
                 db.add(OcrAttempt(zone_id=zone.id, provider="cv_local",
-                                  raw_json={"densities": densities, "selected": selected},
+                                  raw_json={"densities": densities, "selected": selected,
+                                            "threshold": round(qcm_thr.value, 4),
+                                            "adapted": qcm_thr.adapted,
+                                            "default_selected": default_sel},
                                   confidence=1.0))
                 n_review += _decide_and_store(
                     db, item=item, zone=zone, student=student,
@@ -234,6 +254,8 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
                 cells_meta = (zone.meta_json or {}).get("cells", [])
                 expected_cells = item.expected_json.get("cells", [])
                 cell_texts, confs = [], []
+                k = 0  # index PLAT des cases non-"given" (row-major) : aligne
+                       # cell_texts, le crop `-c{k}.png` et scans._cell_units.
                 for ri, row in enumerate(cells_meta):
                     for ci, cell in enumerate(row):
                         # cellule "given" : déjà imprimée dans le manuel, non
@@ -245,6 +267,16 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
                         ccrop = worker_cv.crop_zone(res.warped, cell["x_pt"], cell["y_pt"],
                                                     cell["w_pt"], cell["h_pt"], padding_pt=0)
                         cfiltered = worker_cv.dropout_filter(ccrop)
+                        # crop DÉDIÉ à la relecture manuelle : la modale montre la
+                        # SEULE case corrigée (pas tout le tableau). Un peu de marge
+                        # pour ne pas rogner l'écriture qui déborde. Toutes les cases
+                        # non-"given" (même vides) pour que l'index k reste aligné.
+                        disp = worker_cv.crop_zone(res.warped, cell["x_pt"], cell["y_pt"],
+                                                   cell["w_pt"], cell["h_pt"], padding_pt=2.5)
+                        if disp.size:  # bord de page/géométrie dégénérée : repli sur le tableau entier
+                            (derived_dir / f"{zone.id}-c{k}.png").write_bytes(
+                                worker_cv.encode_png(worker_cv.dropout_filter(disp)))
+                        k += 1
                         if worker_cv.ink_ratio(cfiltered) < 0.01:
                             cell_texts.append("")
                             confs.append(1.0)
