@@ -1,5 +1,8 @@
-from fastapi import FastAPI
+import traceback as _traceback
+
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from .db import Base, SessionLocal, engine, run_migrations
 from .routers import (
@@ -7,7 +10,7 @@ from .routers import (
     students, system,
 )
 from .seed import seed
-from .services import job_worker
+from .services import errorlog, job_worker
 from .services.bootstrap import ensure_strong_secrets
 
 app = FastAPI(title="MathPrint", version="0.9.0",
@@ -24,6 +27,18 @@ for r in (setup.router, auth.router, org.router, assessments.router, scans.route
           students.router, misc.router, printing.router, system.router,
           content.router, data_admin.router):
     app.include_router(r)
+
+
+@app.exception_handler(Exception)
+async def _capture_unhandled(request: Request, exc: Exception):
+    """Toute exception NON gérée (500) est tracée dans le journal (Paramètres →
+    Journaux) avec sa stack complète, et son message réel est renvoyé au client
+    au lieu d'un « Internal Server Error » opaque. Les HTTPException (4xx/erreurs
+    métier volontaires) gardent leur propre gestionnaire et ne passent pas ici."""
+    detail = f"{type(exc).__name__}: {exc}"
+    errorlog.record(method=request.method, path=request.url.path,
+                    error=detail, traceback=_traceback.format_exc())
+    return JSONResponse(status_code=500, content={"detail": detail})
 
 
 @app.on_event("startup")

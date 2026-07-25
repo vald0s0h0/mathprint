@@ -7,8 +7,8 @@ import {
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
 import {
-  AlertTriangle, Database, FileText, FlaskConical, KeyRound, Printer, Ruler,
-  Save, SlidersHorizontal, Trash2, UserRound,
+  AlertTriangle, Database, FileText, FlaskConical, KeyRound, Printer,
+  RefreshCw, Ruler, ScrollText, Save, SlidersHorizontal, Trash2, UserRound,
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { api, getToken } from '../api'
@@ -51,6 +51,7 @@ type SystemStatus = {
   disk: { total_gb: number; free_gb: number; alert: boolean }
   last_backup: string | null
 }
+type LogEntry = { ts: string; method: string; path: string; error: string; traceback: string }
 
 export default function SettingsPage() {
   const [me, setMe] = useState<Me | null>(null)
@@ -77,6 +78,8 @@ export default function SettingsPage() {
   const [purging, setPurging] = useState(false)
   const [orphansPurgeOpen, setOrphansPurgeOpen] = useState(false)
   const [purgingOrphans, setPurgingOrphans] = useState(false)
+  const [logs, setLogs] = useState<LogEntry[]>([])
+  const [logsLoading, setLogsLoading] = useState(false)
 
   function refresh() {
     api.get<Me>('/api/auth/me').then(setMe)
@@ -224,6 +227,24 @@ export default function SettingsPage() {
     refresh()
   }
 
+  async function refreshLogs() {
+    setLogsLoading(true)
+    try {
+      const r = await api.get<{ entries: LogEntry[] }>('/api/system/logs?n=50')
+      setLogs(r.entries)
+    } catch (e) {
+      notifications.show({ color: 'red', message: (e as Error).message })
+    } finally {
+      setLogsLoading(false)
+    }
+  }
+
+  async function clearLogs() {
+    await api.post('/api/system/logs/clear')
+    setLogs([])
+    notifications.show({ color: 'green', message: 'Journal vidé' })
+  }
+
   async function registerNetwork() {
     await api.post('/api/printers/network', { name: netName, uri: netUri })
     setNetName(''); setNetUri('')
@@ -260,7 +281,8 @@ export default function SettingsPage() {
   return (
     <Stack>
       <Title order={2}>Paramètres</Title>
-      <Tabs defaultValue="compte" keepMounted={false}>
+      <Tabs defaultValue="compte" keepMounted={false}
+        onChange={(v) => { if (v === 'journaux') refreshLogs() }}>
         <Tabs.List>
           <Tabs.Tab value="compte" leftSection={<UserRound size={15} />}>Mon compte</Tabs.Tab>
           <Tabs.Tab value="api" leftSection={<KeyRound size={15} />}>API</Tabs.Tab>
@@ -269,6 +291,7 @@ export default function SettingsPage() {
           <Tabs.Tab value="pedagogie" leftSection={<SlidersHorizontal size={15} />}>Pédagogie</Tabs.Tab>
           <Tabs.Tab value="documents" leftSection={<FileText size={15} />}>Documents</Tabs.Tab>
           <Tabs.Tab value="systeme" leftSection={<Database size={15} />}>Système</Tabs.Tab>
+          <Tabs.Tab value="journaux" leftSection={<ScrollText size={15} />}>Journaux</Tabs.Tab>
           <Tabs.Tab value="donnees" leftSection={<Trash2 size={15} />}>Données</Tabs.Tab>
         </Tabs.List>
 
@@ -533,6 +556,49 @@ export default function SettingsPage() {
                 </Group>
               ))}
             </Card>
+          </Stack>
+        </Tabs.Panel>
+
+        <Tabs.Panel value="journaux" pt="md">
+          <Stack>
+            <Group justify="space-between">
+              <div>
+                <Text fw={600}>Journal des erreurs serveur</Text>
+                <Text size="sm" c="dimmed">
+                  Les 50 dernières erreurs 500 avec leur trace complète — pour diagnostiquer
+                  un bug (ex. « Valider la correction »). Reproduis l'erreur, puis actualise.
+                </Text>
+              </div>
+              <Group gap="xs">
+                <Button size="xs" variant="light" leftSection={<RefreshCw size={14} />}
+                  loading={logsLoading} onClick={refreshLogs}>Actualiser</Button>
+                <Button size="xs" variant="subtle" color="red" leftSection={<Trash2 size={14} />}
+                  onClick={clearLogs} disabled={logs.length === 0}>Vider</Button>
+              </Group>
+            </Group>
+            {logs.length === 0 ? (
+              <Text size="sm" c="dimmed" py="md">
+                Aucune erreur enregistrée. Clique « Actualiser » après avoir reproduit le problème.
+              </Text>
+            ) : logs.map((l, i) => (
+              <Card key={i} withBorder>
+                <Group gap="xs" mb={4} wrap="nowrap">
+                  <Badge color="red" variant="light">{l.method}</Badge>
+                  <Text size="sm" ff="monospace" style={{ wordBreak: 'break-all' }}>{l.path}</Text>
+                  <Text size="xs" c="dimmed" ml="auto" style={{ flexShrink: 0 }}>
+                    {new Date(l.ts).toLocaleString('fr-FR')}
+                  </Text>
+                </Group>
+                <Text size="sm" c="red" fw={600} mb={4} style={{ wordBreak: 'break-word' }}>
+                  {l.error}
+                </Text>
+                <Text component="pre" size="xs" ff="monospace" c="dimmed"
+                  style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: 0,
+                    maxHeight: 260, overflow: 'auto' }}>
+                  {l.traceback}
+                </Text>
+              </Card>
+            ))}
           </Stack>
         </Tabs.Panel>
 

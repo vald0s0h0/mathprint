@@ -206,3 +206,20 @@ def calibration_profiles(db: Session = Depends(get_db)):
              "rotation_deg": p.rotation_deg, "offset_x_mm": p.offset_x_mm,
              "offset_y_mm": p.offset_y_mm, "validated_at": str(p.validated_at)}
             for p in db.query(CalibrationProfile).all()]
+
+
+# ------------------------------------------------------------- journal d'erreurs
+
+@router.get("/logs", dependencies=[Depends(require_role("admin", "teacher"))])
+def error_logs(n: int = 50):
+    """Dernières erreurs serveur (500) avec leur traceback — diagnostic prod
+    (Paramètres → Journaux). Voir services.errorlog."""
+    from ..services import errorlog
+    return {"entries": errorlog.tail(n)}
+
+
+@router.post("/logs/clear", dependencies=[Depends(require_role("admin", "teacher"))])
+def clear_error_logs():
+    from ..services import errorlog
+    errorlog.clear()
+    return {"ok": True}
