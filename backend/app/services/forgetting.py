@@ -32,6 +32,20 @@ def recall_probability(state: StudentCompetencyState, at: datetime | None = None
     return math.exp(-days / max(0.1, state.stability))
 
 
+# Plafond de stabilité (en jours) : la stabilité est multipliée (~×2) à CHAQUE
+# rappel réussi et croissait donc SANS BORNE. Au bout d'une vingtaine de rappels
+# d'une même compétence, la date due calculée (`now + timedelta(days=t_due)`)
+# dépassait datetime.max (an 9999) -> `OverflowError: date value out of range`,
+# non gérée, à la finalisation d'un lot (services.pipeline.finalize_batch, boucle
+# de preuves, AVANT le try/except des overlays) : c'est le 500 « Valider la
+# correction » vu en prod. Une compétence « stable à 10 ans » est de toute façon
+# acquise ; on plafonne donc à 10 ans, ce qui borne t_due (~2,2 ans) bien en deçà
+# de tout dépassement de date. `MAX_DUE_DAYS` est une ceinture de sécurité
+# supplémentaire sur l'arithmétique de date (états déjà corrompus en base).
+MAX_STABILITY_DAYS = 3650.0
+MAX_DUE_DAYS = 3650.0
+
+
 def recall_quality(score_ratio: float, difficulty: int, days_elapsed: float) -> float:
     """Qualité de rappel 0-1 : exactitude pondérée par difficulté et délai."""
     diff_bonus = 1 + (difficulty - 5) * 0.05
@@ -63,18 +77,22 @@ def apply_evidence(db: Session, ev: CompetencyEvidence) -> StudentCompetencyStat
     state.mastery = round((1 - alpha) * state.mastery + alpha * q, 4)
     state.confidence = round(min(1.0, state.confidence + 0.1 * w), 4)
 
-    # stabilité : augmente après rappel réussi, diminue après échec
+    # stabilité : augmente après rappel réussi, diminue après échec — PLAFONNÉE
+    # (cf. MAX_STABILITY_DAYS) pour ne pas croître sans borne et faire déborder la
+    # date due. Le plafond s'applique aussi à une valeur déjà énorme lue en base.
     if q >= 0.6:
         state.stability = round(state.stability * (1.5 + 0.5 * q * w), 2)
     else:
         state.stability = round(max(0.5, state.stability * 0.5), 2)
+    state.stability = min(MAX_STABILITY_DAYS, state.stability)
     state.memory_difficulty = round(
         max(1.0, min(10.0, state.memory_difficulty + (0.5 - q) * 2)), 2)
 
     state.last_seen_at = now
-    # date due : R(t) = seuil  =>  t = -S * ln(seuil)
+    # date due : R(t) = seuil  =>  t = -S * ln(seuil), bornée pour ne jamais
+    # dépasser datetime.max (OverflowError sinon, cf. MAX_DUE_DAYS)
     t_due = -state.stability * math.log(settings.forgetting_threshold)
-    state.due_at = now + timedelta(days=max(0.5, t_due))
+    state.due_at = now + timedelta(days=min(MAX_DUE_DAYS, max(0.5, t_due)))
 
     db.add(CompetencyStateHistory(
         student_id=ev.student_id, competency_id=ev.competency_id,
