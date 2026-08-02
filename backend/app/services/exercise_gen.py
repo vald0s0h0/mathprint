@@ -86,7 +86,8 @@ FORBIDDEN_GEOMETRY_VERBS = {
 FORBIDDEN_GEOMETRY_VERBS |= {"place", "placer", "placez", "placé", "placée"}
 
 VALID_RESPONSE_TYPES = {"qcm_single", "qcm_multiple", "short_text", "multi_blank",
-                        "multiline_text", "table_fill", "matching", "manual_drawing"}
+                        "multiline_text", "table_fill", "matching", "manual_drawing",
+                        "checkbox_grid", "composite"}
 
 def student_level_to_difficulty(level_1_10: int) -> int:
     """Niveau élève 1-10 -> niveau d'exercice 1-5."""
@@ -211,9 +212,9 @@ def diagnose_rejection(raw: dict, competency: Competency) -> str:
     rtype = raw.get("response_type", "short_text")
     statement = statement_mod.normalize(str(raw.get("statement", "")))
     correction = str(raw.get("correction", "")).strip()
-    # table_fill : le détail vit dans row_labels/col_labels, "statement" ne
-    # porte que la consigne commune (souvent très courte, ex. "Calcule.").
-    statement_min = 3 if rtype == "table_fill" else 15
+    # table_fill / checkbox_grid : le détail vit dans les libellés de lignes,
+    # "statement" ne porte que la consigne commune (souvent très courte).
+    statement_min = 3 if rtype in ("table_fill", "checkbox_grid") else 15
     if (r := _text_reject_reason(statement, statement_min, 1200)):
         return f"énoncé invalide : {r}"
     if (r := _text_reject_reason(correction, 5, 1500)):
@@ -234,8 +235,12 @@ def diagnose_rejection(raw: dict, competency: Competency) -> str:
         return _diagnose_table_fill(answer)
     if rtype == "multi_blank":
         return _diagnose_multi_blank(statement, answer)
+    if rtype == "composite":
+        return _diagnose_composite(raw, competency)
     if rtype in ("qcm_single", "qcm_multiple"):
         return _diagnose_qcm(raw, answer, rtype)
+    if rtype == "checkbox_grid":
+        return _diagnose_grid(answer)
     if rtype == "matching":
         return _diagnose_matching(answer)
     if rtype in ("short_text", "multiline_text"):
@@ -315,6 +320,56 @@ def _diagnose_qcm(raw: dict, answer: dict, rtype: str) -> str:
     return "qcm : auto-vérification échouée (incohérence réponse attendue)"
 
 
+def _diagnose_composite(raw: dict, competency: Competency) -> str:
+    answer = raw.get("answer") or {}
+    parts = answer.get("parts") if isinstance(answer, dict) else None
+    if parts is None:
+        parts = raw.get("parts")
+    if not (isinstance(parts, list) and 2 <= len(parts) <= 8):
+        got = len(parts) if isinstance(parts, list) else 0
+        return f"composite : {got} partie(s) hors bornes [2,8]"
+    for i, p in enumerate(parts):
+        if not isinstance(p, dict):
+            return f"composite : partie #{i} n'est pas un objet"
+        prt = p.get("response_type")
+        if prt in ("composite", "multi_blank", "manual_drawing"):
+            return f"composite : partie #{i} type interdit ({prt})"
+        if prt not in VALID_RESPONSE_TYPES:
+            return f"composite : partie #{i} response_type inconnu ({prt!r})"
+        # diagnostic best-effort de la partie (l'énoncé y est plus court qu'un
+        # exercice autonome, d'où d'éventuels faux positifs sur la longueur)
+        sub = diagnose_rejection(p, competency)
+        if not sub.endswith("auto-vérification échouée") and "incohérence" not in sub:
+            return f"composite : partie #{i} ({prt}) — {sub}"
+    return "composite : une partie n'a pas passé la validation (réponse/format)"
+
+
+def _diagnose_grid(answer: dict) -> str:
+    if answer.get("type") != "grid":
+        return f"checkbox_grid : answer.type={answer.get('type')!r} (attendu 'grid')"
+    cols = [str(c).strip() for c in (answer.get("cols") or [])]
+    if not (2 <= len(cols) <= 4):
+        return f"checkbox_grid : {len(cols)} colonne(s) hors bornes [2,4]"
+    if len({c.lower() for c in cols}) != len(cols):
+        return "checkbox_grid : colonnes dupliquées"
+    rows = answer.get("rows")
+    if not (isinstance(rows, list) and 2 <= len(rows) <= 12):
+        got = len(rows) if isinstance(rows, list) else 0
+        return f"checkbox_grid : {got} ligne(s) hors bornes [2,12]"
+    for i, r in enumerate(rows):
+        if not isinstance(r, dict):
+            return f"checkbox_grid : ligne #{i} n'est pas un objet"
+        if (rr := _text_reject_reason(str(r.get("label", "")).strip(), 1, 200)):
+            return f"checkbox_grid : ligne #{i} label invalide : {rr}"
+        try:
+            k = int(r.get("correct"))
+        except (TypeError, ValueError):
+            return f"checkbox_grid : ligne #{i} 'correct' non entier"
+        if not 0 <= k < len(cols):
+            return f"checkbox_grid : ligne #{i} 'correct'={k} hors [0,{len(cols) - 1}]"
+    return "checkbox_grid : auto-vérification échouée (incohérence réponse attendue)"
+
+
 def _diagnose_matching(answer: dict) -> str:
     left = [str(c).strip() for c in (answer.get("left") or [])]
     right = [str(c).strip() for c in (answer.get("right") or [])]
@@ -390,14 +445,20 @@ def _diagnose_multi_blank(statement: str, answer: dict) -> str:
 
 def _validate_exercise(raw: dict, competency: Competency, db: Session,
                        existing_norms: set[str], *,
-                       allow_geometry_text: bool = False) -> dict | None:
+                       allow_geometry_text: bool = False,
+                       part_mode: bool = False) -> dict | None:
     """Valide un exercice candidat. Retourne le contrat interne ou None.
 
     `allow_geometry_text` : lève le rejet des verbes de construction en domaine
     géométrique. La pipeline Indigo l'active car elle conserve la figure du
     manuel comme IMAGE à côté de l'énoncé — l'élève LIT la figure et répond en
     QCM/texte, il n'y trace rien, donc un énoncé de géométrie reste corrigeable
-    (cf. services.indigo_gemini)."""
+    (cf. services.indigo_gemini).
+
+    `part_mode` : valide UNE sous-partie d'un exercice `composite` (cf. la branche
+    composite plus bas). Une partie porte un ÉNONCÉ court (la sous-question) et
+    PAS de correction propre (le composite en a une seule) — on abaisse donc le
+    plancher de longueur d'énoncé et on n'exige pas de champ `correction`."""
     if not isinstance(raw, dict):
         return None
     rtype = raw.get("response_type", "short_text")
@@ -410,10 +471,15 @@ def _validate_exercise(raw: dict, competency: Competency, db: Session,
     statement = statement_mod.normalize(str(raw.get("statement", "")))
     # même corruption \times->tabulation possible dans le corrigé (LaTeX aussi)
     correction = statement_mod.repair_latex_control_chars(str(raw.get("correction", "")).strip())
-    # table_fill : le détail vit dans row_labels/col_labels, "statement" ne
-    # porte que la consigne commune (souvent très courte, ex. "Calcule.").
-    statement_min = 3 if rtype == "table_fill" else 15
-    if not _check_text(statement, statement_min, 1200) or not _check_text(correction, 5, 1500):
+    # table_fill / checkbox_grid : le détail vit dans les libellés de lignes,
+    # "statement" ne porte que la consigne commune (souvent très courte). Une
+    # sous-partie de composite (part_mode) porte une sous-question courte.
+    statement_min = 3 if rtype in ("table_fill", "checkbox_grid") else 15
+    if part_mode:
+        statement_min = 1
+    if not _check_text(statement, statement_min, 1200):
+        return None
+    if not part_mode and not _check_text(correction, 5, 1500):
         return None
 
     is_geometry = competency.domain_code in GEOMETRY_DOMAINS
@@ -455,6 +521,43 @@ def _validate_exercise(raw: dict, competency: Competency, db: Session,
                 "response_type": rtype, "expected": expected, "grading": gpolicy,
                 "figure_json": figure_json, "kind": kind}
 
+    # ---------------- exercice composite (types mixtes par sous-question) ----------------
+    # Un composite = un CONTEXTE commun (statement) + une liste ORDONNÉE de parties,
+    # chaque partie étant une FEUILLE autonome (QCM, grille, case courte, tableau,
+    # raisonnement). Chaque partie est validée par CE MÊME validateur (part_mode) —
+    # elle porte donc son propre response_type/expected/grading, ce qui permet à la
+    # distribution de la déplier en un CopyItem normal (correction inchangée).
+    if rtype == "composite":
+        parts_in = answer.get("parts") if isinstance(answer, dict) else None
+        if parts_in is None:
+            parts_in = raw.get("parts")
+        if not (isinstance(parts_in, list) and 2 <= len(parts_in) <= 8):
+            return None
+        validated_parts, total = [], 0.0
+        for p in parts_in:
+            if not isinstance(p, dict):
+                return None
+            # pas d'imbrication, pas de case inline ni de tracé comme sous-partie :
+            # chaque partie a SA propre zone de réponse sous sa sous-question.
+            if p.get("response_type") in ("composite", "multi_blank", "manual_drawing"):
+                return None
+            pv = _validate_exercise(p, competency, db, set(),
+                                    allow_geometry_text=allow_geometry_text, part_mode=True)
+            if pv is None:
+                return None
+            pstmt = statement_mod.strip_figure_marker(
+                pv["statement"]).replace("{{blank}}", "").strip()
+            pexp = dict(pv["expected"] or {})
+            pexp.pop("inline", None)
+            validated_parts.append({"statement": pstmt, "response_type": pv["response_type"],
+                                    "expected": pexp, "grading": pv["grading"]})
+            total += float(pv["grading"].get("max_score", 1))
+        if total <= 0:
+            return None
+        expected = {"type": "composite", "parts": validated_parts}
+        gpolicy = {"max_score": total, "comparator": "composite", "parts": validated_parts}
+        return _contract(expected, gpolicy, rtype)
+
     # ---------------- QCM ----------------
     if rtype in ("qcm_single", "qcm_multiple"):
         choices = [str(c).strip() for c in (raw.get("choices") or [])]
@@ -478,6 +581,46 @@ def _validate_exercise(raw: dict, competency: Competency, db: Session,
         expected = {"type": "choice", "correct": correct}
         gpolicy = {"max_score": 1, "comparator": "qcm", "negative": 0, "choices": choices}
         return _contract(expected, gpolicy, rtype, choices=choices)
+
+    # ---------------- grille cochée (Vrai/Faux, Oui/Non) — corrigée par CV ----------------
+    if rtype == "checkbox_grid":
+        if atype != "grid":
+            return None
+        cols = [str(c).strip() for c in (answer.get("cols") or [])]
+        rows_in = answer.get("rows")
+        # 2 à 4 colonnes (typiquement Vrai/Faux, Oui/Non), distinctes, courtes ;
+        # 2 à 12 lignes = 2 à 12 sous-questions (une case cochée par ligne).
+        if not (2 <= len(cols) <= 4):
+            return None
+        if len({c.lower() for c in cols}) != len(cols):
+            return None
+        if not all(_check_text(c, 1, 24) for c in cols):
+            return None
+        if not (isinstance(rows_in, list) and 2 <= len(rows_in) <= 12):
+            return None
+        rows = []
+        for r in rows_in:
+            if not isinstance(r, dict):
+                return None
+            label = str(r.get("label", "")).strip()
+            if not _check_text(label, 1, 200):
+                return None
+            try:
+                correct = int(r.get("correct"))
+            except (TypeError, ValueError):
+                return None
+            if not 0 <= correct < len(cols):
+                return None
+            rows.append({"label": label, "correct": correct})
+        expected = {"type": "grid", "cols": cols, "rows": rows}
+        gpolicy = {"max_score": len(rows), "comparator": "grid", "cols": cols, "rows": rows}
+        # la sélection de référence (chaque ligne = sa bonne colonne) doit obtenir
+        # le maximum via le moteur de correction déterministe
+        verdict = grading.grade(expected, gpolicy, "", 0.99,
+                                selected_choices=[r["correct"] for r in rows])
+        if verdict["score"] < gpolicy["max_score"]:
+            return None
+        return _contract(expected, gpolicy, rtype)
 
     # ---------------- tableau à remplir ----------------
     if rtype == "table_fill":
@@ -799,6 +942,20 @@ _GEMINI_FORMAT_INTRO = (
 )
 
 _FORMAT_MENU = (
+    "0. EXERCICE COMPOSITE (\"composite\") — pour un exercice à PLUSIEURS "
+    "sous-questions de FORMATS DIFFÉRENTS : un CONTEXTE commun dans "
+    "\"statement\", puis une LISTE ORDONNÉE de sous-questions, CHACUNE avec SON "
+    "propre format de réponse. Utilise-le dès qu'un même exercice mélange, par "
+    "exemple, des affirmations Vrai/Faux (grille) ET une réponse chiffrée "
+    "(case). answer = {\"type\":\"composite\",\"parts\":[{\"response_type\":"
+    "\"qcm_single\"|\"qcm_multiple\"|\"checkbox_grid\"|\"short_text\"|"
+    "\"table_fill\"|\"multiline_text\",\"statement\":str (la sous-question, "
+    "courte),\"choices\":[str]?,\"answer\":{…exactement comme le format "
+    "autonome correspondant ci-dessous…}}]} (2 à 8 parties). Une partie NE peut "
+    "PAS être \"composite\", \"multi_blank\" ni \"manual_drawing\", et NE "
+    "contient PAS de \"correction\" propre (le composite a un seul "
+    "\"correction\"/\"correction_solution\") ni de {{blank}} en ligne (chaque "
+    "partie reçoit automatiquement sa zone de réponse sous sa sous-question).\n"
     "1. QCM UNIQUE / QCM MULTIPLE (\"qcm_single\"/\"qcm_multiple\") : "
     "reconnaissance, propriété, lecture de figure. 2 à 8 choix (2 pour un "
     "Vrai/Faux : choices=[\"Vrai\",\"Faux\"]), distracteurs = erreurs "
@@ -812,6 +969,19 @@ _FORMAT_MENU = (
     "sont déjà imprimées à côté de leur case à cocher — \"statement\" ne porte "
     "que la question/consigne (« Coche la bonne réponse. »), jamais leur liste "
     "recopiée en toutes lettres ni entre parenthèses.\n"
+    "1bis. GRILLE COCHÉE (\"checkbox_grid\", aussi GRATUITE que le QCM, corrigée "
+    "par lecture de cases) : une SÉRIE de sous-questions qui appellent TOUTES la "
+    "MÊME réponse fermée courte — Vrai/Faux, Oui/Non, ≤ 4 options. Chaque ligne "
+    "est une sous-question, l'élève coche UNE case par ligne. C'est le format à "
+    "PRIVILÉGIER pour une liste d'affirmations à juger (« $2$ est-il un diviseur "
+    "de $A$ ? », « $A$ est-il multiple de $7$ ? »…) : au lieu d'un long "
+    "raisonnement, chaque sous-question devient une ligne de la grille. "
+    "answer = {\"type\":\"grid\",\"cols\":[str] (2 à 4, ex. [\"Vrai\",\"Faux\"] "
+    "ou [\"Oui\",\"Non\"]),\"rows\":[{\"label\":str (l'énoncé COURT et AUTONOME "
+    "de la sous-question, SANS pastille a./b./c. — la grille numérote les "
+    "lignes),\"correct\":int (indice 0-based de la bonne colonne)}] (2 à 12 "
+    "lignes)}. \"statement\" ne porte que la consigne commune (souvent vide ou "
+    "« Pour chaque affirmation, coche la bonne case. »), jamais les lignes.\n"
     "2. CASE SIMPLE AVEC RÉPONSE COURTE (\"short_text\", EN LIGNE) : la "
     "réponse s'insère naturellement au milieu de la phrase ou de l'équation "
     "(texte à trous) — place le marqueur littéral {{blank}} à cet endroit "
@@ -1006,12 +1176,14 @@ _JSON_CONTRACT = (
     "(corrigé TRÈS SUCCINCT, 1 à 3 lignes au maximum, jamais une résolution "
     "pas-à-pas ; formules en $...$ et sauts de ligne \\n comme dans statement ; "
     "voir les consignes de rédaction pour son contenu),"
-    '"response_type":"short_text"|"qcm_single"|"qcm_multiple"|"multi_blank"|'
-    '"multiline_text"|"table_fill"|"matching"|"manual_drawing",'
+    '"response_type":"short_text"|"qcm_single"|"qcm_multiple"|"checkbox_grid"|'
+    '"multi_blank"|"multiline_text"|"table_fill"|"matching"|"manual_drawing"|"composite",'
     '"choices":[str]?,"answer":{"type":"integer"|"decimal"|"rational"|"expression"|'
-    '"text"|"choice"|"rubric"|"table"|"blanks"|"matching","value":...,"variable":str?,'
-    '"correct":[int]?,"steps":[{"description":str,"expected_text":str,"points":int}]?,'
-    '"lines":int?,"rows":int?,"cols":int?,"col_labels":[str]?,"row_labels":[str]?,'
+    '"text"|"choice"|"grid"|"rubric"|"table"|"blanks"|"matching"|"composite","value":...,"variable":str?,'
+    '"parts":[{"response_type":str,"statement":str,"choices":[str]?,"answer":{...}}]?,'
+    '"correct":[int]?,"cols":[str]?,"rows":[{"label":str,"correct":int}]?,'
+    '"steps":[{"description":str,"expected_text":str,"points":int}]?,'
+    '"lines":int?,"col_labels":[str]?,"row_labels":[str]?,'
     '"cells":[[{"type":str,"value":...}]]?,"values":[{"type":str,"value":...}]?,'
     '"left":[str]?,"right":[str]?,"pairs":[[int,int]]?},'
     '"figure":{...}?,"source_blocks":[int]?}]}'

@@ -264,6 +264,20 @@ def nudge_figure(exercise_id: str, body: CropNudge, db: Session = Depends(get_db
     return indigo.exercise_out(db, ex)
 
 
+@router.post("/exercises/{exercise_id}/figure/add")
+def add_figure(exercise_id: str, db: Session = Depends(get_db)):
+    """Ajoute une image à l'énoncé (amorcée depuis l'extrait du manuel) quand le
+    LLM n'en a rattaché aucune — l'admin affine ensuite le cadrage."""
+    ex = db.get(IndigoExercise, exercise_id)
+    if ex is None:
+        raise HTTPException(404, "Exercice introuvable")
+    try:
+        indigo.add_figure(db, ex)
+    except RuntimeError as e:
+        raise HTTPException(422, str(e))
+    return indigo.exercise_out(db, ex)
+
+
 @router.delete("/exercises/{exercise_id}/figure")
 def delete_figure(exercise_id: str, db: Session = Depends(get_db)):
     """Supprime l'image (figure) de l'énoncé."""
@@ -272,6 +286,24 @@ def delete_figure(exercise_id: str, db: Session = Depends(get_db)):
         raise HTTPException(404, "Exercice introuvable")
     indigo.remove_figure(db, ex)
     return indigo.exercise_out(db, ex)
+
+
+class RegenerateIn(BaseModel):
+    ids: list[str]
+
+
+@router.post("/exercises/regenerate")
+def regenerate_exercises(body: RegenerateIn, db: Session = Depends(get_db),
+                         user: User = Depends(require_role("admin"))):
+    """Régénère les exercices sélectionnés depuis l'OCR stocké, avec le prompt et
+    le fournisseur LLM ACTUELS (le prompt a pu changer). Lot borné pour éviter des
+    requêtes interminables."""
+    ids = [i for i in (body.ids or []) if i]
+    if not ids:
+        raise HTTPException(422, "Aucun exercice sélectionné")
+    if len(ids) > 30:
+        raise HTTPException(422, "Trop d'exercices d'un coup (max 30) — régénère par lots")
+    return indigo.regenerate_exercises(db, ids)
 
 
 @router.post("/exercises/{exercise_id}/validate")

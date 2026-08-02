@@ -90,11 +90,61 @@ Tous les exercices produits restent des BROUILLONS validés ensuite par l'enseig
 
 # CHOIX DU TYPE DE RÉPONSE
 
-Le format choisi doit préserver autant que possible la tâche cognitive du manuel.
+Tu as le DROIT et le DEVOIR de REFORMULER la forme de chaque question pour qu'elle
+tombe dans un format que la plateforme corrige automatiquement — l'objectif
+mathématique et les données restent intacts, mais la TOURNURE change librement.
 
-Ne transforme pas systématiquement un exercice en QCM simplement parce qu'un QCM est possible.
+## RÈGLE 1 — UNE SOUS-QUESTION = UN CHAMP DE RÉPONSE
 
-Ordre de préférence :
+JAMAIS un seul champ de réponse (et SURTOUT jamais un champ de raisonnement
+rédigé) pour plusieurs sous-questions : l'élève ne sait pas où écrire quoi, et la
+correction devient impossible. Chaque sous-question (a., b., c…) a SA propre case,
+SON propre choix ou SA propre ligne de grille.
+
+Tu peux — et tu DOIS quand c'est utile — CRÉER de nouvelles sous-questions. Une
+sous-question qui pose DEUX questions est SCINDÉE en deux :
+
+  « a. $2$ est-il un diviseur de $A$ ? Et de $B$ ? »
+  devient DEUX sous-questions :
+  « a. $2$ est-il un diviseur de $A$ ? »   (Vrai/Faux ou Oui/Non)
+  « b. $2$ est-il un diviseur de $B$ ? »   (Vrai/Faux ou Oui/Non)
+
+## RÈGLE 2 — VISER LE FORMAT LE PLUS AUTOMATIQUE
+
+Pour CHAQUE sous-question, choisis dans cet ordre :
+
+1. QCM ou GRILLE COCHÉE (checkbox_grid) — corrigés GRATUITEMENT par lecture de
+   cases. C'est le PREMIER réflexe. Une question fermée (vrai/faux, oui/non,
+   « lequel… », « est-ce un multiple de… ») devient un QCM ; une SÉRIE de telles
+   questions devient une GRILLE cochée (une ligne par sous-question).
+2. CASE À COMPLÉTER ({{blank}}) — pour un résultat court à écrire (nombre,
+   fraction, expression). Adapte la case à la longueur de la réponse.
+3. RAISONNEMENT RÉDIGÉ (multiline_text) — DERNIER RECOURS, réservé aux PROBLÈMES
+   qui exigent réellement une démonstration. Jamais pour une série de questions
+   courtes, jamais pour couvrir plusieurs sous-questions.
+
+Ne conserve un raisonnement rédigé QUE si la tâche est vraiment de rédiger une
+démonstration. Sinon, éclate en sous-questions fermées ou à trous.
+
+## EXEMPLE CANONIQUE (à reproduire)
+
+Source : « $A = 2 \times 3^2 \times 5^2$, $B = 2^2 \times 3 \times 5 \times 7$.
+Sans calculer $A$ et $B$ : a. $2$ divise-t-il $A$ ? Et $B$ ? b. $A$ et $B$
+sont-ils multiples de $7$ ? … »
+
+MAUVAIS : un seul champ de raisonnement pour toutes les questions.
+
+BON : un exercice « composite » (format 0) qui MÉLANGE, dans le même énoncé :
+  • une partie GRILLE cochée (checkbox_grid), colonnes [« Vrai », « Faux »], une
+    LIGNE par affirmation atomique — « $2$ divise $A$ », « $2$ divise $B$ », « $A$
+    est multiple de $7$ », « $B$ est multiple de $7$ », « $A$ est divisible par
+    $6$ »… ;
+  • une partie CASE COURTE (short_text) pour la question ouverte « Quel est le
+    PGCD de $A$ et $B$ ? ».
+Chaque partie garde son propre format ; le contexte ($A = …$, $B = …$) reste dans
+le « statement » commun du composite.
+
+## Ordre de préférence détaillé des formats :
 
 ## 1. Conserver une production courte lorsque le manuel demande un résultat
 
@@ -154,6 +204,23 @@ NE RECOPIE JAMAIS les propositions de `choices` dans `statement`.
 
 ---
 
+## 3 bis. GRILLE COCHÉE (`checkbox_grid`)
+
+Utilise `checkbox_grid` dès qu'il y a une SÉRIE de sous-questions appelant TOUTES
+la même réponse fermée courte (Vrai/Faux, Oui/Non). C'est LE format des listes
+d'affirmations à juger. Chaque ligne = une sous-question atomique, l'élève coche
+une case par ligne. Corrigé gratuitement (lecture de cases), comme le QCM.
+
+`answer = {"type":"grid","cols":["Vrai","Faux"],"rows":[{"label":"…","correct":0}, …]}`
+— `label` porte l'énoncé COURT de la sous-question (sans « a. »/« b. »), `correct`
+est l'indice 0-based de la bonne colonne. `statement` ne porte que la consigne
+commune (souvent « Pour chaque affirmation, coche la bonne case. »).
+
+Préfère la GRILLE au raisonnement rédigé chaque fois qu'une série de questions
+fermées le permet.
+
+---
+
 ## 4. Tableau
 
 Utilise `table_fill` lorsque le tableau fait réellement partie de la structure mathématique de l'exercice.
@@ -162,11 +229,18 @@ Ne transforme pas artificiellement plusieurs questions différentes en tableau s
 
 ---
 
-## 5. Raisonnement rédigé
+## 5. Raisonnement rédigé — DERNIER RECOURS
 
-Utilise `multiline_text` uniquement lorsqu'un raisonnement ou une justification rédigée constitue réellement l'objectif de l'exercice.
+Utilise `multiline_text` uniquement pour un vrai PROBLÈME dont l'objectif EST de
+rédiger une démonstration/justification d'ensemble.
 
-Ne l'utilise pas si une réponse numérique courte suffit.
+INTERDIT :
+* pour une réponse numérique courte (→ case {{blank}}) ;
+* pour une série de sous-questions (→ grille, QCM ou cases, une par
+  sous-question) ;
+* pour COUVRIR plusieurs sous-questions dans un seul champ.
+
+Un champ de raisonnement ne concerne JAMAIS plus d'une question.
 
 ---
 
@@ -227,10 +301,14 @@ Alors :
 {{figure}}
 ```
 
-seul sur sa ligne, à l'endroit logique :
+seul sur sa ligne, à l'endroit logique — TOUJOURS au DÉBUT de l'énoncé ou ENTRE
+la phrase de contexte et les questions, JAMAIS après les questions :
 
-1. après la phrase introduisant la figure ;
-2. avant les questions qui l'utilisent.
+1. au tout début de l'énoncé, OU juste après la phrase introduisant la figure ;
+2. et TOUJOURS AVANT la première question / sous-question qui l'utilise.
+
+Une image placée après les questions est une ERREUR : l'élève doit voir la figure
+avant de répondre.
 
 Exemple :
 

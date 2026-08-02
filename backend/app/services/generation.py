@@ -206,17 +206,10 @@ def generate_assessment_job(db: Session, assessment: Assessment,
             # le jour où la règle de repli change, les copies déjà imprimées ne
             # doivent pas se mettre à valoir autre chose (§ barème).
             grading_json = scoring.with_bareme(row.grading_json, row.response_type)
-            item = CopyItem(
-                copy_id=copy.id, catalog_id=catalog_refs[comp_id].id, sequence=seq,
-                difficulty=row.difficulty_level * 2, response_type=row.response_type,
-                statement=row.statement, correction=row.correction,
-                expected_json=row.expected_json, grading_json=grading_json,
-                lesson_snippet_id=lesson_snippet_id)
-            db.add(item)
-            db.flush()
             # exercices Indigo (manuel) : label « Problème/Énigme + titre » affiché
             # À CÔTÉ du numéro (préfixe de 1re ligne d'énoncé), et statut calculette
-            # dessiné en icône par pdfgen. Les tags du manuel ne sont JAMAIS affichés.
+            # dessiné en icône par pdfgen. Communs à l'exercice (et à chaque partie
+            # d'un composite). Les tags du manuel ne sont JAMAIS affichés.
             indigo_meta = ((row.raw_extract_json or {}).get("indigo")
                            if row.source == "indigo" else None)
             disp_statement, calc, is_probleme = row.statement, "autorisee", False
@@ -229,6 +222,54 @@ def generate_assessment_job(db: Session, assessment: Assessment,
                     title = (indigo_meta.get("title") or "").strip()
                     disp_statement = f"{lbl} — {title}\n{row.statement}" if title \
                         else f"{lbl}\n{row.statement}"
+            # les cartes de remplissage ne passent pas par le tirage équilibré
+            # (kind_counts), donc pas de bucket à décrémenter si retirées.
+            bucket = None if filler else distribution.exercise_bucket(row)
+
+            # EXERCICE COMPOSITE (types mixtes par sous-question) : une CopyItem
+            # PAR PARTIE (chacune un type feuille normal, corrigée par la pipeline
+            # existante) mais UNE seule carte unifiée à l'impression (cf.
+            # pdfgen._draw_composite_card). Le contexte commun et le corrigé restent
+            # portés par la carte ; chaque partie porte sa sous-question et sa zone.
+            if row.response_type == "composite":
+                parts = (row.expected_json or {}).get("parts") \
+                    or (grading_json or {}).get("parts") or []
+                part_ids, part_render = [], []
+                for pi, part in enumerate(parts):
+                    p_rt = part.get("response_type", "short_text")
+                    p_grad = scoring.with_bareme(part.get("grading") or {}, p_rt)
+                    p_item = CopyItem(
+                        copy_id=copy.id, catalog_id=catalog_refs[comp_id].id, sequence=seq,
+                        difficulty=row.difficulty_level * 2, response_type=p_rt,
+                        statement=part.get("statement", ""), correction=row.correction,
+                        expected_json=part.get("expected") or {}, grading_json=p_grad,
+                        lesson_snippet_id=(lesson_snippet_id if pi == 0 else None))
+                    db.add(p_item)
+                    db.flush()
+                    part_ids.append(p_item.id)
+                    part_render.append({"response_type": p_rt, "grading": p_grad,
+                                        "statement": part.get("statement", ""),
+                                        "expected": part.get("expected") or {}})
+                if not part_ids:
+                    return False
+                render_items.append({"kind": "exercise", "response_type": "composite",
+                                     "item_id": part_ids[0], "part_item_ids": part_ids,
+                                     "statement": disp_statement, "correction": row.correction,
+                                     "grading": {"parts": part_render},
+                                     "level5": row.difficulty_level, "calc": calc,
+                                     "is_probleme": is_probleme, "figure": row.figure_json,
+                                     "_identity": identity, "_bucket": bucket})
+                total_non_qcm += 1
+                return True
+
+            item = CopyItem(
+                copy_id=copy.id, catalog_id=catalog_refs[comp_id].id, sequence=seq,
+                difficulty=row.difficulty_level * 2, response_type=row.response_type,
+                statement=row.statement, correction=row.correction,
+                expected_json=row.expected_json, grading_json=grading_json,
+                lesson_snippet_id=lesson_snippet_id)
+            db.add(item)
+            db.flush()
             render_items.append({"kind": "exercise", "item_id": item.id,
                                  "statement": disp_statement,
                                  "correction": row.correction,
@@ -239,11 +280,7 @@ def generate_assessment_job(db: Session, assessment: Assessment,
                                  "grading": grading_json,
                                  "inline": bool((row.expected_json or {}).get("inline")),
                                  "_identity": identity,
-                                 # les cartes de remplissage ne passent pas par le
-                                 # tirage équilibré (kind_counts), donc pas de
-                                 # bucket à décrémenter si elles sont retirées —
-                                 # sinon on fausserait le mix des exercices classiques
-                                 "_bucket": None if filler else distribution.exercise_bucket(row)})
+                                 "_bucket": bucket})
             if not row.response_type.startswith("qcm"):
                 total_non_qcm += 1
             return True
@@ -296,8 +333,12 @@ def generate_assessment_job(db: Session, assessment: Assessment,
         def _rollback(before: int) -> None:
             nonlocal total_non_qcm
             for ri in render_items[before:]:
-                if ri.get("item_id"):
-                    db.query(CopyItem).filter_by(id=ri["item_id"]).delete()
+                # un composite porte PLUSIEURS CopyItem (une par partie) — toutes
+                # à supprimer ; les autres exercices, une seule.
+                ids = ri.get("part_item_ids") or ([ri["item_id"]] if ri.get("item_id") else [])
+                if ids:
+                    for iid in ids:
+                        db.query(CopyItem).filter_by(id=iid).delete()
                     if not ri["response_type"].startswith("qcm"):
                         total_non_qcm -= 1
                     if ri.get("_bucket"):
@@ -350,9 +391,11 @@ def generate_assessment_job(db: Session, assessment: Assessment,
         render_items, _ = _pack(render_items)
         seq_no = 0
         for ri in render_items:
-            if ri.get("kind") == "exercise" and ri.get("item_id"):
+            if ri.get("kind") == "exercise" and (ri.get("part_item_ids") or ri.get("item_id")):
                 seq_no += 1
-                db.query(CopyItem).filter_by(id=ri["item_id"]).update({"sequence": seq_no})
+                # un composite = UNE carte : ses parties partagent le même n° d'exercice
+                for iid in (ri.get("part_item_ids") or [ri["item_id"]]):
+                    db.query(CopyItem).filter_by(id=iid).update({"sequence": seq_no})
         db.flush()
 
         _set_progress(db, job, round(5 + 90 * (s_idx + 1) / max(1, len(students))),

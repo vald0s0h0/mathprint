@@ -76,6 +76,28 @@ def strip_figure_marker(text: str) -> str:
     before, after = split_figure_marker(text)
     return "\n".join(p for p in (before, after) if p)
 
+
+def place_figure_marker(text: str, has_figure: bool) -> str:
+    """Garde-fou déterministe de PLACEMENT de l'image (règle Indigo) : le marqueur
+    « {{figure}} » doit être AU DÉBUT de l'énoncé ou ENTRE le contexte et les
+    questions, JAMAIS après les questions. On retire le marqueur existant (où que
+    le modèle l'ait mis) puis on le repose sur sa propre ligne JUSTE AVANT la 1re
+    sous-question ; à défaut de sous-question, après la 1re ligne de contexte (ou
+    au tout début s'il n'y a qu'une ligne). Sans figure disponible, un marqueur
+    parasite est retiré. Idempotent."""
+    text = text or ""
+    if not has_figure:
+        return strip_figure_marker(text)
+    body = strip_figure_marker(text)
+    if not body:
+        return FIGURE_TOKEN
+    lines = body.split("\n")
+    first_q = next((i for i, ln in enumerate(lines) if subquestion_label(ln)), None)
+    if first_q is None:
+        first_q = 1 if len(lines) > 1 else 0
+    lines.insert(first_q, FIGURE_TOKEN)
+    return "\n".join(lines)
+
 # Une ligne ne commence JAMAIS par « - » : à l'impression, un tiret en tête de
 # ligne se confond avec le signe moins d'une formule (« -5 »). Une puce de liste
 # doit donc être « • » (de la couleur de l'exercice), jamais « - ». On convertit

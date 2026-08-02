@@ -340,7 +340,7 @@ def _open_review_for_response(db: Session, response_id: str) -> ManualReview | N
 #   partial : réponse rédigée (raisonnement, formulation, réponse unique) →
 #             les 4 boutons de crédit partiel (tous / 2⁄3 / 1⁄3 / 0).
 def _grade_mode(response_type: str) -> str:
-    if response_type in ("table_fill", "multi_blank"):
+    if response_type in ("table_fill", "multi_blank", "checkbox_grid"):
         return "cells"
     if response_type.startswith("qcm"):
         return "binary"
@@ -429,6 +429,43 @@ def _cell_units(item: CopyItem, ocr: OcrAttempt | None,
     return out
 
 
+_GRID_NONE = "—"
+
+
+def _grid_units(item: CopyItem, ocr: OcrAttempt | None,
+                decision: GradingDecision | None, selected: list | None) -> list[dict]:
+    """Une entrée PAR LIGNE d'une grille cochée (checkbox_grid) : l'énoncé de la
+    sous-question, la bonne colonne attendue, la colonne que l'élève a cochée (lue
+    par CV), le verdict automatique et, s'il existe, celui déjà posé par le
+    professeur. Corrigée LIGNE PAR LIGNE, comme un tableau."""
+    g = item.grading_json or {}
+    rows = g.get("rows") or (item.expected_json or {}).get("rows") or []
+    cols = g.get("cols") or (item.expected_json or {}).get("cols") or []
+    # sélection élève : dernier OcrAttempt (teacher/cv), sinon la réponse stockée
+    sel = ((ocr.raw_json or {}).get("grid_selected") if ocr else None)
+    if sel is None:
+        sel = selected or []
+    teacher = None
+    if decision and decision.source == "teacher":
+        teacher = (decision.evidence_json or {}).get("cell_verdicts")
+
+    def _col(k):
+        return cols[k] if isinstance(k, int) and 0 <= k < len(cols) else None
+
+    out = []
+    for i, r in enumerate(rows):
+        correct = r.get("correct")
+        s = sel[i] if i < len(sel) else -1
+        out.append({
+            "index": i, "label": str(r.get("label", f"Ligne {i + 1}")),
+            "expected_display": _col(correct) or "",
+            "ocr_text": _col(s) or _GRID_NONE,
+            "auto_ok": (s == correct),
+            "teacher_ok": (teacher[i] if teacher and i < len(teacher) else None),
+        })
+    return out
+
+
 def _review_unit(db: Session, resp: StudentResponse, item: CopyItem, copy: Copy,
                  student: Student, *, review: ManualReview | None = None,
                  decision: GradingDecision | None = None) -> dict:
@@ -485,7 +522,9 @@ def _review_unit(db: Session, resp: StudentResponse, item: CopyItem, copy: Copy,
         # JSON brut), et le détail CASE PAR CASE pour les tableaux/cases à trous
         "grade_mode": _grade_mode(item.response_type),
         "expected_display": _expected_display(item),
-        "cells": (_cell_units(item, ocr, decision)
+        "cells": (_grid_units(item, ocr, decision, resp.selected_choices)
+                  if item.response_type == "checkbox_grid"
+                  else _cell_units(item, ocr, decision)
                   if item.response_type in ("table_fill", "multi_blank") else []),
     }
 
@@ -714,23 +753,43 @@ def _apply_resolution(db: Session, resp: StudentResponse, body: ResolveIn) -> di
         if body.cell_verdicts is None:
             raise HTTPException(422, "cell_verdicts requis")
         item = db.get(CopyItem, resp.copy_item_id)
-        flat = [c for row in ((item.expected_json or {}).get("cells") or [])
-                for c in row if not c.get("given")] if item else []
         verdicts = [bool(v) for v in body.cell_verdicts]
-        if len(verdicts) != len(flat):
-            raise HTTPException(422, "nombre de cases incohérent avec l'exercice")
-        score = float(sum(verdicts))
-        max_score = float(len(verdicts))
-        evidence["cell_verdicts"] = verdicts
-        # réécrit le texte de CHAQUE case selon le verdict (juste → valeur
-        # canonique, faux → vide) pour que la marque ✓/✗ imprimée par l'overlay
-        # (dérivée du texte de cellule via grading.cell_marks) reste cohérente
-        # avec la note. Attempt « teacher » : devient le plus récent, fait foi.
-        if resp.zone_id:
-            corrected = [grading.cell_reference_text(c) if ok else ""
-                         for c, ok in zip(flat, verdicts)]
-            db.add(OcrAttempt(zone_id=resp.zone_id, provider="teacher",
-                              raw_json={"cells": corrected}, confidence=1.0))
+        if item and item.response_type == "checkbox_grid":
+            # grille cochée : une ligne = une « case ». Verdicts LIGNE PAR LIGNE.
+            rows = ((item.grading_json or {}).get("rows")
+                    or (item.expected_json or {}).get("rows") or [])
+            if len(verdicts) != len(rows):
+                raise HTTPException(422, "nombre de lignes incohérent avec l'exercice")
+            score = float(sum(verdicts))
+            max_score = float(len(verdicts))
+            evidence["cell_verdicts"] = verdicts
+            # réécrit la SÉLECTION par ligne (juste → bonne colonne, faux → une
+            # autre) pour que les marques d'overlay (dérivées de grid_selected)
+            # restent cohérentes avec la note. Attempt « teacher » = le plus récent.
+            if resp.zone_id:
+                ncols = max(1, len((item.grading_json or {}).get("cols") or []))
+                grid_sel = [r.get("correct") if ok
+                            else ((int(r.get("correct", 0)) + 1) % ncols)
+                            for r, ok in zip(rows, verdicts)]
+                db.add(OcrAttempt(zone_id=resp.zone_id, provider="teacher",
+                                  raw_json={"grid_selected": grid_sel}, confidence=1.0))
+        else:
+            flat = [c for row in ((item.expected_json or {}).get("cells") or [])
+                    for c in row if not c.get("given")] if item else []
+            if len(verdicts) != len(flat):
+                raise HTTPException(422, "nombre de cases incohérent avec l'exercice")
+            score = float(sum(verdicts))
+            max_score = float(len(verdicts))
+            evidence["cell_verdicts"] = verdicts
+            # réécrit le texte de CHAQUE case selon le verdict (juste → valeur
+            # canonique, faux → vide) pour que la marque ✓/✗ imprimée par l'overlay
+            # (dérivée du texte de cellule via grading.cell_marks) reste cohérente
+            # avec la note. Attempt « teacher » : devient le plus récent, fait foi.
+            if resp.zone_id:
+                corrected = [grading.cell_reference_text(c) if ok else ""
+                             for c, ok in zip(flat, verdicts)]
+                db.add(OcrAttempt(zone_id=resp.zone_id, provider="teacher",
+                                  raw_json={"cells": corrected}, confidence=1.0))
     if body.corrected_text is not None:
         resp.final_text = body.corrected_text
 

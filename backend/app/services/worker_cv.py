@@ -396,6 +396,32 @@ def detect_qcm(warped: np.ndarray, boxes: list[dict],
     return selected, densities
 
 
+def detect_grid(warped: np.ndarray, boxes: list[dict], thr: QcmThreshold
+                ) -> tuple[list[int] | None, list[float]]:
+    """Grille cochée (checkbox_grid) : une case cochée PAR LIGNE. Réutilise les
+    densités QCM + le seuil (adaptatif) de la page — la grille est un QCM à choix
+    unique par ligne. Retourne (sélection par ligne, densités) : `selection[i]` =
+    indice de la colonne cochée à la ligne i (-1 = rien coché). None (→ revue) si
+    une case est AMBIGUË (densité dans la bande) ou si une ligne porte PLUSIEURS
+    coches (choix multiple interdit sur une ligne)."""
+    densities = qcm_densities(warped, boxes)
+    lo, hi = thr.band
+    if any(lo <= d < hi for d in densities):
+        return None, densities
+    rows: dict[int, list[tuple[int, float]]] = {}
+    for b, d in zip(boxes, densities):
+        rows.setdefault(int(b.get("row", 0)), []).append((int(b.get("col", 0)), d))
+    n_rows = (max(rows) + 1) if rows else 0
+    selected = [-1] * n_rows
+    for ri, cells in rows.items():
+        checked = [col for col, d in cells if d >= thr.value]
+        if len(checked) > 1:
+            return None, densities          # double coche sur une ligne -> revue
+        if checked:
+            selected[ri] = checked[0]
+    return selected, densities
+
+
 def detect_matching(warped: np.ndarray, left_points: list[dict], right_points: list[dict]
                     ) -> tuple[list[list[int]] | None, float]:
     """Détection heuristique v1 du trait manuscrit reliant une pastille gauche

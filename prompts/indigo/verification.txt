@@ -162,6 +162,25 @@ Une réponse constituée d'un ENSEMBLE dont l'ordre d'écriture est libre — to
 
 ---
 
+# UNE SOUS-QUESTION = UN CHAMP DE RÉPONSE (contrôle STRUCTUREL)
+
+FAUTE GRAVE à corriger : un SEUL champ de réponse (surtout un `multiline_text` de raisonnement) qui couvre PLUSIEURS sous-questions. L'élève est perdu et la correction devient impossible.
+
+Si le candidat regroupe plusieurs sous-questions dans un champ unique, RESTRUCTURE :
+
+* une SÉRIE de sous-questions fermées (vrai/faux, oui/non, « est-ce un multiple de… ») → `checkbox_grid` (une LIGNE par affirmation) ou des QCM ;
+* des réponses courtes → une case `{{blank}}` PAR sous-question (`multi_blank`) ;
+* un exercice qui MÉLANGE des formats (ex. une grille Vrai/Faux ET une réponse chiffrée) → un `composite` (une partie par format) ;
+* `multiline_text` uniquement pour un vrai problème à démontrer, et JAMAIS pour plus d'une question.
+
+Une sous-question qui en contient deux (« $2$ divise-t-il $A$ ? Et $B$ ? ») doit être SCINDÉE.
+
+# GRILLE COCHÉE (`checkbox_grid`)
+
+`answer = {"type":"grid","cols":[str] (2-4),"rows":[{"label":str,"correct":int}] (2-12)}`. Vérifie mathématiquement la bonne colonne (`correct`, indice 0-based) de CHAQUE ligne. `statement` ne porte que la consigne commune ; les sous-questions vivent dans `rows[].label`.
+
+---
+
 # QCM
 
 Pour `qcm_single` et `qcm_multiple` :
@@ -201,7 +220,7 @@ avec `"answer": {"value": "238"}` est parfaitement valide. L'absence de `{{blank
 La figure existe réellement. Alors :
 
 * `needs_figure` doit être `true` ;
-* `statement` doit contenir EXACTEMENT un `{{figure}}`, seul sur sa ligne, après l'introduction de la figure et avant son exploitation.
+* `statement` doit contenir EXACTEMENT un `{{figure}}`, seul sur sa ligne, AU DÉBUT de l'énoncé ou ENTRE le contexte et les questions — JAMAIS après les questions. Si le candidat l'a placé après une question, REMONTE-le avant la première question.
 
 ## `has_figure = false` mais une figure est indispensable
 

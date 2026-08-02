@@ -196,7 +196,9 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
         pooled: list[float] = []
         for zone in zones:
             zitem = db.get(CopyItem, zone.item_id)
-            if zitem.response_type.startswith("qcm"):
+            # QCM et grille cochée partagent la même détection de cases : on met en
+            # commun leurs densités pour caler le seuil adaptatif de la page.
+            if zitem.response_type.startswith("qcm") or zitem.response_type == "checkbox_grid":
                 zboxes = (zone.meta_json or {}).get("boxes", [])
                 zdens = worker_cv.qcm_densities(res.warped, zboxes)
                 qcm_meta[zone.id] = (zboxes, zdens)
@@ -227,6 +229,16 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
                                             "adapted": qcm_thr.adapted,
                                             "default_selected": default_sel},
                                   confidence=1.0))
+                n_review += _decide_and_store(
+                    db, item=item, zone=zone, student=student,
+                    ocr_text="", conf=1.0, selected=selected, corr_id=corr_id)
+            elif item.response_type == "checkbox_grid":
+                boxes = (zone.meta_json or {}).get("boxes", [])
+                selected, _dens = worker_cv.detect_grid(res.warped, boxes, qcm_thr)
+                db.add(OcrAttempt(zone_id=zone.id, provider="cv_local",
+                                  raw_json={"grid_selected": selected,
+                                            "threshold": round(qcm_thr.value, 4),
+                                            "adapted": qcm_thr.adapted}, confidence=1.0))
                 n_review += _decide_and_store(
                     db, item=item, zone=zone, student=student,
                     ocr_text="", conf=1.0, selected=selected, corr_id=corr_id)
@@ -367,6 +379,19 @@ def _process_mock(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
                     selected = list({expected.get("correct", [0])[0], 1})  # double coche
                 db.add(OcrAttempt(zone_id=zone.id, provider="cv_local",
                                   raw_json={"selected": selected}, confidence=1.0))
+                n_review += _decide_and_store(db, item=item, zone=zone, student=student,
+                                              ocr_text="", conf=1.0, selected=selected,
+                                              corr_id=corr_id)
+            elif item.response_type == "checkbox_grid":
+                rows = expected.get("rows", [])
+                ncols = len(gpolicy.get("cols", [])) or 2
+                h = int(hashlib.sha256(corr_id.encode()).hexdigest(), 16)
+                # majorité juste, quelques erreurs déterministes (une case par ligne)
+                selected = [r.get("correct", 0) if (h >> i) % 5 != 0
+                            else (r.get("correct", 0) + 1) % ncols
+                            for i, r in enumerate(rows)]
+                db.add(OcrAttempt(zone_id=zone.id, provider="mock",
+                                  raw_json={"grid_selected": selected}, confidence=1.0))
                 n_review += _decide_and_store(db, item=item, zone=zone, student=student,
                                               ocr_text="", conf=1.0, selected=selected,
                                               corr_id=corr_id)
@@ -578,6 +603,34 @@ def _zone_marks(db: Session, item: CopyItem, zone: ResponseZone,
                           "w_pt": b.get("w_pt"), "h_pt": b.get("h_pt"),
                           "correction_box": b.get("correction_box"), "state": state})
         return {"kind": "qcm", "any_error": not full, "boxes": boxes}
+
+    if rtype == "checkbox_grid":
+        rows = expected.get("rows") or []
+        # sélection par ligne : dernier OcrAttempt (teacher après set_cells, sinon
+        # cv_local), puis la réponse stockée en repli
+        ocr = _latest_ocr(db, zone.id)
+        selected = ((ocr.raw_json or {}).get("grid_selected") if ocr else None)
+        if selected is None:
+            resp = db.get(StudentResponse, decision.response_id)
+            selected = list(resp.selected_choices or []) if resp else []
+        if full:                        # crédit plein : chaque ligne vaut sa bonne colonne
+            selected = [r.get("correct") for r in rows]
+        boxes = []
+        for b in meta.get("boxes", []):
+            ri, ci = b.get("row"), b.get("col")
+            sel = selected[ri] if ri is not None and ri < len(selected) else -1
+            correct = rows[ri].get("correct") if ri is not None and ri < len(rows) else None
+            if sel == ci and correct == ci:
+                state = "ok"            # cochée à raison
+            elif sel == ci:
+                state = "wrong"         # cochée à tort
+            elif correct == ci:
+                state = "missed"        # bonne réponse oubliée
+            else:
+                state = None
+            boxes.append({"x_pt": b.get("x_pt"), "y_pt": b.get("y_pt"),
+                          "w_pt": b.get("w_pt"), "h_pt": b.get("h_pt"), "state": state})
+        return {"kind": "grid", "any_error": not full, "boxes": boxes}
 
     if rtype in ("table_fill", "multi_blank"):
         ocr = _latest_ocr(db, zone.id)

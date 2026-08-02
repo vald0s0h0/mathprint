@@ -1166,6 +1166,8 @@ def _zone_height(response_type: str, choices: list[str], width: float,
     if response_type in ("qcm_single", "qcm_multiple"):
         _items, total_h, _ncols = _qcm_layout(choices, width - 2 * CARD_PAD, font_size)
         return total_h + 2.5 * mm
+    if response_type == "checkbox_grid":
+        return _grid_zone_height(width, grading.get("cols"), grading.get("rows"), font_size)
     if response_type == "short_text":
         return 0.0 if inline else 13 * mm
     if response_type == "multi_blank":
@@ -1319,6 +1321,104 @@ def _draw_matching_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float
     return {"left_points": left_pts, "right_points": right_pts}
 
 
+# ---- grille cochée (checkbox_grid) : une case cochée par ligne, lue par CV ----
+# Mêmes cases + fenêtre de détection que le QCM (worker_cv.qcm_densities/select) :
+# la grille est un QCM à choix unique PAR LIGNE. La 1re colonne porte l'énoncé de
+# la sous-question, les suivantes une case cochable par option (Vrai/Faux…).
+_GRID_HEAD_MIN_H = 5.5 * mm
+_GRID_CELL_PAD = 1.4 * mm
+_GRID_BOX = 3.2 * mm                  # case cochable imprimée (confort > QCM 2 mm)
+_GRID_OPT_MIN_W = 13.0 * mm           # largeur mini d'une colonne d'option
+_GRID_ROWLAB_MIN_W = 24.0 * mm
+_GRID_ROW_MIN_H = max(_GRID_BOX + 2 * _GRID_CELL_PAD, 7.0 * mm)
+_GRID_DETECT_MARGIN = 1.0 * mm
+
+
+def _grid_geometry(w: float, cols: list[str], rows: list[dict], font_size: int) -> dict:
+    ncols = max(1, len(cols))
+    inner = w - 2 * CARD_PAD
+    lab_fs = max(6, font_size - 1)
+    # colonne d'option = assez large pour son libellé de tête + la case
+    head_nat = max((max((ln["w"] for ln in _rich_layout(str(cl), 30 * mm, lab_fs)["lines"]),
+                        default=0.0) for cl in cols), default=0.0)
+    opt_w = max(_GRID_OPT_MIN_W, head_nat + 2 * _GRID_CELL_PAD)
+    rowlab_w = inner - ncols * opt_w
+    if rowlab_w < _GRID_ROWLAB_MIN_W:      # colonne énoncé trop étroite : on rogne les options
+        opt_w = max(_GRID_BOX + 2 * _GRID_CELL_PAD, (inner - _GRID_ROWLAB_MIN_W) / ncols)
+        rowlab_w = inner - ncols * opt_w
+    head_lays = [_rich_layout(str(cl), opt_w - 2 * mm, lab_fs) for cl in cols]
+    head_h = max([_GRID_HEAD_MIN_H] + [lay["height"] + 2 * _GRID_CELL_PAD for lay in head_lays])
+    row_lays = [_rich_layout(str(r.get("label", "")),
+                             max(8 * mm, rowlab_w - 2 * _GRID_CELL_PAD), lab_fs) for r in rows]
+    row_hs = [max(_GRID_ROW_MIN_H, lay["height"] + 2 * _GRID_CELL_PAD) for lay in row_lays]
+    body_h = head_h + sum(row_hs)
+    return {"ncols": ncols, "opt_w": opt_w, "rowlab_w": rowlab_w, "head_h": head_h,
+            "head_lays": head_lays, "row_lays": row_lays, "row_hs": row_hs,
+            "lab_fs": lab_fs, "height": body_h + 2 * mm}
+
+
+def _grid_zone_height(w: float, cols: list, rows: list, font_size: int) -> float:
+    return _grid_geometry(w, cols or [], rows or [], font_size)["height"]
+
+
+def _draw_grid_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float,
+                    cols: list[str], rows: list[dict], font_size: int) -> dict:
+    geo = _grid_geometry(w, cols, rows, font_size)
+    ncols, opt_w, rowlab_w, head_h = geo["ncols"], geo["opt_w"], geo["rowlab_w"], geo["head_h"]
+    inner = w - 2 * CARD_PAD
+    grid_w = rowlab_w + ncols * opt_w
+    x0 = x + CARD_PAD + max(0.0, (inner - grid_w) / 2)       # grille centrée
+    grid_top = y + h - 1 * mm
+    body_h = head_h + sum(geo["row_hs"])
+    grid_bottom = grid_top - body_h
+    grid_x = x0 + rowlab_w                                    # début des colonnes d'option
+
+    c.setStrokeColor(DROPOUT)
+    c.setLineWidth(0.7)
+    c.rect(x0, grid_bottom, grid_w, body_h, stroke=1, fill=0)
+    c.setLineWidth(0.5)
+    c.setFillColor(black)
+    for j, lay in enumerate(geo["head_lays"]):               # libellés de colonnes
+        _draw_rich(c, grid_x + j * opt_w + 1 * mm, grid_top - (head_h - lay["height"]) / 2,
+                   lay, centered=True, width=opt_w - 2 * mm)
+    c.setStrokeColor(DROPOUT)
+    c.line(x0, grid_top - head_h, x0 + grid_w, grid_top - head_h)
+    c.line(grid_x, grid_bottom, grid_x, grid_top)            # séparateur énoncé | options
+    for j in range(1, ncols):
+        cx = grid_x + j * opt_w
+        c.line(cx, grid_bottom, cx, grid_top)
+
+    boxes = []
+    ry_top = grid_top - head_h
+    for i, r in enumerate(rows):
+        row_h = geo["row_hs"][i]
+        if i > 0:
+            c.setStrokeColor(DROPOUT)
+            c.setLineWidth(0.5)
+            c.line(x0, ry_top, x0 + grid_w, ry_top)
+        lay = geo["row_lays"][i]                              # énoncé de la sous-question
+        c.setFillColor(black)
+        _draw_rich(c, x0 + _GRID_CELL_PAD, ry_top - (row_h - lay["height"]) / 2, lay,
+                   width=rowlab_w - 2 * _GRID_CELL_PAD)
+        for j in range(ncols):
+            cx = grid_x + j * opt_w
+            bw = bh = _GRID_BOX
+            bx = cx + (opt_w - bw) / 2
+            by = ry_top - row_h + (row_h - bh) / 2
+            c.setStrokeColor(DROPOUT)
+            c.setLineWidth(0.8)
+            c.rect(bx, by, bw, bh, stroke=1, fill=0)
+            dm = _GRID_DETECT_MARGIN
+            boxes.append({"row": i, "col": j, "index": i * ncols + j,
+                          "x_pt": bx, "y_pt": by, "w_pt": bw, "h_pt": bh,
+                          "detect": {"x_pt": bx - dm, "y_pt": by - dm,
+                                     "w_pt": bw + 2 * dm, "h_pt": bh + 2 * dm}})
+        ry_top -= row_h
+    c.setStrokeColor(black)
+    c.setFillColor(black)
+    return {"boxes": boxes, "ncols": ncols}
+
+
 def _draw_answer_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float,
                       response_type: str, choices: list[str], font_size: int,
                       grading: dict | None = None,
@@ -1364,6 +1464,9 @@ def _draw_answer_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float,
                           "correction_box": {"x_pt": corr_x, "y_pt": by,
                                              "w_pt": box, "h_pt": box}})
         meta["boxes"] = boxes
+    elif response_type == "checkbox_grid":
+        meta = _draw_grid_zone(c, x, y, w, h, grading.get("cols") or [],
+                               grading.get("rows") or [], font_size)
     elif response_type == "table_fill":
         meta = _draw_table_zone(c, x, y, w, h, grading.get("col_labels"),
                                 grading.get("row_labels"), grading.get("cells") or [],
@@ -1823,6 +1926,117 @@ def _exercise_layout(item: dict, font_size: int,
     return layout, zone_fs, zone_h, strip
 
 
+# ------------------------------------------------------------- exercice composite
+# Un composite = un CONTEXTE commun + N sous-questions, chacune de SON format,
+# dans UNE seule carte unifiée. La distribution (services.generation) a créé une
+# CopyItem PAR PARTIE (chacune un type feuille normal) : _draw_composite_card
+# renvoie donc une zone PAR PARTIE, reliée à son item_id, et la correction traite
+# chaque partie comme un exercice autonome (pipeline inchangée).
+_COMPOSITE_PART_GAP = 2.4 * mm     # blanc avant chaque sous-question
+_COMPOSITE_FRAG_GAP = 1.0 * mm     # blanc entre une sous-question et sa zone
+
+
+def _composite_parts(item: dict) -> list[dict]:
+    """Parties d'un composite : {response_type, statement, choices, grading,
+    item_id}. Contrats lus dans item['grading']['parts'] (posés par la
+    distribution), item_ids dans item['part_item_ids']."""
+    parts = (item.get("grading") or {}).get("parts") or []
+    ids = item.get("part_item_ids") or []
+    out = []
+    for k, p in enumerate(parts):
+        pg = p.get("grading") or {}
+        out.append({"response_type": p.get("response_type", "short_text"),
+                    "statement": p.get("statement", ""),
+                    "choices": pg.get("choices") or [], "grading": pg,
+                    "item_id": ids[k] if k < len(ids) else None})
+    return out
+
+
+def _composite_layout(item: dict, font_size: int, math_fs: int) -> dict:
+    badge_w, _bh, _bfs = _badge_metrics(font_size)
+    sub_color = _exercise_badge_color(item.get("level5", 3), item.get("is_probleme", False))
+    stmt = _statement_layout(item.get("statement", ""), COL_W - 2 * CARD_PAD, font_size,
+                             math_fs, item.get("figure"),
+                             first_indent=badge_w + BADGE_GAP,
+                             first_min_asc=_badge_min_asc(font_size),
+                             blank_fs=font_size + BLANK_FONT_BOOST, sub_badge_color=sub_color)
+    laid, body_h = [], stmt["height"]
+    for k, p in enumerate(_composite_parts(item)):
+        prt = p["response_type"]
+        frag = _rich_layout(f"{chr(97 + k)}. " + statement_mod.normalize(p["statement"]),
+                            COL_W - 2 * CARD_PAD, font_size, sub_badge_color=sub_color)
+        zone_fs = _zone_font_size(prt, font_size)
+        zone_h = _zone_height(prt, p["choices"], COL_W, zone_fs, p["grading"], False, sub_color)
+        laid.append({**p, "frag": frag, "zone_fs": zone_fs, "zone_h": zone_h})
+        body_h += _COMPOSITE_PART_GAP + frag["height"] + _COMPOSITE_FRAG_GAP + zone_h
+    strip = _correction_strip_layout(item.get("correction", ""), COL_W, font_size)
+    return {"stmt": stmt, "parts": laid, "body_h": body_h, "strip": strip,
+            "badge_color": sub_color}
+
+
+def _composite_card_h(cl: dict) -> float:
+    return cl["body_h"] + cl["strip"]["height"] + STRIP_GAP + 3 * CARD_PAD
+
+
+def _draw_composite_card(c: canvas.Canvas, x: float, y_top: float, w: float, seq: int,
+                         cl: dict, item: dict, tpl: dict, font_size: float) -> tuple[float, list]:
+    """Dessine la carte unifiée d'un exercice composite. Retourne (hauteur, zones)
+    — une zone PAR PARTIE : {item_id, response_type, zone_geo, meta}."""
+    border = HexColor(tpl.get("border", "#C7CDD4"))
+    radius = max(0.0, float(tpl.get("radius", 2.2))) * mm
+    strip_h = cl["strip"]["height"]
+    card_h = _composite_card_h(cl)
+    y = y_top - card_h
+    card_bottom = y + strip_h + STRIP_GAP
+    card_h_body = card_h - strip_h - STRIP_GAP
+    if tpl.get("shadow", True):
+        c.setFillColor(CARD_SHADOW)
+        c.roundRect(x + 1.1, card_bottom - 1.3, w, card_h_body, radius, stroke=0, fill=1)
+    c.setFillColor(white)
+    c.setStrokeColor(border)
+    c.setLineWidth(0.9)
+    c.roundRect(x, card_bottom, w, card_h_body, radius, stroke=1, fill=1)
+
+    stmt = cl["stmt"]
+    badge_color = cl["badge_color"]
+    ty = card_bottom + card_h_body - CARD_PAD
+    first = stmt["intro"]["lines"][0] if stmt["intro"]["lines"] else None
+    _draw_badge(c, x + CARD_PAD, ty - (first["asc"] if first else font_size * 0.78),
+                font_size, str(seq), badge_color)
+    line_y = _draw_rich(c, x + CARD_PAD, ty, stmt["intro"])
+    if stmt.get("figure_inline") and stmt["figure"]:
+        fimg, fw, fh = stmt["figure"]
+        c.drawImage(fimg, x + (w - fw) / 2, line_y - _FIG_MARKER_GAP - fh, width=fw, height=fh,
+                    mask="auto", preserveAspectRatio=True)
+        line_y -= 2 * _FIG_MARKER_GAP + fh
+        if stmt.get("intro_after"):
+            line_y = _draw_rich(c, x + CARD_PAD, line_y, stmt["intro_after"])
+    elif stmt["figure"]:
+        fimg, fw, fh = stmt["figure"]
+        c.drawImage(fimg, x + (w - fw) / 2, line_y - fh - 0.5 * mm, width=fw, height=fh,
+                    mask="auto", preserveAspectRatio=True)
+        line_y -= fh + 1 * mm
+    c.setFillColor(black)
+    if item.get("calc") in ("necessaire", "interdite"):
+        _draw_calc_icon(c, x + w - 1.4 * mm, card_bottom + card_h_body - 1.4 * mm, 3.6 * mm,
+                        forbidden=(item.get("calc") == "interdite"))
+
+    part_zones = []
+    for p in cl["parts"]:
+        line_y -= _COMPOSITE_PART_GAP
+        line_y = _draw_rich(c, x + CARD_PAD, line_y, p["frag"])
+        line_y -= _COMPOSITE_FRAG_GAP
+        zone_y = line_y - p["zone_h"]
+        meta = _draw_answer_zone(c, x, zone_y, w, p["zone_h"], p["response_type"],
+                                 p["choices"], p["zone_fs"], p["grading"], badge_color)
+        part_zones.append({"item_id": p["item_id"], "response_type": p["response_type"],
+                           "zone_geo": {"x_pt": x, "y_pt": zone_y, "w_pt": w, "h_pt": p["zone_h"]},
+                           "meta": meta})
+        line_y = zone_y
+    c.setFillColor(black)
+    return card_h, part_zones
+
+
 def estimate_item_height(item: dict, font_size: int, math_fs: int,
                          ex_tpl: dict, lesson_tpl: dict) -> float:
     """Hauteur (pt) qu'occuperait `item` (placement inclus), sans dessiner —
@@ -1836,6 +2050,8 @@ def estimate_item_height(item: dict, font_size: int, math_fs: int,
         }
         lay = _lesson_layout(blocks, COL_W, fs)
         return _lesson_card_h(lay, lesson_tpl) + GAP
+    if item.get("response_type") == "composite":
+        return _composite_card_h(_composite_layout(item, font_size, math_fs)) + GAP
     layout, _fs, zone_h, strip = _exercise_layout(item, font_size, math_fs)
     return _exercise_card_h(layout, zone_h, strip["height"], ex_tpl) + GAP
 
@@ -1910,6 +2126,21 @@ def render_copy(pdf_canvas: canvas.Canvas, *, student_name: str, class_name: str
             continue
 
         seq += 1
+        if item["response_type"] == "composite":
+            cl = _composite_layout(item, font_size, math_fs)
+            place(_composite_card_h(cl) + gap)
+            x = MARGIN + col * (col_w + COL_GAP)
+            card_h, part_zones = _draw_composite_card(
+                pdf_canvas, x, y_cursor, col_w, seq, cl, item, ex_tpl, font_size)
+            for pz in part_zones:
+                zones.append({
+                    "item_id": pz["item_id"], "page_index": page_idx,
+                    "page_id": pages_meta[page_idx]["page_id"],
+                    "type": pz["response_type"], **pz["zone_geo"], "meta": pz["meta"],
+                })
+            y_cursor -= card_h + gap
+            continue
+
         choices = item.get("choices", [])
         layout, zone_fs, zone_h, strip = _exercise_layout(item, font_size, math_fs)
         card_h = _exercise_card_h(layout, zone_h, strip["height"], ex_tpl)
@@ -1999,6 +2230,22 @@ def _draw_zone_marks(c: canvas.Canvas, z: dict, col):
         # récap de la CARTE en bas à droite : coche si zéro erreur, croix sinon
         _mark(c, z["x_pt"] + z["w_pt"] - QCM_MARK_SIZE - m, z["y_pt"] + m,
               not marks.get("any_error"), size=QCM_MARK_SIZE)
+    elif kind == "grid":
+        # grille cochée : sur CHAQUE case, coche (cochée à raison) / croix (cochée
+        # à tort) ; une bonne réponse OUBLIÉE est montrée en case REMPLIE (comme la
+        # correction QCM). Récap juste/faux une seule fois, en bas à droite.
+        for b in marks.get("boxes", []):
+            state = b.get("state")
+            box = {"x_pt": b["x_pt"], "y_pt": b["y_pt"], "w_pt": b["w_pt"], "h_pt": b["h_pt"]}
+            if state in ("ok", "wrong"):
+                _mark(c, box["x_pt"] + (box["w_pt"] - CELL_MARK_SIZE) / 2,
+                      box["y_pt"] + (box["h_pt"] - CELL_MARK_SIZE) / 2,
+                      state == "ok", size=CELL_MARK_SIZE)
+            elif state == "missed" and marks.get("any_error"):
+                _draw_corr_checkbox(c, {**box, "should_check": True}, col)
+        _mark(c, z["x_pt"] + z["w_pt"] - QCM_MARK_SIZE - m, z["y_pt"] + m,
+              not marks.get("any_error"), size=QCM_MARK_SIZE)
+        c.setFillColor(col)
     elif kind == "matching":
         c.saveState()
         c.setStrokeColor(col)

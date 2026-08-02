@@ -120,6 +120,16 @@ def cell_marks(grading: dict, cell_texts: list[str] | None) -> list[bool]:
     return marks
 
 
+def grid_rows_ok(grading: dict, selected: list[int] | None) -> list[bool]:
+    """Justesse par LIGNE d'une grille cochée (checkbox_grid), pour marquer chaque
+    ligne en overlay. `selected[i]` = colonne cochée à la ligne i (-1 = rien).
+    Une ligne sans lecture (crédit plein reconstruit ailleurs) est comptée fausse
+    faute de sélection — jamais laissée sans signe."""
+    rows = grading.get("rows") or []
+    sel = selected or []
+    return [(i < len(sel) and sel[i] == r.get("correct")) for i, r in enumerate(rows)]
+
+
 def grade(expected: dict, grading: dict, ocr_text: str, ocr_confidence: float,
           selected_choices: list[int] | None = None,
           cell_texts: list[str] | None = None,
@@ -192,6 +202,25 @@ def grade(expected: dict, grading: dict, ocr_text: str, ocr_confidence: float,
             score = max_score if chosen == correct else 0.0
             result.update(tier="A", score=score, confidence=1.0,
                           reason_code="qcm_match" if score else "qcm_wrong")
+        return result
+
+    # --- grille cochée (checkbox_grid) : une case cochée par ligne, lue par CV
+    # (comme le QCM). `selected_choices` porte ici, par POSITION, l'indice de la
+    # colonne cochée à chaque ligne (-1 = rien coché). Score = nombre de lignes
+    # dont la colonne cochée est la bonne. Une lecture ambiguë (None) part en revue. ---
+    if comparator == "grid":
+        rows = grading.get("rows") or []
+        if selected_choices is None:
+            result.update(tier="D", reason_code="grid_unreadable")
+            return result
+        score = 0.0
+        for i, r in enumerate(rows):
+            sel = selected_choices[i] if i < len(selected_choices) else -1
+            if sel == r.get("correct"):
+                score += 1.0
+        full = score >= max_score
+        result.update(tier="A", score=score, confidence=1.0,
+                      reason_code="grid_match" if full else "grid_mismatch")
         return result
 
     if not ocr_text.strip():

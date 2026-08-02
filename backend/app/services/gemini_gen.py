@@ -94,7 +94,10 @@ FILLER_RESPONSE_TYPES = {"short_text", "qcm_single", "qcm_multiple"}
 # correction humaine). L'adaptateur Sésamaths, lui, en a besoin — il subit le
 # format du manuel et n'a pas le droit d'omettre un exercice ; ici on invente,
 # donc on n'a aucune excuse pour produire un exercice non corrigeable.
-FORBIDDEN_RESPONSE_TYPES = {"matching", "manual_drawing"}
+# `composite` (types mixtes par sous-question) reste réservé à la pipeline Indigo
+# (reprise d'exercices de manuel) : on ne l'INVENTE pas ici (checkbox_grid, lui,
+# est un QCM comme un autre et reste autorisé).
+FORBIDDEN_RESPONSE_TYPES = {"matching", "manual_drawing", "composite"}
 
 # Budgets de sortie essayés dans l'ordre : le budget Gemini couvre AUSSI les
 # tokens de réflexion (2.5 Flash pense par défaut), un lot de 5 exercices dont

@@ -11,8 +11,9 @@ import {
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
 import {
-  AlertTriangle, BookOpen, Calculator, Check, CheckCircle2, ChevronLeft,
-  ImageOff, Minus, Pencil, Plus, RefreshCw, Slash, Sparkles, Trash2, UploadCloud, Wand2,
+  AlertTriangle, BookOpen, Calculator, Check, CheckCircle2, CheckSquare, ChevronLeft,
+  ImageOff, ImagePlus, Minus, Pencil, Plus, RefreshCw, RotateCcw, Slash, Sparkles,
+  Trash2, UploadCloud, Wand2,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../api'
@@ -71,11 +72,13 @@ const BADGE_LABEL: Record<string, string> = {
 const RESPONSE_TYPES = [
   { value: 'qcm_single', label: 'QCM (une réponse)' },
   { value: 'qcm_multiple', label: 'QCM (plusieurs)' },
+  { value: 'checkbox_grid', label: 'Grille cochée (Vrai/Faux…)' },
   { value: 'short_text', label: 'Réponse courte' },
   { value: 'multi_blank', label: 'Cases à trous' },
   { value: 'table_fill', label: 'Tableau à remplir' },
   { value: 'multiline_text', label: 'Raisonnement rédigé' },
   { value: 'manual_drawing', label: 'Tracé (correction manuelle)' },
+  { value: 'composite', label: 'Composite (types mixtes)' },
 ]
 const CALC_OPTS = [
   { value: 'autorisee', label: 'Autorisée' },
@@ -124,6 +127,32 @@ function ResponseZone({ ex }: { ex: Exercise }) {
           </Group>
         ))}
       </Box>
+    )
+  }
+  if (rt === 'checkbox_grid') {
+    // grille cochée : lignes = sous-questions, colonnes = options (Vrai/Faux…),
+    // une case à cocher par option. Vue élève : les bonnes réponses sont masquées.
+    const cols: string[] = ex.expected?.cols ?? []
+    const rows: { label: string; correct: number }[] = ex.expected?.rows ?? []
+    return (
+      <Table withTableBorder withColumnBorders mt={8} styles={{ td: { padding: 4 }, th: { padding: 4 } }}>
+        <Table.Thead><Table.Tr>
+          <Table.Th />
+          {cols.map((c, i) => <Table.Th key={i} ta="center"><MathText text={c} size="xs" /></Table.Th>)}
+        </Table.Tr></Table.Thead>
+        <Table.Tbody>
+          {rows.map((r, ri) => (
+            <Table.Tr key={ri}>
+              <Table.Td><MathText text={r.label} size="sm" /></Table.Td>
+              {cols.map((_c, ci) => (
+                <Table.Td key={ci} ta="center">
+                  <Box style={{ display: 'inline-block', width: 13, height: 13, border: '1.5px solid #888', borderRadius: 3 }} />
+                </Table.Td>
+              ))}
+            </Table.Tr>
+          ))}
+        </Table.Tbody>
+      </Table>
     )
   }
   if (rt === 'short_text' && !inlineBlank)
@@ -249,6 +278,37 @@ function StatementPreview({ ex, color }: { ex: Exercise; color: string }) {
   const figImg = ex.figure_url
     ? <AuthImg src={ex.figure_url} alt="figure" style={{ maxWidth: '100%', marginTop: 6, marginBottom: 6, display: 'block' }} />
     : null
+  // exercice COMPOSITE : contexte commun, puis chaque sous-question (a./b./c.)
+  // avec SON propre format de réponse — rendu comme une carte unifiée à l'impression.
+  if (ex.response_type === 'composite') {
+    const parts: any[] = ex.expected?.parts ?? []
+    return (
+      <Box>
+        <RichBody text={stripFigureToken(ex.statement)} color={color} />
+        {figImg}
+        <Stack gap={8} mt={8}>
+          {parts.map((p, i) => {
+            const g = p.grading ?? {}
+            const partEx = { ...ex, response_type: p.response_type, statement: p.statement || '',
+              expected: p.expected ?? {}, choices: g.choices ?? [],
+              col_labels: g.col_labels ?? null, row_labels: g.row_labels ?? null,
+              lines: g.lines ?? null } as Exercise
+            return (
+              <Group key={i} gap={6} align="flex-start" wrap="nowrap">
+                <Badge color={color} radius="sm" size="sm" variant="filled" style={{ flex: '0 0 auto', marginTop: 2 }}>
+                  {String.fromCharCode(97 + i)}
+                </Badge>
+                <Box style={{ flex: 1, minWidth: 0 }}>
+                  <RichBody text={p.statement || ''} color={color} />
+                  <ResponseZone ex={partEx} />
+                </Box>
+              </Group>
+            )
+          })}
+        </Stack>
+      </Box>
+    )
+  }
   // l'image se place AU marqueur {{figure}} (comme à l'impression) ; sans
   // marqueur (ou sans image), elle reste après l'énoncé (comportement d'avant).
   if (figImg && (ex.statement || '').includes(FIGURE_TOKEN)) {
@@ -320,9 +380,10 @@ function BadgeRow({ ex }: { ex: Exercise }) {
 }
 
 // ----------------------------------------------------- carte exercice (colonne)
-function ExerciseCard({ ex, onEdit, onChange, onDelete }: {
+function ExerciseCard({ ex, onEdit, onChange, onDelete, selectable, selected, onToggleSelect }: {
   ex: Exercise; onEdit: (e: Exercise) => void
   onChange: (e: Exercise) => void; onDelete: (id: string) => void
+  selectable?: boolean; selected?: boolean; onToggleSelect?: (id: string, v: boolean) => void
 }) {
   const validate = async () => {
     const updated = await api.post<Exercise>(`/api/indigo/exercises/${ex.id}/validate`)
@@ -331,7 +392,13 @@ function ExerciseCard({ ex, onEdit, onChange, onDelete }: {
   }
   const color = badgeColor(ex)
   return (
-    <Card withBorder radius="md" p="sm" style={{ width: CARD_W }}>
+    <Card withBorder radius="md" p="sm"
+      style={{ width: CARD_W, outline: selected ? '2px solid var(--mantine-color-blue-5)' : undefined }}>
+      {/* sélection (mode « régénérer ») */}
+      {selectable && (
+        <Checkbox mb={8} checked={!!selected} label={<Text size="xs" fw={600}>Sélectionner</Text>}
+          onChange={(e) => onToggleSelect?.(ex.id, e.currentTarget.checked)} />
+      )}
       {/* 1 — extrait du manuel (image de référence, non éditable) */}
       {ex.crop_url && (
         <Box mb={8}>
@@ -398,6 +465,14 @@ function EditModal({ ex, onClose, onSaved, onChange }: {
     notifications.show({ color: 'gray', message: 'Image de l\'énoncé supprimée' })
   }
 
+  const addFigure = async () => {
+    try {
+      const updated = await api.post<Exercise>(`/api/indigo/exercises/${form.id}/figure/add`)
+      setForm(updated); setFigV((v) => v + 1); onChange(updated)
+      notifications.show({ color: 'green', message: 'Image ajoutée depuis l\'extrait du manuel — ajuste le cadrage' })
+    } catch (e: any) { notifications.show({ color: 'red', message: e.message }) }
+  }
+
   const buildPatch = () => {
     const p: any = {
       statement: form.statement, response_type: form.response_type,
@@ -407,6 +482,13 @@ function EditModal({ ex, onClose, onSaved, onChange }: {
     }
     if (form.response_type.startsWith('qcm'))
       p.grading_json = { comparator: 'qcm', max_score: 1, negative: 0, choices: form.choices }
+    if (form.response_type === 'checkbox_grid') {
+      const cols = form.expected?.cols ?? []
+      const rows = form.expected?.rows ?? []
+      p.expected = { type: 'grid', cols, rows }
+      p.grading_json = { comparator: 'grid', max_score: rows.length, cols, rows,
+        bareme_points: form.effort_points }
+    }
     return p
   }
 
@@ -484,6 +566,67 @@ function EditModal({ ex, onClose, onSaved, onChange }: {
                 onClick={() => setForm({ ...form, choices: [...form.choices, ''] })}>Ajouter un choix</Button>
             </Stack>
           </Box>
+        )}
+
+        {form.response_type === 'checkbox_grid' && (() => {
+          const cols: string[] = form.expected?.cols ?? ['Vrai', 'Faux']
+          const rows: { label: string; correct: number }[] = form.expected?.rows ?? []
+          const setGrid = (next: { cols?: string[]; rows?: { label: string; correct: number }[] }) =>
+            setForm({ ...form, expected: { type: 'grid', cols: next.cols ?? cols, rows: next.rows ?? rows } })
+          return (
+            <Box>
+              <Text size="xs" fw={600} mb={4}>Colonnes (options — 2 à 4, ex. Vrai / Faux)</Text>
+              <Group gap={6} mb={8}>
+                {cols.map((c, i) => (
+                  <Group key={i} gap={2} wrap="nowrap">
+                    <TextInput size="xs" w={104} value={c} onChange={(e) => {
+                      const cc = [...cols]; cc[i] = e.currentTarget.value; setGrid({ cols: cc })
+                    }} />
+                    {cols.length > 2 && (
+                      <ActionIcon size="sm" color="red" variant="subtle" onClick={() => {
+                        const cc = cols.filter((_, j) => j !== i)
+                        const rr = rows.map((r) => ({ ...r, correct: Math.min(r.correct, cc.length - 1) }))
+                        setGrid({ cols: cc, rows: rr })
+                      }}><Minus size={12} /></ActionIcon>
+                    )}
+                  </Group>
+                ))}
+                {cols.length < 4 && (
+                  <Button size="compact-xs" variant="light" leftSection={<Plus size={12} />}
+                    onClick={() => setGrid({ cols: [...cols, ''] })}>Colonne</Button>
+                )}
+              </Group>
+              <Text size="xs" fw={600} mb={4}>Lignes (sous-questions — coche la bonne colonne)</Text>
+              <Stack gap={4}>
+                {rows.map((r, i) => (
+                  <Group key={i} gap={6} wrap="nowrap" align="center">
+                    <TextInput size="xs" style={{ flex: 1 }} placeholder="énoncé de la sous-question (LaTeX $...$)"
+                      value={r.label} onChange={(e) => {
+                        const rr = [...rows]; rr[i] = { ...r, label: e.currentTarget.value }; setGrid({ rows: rr })
+                      }} />
+                    <Select size="xs" w={104} allowDeselect={false}
+                      data={cols.map((c, j) => ({ value: String(j), label: c || `Col ${j + 1}` }))}
+                      value={String(r.correct)} onChange={(v) => {
+                        const rr = [...rows]; rr[i] = { ...r, correct: Number(v) || 0 }; setGrid({ rows: rr })
+                      }} />
+                    <ActionIcon size="sm" color="red" variant="subtle"
+                      onClick={() => setGrid({ rows: rows.filter((_, j) => j !== i) })}><Minus size={12} /></ActionIcon>
+                  </Group>
+                ))}
+                <Button size="xs" variant="light" leftSection={<Plus size={12} />}
+                  onClick={() => setGrid({ rows: [...rows, { label: '', correct: 0 }] })}>Ajouter une ligne</Button>
+              </Stack>
+            </Box>
+          )
+        })()}
+
+        {/* ajouter une image quand le LLM n'en a rattaché aucune : amorcée depuis
+            l'extrait du manuel, puis affinée avec les boutons de cadrage ci-dessous */}
+        {!form.has_figure && (
+          <Button size="xs" variant="light" leftSection={<ImagePlus size={14} />}
+            onClick={addFigure} style={{ alignSelf: 'flex-start' }}>
+            Ajouter une image (depuis l'extrait du manuel)
+          </Button>
         )}
 
         {/* figure (schéma) : SEUL crop éditable — ajuste les bords si Mistral l'a mal cadrée.
@@ -747,6 +890,9 @@ export default function Exercices() {
   const [deletingAll, setDeletingAll] = useState(false)
   const [provider, setProvider] = useState('anthropic')            // fournisseur LLM des 3 étapes
   const [providerOffline, setProviderOffline] = useState(false)
+  const [selMode, setSelMode] = useState(false)                    // mode sélection (régénérer)
+  const [selIds, setSelIds] = useState<Set<string>>(new Set())
+  const [regenerating, setRegenerating] = useState(false)
 
   const isAll = grade === 'all'
   const loadSummary = useCallback(() => {
@@ -784,7 +930,30 @@ export default function Exercices() {
     return () => clearInterval(t)
   }, [active, selected, loadExtractions, loadSummary, loadExercises])
 
-  const openComp = (r: SummaryRow) => { setSelected(r); setExercises(null); loadExercises(r.competency_id) }
+  const openComp = (r: SummaryRow) => {
+    setSelected(r); setExercises(null); setSelMode(false); setSelIds(new Set())
+    loadExercises(r.competency_id)
+  }
+  const toggleSel = (id: string, v: boolean) => setSelIds((s) => {
+    const n = new Set(s); if (v) n.add(id); else n.delete(id); return n
+  })
+  const regenerate = async () => {
+    const ids = Array.from(selIds)
+    if (!ids.length || !selected) return
+    setRegenerating(true)
+    try {
+      const r = await api.post<{ regenerated: number; failed: number }>(
+        '/api/indigo/exercises/regenerate', { ids })
+      notifications.show({
+        color: r.failed ? 'orange' : 'green',
+        message: `${r.regenerated} exercice(s) régénéré(s)`
+          + (r.failed ? `, ${r.failed} échec(s) (inchangés)` : ''),
+      })
+      setSelIds(new Set()); setSelMode(false)
+      loadExercises(selected.competency_id); loadSummary()
+    } catch (e: any) { notifications.show({ color: 'red', message: e.message }) }
+    finally { setRegenerating(false) }
+  }
   const dismissExtraction = async (id: string) => {
     // masque le bandeau côté serveur (statut « dismissed ») pour qu'il ne
     // revienne pas au rechargement, puis le retire de l'affichage
@@ -908,15 +1077,40 @@ export default function Exercices() {
         <>
           <Group justify="space-between" align="center">
             <Text fw={600}>{selected.short_id} — {selected.label}</Text>
-            {/* « Tout supprimer » : apparaît dès qu'une compétence est sélectionnée
-                (désactivé si la page n'a aucun exercice), confirmation obligatoire */}
-            <Tooltip label="Supprimer TOUS les exercices de cette compétence (brouillons ET publiés)">
-              <Button variant="light" color="red" size="xs" leftSection={<Trash2 size={16} />}
-                disabled={!exercises || exercises.length === 0}
-                onClick={() => setConfirmDeleteAll(true)}>
-                Tout supprimer{exercises && exercises.length ? ` (${exercises.length})` : ''}
-              </Button>
-            </Tooltip>
+            <Group gap={8}>
+              {/* mode sélection : régénérer les exercices choisis avec le prompt ACTUEL
+                  (utile après une évolution du prompt de génération) */}
+              {selMode && exercises && exercises.length > 0 && (
+                <>
+                  <Button size="xs" variant="subtle"
+                    onClick={() => setSelIds(new Set(exercises.map((e) => e.id)))}>
+                    Tout sélectionner
+                  </Button>
+                  <Tooltip label="Rejoue l'adaptation + la vérification depuis l'OCR stocké, avec le prompt et le fournisseur actuels. Les échecs laissent l'exercice inchangé.">
+                    <Button size="xs" color="blue" leftSection={<RotateCcw size={14} />}
+                      loading={regenerating} disabled={selIds.size === 0} onClick={regenerate}>
+                      Régénérer ({selIds.size})
+                    </Button>
+                  </Tooltip>
+                </>
+              )}
+              <Tooltip label="Sélectionner des exercices pour les régénérer avec le prompt actuel">
+                <Button size="xs" variant={selMode ? 'filled' : 'light'} color={selMode ? 'blue' : 'gray'}
+                  leftSection={<CheckSquare size={14} />}
+                  disabled={!exercises || exercises.length === 0}
+                  onClick={() => { setSelMode((m) => !m); setSelIds(new Set()) }}>
+                  {selMode ? 'Annuler' : 'Sélectionner'}
+                </Button>
+              </Tooltip>
+              {/* « Tout supprimer » : désactivé si la page n'a aucun exercice, confirmation obligatoire */}
+              <Tooltip label="Supprimer TOUS les exercices de cette compétence (brouillons ET publiés)">
+                <Button variant="light" color="red" size="xs" leftSection={<Trash2 size={16} />}
+                  disabled={!exercises || exercises.length === 0}
+                  onClick={() => setConfirmDeleteAll(true)}>
+                  Tout supprimer{exercises && exercises.length ? ` (${exercises.length})` : ''}
+                </Button>
+              </Tooltip>
+            </Group>
           </Group>
           {exercises === null && <Loader />}
           {exercises && exercises.length === 0 && (
@@ -924,7 +1118,8 @@ export default function Exercices() {
           )}
           <Group align="flex-start" gap="md" wrap="wrap">
             {exercises?.map((ex) => (
-              <ExerciseCard key={ex.id} ex={ex} onEdit={setEditing} onChange={onChange} onDelete={onDelete} />
+              <ExerciseCard key={ex.id} ex={ex} onEdit={setEditing} onChange={onChange} onDelete={onDelete}
+                selectable={selMode} selected={selIds.has(ex.id)} onToggleSelect={toggleSel} />
             ))}
           </Group>
         </>

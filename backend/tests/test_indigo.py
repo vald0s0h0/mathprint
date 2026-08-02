@@ -295,6 +295,172 @@ def test_matching_answer_schema_validates(db):
     assert valid["expected"]["pairs"] == [[0, 0], [1, 1]]
 
 
+def _grid_raw(correct=(0, 1, 0)):
+    return {"kind": "application", "effort_points": 2,
+            "statement": "Pour chaque affirmation, coche la bonne case.",
+            "response_type": "checkbox_grid",
+            "answer": {"type": "grid", "cols": ["Vrai", "Faux"],
+                       "rows": [{"label": "$2$ divise $A$", "correct": correct[0]},
+                                {"label": "$A$ est multiple de $7$", "correct": correct[1]},
+                                {"label": "$A$ est divisible par $6$", "correct": correct[2]}]},
+            "correction": "Un diviseur divise sans reste.",
+            "correction_solution": "$A=2\\times3^2\\times5^2$.",
+            "source_number": "63", "needs_figure": False}
+
+
+def test_checkbox_grid_schema_validates(db):
+    """Nouveau type `checkbox_grid` : une grille cochée (Vrai/Faux) accepte
+    2-4 colonnes, 2-12 lignes, chaque `correct` dans les bornes des colonnes."""
+    from app.services import indigo_gemini
+    comp = _comp(db)
+    raw = _grid_raw()
+    manual = {"number": "63", "statement": raw["statement"],
+              "correction": raw["correction_solution"], "has_figure": False}
+    valid = indigo_gemini._finalize(raw, comp, db, manual)
+    assert valid is not None and valid["response_type"] == "checkbox_grid"
+    assert valid["expected"]["cols"] == ["Vrai", "Faux"]
+    assert [r["correct"] for r in valid["expected"]["rows"]] == [0, 1, 0]
+    assert valid["grading"]["comparator"] == "grid"
+    assert valid["grading"]["max_score"] == 3
+
+
+def test_checkbox_grid_rejects_out_of_range_correct(db):
+    from app.services import exercise_gen
+    comp = _comp(db)
+    raw = _grid_raw(correct=(0, 5, 0))          # 5 hors [0,1]
+    assert exercise_gen._validate_exercise(raw, comp, db, set(),
+                                           allow_geometry_text=True) is None
+    assert "correct" in exercise_gen.diagnose_rejection(raw, comp)
+
+
+def test_grid_grading_scores_per_row():
+    from app.services import grading
+    g = {"max_score": 3, "comparator": "grid", "cols": ["Vrai", "Faux"],
+         "rows": [{"correct": 0}, {"correct": 1}, {"correct": 0}]}
+    assert grading.grade({}, g, "", 0.99, selected_choices=[0, 1, 0])["score"] == 3.0
+    assert grading.grade({}, g, "", 0.99, selected_choices=[0, 0, 0])["score"] == 2.0
+    # blanc (rien coché) sur une ligne = 0 pour cette ligne, pas de revue
+    assert grading.grade({}, g, "", 0.99, selected_choices=[0, -1, 0])["score"] == 2.0
+    # lecture ambiguë (None) -> revue
+    assert grading.grade({}, g, "", 0.99, selected_choices=None)["reason_code"] == "grid_unreadable"
+
+
+def test_detect_grid_picks_checked_column_per_row(monkeypatch):
+    from app.services import worker_cv
+    boxes = [{"row": 0, "col": 0}, {"row": 0, "col": 1},
+             {"row": 1, "col": 0}, {"row": 1, "col": 1}]
+    thr = worker_cv.QcmThreshold(value=0.2, band=(0.1, 0.2), adapted=False)
+    monkeypatch.setattr(worker_cv, "qcm_densities", lambda w, b: [0.5, 0.02, 0.01, 0.6])
+    sel, _d = worker_cv.detect_grid(None, boxes, thr)
+    assert sel == [0, 1]                          # ligne0 -> col0, ligne1 -> col1
+    monkeypatch.setattr(worker_cv, "qcm_densities", lambda w, b: [0.5, 0.6, 0.01, 0.6])
+    assert worker_cv.detect_grid(None, boxes, thr)[0] is None   # double coche -> revue
+    monkeypatch.setattr(worker_cv, "qcm_densities", lambda w, b: [0.15, 0.02, 0.01, 0.6])
+    assert worker_cv.detect_grid(None, boxes, thr)[0] is None   # densité dans la bande -> revue
+
+
+def _composite_raw():
+    return {"kind": "application", "effort_points": 3,
+            "statement": "On considère $A = 2 \\times 3^2$ et $B = 2^2 \\times 3 \\times 7$.",
+            "response_type": "composite",
+            "answer": {"type": "composite", "parts": [
+                {"response_type": "checkbox_grid",
+                 "statement": "Coche la bonne case.",
+                 "answer": {"type": "grid", "cols": ["Vrai", "Faux"],
+                            "rows": [{"label": "$2$ divise $A$", "correct": 0},
+                                     {"label": "$A$ est multiple de $7$", "correct": 1}]}},
+                {"response_type": "short_text", "statement": "Donne le PGCD de $A$ et $B$.",
+                 "answer": {"type": "integer", "value": 6}}]},
+            "correction": "Un diviseur divise sans reste.",
+            "correction_solution": "$PGCD(A,B)=2\\times3=6$.",
+            "source_number": "63", "needs_figure": False}
+
+
+def test_composite_validates_and_sums_parts(db):
+    """Exercice composite : chaque partie est validée comme une feuille autonome,
+    le barème total est la SOMME des parties."""
+    from app.services import indigo_gemini
+    comp = _comp(db)
+    raw = _composite_raw()
+    manual = {"number": "63", "statement": raw["statement"],
+              "correction": raw["correction_solution"], "has_figure": False}
+    valid = indigo_gemini._finalize(raw, comp, db, manual)
+    assert valid is not None and valid["response_type"] == "composite"
+    parts = valid["expected"]["parts"]
+    assert [p["response_type"] for p in parts] == ["checkbox_grid", "short_text"]
+    assert valid["grading"]["max_score"] == 3.0        # 2 (grille) + 1 (case)
+
+
+def test_composite_rejects_forbidden_part_types(db):
+    from app.services import exercise_gen
+    comp = _comp(db)
+    raw = _composite_raw()
+    raw["answer"]["parts"][1] = {"response_type": "manual_drawing",
+                                 "statement": "Trace la figure.", "answer": {}}
+    assert exercise_gen._validate_exercise(raw, comp, db, set(),
+                                           allow_geometry_text=True) is None
+
+
+def test_composite_card_renders_one_zone_per_part():
+    """Le composite s'imprime en UNE carte mais produit une zone PAR PARTIE (une
+    CopyItem par partie), chacune corrigée par la pipeline existante."""
+    import io
+    from reportlab.pdfgen import canvas
+    from app.services import pdfgen, scoring
+    grid_g = {"comparator": "grid", "max_score": 2, "cols": ["Vrai", "Faux"],
+              "rows": [{"label": "$2$ divise $A$", "correct": 0}]}
+    parts = [
+        {"response_type": "checkbox_grid", "statement": "Coche.",
+         "grading": scoring.with_bareme(grid_g, "checkbox_grid"),
+         "expected": {"type": "grid", "cols": ["Vrai", "Faux"], "rows": grid_g["rows"]}},
+        {"response_type": "short_text", "statement": "PGCD ?",
+         "grading": scoring.with_bareme({"comparator": "numeric", "max_score": 1}, "short_text"),
+         "expected": {"type": "integer", "value": 6}}]
+    item = {"kind": "exercise", "response_type": "composite", "item_id": "i0",
+            "part_item_ids": ["i0", "i1"], "statement": "Contexte de l'exercice composite.",
+            "correction": "Guide.", "grading": {"parts": parts}, "level5": 3,
+            "calc": "autorisee", "is_probleme": False, "figure": None}
+    c = canvas.Canvas(io.BytesIO())
+    zones = pdfgen.render_copy(c, student_name="T", class_name="3e", title="T",
+                               assessment_type="DS", items=[item],
+                               pages_meta=[{"page_id": "p0", "payload": "MP1|p0|0"}], font_size=9)
+    assert [z["item_id"] for z in zones] == ["i0", "i1"]
+    assert [z["type"] for z in zones] == ["checkbox_grid", "short_text"]
+    assert zones[0]["meta"].get("boxes")               # la grille a ses cases CV
+
+
+def test_place_figure_marker_never_after_questions():
+    from app.services import statement as s
+    t = "On considère le triangle $ABC$.\na. Longueur de $AB$ ? {{blank}}\n{{figure}}"
+    out = s.place_figure_marker(t, True)
+    lines = out.split("\n")
+    assert lines.index("{{figure}}") < next(i for i, ln in enumerate(lines)
+                                            if s.subquestion_label(ln))
+    # sans figure disponible : marqueur parasite retiré
+    assert "{{figure}}" not in s.place_figure_marker("Texte\n{{figure}}", False)
+
+
+def test_regenerate_leaves_exercise_unchanged_when_llm_fails(db, monkeypatch):
+    """La régénération ne DÉGRADE jamais : si l'adaptation échoue (renvoie None),
+    l'exercice existant est laissé tel quel (jamais réécrit en repli OCR brut)."""
+    from app.services import indigo, indigo_gemini
+    c = _comp(db)
+    row = IndigoExercise(id="rg1", extraction_id="e", competency_id=c.id, grade_level="3e",
+                         source_page=0, source_number="1", order_index=0,
+                         badge_type="exercice", difficulty=3, calculator="autorisee",
+                         status="validated", response_type="qcm_single",
+                         statement="Énoncé adapté.", correction_solution="Corrigé.",
+                         correction_guide="Guide.",
+                         raw_ocr_json={"statement": "OCR brut", "correction": "", "adapted": True})
+    db.add(row)
+    db.commit()
+    monkeypatch.setattr(indigo_gemini, "adapt_one", lambda *a, **k: None)
+    out = indigo.regenerate_exercises(db, ["rg1"])
+    assert out == {"regenerated": 0, "failed": 1}
+    again = db.get(IndigoExercise, "rg1")
+    assert again.statement == "Énoncé adapté." and again.status == "validated"
+
+
 def test_review_prompt_wraps_shared_contract(db):
     """Le prompt de relecture (contenu ÉDITABLE dans prompts/indigo/verification.txt)
     reste ENVELOPPÉ par le contrat partagé que le CODE ajoute (mêmes formats/règles

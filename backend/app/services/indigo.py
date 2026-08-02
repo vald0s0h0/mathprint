@@ -793,6 +793,10 @@ def _persist_exercise(db, row: IndigoExercise, manual: dict, valid: dict | None)
     row.figure_required = row.figure_required or bool(valid.get("needs_figure"))
     if row.figure_required and not row.has_figure:
         _fallback_figure_from_crop(row)
+    # garde-fou de PLACEMENT de l'image : {{figure}} au début ou avant la 1re
+    # question, jamais après (règle Indigo) — cf. statement.place_figure_marker.
+    statement = statement_mod.place_figure_marker(statement, row.has_figure)
+    row.statement = statement
     # contrat archivé : on y reporte l'énoncé et le barème APRÈS le moteur de
     # champs (ce sont eux qui seront rendus/publiés), pas la sortie brute de Gemini.
     row.payload_json = {**{k: valid.get(k) for k in
@@ -1094,6 +1098,62 @@ def remove_figure(db, ex: IndigoExercise) -> IndigoExercise:
     ex.updated_at = datetime.now(timezone.utc)
     db.commit()
     return ex
+
+
+def add_figure(db, ex: IndigoExercise) -> IndigoExercise:
+    """Ajoute une image (figure) à l'énoncé quand le LLM n'en a rattaché aucune :
+    on AMORCE la figure depuis l'extrait du manuel de l'exercice (l'admin affine
+    ensuite le cadrage via nudge_figure). Requiert un extrait (`crop_path`). Le
+    marqueur {{figure}} est (re)placé au bon endroit (début / avant les questions)."""
+    if ex.has_figure:
+        return ex
+    if not ex.crop_path or not crop_abs_path(ex.crop_path).exists():
+        raise RuntimeError("Aucun extrait de manuel pour amorcer une image sur cet exercice.")
+    _fallback_figure_from_crop(ex)      # copie l'extrait comme figure + box éditable
+    ex.statement = statement_mod.place_figure_marker(ex.statement, True)
+    ex.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    return ex
+
+
+def regenerate_exercises(db, ids: list[str]) -> dict:
+    """Régénère des exercices DEPUIS L'OCR déjà stocké (`raw_ocr_json` =
+    {statement, correction}), avec le PROMPT et le fournisseur LLM ACTUELS —
+    utile quand le prompt de génération a changé. Rejoue adaptation (solo) +
+    vérification, MET À JOUR la ligne en place (garde crop/figure/badge/
+    source_number), repasse en brouillon. Un exercice dont la régénération ÉCHOUE
+    (LLM hors-ligne, refus) est LAISSÉ INCHANGÉ (jamais dégradé en repli OCR)."""
+    n_ok = n_fail = 0
+    for ex in db.query(IndigoExercise).filter(IndigoExercise.id.in_(list(ids))).all():
+        comp = db.get(Competency, ex.competency_id)
+        raw = ex.raw_ocr_json or {}
+        manual = {"number": ex.source_number,
+                  "statement": (raw.get("statement") or ex.statement or ""),
+                  "correction": (raw.get("correction") or ex.correction_solution or ""),
+                  "has_figure": ex.has_figure}
+        final = None
+        if comp is not None:
+            try:
+                valid = indigo_gemini.adapt_one(db, comp, ex.grade_level, manual)
+                if valid is not None:
+                    reviewed = indigo_verify.review(db, comp, ex.grade_level,
+                                                    [(ex, manual, valid)])
+                    final = (reviewed.get(str(ex.source_number).strip())
+                             or indigo_verify._strip_raw(valid))
+            except Exception:
+                logger.exception("Indigo : régénération de l'exercice %s échouée", ex.id)
+                final = None
+        if final is None:                 # jamais de dégradation : on garde l'existant
+            n_fail += 1
+            continue
+        _persist_exercise(db, ex, manual, final)   # met à jour la ligne existante
+        ex.status = "draft"
+        ex.validated_by = None
+        ex.validated_at = None
+        ex.updated_at = datetime.now(timezone.utc)
+        n_ok += 1
+    db.commit()
+    return {"regenerated": n_ok, "failed": n_fail}
 
 
 def validate_exercise(db, ex: IndigoExercise, user_id: str | None) -> IndigoExercise:
