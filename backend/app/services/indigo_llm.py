@@ -85,9 +85,17 @@ def offline(db: Session) -> bool:
 def call(db: Session, stage: str, system: str, payload: dict,
          correlation_id: str) -> dict | None:
     """Appelle l'étape `stage` (« segment » | « adapt » | « review ») sur le
-    fournisseur choisi, sortie JSON. Retry sur rate-limit ; sinon lève (l'appelant
-    dégrade proprement : repli OCR brut pour l'adaptation, version adaptée gardée
-    pour la vérification, découpage géométrique pour le découpage)."""
+    fournisseur choisi, sortie JSON. Retry sur rate-limit ET sur réponse
+    TRONQUÉE (budget de sortie doublé, cf. `_output_budgets`) ; sinon lève
+    (l'appelant dégrade proprement : repli OCR brut pour l'adaptation, version
+    adaptée gardée pour la vérification, découpage géométrique pour le
+    découpage).
+
+    Le délai TOTAL est celui d'Indigo (`indigo_llm_call_timeout_s`), pas le
+    défaut global : un LOT d'exercices est une génération légitimement longue
+    (plusieurs milliers de tokens de sortie), et l'abandonner à 180 s renvoyait
+    tout le lot en adaptation UN PAR UN — 5 à 7 fois plus d'appels, budget
+    quotidien épuisé en une extraction (incident A1.3 du 02/08)."""
     if get_provider(db) == "deepseek":
         fn, model, max_tokens = (providers.deepseek_json,
                                  settings.indigo_deepseek_model,
@@ -96,13 +104,26 @@ def call(db: Session, stage: str, system: str, payload: dict,
         fn, model, max_tokens = (providers.claude_json, _anthropic_model(stage),
                                  settings.indigo_anthropic_max_output_tokens)
     op = _OPERATION[stage]
-    for attempt in range(3):
-        try:
-            return fn(db, op, system, payload, max_tokens=max_tokens,
-                      model=model, correlation_id=correlation_id)
-        except Exception as e:
-            if providers.is_rate_limited(e) and attempt < 2:
-                time.sleep(providers.retry_after_s(e, attempt))
-                continue
-            raise
+    budgets = _output_budgets(max_tokens)
+    for budget in budgets:
+        for attempt in range(3):
+            try:
+                return fn(db, op, system, payload, max_tokens=budget,
+                          model=model, correlation_id=correlation_id,
+                          total_timeout=settings.indigo_llm_call_timeout_s)
+            except Exception as e:
+                if providers.is_rate_limited(e) and attempt < 2:
+                    time.sleep(providers.retry_after_s(e, attempt))
+                    continue
+                if providers.is_truncated(e) and budget != budgets[-1]:
+                    break                       # même appel, budget de sortie plus large
+                raise
     return None
+
+
+def _output_budgets(max_tokens: int) -> tuple[int, ...]:
+    """Budgets de sortie essayés dans l'ordre : celui de la config, puis le
+    double, puis le quadruple. Un lot d'exercices riches (tableaux, grilles,
+    corrigés) dépasse régulièrement le premier — sans cette échelle, la réponse
+    tronquée faisait échouer le lot ENTIER."""
+    return (max_tokens, max_tokens * 2, max_tokens * 4)

@@ -183,15 +183,19 @@ def test_segment_corrections_by_numbers():
     assert "détail du calcul" in out["34"]
 
 
-def test_choose_batch_size_stays_5_to_7_and_fills_last_batch():
+def test_choose_batch_size_stays_in_window_and_fills_last_batch():
+    """Fenêtre ramenée à 3-4 (02/08) : un lot de 5 à 7 exercices demandait
+    couramment 12 000 à 25 000 tokens de SORTIE en une réponse — au-delà du
+    plafond de sortie et du délai d'appel, donc systématiquement en échec."""
     from app.services import indigo_gemini as g
-    assert g.choose_batch_size(6) == 6           # <= 7 -> un seul lot
-    assert g.choose_batch_size(7) == 7
-    for n in range(8, 60):
+    lo, hi = g.BATCH_MIN, g.BATCH_MAX
+    assert (lo, hi) == (3, 4)
+    assert g.choose_batch_size(hi) == hi          # <= BATCH_MAX -> un seul lot
+    for n in range(hi + 1, 60):
         s = g.choose_batch_size(n)
-        assert 5 <= s <= 7
+        assert lo <= s <= hi
         last = n % s or s
-        for alt in (5, 6, 7):
+        for alt in range(lo, hi + 1):
             assert last >= (n % alt or alt)      # aucune taille ne remplit mieux le dernier lot
 
 
@@ -391,6 +395,24 @@ def test_composite_validates_and_sums_parts(db):
     assert valid["grading"]["max_score"] == 3.0        # 2 (grille) + 1 (case)
 
 
+def test_composite_part_labels_are_stripped(db):
+    """« a. a. Donne la décomposition… » (vu sur A1.3 n°70, par intermittence
+    selon les régénérations) : le RENDU numérote déjà chaque partie
+    (pdfgen._composite_layout préfixe par sa lettre), donc une étiquette laissée
+    en tête de sous-question s'imprimait en double. Elle est retirée d'office."""
+    from app.services import indigo_gemini
+    comp = _comp(db)
+    raw = _composite_raw()
+    raw["answer"]["parts"][0]["statement"] = "a. Coche la bonne case."
+    raw["answer"]["parts"][1]["statement"] = "b. Donne le PGCD de $A$ et $B$."
+    manual = {"number": "63", "statement": raw["statement"],
+              "correction": raw["correction_solution"], "has_figure": False}
+    valid = indigo_gemini._finalize(raw, comp, db, manual)
+    assert valid is not None
+    assert [p["statement"] for p in valid["expected"]["parts"]] == [
+        "Coche la bonne case.", "Donne le PGCD de $A$ et $B$."]
+
+
 def test_composite_rejects_forbidden_part_types(db):
     from app.services import exercise_gen
     comp = _comp(db)
@@ -459,6 +481,68 @@ def test_regenerate_leaves_exercise_unchanged_when_llm_fails(db, monkeypatch):
     assert out == {"regenerated": 0, "failed": 1}
     again = db.get(IndigoExercise, "rg1")
     assert again.statement == "Énoncé adapté." and again.status == "validated"
+
+
+def test_adapt_batch_splits_in_half_instead_of_going_solo(db, monkeypatch):
+    """Incident A1.3 (02/08) : un lot en échec repartait aussitôt en N appels
+    UNITAIRES — 5 à 7 fois plus d'appels, plafond de dépense quotidien épuisé au
+    milieu de l'extraction. Un lot en échec est maintenant COUPÉ EN DEUX."""
+    from app.services import indigo_gemini
+    comp = _comp(db)
+    sizes: list[int] = []
+
+    def fake_call(db_, stage, system, payload, correlation_id):
+        n = len(payload["exercises_to_adapt"])
+        sizes.append(n)
+        if n > 1:
+            raise ValueError("Réponse Claude JSON TRONQUÉE (test)")
+        return {"exercises": []}          # feuille : appel OK, sortie vide
+
+    monkeypatch.setattr(indigo_gemini.indigo_llm, "call", fake_call)
+    manuals = [{"number": str(i), "statement": "x", "correction": "y"} for i in range(4)]
+    errors: list[str] = []
+    assert indigo_gemini.adapt_batch(db, comp, "3e", manuals, errors) == {}
+    # 4 -> 2 + 2 -> 1+1 + 1+1 : jamais 4 appels unitaires d'emblée
+    assert sizes == [4, 2, 1, 1, 2, 1, 1]
+    assert errors == []          # récupéré par le découpage : rien à signaler
+
+    # même lot, mais l'appel échoue AUSSI à l'unité : la cause est collectée pour
+    # être affichée (c'est son absence qui rendait l'incident indéchiffrable)
+    monkeypatch.setattr(indigo_gemini.indigo_llm, "call",
+                        lambda *a, **k: (_ for _ in ()).throw(ValueError("API HS")))
+    assert indigo_gemini.adapt_batch(db, comp, "3e", manuals, errors) == {}
+    assert len(errors) == 4 and all("API HS" in e for e in errors)
+
+
+def test_budget_exceeded_stops_the_run_instead_of_silently_failing(db, monkeypatch):
+    """Cause RACINE de « 1/21 adapté » : le plafond de dépense atteint faisait
+    échouer chaque appel suivant, en silence. Il doit maintenant REMONTER (arrêt
+    net) au lieu d'être avalé exercice par exercice."""
+    from app.services import indigo_gemini, providers
+    comp = _comp(db)
+
+    def broke(db_, stage, system, payload, correlation_id):
+        raise providers.BudgetExceeded("Budget anthropic quotidien atteint")
+
+    monkeypatch.setattr(indigo_gemini.indigo_llm, "call", broke)
+    manuals = [{"number": "1", "statement": "x", "correction": "y"}]
+    for fn in (lambda: indigo_gemini.adapt_batch(db, comp, "3e", manuals),
+               lambda: indigo_gemini.adapt_one(db, comp, "3e", manuals[0])):
+        try:
+            fn()
+        except providers.BudgetExceeded:
+            continue
+        raise AssertionError("BudgetExceeded doit remonter, pas être avalé")
+
+
+def test_budget_state_reports_spend_and_cap(db):
+    from app.services import providers
+    from app.models import ApiUsageEvent
+    db.add(ApiUsageEvent(provider="anthropic", model="claude-sonnet-5",
+                         operation="indigo_adapt", estimated_cost=0.75))
+    db.commit()
+    spent, cap = providers.budget_state(db, "anthropic")
+    assert spent == 0.75 and cap == settings.llm_daily_cost_limit_eur
 
 
 def test_review_prompt_wraps_shared_contract(db):
@@ -961,6 +1045,65 @@ def test_indigo_prompts_externalized_and_wrapped(db):
     assert "source_number" in sp
     for ph in ("§GRADE§", "§COMPETENCY§", "§COMPETENCY_TREE§"):
         assert ph not in sp
+
+
+def test_indigo_prompt_carries_priority_order_and_allows_drawing(db):
+    """L'ordre de priorité Indigo (cf. prompts/indigo/generation.txt) doit
+    ARRIVER au modèle, et il PRÉVAUT sur le menu partagé qui le suit — lequel
+    présente encore `matching` et `manual_drawing` comme des derniers recours.
+    Les règles de géométrie sont celles d'Indigo (le tracé est autorisé), pas
+    celles du contrat partagé (« l'élève ne trace JAMAIS rien »)."""
+    from app.services import indigo_gemini, indigo_verify
+    comp = _comp(db)
+    for sp in (indigo_gemini._system_prompt(db, comp, "3e"),
+               indigo_verify._system_prompt(db, comp, "3e")):
+        assert "manual_drawing" in sp
+        assert "ne trace, ne construit" not in sp        # règle géométrie partagée écartée
+        assert "échelon de l'ordre de priorité" in sp
+    sp = indigo_gemini._system_prompt(db, comp, "3e")
+    for fmt in ("qcm_single", "checkbox_grid", "matching", "short_text",
+                "table_fill", "multi_blank", "multiline_text", "manual_drawing"):
+        assert fmt in sp
+    assert "PRÉVAUT" in sp
+
+
+def test_manual_drawing_is_no_longer_refused(db):
+    """Le tracé/dessin est de nouveau un format valide côté Indigo (priorité 7) :
+    l'adaptation ne le rejette plus."""
+    from app.services import indigo_gemini
+    comp = _comp(db)
+    raw = {"kind": "application", "effort_points": 1,
+           "statement": "Construis la médiatrice du segment $[AB]$ ci-contre.",
+           "response_type": "manual_drawing",
+           "correction": "Reporte la même ouverture de compas de part et d'autre.",
+           "correction_solution": "Deux arcs de même rayon depuis $A$ et $B$.",
+           "source_number": "41", "needs_figure": True}
+    valid = indigo_gemini._finalize(raw, comp, db, {"number": "41", "has_figure": True})
+    assert valid is not None and valid["response_type"] == "manual_drawing"
+
+
+def test_persist_adds_missing_answer_field(db):
+    """Filet déterministe à l'enregistrement : une réponse courte SANS case en
+    reçoit une, une case orpheline dans un format à zone dessinée est retirée."""
+    row = IndigoExercise(id="fx1", extraction_id="e", competency_id="c", grade_level="3e",
+                         source_page=1, source_number="9", order_index=0)
+    valid = {"statement": "Calcule $17 \\times 14$.", "response_type": "short_text",
+             "expected": {"type": "integer", "value": 238},
+             "grading": {"max_score": 1, "comparator": "numeric"},
+             "correction": "Pose la multiplication.", "correction_solution": "$238$"}
+    indigo._persist_exercise(db, row, {"number": "9", "statement": "x", "correction": ""}, valid)
+    assert row.statement.endswith("{{blank}}")
+    assert row.expected_json["inline"] is True
+
+    row2 = IndigoExercise(id="fx2", extraction_id="e", competency_id="c", grade_level="3e",
+                          source_page=1, source_number="10", order_index=1)
+    valid2 = {"statement": "Coche les diviseurs de $12$. {{blank}}",
+              "response_type": "qcm_multiple",
+              "expected": {"type": "choice", "correct": [0]},
+              "grading": {"max_score": 1, "comparator": "qcm", "choices": ["$2$", "$5$"]},
+              "correction": "Un diviseur divise sans reste.", "correction_solution": "$2$"}
+    indigo._persist_exercise(db, row2, {"number": "10", "statement": "x", "correction": ""}, valid2)
+    assert "{{blank}}" not in row2.statement
 
 
 def test_mathtext_accepts_short_inequality_commands():

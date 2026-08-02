@@ -1,0 +1,44 @@
+{
+  // Débogage Python de l'API (breakpoints dans backend/app/**).
+  // debugpy est fourni par l'extension VS Code « Python » — rien à installer.
+  //
+  //   • « Débogue tout (API + MathALÉA + Vite) » : lance MathALÉA + Vite comme
+  //     tâches, puis démarre l'API sous le débogueur. C'est l'entrée par défaut.
+  //   • « Débogue l'API (hot-reload) » : reload actif ; breakpoints généralement
+  //     OK, mais si l'un ne s'active pas après un reload, utilise la variante
+  //     « sans reload » ci-dessous (attache 100% fiable).
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Débogue l'API (hot-reload)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": ["app.main:app", "--reload", "--reload-dir", "app", "--port", "8787"],
+      "cwd": "${workspaceFolder}/backend",
+      "python": "${workspaceFolder}/backend/.venv/bin/python",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "subProcess": true
+    },
+    {
+      "name": "Débogue l'API (sans reload — breakpoints fiables)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": ["app.main:app", "--port", "8787"],
+      "cwd": "${workspaceFolder}/backend",
+      "python": "${workspaceFolder}/backend/.venv/bin/python",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Débogue tout (API + MathALÉA + Vite)",
+      "configurations": ["Débogue l'API (hot-reload)"],
+      "preLaunchTask": "dev: mathalea + web",
+      "stopAll": true
+    }
+  ]
+}

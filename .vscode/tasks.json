@@ -1,0 +1,96 @@
+{
+  // Environnement de dev natif (hot-reload) — voir DEV_LOCAL.md.
+  //   MathALÉA :8123  →  API :8787 (uvicorn --reload)  →  Vite :5173 (proxy /api)
+  //
+  // ►►► LE PLUS SIMPLE : Cmd+Shift+B  (= tâche « Dev ▶ » ci-dessous) ◄◄◄
+  //     Un seul terminal, les 3 services, Ctrl+C arrête TOUT d'un coup.
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Dev ▶ (tout, 1 terminal)",
+      "detail": "Lance MathALÉA + API (hot-reload) + Vite dans UN terminal. Ctrl+C arrête tout.",
+      "type": "shell",
+      "command": "./scripts/dev.sh",
+      "options": { "cwd": "${workspaceFolder}" },
+      "isBackground": true,
+      "problemMatcher": {
+        "pattern": { "regexp": "^\\s*$", "file": 1, "location": 2, "message": 3 },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "\\[dev\\]",
+          "endsPattern": "les 3 services tournent"
+        }
+      },
+      "presentation": { "reveal": "always", "panel": "dedicated", "focus": true },
+      // Cmd+Shift+B lance cette tâche.
+      "group": { "kind": "build", "isDefault": true }
+    },
+    {
+      "label": "dev: mathalea",
+      "detail": "Service MathALÉA headless (génération déterministe) sur :8123",
+      "type": "shell",
+      "command": "npm start",
+      "options": { "cwd": "${workspaceFolder}/mathalea-service" },
+      "isBackground": true,
+      "problemMatcher": {
+        "pattern": { "regexp": "^\\s*$", "file": 1, "location": 2, "message": 3 },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "mathalea-service",
+          "endsPattern": "sur :\\d+"
+        }
+      },
+      "presentation": { "group": "dev", "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "dev: api",
+      "detail": "API FastAPI en hot-reload (uvicorn --reload, watch backend/app) sur :8787",
+      "type": "shell",
+      // reload scopé sur le package `app` : sinon les écritures dans
+      // mathprint.db / .venv / data déclencheraient des reloads en boucle.
+      "command": ".venv/bin/uvicorn app.main:app --reload --reload-dir app --port 8787",
+      "options": { "cwd": "${workspaceFolder}/backend" },
+      "isBackground": true,
+      "problemMatcher": {
+        "pattern": { "regexp": "^\\s*$", "file": 1, "location": 2, "message": 3 },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "Uvicorn running|Started reloader",
+          "endsPattern": "Application startup complete|Uvicorn running"
+        }
+      },
+      "presentation": { "group": "dev", "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "dev: web",
+      "detail": "Interface Vite (HMR) sur :5173, proxy /api → :8787",
+      "type": "shell",
+      "command": "npm run dev",
+      "options": { "cwd": "${workspaceFolder}/frontend" },
+      "isBackground": true,
+      "problemMatcher": {
+        "pattern": { "regexp": "^\\s*$", "file": 1, "location": 2, "message": 3 },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "VITE",
+          "endsPattern": "ready in|Local:"
+        }
+      },
+      "presentation": { "group": "dev", "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "Dev: tout lancer (3 terminaux séparés)",
+      "detail": "Alternative : MathALÉA + API + Vite dans 3 terminaux dédiés (logs séparés)",
+      "dependsOn": ["dev: mathalea", "dev: api", "dev: web"],
+      "dependsOrder": "parallel",
+      "problemMatcher": []
+    },
+    {
+      "label": "dev: mathalea + web",
+      "detail": "MathALÉA + Vite seuls — l'API est lancée par le débogueur (voir launch.json)",
+      "dependsOn": ["dev: mathalea", "dev: web"],
+      "dependsOrder": "parallel",
+      "problemMatcher": []
+    }
+  ]
+}

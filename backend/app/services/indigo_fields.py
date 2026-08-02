@@ -4,7 +4,15 @@ Après que Gemini a « mis au propre » un exercice du manuel (services.
 indigo_gemini) et qu'il a passé le validateur partagé (services.exercise_gen),
 on ajuste ICI, de façon DÉTERMINISTE, la forme des cases que l'élève remplira —
 en fonction de la SEULE réponse attendue, jamais du type d'exercice (« seuls les
-tags/metadata changent »). Trois décisions, robustes et idempotentes :
+tags/metadata changent »). Quatre décisions, robustes et idempotentes :
+
+0. PRÉSENCE DU CHAMP (cf. `ensure_answer_field`) : le prompt impose au modèle de
+   poser LUI-MÊME le champ de réponse de CHAQUE question et sous-question — il
+   n'existe plus d'exercice « sans case, la plateforme en ajoutera une ». Ce
+   moteur est le FILET qui le vérifie : une réponse courte sans case reçoit sa
+   case en fin d'énoncé, et un marqueur resté dans l'énoncé d'un format à zone
+   dessinée (QCM, grille, tableau, appariement, raisonnement, tracé) est retiré —
+   il imprimerait une case ORPHELINE que la correction ne relit jamais.
 
 1. TAILLE DE CHAQUE CASE (cf. statement.MINI_TOKEN / WIDE_TOKEN) :
    • réponse = petit entier (0-99) ET la case est COLLÉE à une formule
@@ -40,6 +48,12 @@ from . import statement as statement_mod
 BLANK = statement_mod.BLANK_TOKEN
 MINI = statement_mod.MINI_TOKEN
 WIDE = statement_mod.WIDE_TOKEN
+
+# Seuls formats dont le champ de réponse vit DANS le fil du texte. Tous les
+# autres reçoivent une zone dessinée sous l'énoncé par le rendu (grille de QCM,
+# grille cochée, tableau, colonnes à relier, lignes de raisonnement, cadre de
+# tracé) : leur énoncé ne doit porter AUCUN marqueur de case.
+INLINE_TYPES = frozenset({"short_text", "multi_blank"})
 
 # Estimation du nombre de lignes d'un raisonnement rédigé : largeur utile d'une
 # carte à ~48 caractères imprimés par ligne, majorée d'un facteur « écriture
@@ -186,6 +200,109 @@ def _redistribute_subquestions(statement: str, n_values: int) -> str:
                      if ln and (k in label_set or not _BARE_LEADIN.match(ln)))
 
 
+# ------------------------------------------------------------ présence du champ de réponse
+
+_MULTISPACE = re.compile(r"[ \t]{2,}")
+
+
+def _strip_tokens(statement: str) -> str:
+    """Retire toute marque de case d'un énoncé (et referme l'espace laissé)."""
+    for tok in statement_mod.ANSWER_TOKENS:
+        statement = statement.replace(tok, "")
+    return "\n".join(_MULTISPACE.sub(" ", ln).rstrip()
+                     for ln in statement.split("\n"))
+
+
+def _append_blank(statement: str) -> str:
+    """Pose une case en fin du DERNIER bloc de texte de l'énoncé — jamais sur la
+    ligne du marqueur de figure, qui n'est pas une question."""
+    lines = (statement or "").split("\n")
+    for i in range(len(lines) - 1, -1, -1):
+        if lines[i].strip() and not statement_mod.has_figure_marker(lines[i]):
+            lines[i] = lines[i].rstrip() + " " + BLANK
+            return "\n".join(lines)
+    return f"{statement}\n{BLANK}".strip()
+
+
+def ensure_answer_field(statement: str, response_type: str,
+                        expected: dict | None) -> tuple[str, dict]:
+    """Garantit que l'exercice porte EXACTEMENT le champ de réponse de son
+    format. Retourne (statement, expected) — `expected` peut gagner "inline"
+    (la case posée se lit dans le fil du texte, cf. pdfgen).
+
+    C'est un FILET, pas la règle : le prompt exige déjà du modèle qu'il pose le
+    champ de chaque question et sous-question. Ici on ne fait que rattraper les
+    deux dérives que le validateur laisse passer — une réponse courte SANS case
+    (l'élève ne sait pas où écrire) et une case ORPHELINE dans un format à zone
+    dessinée (elle serait imprimée mais jamais relue par la correction)."""
+    expected = dict(expected or {})
+    statement = statement or ""
+    if response_type not in INLINE_TYPES:
+        return _strip_tokens(statement), expected
+    if response_type == "short_text" and not statement_mod.has_answer_field(statement):
+        statement = _append_blank(statement)
+        expected["inline"] = True
+    return statement, expected
+
+
+def _n_subquestions(statement: str) -> int:
+    return sum(1 for ln in statement_mod.lines(statement)
+               if statement_mod.subquestion_label(ln))
+
+
+# Colonnes d'une grille qui trahissent un simple JUGEMENT : ce cas doit être un
+# qcm_multiple « Coche les… » (bien plus compact à l'impression, cf. prompt
+# « Priorité 1b »). La grille reste légitime pour 4 colonnes, ou pour des
+# colonnes-CATÉGORIES (numérateur/dénominateur, pair/impair…).
+_JUDGEMENT_COLS = ({"vrai", "faux"}, {"oui", "non"}, {"true", "false"})
+
+
+def _is_judgement_grid(expected: dict) -> bool:
+    cols = {mathrender.strip_math(str(c)).strip().lower()
+            for c in (expected.get("cols") or [])}
+    return len(cols) <= 3 and any(cols == j for j in _JUDGEMENT_COLS)
+
+
+def audit(statement: str, response_type: str, expected: dict | None,
+          part: bool = False) -> list[str]:
+    """Anomalies de champ de réponse détectables SANS modèle, journalisées à
+    l'enregistrement. JAMAIS bloquantes : un exercice n'est pas dégradé pour ça
+    (`ensure_answer_field` a déjà réparé ce qui est réparable) — c'est un signal
+    de qualité du prompt d'adaptation, relu dans les journaux.
+
+    `part=True` : on audite une SOUS-QUESTION de composite, dont la zone de
+    réponse est dessinée sous son énoncé — elle n'a donc jamais de case en ligne,
+    et son absence n'est pas une anomalie."""
+    statement = statement or ""
+    expected = expected or {}
+    out: list[str] = []
+    n_blanks = sum(statement.count(tok) for tok in statement_mod.ANSWER_TOKENS)
+    n_sub = _n_subquestions(statement)
+    if response_type not in INLINE_TYPES and n_blanks:
+        out.append(f"{n_blanks} case(s) orpheline(s) dans un énoncé {response_type} (retirées)")
+    if response_type == "short_text" and not n_blanks and not part:
+        out.append("réponse courte sans case (posée d'office en fin d'énoncé)")
+    if response_type in INLINE_TYPES:
+        n_values = len(_ordered_values(response_type, expected) or [])
+        if n_sub >= 2 and n_values < n_sub:
+            out.append(f"{n_sub} sous-questions pour {n_values} réponse(s) attendue(s)")
+    if response_type == "multiline_text" and n_sub >= 2:
+        out.append(f"un seul raisonnement rédigé pour {n_sub} sous-questions")
+    if response_type == "checkbox_grid" and _is_judgement_grid(expected):
+        n_rows = len(expected.get("rows") or [])
+        out.append(f"grille de jugement {'/'.join(expected.get('cols') or [])} sur "
+                   f"{n_rows} lignes — un qcm_multiple « Coche les… » tiendrait en "
+                   f"2 à 3 colonnes")
+    # un composite porte SES sous-questions dans expected["parts"] : chacune est
+    # une feuille autonome, donc auditée par le MÊME contrôle (c'est dans une
+    # partie de composite qu'est passée la grille Oui/Non de l'exercice 70).
+    for sub in (expected.get("parts") or []):
+        for msg in audit(sub.get("statement", ""), sub.get("response_type", ""),
+                         sub.get("expected"), part=True):
+            out.append(f"sous-question « {str(sub.get('statement', ''))[:40]} » : {msg}")
+    return out
+
+
 # ------------------------------------------------------------------- raisonnement : nombre de lignes
 
 def _steps(expected: dict, grading: dict) -> list[dict]:
@@ -219,23 +336,28 @@ def estimate_reasoning_lines(expected: dict, grading: dict) -> int:
 # ----------------------------------------------------------------------------------- point d'entrée
 
 def adapt_fields(statement: str, response_type: str,
-                 expected: dict | None, grading: dict | None) -> tuple[str, dict]:
+                 expected: dict | None, grading: dict | None) -> tuple[str, dict, dict]:
     """Adapte les champs de réponse d'un exercice Indigo. Retourne
-    (statement, grading) — jamais d'exception : en cas d'imprévu on rend l'entrée
-    inchangée (le rendu sait déjà traiter {{blank}} et un multiline_text)."""
+    (statement, expected, grading) — jamais d'exception : en cas d'imprévu on
+    rend l'entrée inchangée (le rendu sait déjà traiter {{blank}} et un
+    multiline_text)."""
     grading = dict(grading or {})
+    expected = dict(expected or {})
     try:
-        if response_type == "multiline_text":
-            grading["lines"] = estimate_reasoning_lines(expected or {}, grading)
-            return statement, grading
+        # 0. le champ doit EXISTER et être le bon (filet, cf. ensure_answer_field)
+        statement, expected = ensure_answer_field(statement, response_type, expected)
 
-        values = _ordered_values(response_type, expected or {})
+        if response_type == "multiline_text":
+            grading["lines"] = estimate_reasoning_lines(expected, grading)
+            return statement_mod.normalize(statement), expected, grading
+
+        values = _ordered_values(response_type, expected)
         if not values:
-            return statement, grading
+            return statement_mod.normalize(statement), expected, grading
 
         statement = _reset(statement or "")
         statement = _redistribute_subquestions(statement, len(values))
         statement = _type_blanks(statement, values)
-        return statement_mod.normalize(statement), grading
+        return statement_mod.normalize(statement), expected, grading
     except Exception:  # robustesse : un exercice ne doit jamais casser sur ce point
-        return statement, grading
+        return statement, expected, grading

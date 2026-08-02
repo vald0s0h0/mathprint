@@ -24,19 +24,28 @@ import logging
 from sqlalchemy.orm import Session
 
 from ..models import Competency
-from . import exercise_gen, indigo_llm, prompts
+from . import exercise_gen, indigo_llm, prompts, providers
 from . import statement as statement_mod
 from .gemini_gen import _competency_name, _competency_tree
 
 logger = logging.getLogger("app.indigo")
 
-PROMPT_VERSION = "indigo-adapt-5-matching"
-FORBIDDEN_RESPONSE_TYPES = {"manual_drawing"}
-BATCH_SIZE = 5
-# fenêtre de taille de lot pour l'adaptation : « par lot de 5 à 7 selon le
-# nombre » (cf. demande utilisateur). On choisit dans cette fenêtre la taille
-# dont le DERNIER lot est le plus rempli (évite un lot final d'un seul exercice).
-BATCH_MIN, BATCH_MAX = 5, 7
+PROMPT_VERSION = "indigo-adapt-6-priorites"
+# Plus AUCUN format interdit (02/08) : le tracé/dessin (« manual_drawing ») est
+# désormais le DERNIER échelon de l'ordre de priorité Indigo (cf.
+# prompts/indigo/generation.txt) — l'élève peut compléter/tracer une figure, la
+# correction est alors manuelle. Le crible reste en place, vide, pour pouvoir
+# refermer un format sans redéployer le prompt.
+FORBIDDEN_RESPONSE_TYPES: frozenset[str] = frozenset()
+BATCH_SIZE = 4
+# Fenêtre de taille de lot pour l'adaptation. On choisit dans cette fenêtre la
+# taille dont le DERNIER lot est le plus rempli (évite un lot final d'un seul
+# exercice). Ramenée de 5-7 à 3-4 le 02/08 : mesure réelle sur 40 adaptations,
+# un exercice coûte 400 à 5 800 tokens de SORTIE (moyenne ~1 800), donc un lot
+# de 7 demandait couramment 12 000 à 25 000 tokens en une seule réponse — au-delà
+# du plafond de sortie ET du délai d'appel. Chaque lot échouait, repartait en
+# adaptations UNITAIRES, et le budget quotidien y passait (incident A1.3).
+BATCH_MIN, BATCH_MAX = 3, 4
 
 
 def choose_batch_size(n: int) -> int:
@@ -60,6 +69,26 @@ def _intro() -> str:
     return prompts.load("indigo", "generation")
 
 
+# Géométrie — règles PROPRES à Indigo, qui remplacent celles du contrat partagé
+# (exercise_gen._GEOMETRY_RULES, « l'élève ne trace JAMAIS rien »). Deux
+# différences assumées ici : la figure du manuel est fournie comme IMAGE à côté
+# de l'énoncé (l'élève la LIT), et le tracé est de nouveau autorisé — en dernier
+# recours, comme dernier échelon de l'ordre de priorité (cf. generation.txt).
+_INDIGO_GEOMETRY_RULES = (
+    "GÉOMÉTRIE : la figure du manuel est fournie à l'élève comme IMAGE à côté de "
+    "l'énoncé — tu n'as ni à la décrire entièrement ni à la reconstruire, écris "
+    "« la figure ci-contre » et pose une question qui se répond en cochant ou en "
+    "écrivant (lire/exploiter la figure, calculer une longueur, une aire, un "
+    "angle, un périmètre, reconnaître une propriété, justifier en une phrase). "
+    "Toute donnée numérique utile doit figurer dans l'énoncé.\n"
+    "Le tracé (\"manual_drawing\") reste POSSIBLE — construire, compléter ou "
+    "coder une figure — mais c'est le DERNIER échelon de l'ordre de priorité : "
+    "sa correction est entièrement manuelle. Ne l'utilise que si aucune "
+    "reformulation dans les six formats prioritaires n'évalue la même "
+    "compétence.\n\n"
+)
+
+
 def _system_prompt(db: Session, competency: Competency, grade: str) -> str:
     intro = (_intro()
              .replace("§GRADE§", grade)
@@ -68,7 +97,7 @@ def _system_prompt(db: Session, competency: Competency, grade: str) -> str:
              .replace("§DOMAIN§", f"{competency.domain_code} {competency.domain_name}".strip())
              .replace("§COMPETENCY_TREE§", _competency_tree(db, competency)))
     contract = exercise_gen.format_contract(
-        intro, geometry_rules=exercise_gen._GEOMETRY_RULES)
+        intro, geometry_rules=_INDIGO_GEOMETRY_RULES)
     contract += (
         "\n\nAJOUT AU SCHÉMA : chaque objet exercice porte EN PLUS "
         "\"source_number\":str (le numéro du manuel), \"correction_solution\":str "
@@ -114,18 +143,55 @@ def _finalize(raw: dict, competency: Competency, db: Session, manual: dict) -> d
 
 def _call(db: Session, system: str, payload: dict, correlation_id: str) -> dict | None:
     """Adaptation par le fournisseur choisi dans l'onglet (Anthropic Sonnet ou
-    DeepSeek pro, cf. services.indigo_llm). Une sortie tronquée/en échec retombe en
-    JSON invalide → l'appelant (adapt_batch) rend {} et CHAQUE exercice du lot est
-    rejoué en solo (adapt_one, sortie minuscule), puis en repli OCR brut."""
+    DeepSeek pro, cf. services.indigo_llm). Lève si l'appel échoue (timeout,
+    erreur API, troncature persistante) : c'est `adapt_batch` qui décide alors de
+    COUPER le lot en deux plutôt que de l'éclater en appels unitaires."""
     return indigo_llm.call(db, "adapt", system, payload, correlation_id)
 
 
 def adapt_batch(db: Session, competency: Competency, grade: str,
+                manuals: list[dict], errors: list[str] | None = None) -> dict:
+    """Adapte un LOT d'exercices en UN appel. `manuals` = [{number, statement,
+    correction, has_figure}, ...]. Retourne {source_number -> contrat interne
+    enrichi} (réappariement par numéro ; un exercice manquant/refusé est
+    simplement absent).
+
+    Si l'APPEL échoue (délai dépassé, erreur API, réponse toujours tronquée
+    après élargissement du budget de sortie), le lot est **coupé en deux** et
+    chaque moitié rejouée. C'est la correction de l'incident A1.3 du 02/08 : un
+    lot en échec repartait aussitôt en N adaptations UNITAIRES, soit 5 à 7 fois
+    plus d'appels, ce qui épuisait le plafond de dépense quotidien au milieu de
+    l'extraction — les exercices restants finissant « non adaptés » sans qu'on
+    sache pourquoi. `errors` collecte les causes pour que l'appelant les affiche.
+
+    Seul `BudgetExceeded` remonte : plafond atteint = tout appel suivant
+    échouera, découper n'y changerait rien, il faut ARRÊTER."""
+    try:
+        return _adapt_call(db, competency, grade, manuals)
+    except providers.BudgetExceeded:
+        raise
+    except Exception as e:
+        reason = f"{type(e).__name__}: {e}"
+        if len(manuals) <= 1:
+            num = manuals[0].get("number") if manuals else "?"
+            logger.warning("Indigo : adaptation de l'exercice n°%s échouée (%s) — %s",
+                           num, competency.code, reason)
+            if errors is not None:
+                errors.append(reason)
+            return {}
+        mid = len(manuals) // 2
+        logger.warning("Indigo : lot de %s exercices en échec (%s) — %s ; "
+                       "coupé en deux (%s + %s)", len(manuals), competency.code,
+                       reason, mid, len(manuals) - mid)
+        out: dict[str, dict] = {}
+        for half in (manuals[:mid], manuals[mid:]):
+            out.update(adapt_batch(db, competency, grade, half, errors))
+        return out
+
+
+def _adapt_call(db: Session, competency: Competency, grade: str,
                 manuals: list[dict]) -> dict:
-    """Adapte un LOT d'exercices (<= BATCH_SIZE) en UN appel DeepSeek. `manuals` =
-    [{number, statement, correction, has_figure}, ...]. Retourne un dict
-    {source_number -> contrat interne enrichi} (réappariement par numéro ;
-    replis best-effort : un exercice manquant/refusé est simplement absent)."""
+    """UN appel d'adaptation pour `manuals`, sans repli (cf. adapt_batch)."""
     system = _system_prompt(db, competency, grade)
     payload = {
         "grade_level": grade,
@@ -167,15 +233,19 @@ def adapt_batch(db: Session, competency: Competency, grade: str,
 
 def adapt_one(db: Session, competency: Competency, grade: str,
               manual: dict) -> dict | None:
-    """Adapte UN exercice en SOLO — 2e chance après un échec/refus en lot. Un
-    lot chargé (5 à 7) dégrade parfois un exercice (sortie tronquée, format
-    ignoré) ; le rejouer seul (contexte minimal) le récupère souvent. Retourne
-    le contrat interne enrichi, ou None (l'appelant retombe alors sur l'OCR
-    brut)."""
+    """Adapte UN exercice en SOLO — 2e chance après un REFUS en lot (le modèle
+    ne l'a pas renvoyé, ou sa sortie n'a pas passé le validateur). Le rejouer
+    seul, avec un contexte minimal, le récupère souvent. Retourne le contrat
+    interne enrichi, ou None (l'appelant retombe alors sur l'OCR brut).
+
+    `BudgetExceeded` REMONTE (l'appelant doit s'arrêter, pas continuer à
+    demander des adaptations qui échoueront toutes)."""
     try:
         out = adapt_batch(db, competency, grade, [manual])
+    except providers.BudgetExceeded:
+        raise
     except Exception:
-        logger.exception("Indigo/DeepSeek : retry solo échoué (n°%s, %s)",
+        logger.exception("Indigo : retry solo échoué (n°%s, %s)",
                          manual.get("number"), competency.code)
         return None
     return out.get(str(manual.get("number", "")).strip())

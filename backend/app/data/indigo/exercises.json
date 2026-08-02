@@ -1,8 +1,2381 @@
 {
  "version": "1",
  "grade_level": "3e",
- "generated_at": "2026-07-31T15:48:03.964580+00:00",
+ "generated_at": "2026-08-02T16:50:20.446279+00:00",
  "exercises": [
+  {
+   "id": "544c55cb-225a-47b9-a569-902f2b0e6e90",
+   "competency_code": "A1.3",
+   "grade_level": "3e",
+   "source_number": "57",
+   "badge_type": "flash",
+   "difficulty": 2,
+   "calculator": "autorisee",
+   "title": "",
+   "tags": [],
+   "statement": "Pour chaque égalité, il existe peut-être un entier $n$ qui la vérifie.\nCoche les égalités pour lesquelles un tel entier $n$ existe.",
+   "response_type": "qcm_multiple",
+   "expected": {
+    "type": "choice",
+    "correct": [
+     0,
+     2
+    ]
+   },
+   "grading": {
+    "max_score": 1,
+    "comparator": "qcm",
+    "negative": 0,
+    "choices": [
+     "$3^n = 9$",
+     "$2^n = 10$",
+     "$5^n = 125$"
+    ],
+    "bareme_points": 1.5
+   },
+   "effort_points": 1.5,
+   "correction_guide": "Cherche si le nombre à droite est bien une puissance entière de la base indiquée.",
+   "correction_solution": "$3^2 = 9$ donc l'égalité $3^n = 9$ est vraie pour $n = 2$.\n$10$ n'est pas une puissance de $2$ (il vaut $2 \\times 5$), donc $2^n = 10$ est fausse pour tout entier $n$.\n$5^3 = 125$ donc l'égalité $5^n = 125$ est vraie pour $n = 3$.",
+   "has_figure": false,
+   "crop_file": "544c55cb-225a-47b9-a569-902f2b0e6e90.png",
+   "figure_file": "",
+   "model": "claude-sonnet-5",
+   "prompt_version": "indigo-adapt-6-priorites"
+  },
+  {
+   "id": "5f442450-8183-4a93-afcf-1c66d9ce26c6",
+   "competency_code": "A1.3",
+   "grade_level": "3e",
+   "source_number": "58",
+   "badge_type": "flash",
+   "difficulty": 2,
+   "calculator": "autorisee",
+   "title": "",
+   "tags": [],
+   "statement": "Quelle écriture de $24$ est une décomposition en produit de facteurs premiers ?",
+   "response_type": "qcm_single",
+   "expected": {
+    "type": "choice",
+    "correct": [
+     3
+    ]
+   },
+   "grading": {
+    "max_score": 1,
+    "comparator": "qcm",
+    "negative": 0,
+    "choices": [
+     "$24 = 4 \\times 6$",
+     "$24 = 2 \\times 3 \\times 4$",
+     "$24 = 3 \\times 8$",
+     "$24 = 2 \\times 2 \\times 2 \\times 3$"
+    ],
+    "bareme_points": 1.0
+   },
+   "effort_points": 1.0,
+   "correction_guide": "Dans une décomposition en facteurs premiers, chaque facteur doit être un nombre premier ; $4$, $6$, $8$ ne le sont pas.",
+   "correction_solution": "$24 = 2 \\times 2 \\times 2 \\times 3$ : c'est la seule écriture où tous les facteurs ($2$ et $3$) sont premiers.",
+   "has_figure": false,
+   "crop_file": "5f442450-8183-4a93-afcf-1c66d9ce26c6.png",
+   "figure_file": "",
+   "model": "claude-sonnet-5",
+   "prompt_version": "indigo-adapt-6-priorites"
+  },
+  {
+   "id": "da96dfd8-e737-4d91-a089-8acaa629b561",
+   "competency_code": "A1.3",
+   "grade_level": "3e",
+   "source_number": "59",
+   "badge_type": "flash",
+   "difficulty": 2,
+   "calculator": "autorisee",
+   "title": "",
+   "tags": [],
+   "statement": "Décompose mentalement les entiers suivants en produits de facteurs premiers.\nComplète le tableau.",
+   "response_type": "table_fill",
+   "expected": {
+    "type": "table",
+    "rows": 4,
+    "cols": 1,
+    "cells": [
+     [
+      {
+       "type": "text",
+       "value": "2^2 \\times 3"
+      }
+     ],
+     [
+      {
+       "type": "text",
+       "value": "2 \\times 3 \\times 5"
+      }
+     ],
+     [
+      {
+       "type": "text",
+       "value": "2^3 \\times 5"
+      }
+     ],
+     [
+      {
+       "type": "text",
+       "value": "2^2 \\times 5^2"
+      }
+     ]
+    ]
+   },
+   "grading": {
+    "max_score": 4,
+    "comparator": "table_cells",
+    "cells": [
+     [
+      {
+       "type": "text",
+       "value": "2^2 \\times 3"
+      }
+     ],
+     [
+      {
+       "type": "text",
+       "value": "2 \\times 3 \\times 5"
+      }
+     ],
+     [
+      {
+       "type": "text",
+       "value": "2^3 \\times 5"
+      }
+     ],
+     [
+      {
+       "type": "text",
+       "value": "2^2 \\times 5^2"
+      }
+     ]
+    ],
+    "col_labels": null,
+    "row_labels": [
+     "$12 =$",
+     "$30 =$",
+     "$40 =$",
+     "$100 =$"
+    ],
+    "bareme_points": 2.0
+   },
+   "effort_points": 2.0,
+   "correction_guide": "Cherche d'abord le plus petit facteur premier possible (2, puis 3, puis 5...) et divise successivement jusqu'à obtenir 1.",
+   "correction_solution": "a. $12 = 2^2 \\times 3$\nb. $30 = 2 \\times 3 \\times 5$\nc. $40 = 2^3 \\times 5$\nd. $100 = 2^2 \\times 5^2$",
+   "has_figure": false,
+   "crop_file": "da96dfd8-e737-4d91-a089-8acaa629b561.png",
+   "figure_file": "",
+   "model": "claude-sonnet-5",
+   "prompt_version": "indigo-adapt-6-priorites"
+  },
+  {
+   "id": "c675378f-bd14-45ea-8e5f-98ae9f8ac613",
+   "competency_code": "A1.3",
+   "grade_level": "3e",
+   "source_number": "61",
+   "badge_type": "exercice",
+   "difficulty": 3,
+   "calculator": "autorisee",
+   "title": "",
+   "tags": [],
+   "statement": "Voici trois nombres $A$, $B$ et $C$ décomposés en produit de facteurs premiers :\n$A = 2^2 \\times 3^2 \\times 5$\n$B = 2^3 \\times 3 \\times 5$\n$C = 2 \\times 3 \\times 5^2$\nComplète le tableau en donnant la valeur de chaque nombre.",
+   "response_type": "table_fill",
+   "expected": {
+    "type": "table",
+    "rows": 3,
+    "cols": 1,
+    "cells": [
+     [
+      {
+       "type": "integer",
+       "value": 180
+      }
+     ],
+     [
+      {
+       "type": "integer",
+       "value": 120
+      }
+     ],
+     [
+      {
+       "type": "integer",
+       "value": 150
+      }
+     ]
+    ]
+   },
+   "grading": {
+    "max_score": 3,
+    "comparator": "table_cells",
+    "cells": [
+     [
+      {
+       "type": "integer",
+       "value": 180
+      }
+     ],
+     [
+      {
+       "type": "integer",
+       "value": 120
+      }
+     ],
+     [
+      {
+       "type": "integer",
+       "value": 150
+      }
+     ]
+    ],
+    "col_labels": null,
+    "row_labels": [
+     "$A = 2^2 \\times 3^2 \\times 5 =$",
+     "$B = 2^3 \\times 3 \\times 5 =$",
+     "$C = 2 \\times 3 \\times 5^2 =$"
+    ],
+    "bareme_points": 1.5
+   },
+   "effort_points": 1.5,
+   "correction_guide": "Pour retrouver le nombre, effectue le produit des facteurs premiers en tenant compte des puissances.",
+   "correction_solution": "$A = 2^2 \\times 3^2 \\times 5 = 4 \\times 9 \\times 5 = 180$\n$B = 2^3 \\times 3 \\times 5 = 8 \\times 3 \\times 5 = 120$\n$C = 2 \\times 3 \\times 5^2 = 2 \\times 3 \\times 25 = 150$",
+   "has_figure": false,
+   "crop_file": "c675378f-bd14-45ea-8e5f-98ae9f8ac613.png",
+   "figure_file": "",
+   "model": "claude-sonnet-5",
+   "prompt_version": "indigo-adapt-6-priorites"
+  },
+  {
+   "id": "2b689669-643f-4021-a366-a0564c5df26e",
+   "competency_code": "A1.3",
+   "grade_level": "3e",
+   "source_number": "62",
+   "badge_type": "flash",
+   "difficulty": 2,
+   "calculator": "autorisee",
+   "title": "",
+   "tags": [],
+   "statement": "Le professeur demande à Yasmine de décomposer $594$ en produit de facteurs premiers.\nVoici sa réponse :\n$594 = 2 \\times 3 \\times 9 \\times 11$\n« Et j'ai même vérifié avec ma calculatrice ! »",
+   "response_type": "composite",
+   "expected": {
+    "type": "composite",
+    "parts": [
+     {
+      "statement": "Yasmine a-t-elle raison ?",
+      "response_type": "qcm_single",
+      "expected": {
+       "type": "choice",
+       "correct": [
+        1
+       ]
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "qcm",
+       "negative": 0,
+       "choices": [
+        "Oui",
+        "Non"
+       ],
+       "bareme_points": 1.0
+      }
+     },
+     {
+      "statement": "Justifie ta réponse en donnant la décomposition correcte de $594$ en produit de facteurs premiers.",
+      "response_type": "multiline_text",
+      "expected": {
+       "type": "rubric",
+       "steps": [
+        {
+         "description": "Identifier l'erreur de Yasmine",
+         "expected_text": "$9$ n'est pas un nombre premier, il fallait continuer la décomposition ($9 = 3 \\times 3$).",
+         "points": 1
+        },
+        {
+         "description": "Donner la décomposition correcte",
+         "expected_text": "$594 = 2 \\times 3 \\times 3 \\times 3 \\times 11$",
+         "points": 2
+        }
+       ]
+      },
+      "grading": {
+       "max_score": 3,
+       "comparator": "rubric",
+       "steps": [
+        {
+         "description": "Identifier l'erreur de Yasmine",
+         "expected_text": "$9$ n'est pas un nombre premier, il fallait continuer la décomposition ($9 = 3 \\times 3$).",
+         "points": 1
+        },
+        {
+         "description": "Donner la décomposition correcte",
+         "expected_text": "$594 = 2 \\times 3 \\times 3 \\times 3 \\times 11$",
+         "points": 2
+        }
+       ],
+       "rubric": [
+        {
+         "description": "Identifier l'erreur de Yasmine",
+         "expected_text": "$9$ n'est pas un nombre premier, il fallait continuer la décomposition ($9 = 3 \\times 3$).",
+         "points": 1
+        },
+        {
+         "description": "Donner la décomposition correcte",
+         "expected_text": "$594 = 2 \\times 3 \\times 3 \\times 3 \\times 11$",
+         "points": 2
+        }
+       ],
+       "lines": 4,
+       "bareme_points": 1.5
+      }
+     }
+    ]
+   },
+   "grading": {
+    "max_score": 4.0,
+    "comparator": "composite",
+    "parts": [
+     {
+      "statement": "Yasmine a-t-elle raison ?",
+      "response_type": "qcm_single",
+      "expected": {
+       "type": "choice",
+       "correct": [
+        1
+       ]
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "qcm",
+       "negative": 0,
+       "choices": [
+        "Oui",
+        "Non"
+       ],
+       "bareme_points": 1.0
+      }
+     },
+     {
+      "statement": "Justifie ta réponse en donnant la décomposition correcte de $594$ en produit de facteurs premiers.",
+      "response_type": "multiline_text",
+      "expected": {
+       "type": "rubric",
+       "steps": [
+        {
+         "description": "Identifier l'erreur de Yasmine",
+         "expected_text": "$9$ n'est pas un nombre premier, il fallait continuer la décomposition ($9 = 3 \\times 3$).",
+         "points": 1
+        },
+        {
+         "description": "Donner la décomposition correcte",
+         "expected_text": "$594 = 2 \\times 3 \\times 3 \\times 3 \\times 11$",
+         "points": 2
+        }
+       ]
+      },
+      "grading": {
+       "max_score": 3,
+       "comparator": "rubric",
+       "steps": [
+        {
+         "description": "Identifier l'erreur de Yasmine",
+         "expected_text": "$9$ n'est pas un nombre premier, il fallait continuer la décomposition ($9 = 3 \\times 3$).",
+         "points": 1
+        },
+        {
+         "description": "Donner la décomposition correcte",
+         "expected_text": "$594 = 2 \\times 3 \\times 3 \\times 3 \\times 11$",
+         "points": 2
+        }
+       ],
+       "rubric": [
+        {
+         "description": "Identifier l'erreur de Yasmine",
+         "expected_text": "$9$ n'est pas un nombre premier, il fallait continuer la décomposition ($9 = 3 \\times 3$).",
+         "points": 1
+        },
+        {
+         "description": "Donner la décomposition correcte",
+         "expected_text": "$594 = 2 \\times 3 \\times 3 \\times 3 \\times 11$",
+         "points": 2
+        }
+       ],
+       "lines": 4,
+       "bareme_points": 1.5
+      }
+     }
+    ],
+    "bareme_points": 2.0
+   },
+   "effort_points": 2.0,
+   "correction_guide": "Vérifie que chaque facteur obtenu est un nombre premier ; sinon, il faut continuer la décomposition.",
+   "correction_solution": "Le produit de Yasmine est bien égal à $594$, mais $9$ n'est pas un nombre premier : elle n'a pas terminé la décomposition. Comme $9 = 3 \\times 3$, la décomposition correcte est $594 = 2 \\times 3 \\times 3 \\times 3 \\times 11$.",
+   "has_figure": false,
+   "crop_file": "2b689669-643f-4021-a366-a0564c5df26e.png",
+   "figure_file": "",
+   "model": "claude-sonnet-5",
+   "prompt_version": "indigo-adapt-6-priorites"
+  },
+  {
+   "id": "70ea725c-416f-4b49-85d2-76b55b848e27",
+   "competency_code": "A1.3",
+   "grade_level": "3e",
+   "source_number": "63",
+   "badge_type": "exercice",
+   "difficulty": 3,
+   "calculator": "autorisee",
+   "title": "",
+   "tags": [],
+   "statement": "On considère deux nombres $A$ et $B$ écrits sous forme de produits de facteurs premiers :\n$A = 2 \\times 3^2 \\times 5^2$\n$B = 2^2 \\times 3 \\times 5 \\times 7$\nSans calculer $A$ et $B$, réponds aux questions suivantes en utilisant leur décomposition en facteurs premiers.",
+   "response_type": "composite",
+   "expected": {
+    "type": "composite",
+    "parts": [
+     {
+      "statement": "Coche les affirmations vraies.",
+      "response_type": "qcm_multiple",
+      "expected": {
+       "type": "choice",
+       "correct": [
+        0,
+        1,
+        3
+       ]
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "qcm",
+       "negative": 0,
+       "choices": [
+        "$2$ divise $A$",
+        "$2$ divise $B$",
+        "$A$ est multiple de $7$",
+        "$B$ est multiple de $7$"
+       ],
+       "bareme_points": 1.0
+      }
+     },
+     {
+      "statement": "Coche les affirmations vraies.",
+      "response_type": "qcm_multiple",
+      "expected": {
+       "type": "choice",
+       "correct": [
+        0,
+        1,
+        2,
+        4
+       ]
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "qcm",
+       "negative": 0,
+       "choices": [
+        "$A$ est divisible par $6$",
+        "$B$ est divisible par $6$",
+        "$18$ divise $A$",
+        "$18$ divise $B$",
+        "$72$ divise $A \\times B$"
+       ],
+       "bareme_points": 1.0
+      }
+     },
+     {
+      "statement": "Quel est le plus grand diviseur commun de $A$ et $B$ ?",
+      "response_type": "short_text",
+      "expected": {
+       "type": "integer",
+       "value": 30
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "numeric",
+       "tolerance": 0,
+       "bareme_points": 1.0
+      }
+     }
+    ]
+   },
+   "grading": {
+    "max_score": 3.0,
+    "comparator": "composite",
+    "parts": [
+     {
+      "statement": "Coche les affirmations vraies.",
+      "response_type": "qcm_multiple",
+      "expected": {
+       "type": "choice",
+       "correct": [
+        0,
+        1,
+        3
+       ]
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "qcm",
+       "negative": 0,
+       "choices": [
+        "$2$ divise $A$",
+        "$2$ divise $B$",
+        "$A$ est multiple de $7$",
+        "$B$ est multiple de $7$"
+       ],
+       "bareme_points": 1.0
+      }
+     },
+     {
+      "statement": "Coche les affirmations vraies.",
+      "response_type": "qcm_multiple",
+      "expected": {
+       "type": "choice",
+       "correct": [
+        0,
+        1,
+        2,
+        4
+       ]
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "qcm",
+       "negative": 0,
+       "choices": [
+        "$A$ est divisible par $6$",
+        "$B$ est divisible par $6$",
+        "$18$ divise $A$",
+        "$18$ divise $B$",
+        "$72$ divise $A \\times B$"
+       ],
+       "bareme_points": 1.0
+      }
+     },
+     {
+      "statement": "Quel est le plus grand diviseur commun de $A$ et $B$ ?",
+      "response_type": "short_text",
+      "expected": {
+       "type": "integer",
+       "value": 30
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "numeric",
+       "tolerance": 0,
+       "bareme_points": 1.0
+      }
+     }
+    ],
+    "bareme_points": 4.0
+   },
+   "effort_points": 4.0,
+   "correction_guide": "Pour savoir si un nombre premier (ou un produit de nombres premiers) divise $A$ ou $B$, compare-le aux facteurs premiers présents dans leur décomposition, sans calculer $A$ ni $B$.",
+   "correction_solution": "• $2$ divise $A$ et $B$ car $2$ apparaît dans leurs décompositions.\n• $B$ est multiple de $7$ (facteur présent) mais pas $A$ (facteur absent).\n• $6 = 2 \\times 3$ : $A$ et $B$ contiennent bien $2$ et $3$, donc les deux sont divisibles par $6$.\n• $18 = 2 \\times 3^2$ : $A$ contient $2 \\times 3^2$ donc $18$ divise $A$ ; $B$ ne contient que $3^1$ donc $18$ ne divise pas $B$.\n• Le plus grand diviseur commun de $A$ et $B$ est obtenu en prenant les facteurs communs à la plus petite puissance : $2 \\times 3 \\times 5 = 30$.\n• $A \\times B = 2^3 \\times 3^3 \\times 5^3 \\times 7$ et $72 = 2^3 \\times 3^2$ : $72$ divise bien $A \\times B$.",
+   "has_figure": false,
+   "crop_file": "70ea725c-416f-4b49-85d2-76b55b848e27.png",
+   "figure_file": "",
+   "model": "claude-sonnet-5",
+   "prompt_version": "indigo-adapt-6-priorites"
+  },
+  {
+   "id": "8ba8f69c-f78d-4a9a-90e4-303647c522eb",
+   "competency_code": "A1.3",
+   "grade_level": "3e",
+   "source_number": "64",
+   "badge_type": "exercice",
+   "difficulty": 3,
+   "calculator": "autorisee",
+   "title": "",
+   "tags": [],
+   "statement": "Décompose chacun des nombres suivants en produit de facteurs premiers, sans calculatrice.",
+   "response_type": "table_fill",
+   "expected": {
+    "type": "table",
+    "rows": 4,
+    "cols": 1,
+    "cells": [
+     [
+      {
+       "type": "text",
+       "value": "2^2 \\times 3^2"
+      }
+     ],
+     [
+      {
+       "type": "text",
+       "value": "2^6"
+      }
+     ],
+     [
+      {
+       "type": "text",
+       "value": "3^3 \\times 5"
+      }
+     ],
+     [
+      {
+       "type": "text",
+       "value": "2^3 \\times 5^2"
+      }
+     ]
+    ]
+   },
+   "grading": {
+    "max_score": 4,
+    "comparator": "table_cells",
+    "cells": [
+     [
+      {
+       "type": "text",
+       "value": "2^2 \\times 3^2"
+      }
+     ],
+     [
+      {
+       "type": "text",
+       "value": "2^6"
+      }
+     ],
+     [
+      {
+       "type": "text",
+       "value": "3^3 \\times 5"
+      }
+     ],
+     [
+      {
+       "type": "text",
+       "value": "2^3 \\times 5^2"
+      }
+     ]
+    ],
+    "col_labels": null,
+    "row_labels": [
+     "$36 =$",
+     "$64 =$",
+     "$135 =$",
+     "$200 =$"
+    ],
+    "bareme_points": 2.5
+   },
+   "effort_points": 2.5,
+   "correction_guide": "Divise successivement le nombre par les nombres premiers dans l'ordre croissant ($2$, $3$, $5$, $7$…) jusqu'à obtenir $1$.",
+   "correction_solution": "a. $36 = 2^2 \\times 3^2$\nb. $64 = 2^6$\nc. $135 = 3^3 \\times 5$\nd. $200 = 2^3 \\times 5^2$",
+   "has_figure": false,
+   "crop_file": "8ba8f69c-f78d-4a9a-90e4-303647c522eb.png",
+   "figure_file": "",
+   "model": "claude-sonnet-5",
+   "prompt_version": "indigo-adapt-6-priorites"
+  },
+  {
+   "id": "41e17500-6358-4b2a-8262-031e850efa5d",
+   "competency_code": "A1.3",
+   "grade_level": "3e",
+   "source_number": "65",
+   "badge_type": "exercice",
+   "difficulty": 3,
+   "calculator": "autorisee",
+   "title": "",
+   "tags": [],
+   "statement": "À la question « décompose $180$ en produit de facteurs premiers », Matéo a écrit sur sa copie :\n$180 = 4 \\times 5 \\times 9$",
+   "response_type": "composite",
+   "expected": {
+    "type": "composite",
+    "parts": [
+     {
+      "statement": "Pourquoi la réponse de Matéo ne convient-elle pas ?",
+      "response_type": "qcm_single",
+      "expected": {
+       "type": "choice",
+       "correct": [
+        0
+       ]
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "qcm",
+       "negative": 0,
+       "choices": [
+        "Parce que $4$ et $9$ ne sont pas des nombres premiers.",
+        "Parce que $180 \\neq 4 \\times 5 \\times 9$.",
+        "Parce qu'il manque un facteur dans le produit.",
+        "Parce que $5$ n'est pas un facteur premier de $180$."
+       ],
+       "bareme_points": 1.0
+      }
+     },
+     {
+      "statement": "Décompose $180$ en produit de facteurs premiers.",
+      "response_type": "short_text",
+      "expected": {
+       "type": "text",
+       "value": "2^2 \\times 3^2 \\times 5"
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "text_equal",
+       "bareme_points": 1.0
+      }
+     }
+    ]
+   },
+   "grading": {
+    "max_score": 2.0,
+    "comparator": "composite",
+    "parts": [
+     {
+      "statement": "Pourquoi la réponse de Matéo ne convient-elle pas ?",
+      "response_type": "qcm_single",
+      "expected": {
+       "type": "choice",
+       "correct": [
+        0
+       ]
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "qcm",
+       "negative": 0,
+       "choices": [
+        "Parce que $4$ et $9$ ne sont pas des nombres premiers.",
+        "Parce que $180 \\neq 4 \\times 5 \\times 9$.",
+        "Parce qu'il manque un facteur dans le produit.",
+        "Parce que $5$ n'est pas un facteur premier de $180$."
+       ],
+       "bareme_points": 1.0
+      }
+     },
+     {
+      "statement": "Décompose $180$ en produit de facteurs premiers.",
+      "response_type": "short_text",
+      "expected": {
+       "type": "text",
+       "value": "2^2 \\times 3^2 \\times 5"
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "text_equal",
+       "bareme_points": 1.0
+      }
+     }
+    ],
+    "bareme_points": 1.5
+   },
+   "effort_points": 1.5,
+   "correction_guide": "Une décomposition en facteurs premiers ne doit contenir que des nombres premiers : vérifie que chaque facteur est bien premier.",
+   "correction_solution": "1. $4$ et $9$ ne sont pas des nombres premiers ($4 = 2^2$, $9 = 3^2$), donc l'écriture de Matéo n'est pas une décomposition en facteurs premiers.\n2. $180 = 18 \\times 10 = 2 \\times 3^2 \\times 2 \\times 5 = 2^2 \\times 3^2 \\times 5$.",
+   "has_figure": false,
+   "crop_file": "41e17500-6358-4b2a-8262-031e850efa5d.png",
+   "figure_file": "",
+   "model": "claude-sonnet-5",
+   "prompt_version": "indigo-adapt-6-priorites"
+  },
+  {
+   "id": "a4eac94a-bafa-428c-82ed-ab1c0d2bb87a",
+   "competency_code": "A1.3",
+   "grade_level": "3e",
+   "source_number": "66",
+   "badge_type": "exercice",
+   "difficulty": 3,
+   "calculator": "autorisee",
+   "title": "",
+   "tags": [],
+   "statement": "Décompose chaque entier en produit de facteurs premiers.\nDonne le résultat sous la forme d'un produit de nombres premiers (utilise les puissances si besoin).",
+   "response_type": "table_fill",
+   "expected": {
+    "type": "table",
+    "rows": 3,
+    "cols": 1,
+    "cells": [
+     [
+      {
+       "type": "text",
+       "value": "2 \\times 3 \\times 7"
+      }
+     ],
+     [
+      {
+       "type": "text",
+       "value": "3 \\times 5^2"
+      }
+     ],
+     [
+      {
+       "type": "text",
+       "value": "2^2 \\times 41"
+      }
+     ]
+    ]
+   },
+   "grading": {
+    "max_score": 3,
+    "comparator": "table_cells",
+    "cells": [
+     [
+      {
+       "type": "text",
+       "value": "2 \\times 3 \\times 7"
+      }
+     ],
+     [
+      {
+       "type": "text",
+       "value": "3 \\times 5^2"
+      }
+     ],
+     [
+      {
+       "type": "text",
+       "value": "2^2 \\times 41"
+      }
+     ]
+    ],
+    "col_labels": null,
+    "row_labels": [
+     "$42 =$",
+     "$75 =$",
+     "$164 =$"
+    ],
+    "bareme_points": 2.0
+   },
+   "effort_points": 2.0,
+   "correction_guide": "Divise successivement l'entier par les nombres premiers dans l'ordre croissant ($2$, $3$, $5$, $7$...) jusqu'à obtenir $1$. Regroupe les facteurs identiques avec des puissances.",
+   "correction_solution": "a. $42 = 2 \\times 3 \\times 7$\nb. $75 = 3 \\times 5 \\times 5 = 3 \\times 5^2$\nc. $164 = 2 \\times 2 \\times 41 = 2^2 \\times 41$",
+   "has_figure": false,
+   "crop_file": "a4eac94a-bafa-428c-82ed-ab1c0d2bb87a.png",
+   "figure_file": "",
+   "model": "claude-sonnet-5",
+   "prompt_version": "indigo-adapt-6-priorites"
+  },
+  {
+   "id": "ca6cede1-254b-4759-8715-98a852d764db",
+   "competency_code": "A1.3",
+   "grade_level": "3e",
+   "source_number": "67",
+   "badge_type": "exercice",
+   "difficulty": 3,
+   "calculator": "autorisee",
+   "title": "",
+   "tags": [],
+   "statement": "Décompose chaque entier en produit de facteurs premiers.\nDonne le résultat sous la forme d'un produit de nombres premiers (utilise les puissances si besoin).",
+   "response_type": "table_fill",
+   "expected": {
+    "type": "table",
+    "rows": 3,
+    "cols": 1,
+    "cells": [
+     [
+      {
+       "type": "text",
+       "value": "2 \\times 3^2 \\times 5 \\times 7"
+      }
+     ],
+     [
+      {
+       "type": "text",
+       "value": "5 \\times 7 \\times 11 \\times 13"
+      }
+     ],
+     [
+      {
+       "type": "text",
+       "value": "2^3 \\times 3 \\times 7 \\times 19"
+      }
+     ]
+    ]
+   },
+   "grading": {
+    "max_score": 3,
+    "comparator": "table_cells",
+    "cells": [
+     [
+      {
+       "type": "text",
+       "value": "2 \\times 3^2 \\times 5 \\times 7"
+      }
+     ],
+     [
+      {
+       "type": "text",
+       "value": "5 \\times 7 \\times 11 \\times 13"
+      }
+     ],
+     [
+      {
+       "type": "text",
+       "value": "2^3 \\times 3 \\times 7 \\times 19"
+      }
+     ]
+    ],
+    "col_labels": null,
+    "row_labels": [
+     "$630 =$",
+     "$5\\,005 =$",
+     "$3\\,192 =$"
+    ],
+    "bareme_points": 2.5
+   },
+   "effort_points": 2.5,
+   "correction_guide": "Divise successivement l'entier par les nombres premiers dans l'ordre croissant ($2$, $3$, $5$, $7$...) jusqu'à obtenir $1$. Regroupe les facteurs identiques avec des puissances.",
+   "correction_solution": "a. $630 = 2 \\times 3 \\times 3 \\times 5 \\times 7 = 2 \\times 3^2 \\times 5 \\times 7$\nb. $5\\,005 = 5 \\times 7 \\times 11 \\times 13$\nc. $3\\,192 = 2 \\times 2 \\times 2 \\times 3 \\times 7 \\times 19 = 2^3 \\times 3 \\times 7 \\times 19$",
+   "has_figure": false,
+   "crop_file": "",
+   "figure_file": "",
+   "model": "claude-sonnet-5",
+   "prompt_version": "indigo-adapt-6-priorites"
+  },
+  {
+   "id": "a6b2b411-4b5f-4355-ade3-63463ab53c0f",
+   "competency_code": "A1.3",
+   "grade_level": "3e",
+   "source_number": "68",
+   "badge_type": "exercice",
+   "difficulty": 3,
+   "calculator": "autorisee",
+   "title": "",
+   "tags": [],
+   "statement": "Décompose chaque entier en produit de facteurs premiers.\nDonne le résultat sous la forme d'un produit de nombres premiers (utilise les puissances si besoin).",
+   "response_type": "table_fill",
+   "expected": {
+    "type": "table",
+    "rows": 3,
+    "cols": 1,
+    "cells": [
+     [
+      {
+       "type": "text",
+       "value": "3^3 \\times 5 \\times 7^2"
+      }
+     ],
+     [
+      {
+       "type": "text",
+       "value": "2 \\times 3 \\times 11^3"
+      }
+     ],
+     [
+      {
+       "type": "text",
+       "value": "3 \\times 5 \\times 7 \\times 13^2"
+      }
+     ]
+    ]
+   },
+   "grading": {
+    "max_score": 3,
+    "comparator": "table_cells",
+    "cells": [
+     [
+      {
+       "type": "text",
+       "value": "3^3 \\times 5 \\times 7^2"
+      }
+     ],
+     [
+      {
+       "type": "text",
+       "value": "2 \\times 3 \\times 11^3"
+      }
+     ],
+     [
+      {
+       "type": "text",
+       "value": "3 \\times 5 \\times 7 \\times 13^2"
+      }
+     ]
+    ],
+    "col_labels": null,
+    "row_labels": [
+     "$6\\,615 =$",
+     "$7\\,986 =$",
+     "$17\\,745 =$"
+    ],
+    "bareme_points": 3.0
+   },
+   "effort_points": 3.0,
+   "correction_guide": "Divise successivement l'entier par les nombres premiers dans l'ordre croissant ($2$, $3$, $5$, $7$...) jusqu'à obtenir $1$. Regroupe les facteurs identiques avec des puissances.",
+   "correction_solution": "a. $6\\,615 = 3 \\times 3 \\times 3 \\times 5 \\times 7 \\times 7 = 3^3 \\times 5 \\times 7^2$\nb. $7\\,986 = 2 \\times 3 \\times 11 \\times 11 \\times 11 = 2 \\times 3 \\times 11^3$\nc. $17\\,745 = 3 \\times 5 \\times 7 \\times 13 \\times 13 = 3 \\times 5 \\times 7 \\times 13^2$",
+   "has_figure": false,
+   "crop_file": "",
+   "figure_file": "",
+   "model": "claude-sonnet-5",
+   "prompt_version": "indigo-adapt-6-priorites"
+  },
+  {
+   "id": "82a75eec-15f8-4758-9711-7cfb7bf32160",
+   "competency_code": "A1.3",
+   "grade_level": "3e",
+   "source_number": "69",
+   "badge_type": "exercice",
+   "difficulty": 3,
+   "calculator": "autorisee",
+   "title": "",
+   "tags": [],
+   "statement": "Sam s'intéresse aux carrés parfaits.\nIl remarque que :\n$196 = 14 \\times 14$\n$225 = 15 \\times 15$\n$256 = 16 \\times 16$\nEn utilisant ces produits, complète le tableau des décompositions en produit de facteurs premiers.",
+   "response_type": "table_fill",
+   "expected": {
+    "type": "table",
+    "rows": 3,
+    "cols": 1,
+    "cells": [
+     [
+      {
+       "type": "text",
+       "value": "2^2 \\times 7^2"
+      }
+     ],
+     [
+      {
+       "type": "text",
+       "value": "3^2 \\times 5^2"
+      }
+     ],
+     [
+      {
+       "type": "text",
+       "value": "2^8"
+      }
+     ]
+    ]
+   },
+   "grading": {
+    "max_score": 3,
+    "comparator": "table_cells",
+    "cells": [
+     [
+      {
+       "type": "text",
+       "value": "2^2 \\times 7^2"
+      }
+     ],
+     [
+      {
+       "type": "text",
+       "value": "3^2 \\times 5^2"
+      }
+     ],
+     [
+      {
+       "type": "text",
+       "value": "2^8"
+      }
+     ]
+    ],
+    "col_labels": null,
+    "row_labels": [
+     "$196 =$",
+     "$225 =$",
+     "$256 =$"
+    ],
+    "bareme_points": 2.0
+   },
+   "effort_points": 2.0,
+   "correction_guide": "Décompose chaque facteur du produit donné en facteurs premiers, puis regroupe les puissances identiques.",
+   "correction_solution": "$196 = 14 \\times 14 = (2\\times7)\\times(2\\times7) = 2^2 \\times 7^2$\n$225 = 15 \\times 15 = (3\\times5)\\times(3\\times5) = 3^2 \\times 5^2$\n$256 = 16 \\times 16 = 2^4 \\times 2^4 = 2^8$",
+   "has_figure": false,
+   "crop_file": "",
+   "figure_file": "",
+   "model": "claude-sonnet-5",
+   "prompt_version": "indigo-adapt-6-priorites"
+  },
+  {
+   "id": "35f54f8f-58d0-4f82-82ab-de52bf8e8f9c",
+   "competency_code": "A1.3",
+   "grade_level": "3e",
+   "source_number": "71",
+   "badge_type": "exercice",
+   "difficulty": 3,
+   "calculator": "autorisee",
+   "title": "",
+   "tags": [],
+   "statement": "On considère les nombres $540$ et $630$.",
+   "response_type": "composite",
+   "expected": {
+    "type": "composite",
+    "parts": [
+     {
+      "statement": "Décompose $540$ et $630$ en produit de facteurs premiers.",
+      "response_type": "table_fill",
+      "expected": {
+       "type": "table",
+       "rows": 2,
+       "cols": 1,
+       "cells": [
+        [
+         {
+          "type": "text",
+          "value": "2^2 \\times 3^3 \\times 5"
+         }
+        ],
+        [
+         {
+          "type": "text",
+          "value": "2 \\times 3^2 \\times 5 \\times 7"
+         }
+        ]
+       ]
+      },
+      "grading": {
+       "max_score": 2,
+       "comparator": "table_cells",
+       "cells": [
+        [
+         {
+          "type": "text",
+          "value": "2^2 \\times 3^3 \\times 5"
+         }
+        ],
+        [
+         {
+          "type": "text",
+          "value": "2 \\times 3^2 \\times 5 \\times 7"
+         }
+        ]
+       ],
+       "col_labels": null,
+       "row_labels": [
+        "$540 =$",
+        "$630 =$"
+       ],
+       "bareme_points": 1.0
+      }
+     },
+     {
+      "statement": "Simplifie autant que possible la fraction $\\dfrac{540}{630}$.",
+      "response_type": "short_text",
+      "expected": {
+       "type": "rational",
+       "value": [
+        6,
+        7
+       ]
+      },
+      "grading": {
+       "max_score": 2,
+       "comparator": "rational_equiv",
+       "bareme_points": 1.5
+      }
+     }
+    ]
+   },
+   "grading": {
+    "max_score": 4.0,
+    "comparator": "composite",
+    "parts": [
+     {
+      "statement": "Décompose $540$ et $630$ en produit de facteurs premiers.",
+      "response_type": "table_fill",
+      "expected": {
+       "type": "table",
+       "rows": 2,
+       "cols": 1,
+       "cells": [
+        [
+         {
+          "type": "text",
+          "value": "2^2 \\times 3^3 \\times 5"
+         }
+        ],
+        [
+         {
+          "type": "text",
+          "value": "2 \\times 3^2 \\times 5 \\times 7"
+         }
+        ]
+       ]
+      },
+      "grading": {
+       "max_score": 2,
+       "comparator": "table_cells",
+       "cells": [
+        [
+         {
+          "type": "text",
+          "value": "2^2 \\times 3^3 \\times 5"
+         }
+        ],
+        [
+         {
+          "type": "text",
+          "value": "2 \\times 3^2 \\times 5 \\times 7"
+         }
+        ]
+       ],
+       "col_labels": null,
+       "row_labels": [
+        "$540 =$",
+        "$630 =$"
+       ],
+       "bareme_points": 1.0
+      }
+     },
+     {
+      "statement": "Simplifie autant que possible la fraction $\\dfrac{540}{630}$.",
+      "response_type": "short_text",
+      "expected": {
+       "type": "rational",
+       "value": [
+        6,
+        7
+       ]
+      },
+      "grading": {
+       "max_score": 2,
+       "comparator": "rational_equiv",
+       "bareme_points": 1.5
+      }
+     }
+    ],
+    "bareme_points": 2.5
+   },
+   "effort_points": 2.5,
+   "correction_guide": "Pour simplifier une fraction, décompose numérateur et dénominateur en facteurs premiers puis simplifie les facteurs communs.",
+   "correction_solution": "$540 = 2^2 \\times 3^3 \\times 5$ ; $630 = 2 \\times 3^2 \\times 5 \\times 7$.\n$\\dfrac{540}{630} = \\dfrac{2^2\\times3^3\\times5}{2\\times3^2\\times5\\times7} = \\dfrac{2\\times3}{7} = \\dfrac{6}{7}$",
+   "has_figure": false,
+   "crop_file": "35f54f8f-58d0-4f82-82ab-de52bf8e8f9c.png",
+   "figure_file": "",
+   "model": "claude-sonnet-5",
+   "prompt_version": "indigo-adapt-6-priorites"
+  },
+  {
+   "id": "303b1818-a70b-4e70-b49c-78ba32593826",
+   "competency_code": "A1.3",
+   "grade_level": "3e",
+   "source_number": "72",
+   "badge_type": "exercice",
+   "difficulty": 3,
+   "calculator": "autorisee",
+   "title": "",
+   "tags": [],
+   "statement": "Une guirlande électrique est constituée de lumières rouges et bleues.\nLes lumières rouges s'allument toutes les $4$ secondes et les lumières bleues toutes les $6$ secondes.\nÀ un instant donné, on voit les lumières rouges et bleues allumées en même temps.\nAu bout de combien de secondes ce phénomène se reproduira-t-il pour la première fois ? {{blank}}",
+   "response_type": "short_text",
+   "expected": {
+    "type": "integer",
+    "value": 12,
+    "inline": true
+   },
+   "grading": {
+    "max_score": 1,
+    "comparator": "numeric",
+    "tolerance": 0,
+    "bareme_points": 2.0
+   },
+   "effort_points": 2.0,
+   "correction_guide": "Cherche le plus petit multiple commun non nul des deux durées : liste les multiples de chaque nombre jusqu'à trouver le premier commun.",
+   "correction_solution": "Multiples de $4$ : $4, 8, 12, 16, 20, 24...$\nMultiples de $6$ : $6, 12, 18...$\nLe plus petit multiple commun de $4$ et $6$ est $12$.\nCe phénomène se reproduira pour la première fois au bout de $12$ secondes.",
+   "has_figure": false,
+   "crop_file": "303b1818-a70b-4e70-b49c-78ba32593826.png",
+   "figure_file": "",
+   "model": "claude-sonnet-5",
+   "prompt_version": "indigo-adapt-6-priorites"
+  },
+  {
+   "id": "8c8fe026-64ca-4c7d-bbf9-8a8a30c8e0b3",
+   "competency_code": "A1.3",
+   "grade_level": "3e",
+   "source_number": "73",
+   "badge_type": "exercice",
+   "difficulty": 3,
+   "calculator": "autorisee",
+   "title": "",
+   "tags": [],
+   "statement": "{{figure}}\nUn engrenage est composé de deux roues dentées en prise l'une avec l'autre : la roue A, qui possède $36$ dents, et la roue B, qui possède $16$ dents.",
+   "response_type": "composite",
+   "expected": {
+    "type": "composite",
+    "parts": [
+     {
+      "statement": "Si la roue A tourne dans un sens donné, dans quel sens tourne la roue B ?",
+      "response_type": "qcm_single",
+      "expected": {
+       "type": "choice",
+       "correct": [
+        1
+       ]
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "qcm",
+       "negative": 0,
+       "choices": [
+        "Le même sens que la roue A",
+        "Le sens contraire de la roue A"
+       ],
+       "bareme_points": 1.0
+      }
+     },
+     {
+      "statement": "Si la roue A fait $8$ tours complets, combien de tours complets la roue B effectue-t-elle ?",
+      "response_type": "short_text",
+      "expected": {
+       "type": "integer",
+       "value": 18
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "numeric",
+       "tolerance": 0,
+       "bareme_points": 1.0
+      }
+     },
+     {
+      "statement": "Décompose $36$ et $16$ en produits de facteurs premiers.",
+      "response_type": "table_fill",
+      "expected": {
+       "type": "table",
+       "rows": 2,
+       "cols": 1,
+       "cells": [
+        [
+         {
+          "type": "text",
+          "value": "2^2 \\times 3^2"
+         }
+        ],
+        [
+         {
+          "type": "text",
+          "value": "2^4"
+         }
+        ]
+       ]
+      },
+      "grading": {
+       "max_score": 2,
+       "comparator": "table_cells",
+       "cells": [
+        [
+         {
+          "type": "text",
+          "value": "2^2 \\times 3^2"
+         }
+        ],
+        [
+         {
+          "type": "text",
+          "value": "2^4"
+         }
+        ]
+       ],
+       "col_labels": null,
+       "row_labels": [
+        "$36 = $",
+        "$16 = $"
+       ],
+       "bareme_points": 1.0
+      }
+     },
+     {
+      "statement": "Les deux roues tournent jusqu'à revenir, pour la première fois, dans leur position initiale. De combien de dents chaque roue aura-t-elle alors tourné ?",
+      "response_type": "short_text",
+      "expected": {
+       "type": "integer",
+       "value": 144
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "numeric",
+       "tolerance": 0,
+       "bareme_points": 1.0
+      }
+     },
+     {
+      "statement": "Combien de tours complets chaque roue aura-t-elle alors effectués ?",
+      "response_type": "table_fill",
+      "expected": {
+       "type": "table",
+       "rows": 2,
+       "cols": 1,
+       "cells": [
+        [
+         {
+          "type": "integer",
+          "value": 4
+         }
+        ],
+        [
+         {
+          "type": "integer",
+          "value": 9
+         }
+        ]
+       ]
+      },
+      "grading": {
+       "max_score": 2,
+       "comparator": "table_cells",
+       "cells": [
+        [
+         {
+          "type": "integer",
+          "value": 4
+         }
+        ],
+        [
+         {
+          "type": "integer",
+          "value": 9
+         }
+        ]
+       ],
+       "col_labels": null,
+       "row_labels": [
+        "Nombre de tours de la roue A :",
+        "Nombre de tours de la roue B :"
+       ],
+       "bareme_points": 1.0
+      }
+     }
+    ]
+   },
+   "grading": {
+    "max_score": 7.0,
+    "comparator": "composite",
+    "parts": [
+     {
+      "statement": "Si la roue A tourne dans un sens donné, dans quel sens tourne la roue B ?",
+      "response_type": "qcm_single",
+      "expected": {
+       "type": "choice",
+       "correct": [
+        1
+       ]
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "qcm",
+       "negative": 0,
+       "choices": [
+        "Le même sens que la roue A",
+        "Le sens contraire de la roue A"
+       ],
+       "bareme_points": 1.0
+      }
+     },
+     {
+      "statement": "Si la roue A fait $8$ tours complets, combien de tours complets la roue B effectue-t-elle ?",
+      "response_type": "short_text",
+      "expected": {
+       "type": "integer",
+       "value": 18
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "numeric",
+       "tolerance": 0,
+       "bareme_points": 1.0
+      }
+     },
+     {
+      "statement": "Décompose $36$ et $16$ en produits de facteurs premiers.",
+      "response_type": "table_fill",
+      "expected": {
+       "type": "table",
+       "rows": 2,
+       "cols": 1,
+       "cells": [
+        [
+         {
+          "type": "text",
+          "value": "2^2 \\times 3^2"
+         }
+        ],
+        [
+         {
+          "type": "text",
+          "value": "2^4"
+         }
+        ]
+       ]
+      },
+      "grading": {
+       "max_score": 2,
+       "comparator": "table_cells",
+       "cells": [
+        [
+         {
+          "type": "text",
+          "value": "2^2 \\times 3^2"
+         }
+        ],
+        [
+         {
+          "type": "text",
+          "value": "2^4"
+         }
+        ]
+       ],
+       "col_labels": null,
+       "row_labels": [
+        "$36 = $",
+        "$16 = $"
+       ],
+       "bareme_points": 1.0
+      }
+     },
+     {
+      "statement": "Les deux roues tournent jusqu'à revenir, pour la première fois, dans leur position initiale. De combien de dents chaque roue aura-t-elle alors tourné ?",
+      "response_type": "short_text",
+      "expected": {
+       "type": "integer",
+       "value": 144
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "numeric",
+       "tolerance": 0,
+       "bareme_points": 1.0
+      }
+     },
+     {
+      "statement": "Combien de tours complets chaque roue aura-t-elle alors effectués ?",
+      "response_type": "table_fill",
+      "expected": {
+       "type": "table",
+       "rows": 2,
+       "cols": 1,
+       "cells": [
+        [
+         {
+          "type": "integer",
+          "value": 4
+         }
+        ],
+        [
+         {
+          "type": "integer",
+          "value": 9
+         }
+        ]
+       ]
+      },
+      "grading": {
+       "max_score": 2,
+       "comparator": "table_cells",
+       "cells": [
+        [
+         {
+          "type": "integer",
+          "value": 4
+         }
+        ],
+        [
+         {
+          "type": "integer",
+          "value": 9
+         }
+        ]
+       ],
+       "col_labels": null,
+       "row_labels": [
+        "Nombre de tours de la roue A :",
+        "Nombre de tours de la roue B :"
+       ],
+       "bareme_points": 1.0
+      }
+     }
+    ],
+    "bareme_points": 3.5
+   },
+   "effort_points": 3.5,
+   "correction_guide": "Deux roues dentées en prise tournent toujours en sens contraire. Pour comparer leur rotation, utilise le nombre total de dents parcourues (nombre de tours $\\times$ nombre de dents).",
+   "correction_solution": "1. La roue A et la roue B sont en prise : elles tournent en sens contraire l'une de l'autre.\n2. Si la roue A fait $8$ tours, elle fait avancer $8 \\times 36 = 288$ dents. La roue B effectue donc $288 \\div 16 = 18$ tours.\n3. $36 = 2^2 \\times 3^2$ et $16 = 2^4$.\n4.\na. Le PPCM de $36$ et $16$, obtenu à partir des décompositions, est $2^4 \\times 3^2 = 144$. Chaque roue aura donc tourné de $144$ dents.\nb. La roue A aura fait $144 \\div 36 = 4$ tours et la roue B aura fait $144 \\div 16 = 9$ tours.",
+   "has_figure": true,
+   "crop_file": "8c8fe026-64ca-4c7d-bbf9-8a8a30c8e0b3.png",
+   "figure_file": "8c8fe026-64ca-4c7d-bbf9-8a8a30c8e0b3.png",
+   "model": "claude-sonnet-5",
+   "prompt_version": "indigo-adapt-6-priorites"
+  },
+  {
+   "id": "f4785719-5da1-448a-8ae3-f5abd213f235",
+   "competency_code": "A1.3",
+   "grade_level": "3e",
+   "source_number": "74",
+   "badge_type": "exercice",
+   "difficulty": 3,
+   "calculator": "autorisee",
+   "title": "",
+   "tags": [],
+   "statement": "Des archéologues doivent explorer un terrain rectangulaire dont les dimensions sont $6{,}6\\ \\text{m}$ et $8{,}58\\ \\text{m}$, soit $660\\ \\text{cm}$ et $858\\ \\text{cm}$.\nPour faciliter la fouille, le terrain va être divisé en carrés identiques dont chaque côté est un nombre entier de centimètres.",
+   "response_type": "composite",
+   "expected": {
+    "type": "composite",
+    "parts": [
+     {
+      "statement": "Pour chaque affirmation, coche la bonne case.",
+      "response_type": "checkbox_grid",
+      "expected": {
+       "type": "grid",
+       "cols": [
+        "Vrai",
+        "Faux"
+       ],
+       "rows": [
+        {
+         "label": "$33$ est un diviseur de $660$",
+         "correct": 0
+        },
+        {
+         "label": "$33$ est un diviseur de $858$",
+         "correct": 0
+        }
+       ]
+      },
+      "grading": {
+       "max_score": 2,
+       "comparator": "grid",
+       "cols": [
+        "Vrai",
+        "Faux"
+       ],
+       "rows": [
+        {
+         "label": "$33$ est un diviseur de $660$",
+         "correct": 0
+        },
+        {
+         "label": "$33$ est un diviseur de $858$",
+         "correct": 0
+        }
+       ],
+       "bareme_points": 1.0
+      }
+     },
+     {
+      "statement": "Peut-on quadriller le terrain avec des carrés de $33\\ \\text{cm}$ de côté ?",
+      "response_type": "qcm_single",
+      "expected": {
+       "type": "choice",
+       "correct": [
+        0
+       ]
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "qcm",
+       "negative": 0,
+       "choices": [
+        "Oui",
+        "Non"
+       ],
+       "bareme_points": 1.0
+      }
+     },
+     {
+      "statement": "Décompose $660$ et $858$ en produits de facteurs premiers.",
+      "response_type": "table_fill",
+      "expected": {
+       "type": "table",
+       "rows": 2,
+       "cols": 1,
+       "cells": [
+        [
+         {
+          "type": "text",
+          "value": "2^2 \\times 3 \\times 5 \\times 11"
+         }
+        ],
+        [
+         {
+          "type": "text",
+          "value": "2 \\times 3 \\times 11 \\times 13"
+         }
+        ]
+       ]
+      },
+      "grading": {
+       "max_score": 2,
+       "comparator": "table_cells",
+       "cells": [
+        [
+         {
+          "type": "text",
+          "value": "2^2 \\times 3 \\times 5 \\times 11"
+         }
+        ],
+        [
+         {
+          "type": "text",
+          "value": "2 \\times 3 \\times 11 \\times 13"
+         }
+        ]
+       ],
+       "col_labels": null,
+       "row_labels": [
+        "$660 = $",
+        "$858 = $"
+       ],
+       "bareme_points": 1.0
+      }
+     },
+     {
+      "statement": "En utilisant ces décompositions, quelle longueur de côté (en cm), supérieure à $33\\ \\text{cm}$, permet de quadriller le terrain ?",
+      "response_type": "short_text",
+      "expected": {
+       "type": "integer",
+       "value": 66
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "numeric",
+       "tolerance": 0,
+       "bareme_points": 1.0
+      }
+     },
+     {
+      "statement": "Combien de tels carrés faut-il pour quadriller tout le terrain ?",
+      "response_type": "short_text",
+      "expected": {
+       "type": "integer",
+       "value": 130
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "numeric",
+       "tolerance": 0,
+       "bareme_points": 1.0
+      }
+     }
+    ]
+   },
+   "grading": {
+    "max_score": 7.0,
+    "comparator": "composite",
+    "parts": [
+     {
+      "statement": "Pour chaque affirmation, coche la bonne case.",
+      "response_type": "checkbox_grid",
+      "expected": {
+       "type": "grid",
+       "cols": [
+        "Vrai",
+        "Faux"
+       ],
+       "rows": [
+        {
+         "label": "$33$ est un diviseur de $660$",
+         "correct": 0
+        },
+        {
+         "label": "$33$ est un diviseur de $858$",
+         "correct": 0
+        }
+       ]
+      },
+      "grading": {
+       "max_score": 2,
+       "comparator": "grid",
+       "cols": [
+        "Vrai",
+        "Faux"
+       ],
+       "rows": [
+        {
+         "label": "$33$ est un diviseur de $660$",
+         "correct": 0
+        },
+        {
+         "label": "$33$ est un diviseur de $858$",
+         "correct": 0
+        }
+       ],
+       "bareme_points": 1.0
+      }
+     },
+     {
+      "statement": "Peut-on quadriller le terrain avec des carrés de $33\\ \\text{cm}$ de côté ?",
+      "response_type": "qcm_single",
+      "expected": {
+       "type": "choice",
+       "correct": [
+        0
+       ]
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "qcm",
+       "negative": 0,
+       "choices": [
+        "Oui",
+        "Non"
+       ],
+       "bareme_points": 1.0
+      }
+     },
+     {
+      "statement": "Décompose $660$ et $858$ en produits de facteurs premiers.",
+      "response_type": "table_fill",
+      "expected": {
+       "type": "table",
+       "rows": 2,
+       "cols": 1,
+       "cells": [
+        [
+         {
+          "type": "text",
+          "value": "2^2 \\times 3 \\times 5 \\times 11"
+         }
+        ],
+        [
+         {
+          "type": "text",
+          "value": "2 \\times 3 \\times 11 \\times 13"
+         }
+        ]
+       ]
+      },
+      "grading": {
+       "max_score": 2,
+       "comparator": "table_cells",
+       "cells": [
+        [
+         {
+          "type": "text",
+          "value": "2^2 \\times 3 \\times 5 \\times 11"
+         }
+        ],
+        [
+         {
+          "type": "text",
+          "value": "2 \\times 3 \\times 11 \\times 13"
+         }
+        ]
+       ],
+       "col_labels": null,
+       "row_labels": [
+        "$660 = $",
+        "$858 = $"
+       ],
+       "bareme_points": 1.0
+      }
+     },
+     {
+      "statement": "En utilisant ces décompositions, quelle longueur de côté (en cm), supérieure à $33\\ \\text{cm}$, permet de quadriller le terrain ?",
+      "response_type": "short_text",
+      "expected": {
+       "type": "integer",
+       "value": 66
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "numeric",
+       "tolerance": 0,
+       "bareme_points": 1.0
+      }
+     },
+     {
+      "statement": "Combien de tels carrés faut-il pour quadriller tout le terrain ?",
+      "response_type": "short_text",
+      "expected": {
+       "type": "integer",
+       "value": 130
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "numeric",
+       "tolerance": 0,
+       "bareme_points": 1.0
+      }
+     }
+    ],
+    "bareme_points": 4.0
+   },
+   "effort_points": 4.0,
+   "correction_guide": "Pour quadriller un rectangle avec des carrés de côté entier, ce côté doit être un diviseur commun des deux dimensions. Utilise les décompositions en facteurs premiers pour trouver les diviseurs communs.",
+   "correction_solution": "1. $858 \\div 33 = 26$ et $660 \\div 33 = 20$ : $33$ divise bien les deux dimensions, donc on peut quadriller le terrain avec des carrés de $33\\ \\text{cm}$ de côté.\n2. $660 = 2^2 \\times 3 \\times 5 \\times 11$ et $858 = 2 \\times 3 \\times 11 \\times 13$.\n3. Un diviseur commun de $660$ et $858$ supérieur à $33$ est $2 \\times 3 \\times 11 = 66$. On peut donc utiliser des carrés de $66\\ \\text{cm}$ de côté.\n$858 \\div 66 = 13$ carrés dans la longueur et $660 \\div 66 = 10$ carrés dans la largeur, soit $13 \\times 10 = 130$ carrés au total.",
+   "has_figure": false,
+   "crop_file": "f4785719-5da1-448a-8ae3-f5abd213f235.png",
+   "figure_file": "",
+   "model": "claude-sonnet-5",
+   "prompt_version": "indigo-adapt-6-priorites"
+  },
+  {
+   "id": "4a70a6af-e530-4f2e-9e42-ca208e698a2a",
+   "competency_code": "A1.3",
+   "grade_level": "3e",
+   "source_number": "75",
+   "badge_type": "exercice",
+   "difficulty": 3,
+   "calculator": "autorisee",
+   "title": "",
+   "tags": [],
+   "statement": "Sur l'île de Ré, deux phares s'allument à intervalle régulier.\nLe phare A s'allume toutes les $112$ secondes et le phare B toutes les $104$ secondes.\nÀ $10$ h, ils sont tous les deux allumés.\nIls seront de nouveau allumés en même temps pour la première fois à {{blank}} h {{blank}} min {{blank}} s.",
+   "response_type": "multi_blank",
+   "expected": {
+    "type": "table",
+    "rows": 1,
+    "cols": 3,
+    "cells": [
+     [
+      {
+       "type": "integer",
+       "value": 10
+      },
+      {
+       "type": "integer",
+       "value": 24
+      },
+      {
+       "type": "integer",
+       "value": 16
+      }
+     ]
+    ]
+   },
+   "grading": {
+    "max_score": 3,
+    "comparator": "table_cells",
+    "cells": [
+     [
+      {
+       "type": "integer",
+       "value": 10
+      },
+      {
+       "type": "integer",
+       "value": 24
+      },
+      {
+       "type": "integer",
+       "value": 16
+      }
+     ]
+    ],
+    "col_labels": null,
+    "row_labels": null,
+    "bareme_points": 2.5
+   },
+   "effort_points": 2.5,
+   "correction_guide": "Cherche le plus petit multiple commun des deux durées en décomposant $112$ et $104$ en produits de facteurs premiers, puis convertis le résultat en minutes et secondes.",
+   "correction_solution": "$112 = 2^4 \\times 7$ et $104 = 2^3 \\times 13$.\nLe plus petit multiple commun est $2^4 \\times 7 \\times 13 = 1\\,456$.\nLes deux phares s'allumeront donc de nouveau en même temps au bout de $1\\,456$ secondes.\n$1\\,456 = 24 \\times 60 + 16$, donc $1\\,456$ secondes $= 24$ min $16$ s.\nLes phares s'allumeront donc en même temps à $10$ h $24$ min $16$ s.",
+   "has_figure": false,
+   "crop_file": "4a70a6af-e530-4f2e-9e42-ca208e698a2a.png",
+   "figure_file": "",
+   "model": "claude-sonnet-5",
+   "prompt_version": "indigo-adapt-6-priorites"
+  },
+  {
+   "id": "d112b2ab-75e9-4026-8bff-85f6ccc7f022",
+   "competency_code": "A1.3",
+   "grade_level": "3e",
+   "source_number": "76",
+   "badge_type": "expert",
+   "difficulty": 5,
+   "calculator": "autorisee",
+   "title": "",
+   "tags": [],
+   "statement": "Quatre roues dentées forment l'engrenage ci-dessous.\n{{figure}}\nLa roue A comporte $20$ dents, la roue B comporte $8$ dents, la roue C comporte $10$ dents et la roue D comporte $7$ dents.\nCombien de tours aura effectué chaque roue pour revenir pour la deuxième fois dans sa position initiale ?\nComplète le tableau.",
+   "response_type": "table_fill",
+   "expected": {
+    "type": "table",
+    "rows": 4,
+    "cols": 1,
+    "cells": [
+     [
+      {
+       "type": "integer",
+       "value": 28
+      }
+     ],
+     [
+      {
+       "type": "integer",
+       "value": 70
+      }
+     ],
+     [
+      {
+       "type": "integer",
+       "value": 56
+      }
+     ],
+     [
+      {
+       "type": "integer",
+       "value": 80
+      }
+     ]
+    ]
+   },
+   "grading": {
+    "max_score": 4,
+    "comparator": "table_cells",
+    "cells": [
+     [
+      {
+       "type": "integer",
+       "value": 28
+      }
+     ],
+     [
+      {
+       "type": "integer",
+       "value": 70
+      }
+     ],
+     [
+      {
+       "type": "integer",
+       "value": 56
+      }
+     ],
+     [
+      {
+       "type": "integer",
+       "value": 80
+      }
+     ]
+    ],
+    "col_labels": null,
+    "row_labels": [
+     "Nombre de tours de la roue A :",
+     "Nombre de tours de la roue B :",
+     "Nombre de tours de la roue C :",
+     "Nombre de tours de la roue D :"
+    ],
+    "bareme_points": 3.0
+   },
+   "effort_points": 3.0,
+   "correction_guide": "Cherche le plus petit multiple commun des nombres de dents, double-le, puis divise ce nombre par le nombre de dents de chaque roue.",
+   "correction_solution": "$20 = 2^2 \\times 5$ ; $8 = 2^3$ ; $10 = 2 \\times 5$ et $7$ est premier.\nLe plus petit multiple commun est $2^3 \\times 5 \\times 7 = 280$.\nPour revenir pour la deuxième fois dans la position initiale, les roues auront tourné de $280 \\times 2 = 560$ dents.\n$560 \\div 20 = 28$ tours pour la roue A.\n$560 \\div 8 = 70$ tours pour la roue B.\n$560 \\div 10 = 56$ tours pour la roue C.\n$560 \\div 7 = 80$ tours pour la roue D.",
+   "has_figure": true,
+   "crop_file": "d112b2ab-75e9-4026-8bff-85f6ccc7f022.png",
+   "figure_file": "d112b2ab-75e9-4026-8bff-85f6ccc7f022.png",
+   "model": "claude-sonnet-5",
+   "prompt_version": "indigo-adapt-6-priorites"
+  },
+  {
+   "id": "1131aefb-203a-41f4-9263-e49e8ca23827",
+   "competency_code": "A1.3",
+   "grade_level": "3e",
+   "source_number": "77",
+   "badge_type": "expert",
+   "difficulty": 5,
+   "calculator": "autorisee",
+   "title": "",
+   "tags": [],
+   "statement": "Une boulangerie dispose de $140$ réglisses et $350$ têtes brûlées.\n{{figure}}\nElle souhaite préparer des sachets tous identiques composés de réglisses et de têtes brûlées, sans qu'il lui reste de bonbons.",
+   "response_type": "composite",
+   "expected": {
+    "type": "composite",
+    "parts": [
+     {
+      "statement": "La boulangère peut-elle préparer $14$ sachets identiques sans qu'il reste de bonbons ?",
+      "response_type": "qcm_single",
+      "expected": {
+       "type": "choice",
+       "correct": [
+        0
+       ]
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "qcm",
+       "negative": 0,
+       "choices": [
+        "Oui",
+        "Non"
+       ],
+       "bareme_points": 1.0
+      }
+     },
+     {
+      "statement": "La boulangère peut-elle préparer $28$ sachets identiques sans qu'il reste de bonbons ?",
+      "response_type": "qcm_single",
+      "expected": {
+       "type": "choice",
+       "correct": [
+        1
+       ]
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "qcm",
+       "negative": 0,
+       "choices": [
+        "Oui",
+        "Non"
+       ],
+       "bareme_points": 1.0
+      }
+     },
+     {
+      "statement": "Si elle prépare $14$ sachets, complète la composition de chaque sachet.",
+      "response_type": "table_fill",
+      "expected": {
+       "type": "table",
+       "rows": 2,
+       "cols": 1,
+       "cells": [
+        [
+         {
+          "type": "integer",
+          "value": 10
+         }
+        ],
+        [
+         {
+          "type": "integer",
+          "value": 25
+         }
+        ]
+       ]
+      },
+      "grading": {
+       "max_score": 2,
+       "comparator": "table_cells",
+       "cells": [
+        [
+         {
+          "type": "integer",
+          "value": 10
+         }
+        ],
+        [
+         {
+          "type": "integer",
+          "value": 25
+         }
+        ]
+       ],
+       "col_labels": null,
+       "row_labels": [
+        "Nombre de réglisses par sachet :",
+        "Nombre de têtes brûlées par sachet :"
+       ],
+       "bareme_points": 1.0
+      }
+     },
+     {
+      "statement": "Quel est le plus grand nombre de sachets identiques que la boulangère peut réaliser ?",
+      "response_type": "short_text",
+      "expected": {
+       "type": "integer",
+       "value": 70
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "numeric",
+       "tolerance": 0,
+       "bareme_points": 1.0
+      }
+     },
+     {
+      "statement": "Dans ce cas, complète la composition de chaque sachet.",
+      "response_type": "table_fill",
+      "expected": {
+       "type": "table",
+       "rows": 2,
+       "cols": 1,
+       "cells": [
+        [
+         {
+          "type": "integer",
+          "value": 2
+         }
+        ],
+        [
+         {
+          "type": "integer",
+          "value": 5
+         }
+        ]
+       ]
+      },
+      "grading": {
+       "max_score": 2,
+       "comparator": "table_cells",
+       "cells": [
+        [
+         {
+          "type": "integer",
+          "value": 2
+         }
+        ],
+        [
+         {
+          "type": "integer",
+          "value": 5
+         }
+        ]
+       ],
+       "col_labels": null,
+       "row_labels": [
+        "Nombre de réglisses par sachet :",
+        "Nombre de têtes brûlées par sachet :"
+       ],
+       "bareme_points": 1.0
+      }
+     }
+    ]
+   },
+   "grading": {
+    "max_score": 7.0,
+    "comparator": "composite",
+    "parts": [
+     {
+      "statement": "La boulangère peut-elle préparer $14$ sachets identiques sans qu'il reste de bonbons ?",
+      "response_type": "qcm_single",
+      "expected": {
+       "type": "choice",
+       "correct": [
+        0
+       ]
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "qcm",
+       "negative": 0,
+       "choices": [
+        "Oui",
+        "Non"
+       ],
+       "bareme_points": 1.0
+      }
+     },
+     {
+      "statement": "La boulangère peut-elle préparer $28$ sachets identiques sans qu'il reste de bonbons ?",
+      "response_type": "qcm_single",
+      "expected": {
+       "type": "choice",
+       "correct": [
+        1
+       ]
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "qcm",
+       "negative": 0,
+       "choices": [
+        "Oui",
+        "Non"
+       ],
+       "bareme_points": 1.0
+      }
+     },
+     {
+      "statement": "Si elle prépare $14$ sachets, complète la composition de chaque sachet.",
+      "response_type": "table_fill",
+      "expected": {
+       "type": "table",
+       "rows": 2,
+       "cols": 1,
+       "cells": [
+        [
+         {
+          "type": "integer",
+          "value": 10
+         }
+        ],
+        [
+         {
+          "type": "integer",
+          "value": 25
+         }
+        ]
+       ]
+      },
+      "grading": {
+       "max_score": 2,
+       "comparator": "table_cells",
+       "cells": [
+        [
+         {
+          "type": "integer",
+          "value": 10
+         }
+        ],
+        [
+         {
+          "type": "integer",
+          "value": 25
+         }
+        ]
+       ],
+       "col_labels": null,
+       "row_labels": [
+        "Nombre de réglisses par sachet :",
+        "Nombre de têtes brûlées par sachet :"
+       ],
+       "bareme_points": 1.0
+      }
+     },
+     {
+      "statement": "Quel est le plus grand nombre de sachets identiques que la boulangère peut réaliser ?",
+      "response_type": "short_text",
+      "expected": {
+       "type": "integer",
+       "value": 70
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "numeric",
+       "tolerance": 0,
+       "bareme_points": 1.0
+      }
+     },
+     {
+      "statement": "Dans ce cas, complète la composition de chaque sachet.",
+      "response_type": "table_fill",
+      "expected": {
+       "type": "table",
+       "rows": 2,
+       "cols": 1,
+       "cells": [
+        [
+         {
+          "type": "integer",
+          "value": 2
+         }
+        ],
+        [
+         {
+          "type": "integer",
+          "value": 5
+         }
+        ]
+       ]
+      },
+      "grading": {
+       "max_score": 2,
+       "comparator": "table_cells",
+       "cells": [
+        [
+         {
+          "type": "integer",
+          "value": 2
+         }
+        ],
+        [
+         {
+          "type": "integer",
+          "value": 5
+         }
+        ]
+       ],
+       "col_labels": null,
+       "row_labels": [
+        "Nombre de réglisses par sachet :",
+        "Nombre de têtes brûlées par sachet :"
+       ],
+       "bareme_points": 1.0
+      }
+     }
+    ],
+    "bareme_points": 3.5
+   },
+   "effort_points": 3.5,
+   "correction_guide": "Le nombre de sachets doit être un diviseur commun des deux quantités. Utilise les décompositions en produits de facteurs premiers pour trouver le plus grand diviseur commun.",
+   "correction_solution": "$140 \\div 14 = 10$ et $350 \\div 14 = 25$ : la boulangère peut préparer $14$ sachets, chacun avec $10$ réglisses et $25$ têtes brûlées.\n$140 \\div 28 = 5$ mais $350 \\div 28$ n'est pas entier : $28$ n'est pas un diviseur de $350$, elle ne peut donc pas préparer $28$ sachets.\nOn décompose : $140 = 2^2 \\times 5 \\times 7$ et $350 = 2 \\times 5^2 \\times 7$.\nLe plus grand diviseur commun est $2 \\times 5 \\times 7 = 70$.\nLa boulangère peut préparer $70$ sachets au maximum, chacun avec $140 \\div 70 = 2$ réglisses et $350 \\div 70 = 5$ têtes brûlées.",
+   "has_figure": true,
+   "crop_file": "1131aefb-203a-41f4-9263-e49e8ca23827.png",
+   "figure_file": "",
+   "model": "claude-sonnet-5",
+   "prompt_version": "indigo-adapt-6-priorites"
+  },
   {
    "id": "ee7d5b99-af8d-4134-9156-8a425755149a",
    "competency_code": "A1.2",
@@ -755,6 +3128,110 @@
    "crop_file": "42e573d4-5ba0-45e3-80cb-306edf0401e8.png",
    "figure_file": "",
    "model": "gemini-flash-latest",
+   "prompt_version": "indigo-adapt-5-matching"
+  },
+  {
+   "id": "934f58bd-9f23-4102-880e-d51bca554bb4",
+   "competency_code": "A1.1",
+   "grade_level": "3e",
+   "source_number": "39",
+   "badge_type": "exercice",
+   "difficulty": 3,
+   "calculator": "autorisee",
+   "title": "",
+   "tags": [],
+   "statement": "1. Si la roue A tourne dans le sens de la flèche, dans quel sens tourne la roue B ?\n2. Si la roue A fait 6 tours complets, combien en fait la roue B ?\n3. Combien de tours complets fait la roue A si la roue B en fait 3 ?",
+   "response_type": "short_text",
+   "expected": {},
+   "grading": {},
+   "effort_points": 1.0,
+   "correction_guide": "À compléter : guide d'auto-correction (rappel de leçon + piège), à saisir.",
+   "correction_solution": "À compléter : corrigé de référence à saisir.",
+   "has_figure": true,
+   "crop_file": "934f58bd-9f23-4102-880e-d51bca554bb4.png",
+   "figure_file": "934f58bd-9f23-4102-880e-d51bca554bb4.png",
+   "model": "",
+   "prompt_version": ""
+  },
+  {
+   "id": "4538c9f8-36e2-4cf7-aa2a-263ba34e005d",
+   "competency_code": "A1.1",
+   "grade_level": "3e",
+   "source_number": "42",
+   "badge_type": "expert",
+   "difficulty": 5,
+   "calculator": "autorisee",
+   "title": "",
+   "tags": [],
+   "statement": "Prouve que la somme d'un nombre pair et d'un nombre impair est toujours un nombre impair.",
+   "response_type": "multiline_text",
+   "expected": {
+    "type": "rubric",
+    "steps": [
+     {
+      "description": "Écrire un nombre pair sous forme littérale",
+      "expected_text": "$2a$",
+      "points": 1
+     },
+     {
+      "description": "Écrire un nombre impair sous forme littérale",
+      "expected_text": "$2b+1$",
+      "points": 1
+     },
+     {
+      "description": "Additionner et conclure sur la parité",
+      "expected_text": "$2a+(2b+1)=2(a+b)+1$, qui est impair",
+      "points": 1
+     }
+    ]
+   },
+   "grading": {
+    "max_score": 3,
+    "comparator": "rubric",
+    "steps": [
+     {
+      "description": "Écrire un nombre pair sous forme littérale",
+      "expected_text": "$2a$",
+      "points": 1
+     },
+     {
+      "description": "Écrire un nombre impair sous forme littérale",
+      "expected_text": "$2b+1$",
+      "points": 1
+     },
+     {
+      "description": "Additionner et conclure sur la parité",
+      "expected_text": "$2a+(2b+1)=2(a+b)+1$, qui est impair",
+      "points": 1
+     }
+    ],
+    "rubric": [
+     {
+      "description": "Écrire un nombre pair sous forme littérale",
+      "expected_text": "$2a$",
+      "points": 1
+     },
+     {
+      "description": "Écrire un nombre impair sous forme littérale",
+      "expected_text": "$2b+1$",
+      "points": 1
+     },
+     {
+      "description": "Additionner et conclure sur la parité",
+      "expected_text": "$2a+(2b+1)=2(a+b)+1$, qui est impair",
+      "points": 1
+     }
+    ],
+    "lines": 5,
+    "bareme_points": 2.0
+   },
+   "effort_points": 2.0,
+   "correction_guide": "Un nombre pair s'écrit $2a$ et un nombre impair s'écrit $2b+1$, avec $a$ et $b$ des entiers naturels. Utilise deux lettres différentes pour les deux nombres avant de les additionner.",
+   "correction_solution": "Soit $a$ et $b$ deux entiers naturels. Un nombre pair s'écrit sous la forme $2a$ et un nombre impair s'écrit sous la forme $2b+1$.\nLeur somme est $2a+(2b+1)=2(a+b)+1$.\nCette expression est de la forme $2k+1$ (avec $k=a+b$ entier naturel), donc la somme d'un nombre pair et d'un nombre impair est toujours un nombre impair.",
+   "has_figure": true,
+   "crop_file": "4538c9f8-36e2-4cf7-aa2a-263ba34e005d.png",
+   "figure_file": "",
+   "model": "claude-sonnet-5",
    "prompt_version": "indigo-adapt-5-matching"
   }
  ]

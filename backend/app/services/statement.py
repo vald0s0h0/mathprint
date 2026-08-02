@@ -275,6 +275,14 @@ def subquestion_label(line: str) -> tuple[str, str] | None:
     return m.group(1), line[m.end():]
 
 
+def strip_subquestion_label(text: str) -> str:
+    """Retire l'étiquette « a. » / « 1. » de tête, quand c'est le RENDU qui
+    numérote (sous-questions d'un composite, lignes d'une grille ou d'un
+    tableau) : gardée, elle s'imprimerait en double."""
+    got = subquestion_label((text or "").lstrip())
+    return got[1].strip() if got else (text or "").strip()
+
+
 def _in_math(text: str, pos: int) -> bool:
     """`pos` tombe-t-il à l'intérieur d'un span $...$ ? Le balisage est
     équilibré (garanti par exercise_gen._check_text -> has_valid_math), donc un

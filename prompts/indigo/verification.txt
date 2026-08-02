@@ -154,6 +154,34 @@ Ne change `response_type` que lorsque le format actuel :
 
 Conserve une production de résultat lorsque le manuel demande réellement de calculer. Ne transforme pas artificiellement un calcul en QCM.
 
+L'ordre de priorité des formats est, du plus souhaitable au dernier recours :
+
+1. `qcm_single`, `qcm_multiple`, `checkbox_grid` (l'élève coche) ;
+2. `matching` (l'élève relie) ;
+3. `short_text` (une réponse courte dans une case) ;
+4. `table_fill` (plusieurs réponses de même nature) ;
+5. `multi_blank` (des trous dans le fil d'une phrase ou d'une égalité) ;
+6. `multiline_text` (raisonnement rédigé) ;
+7. `manual_drawing` (tracé, construction, coloriage — correction manuelle).
+
+Ces sept formats sont tous AUTORISÉS, `manual_drawing` compris. Cet ordre prévaut sur
+toute mention de « dernier recours » figurant dans le schéma technique ajouté plus bas,
+dont la numérotation décrit la structure JSON et non une préférence. Ne fais REMONTER un
+exercice d'un cran que si le format supérieur évalue vraiment la même compétence.
+
+---
+
+# CHAMP DE RÉPONSE OBLIGATOIRE
+
+Chaque exercice à question unique, et CHAQUE sous-question, doit posséder son propre
+champ de réponse. Un énoncé sans endroit où répondre, ou une consigne (« Justifie… »)
+laissée sans champ, est une FAUTE à corriger.
+
+Les cases `{{blank}}` n'existent que dans `short_text` (exactement une) et `multi_blank`
+(une par valeur attendue). Dans tous les autres formats, le champ est dessiné
+automatiquement : un `{{blank}}` resté dans leur `statement` est une case orpheline, à
+RETIRER.
+
 ---
 
 # RÈGLE DES LISTES
@@ -168,16 +196,33 @@ FAUTE GRAVE à corriger : un SEUL champ de réponse (surtout un `multiline_text`
 
 Si le candidat regroupe plusieurs sous-questions dans un champ unique, RESTRUCTURE :
 
-* une SÉRIE de sous-questions fermées (vrai/faux, oui/non, « est-ce un multiple de… ») → `checkbox_grid` (une LIGNE par affirmation) ou des QCM ;
-* des réponses courtes → une case `{{blank}}` PAR sous-question (`multi_blank`) ;
-* un exercice qui MÉLANGE des formats (ex. une grille Vrai/Faux ET une réponse chiffrée) → un `composite` (une partie par format) ;
+* une SÉRIE de sous-questions fermées (vrai/faux, oui/non, « est-ce un multiple de… ») → un `qcm_multiple` « Coche… » (une PROPOSITION par affirmation), jamais une grille ;
+* une série de réponses courtes de même nature → un `table_fill` (une ligne par
+  sous-question), ou une case `{{blank}}` par trou si les trous sont dans le fil du texte
+  (`multi_blank`) ;
+* un exercice qui MÉLANGE des formats (ex. un QCM à cocher ET une réponse chiffrée) → un `composite` (une partie par format) ; dans un composite, une partie ne commence JAMAIS par « a. » / « b. » / « 1. » — la plateforme numérote les sous-questions, l'étiquette s'imprimerait en double (« a. a. ») : RETIRE-la ;
 * `multiline_text` uniquement pour un vrai problème à démontrer, et JAMAIS pour plus d'une question.
 
 Une sous-question qui en contient deux (« $2$ divise-t-il $A$ ? Et $B$ ? ») doit être SCINDÉE.
 
-# GRILLE COCHÉE (`checkbox_grid`)
+# GRILLE COCHÉE (`checkbox_grid`) — À CONVERTIR EN QCM DANS LA PLUPART DES CAS
 
-`answer = {"type":"grid","cols":[str] (2-4),"rows":[{"label":str,"correct":int}] (2-12)}`. Vérifie mathématiquement la bonne colonne (`correct`, indice 0-based) de CHAQUE ligne. `statement` ne porte que la consigne commune ; les sous-questions vivent dans `rows[].label`.
+La grille est ENCOMBRANTE (une ligne par item, une colonne par option, plus les en-têtes).
+Elle n'est légitime que dans DEUX cas :
+
+1. 4 colonnes d'options (plus de 3 cases à cocher par ligne) ;
+2. des colonnes qui sont des CATÉGORIES à distinguer — `["numérateur","dénominateur"]`, `["pair","impair"]`, `["premier","composé"]` — et non un jugement.
+
+FAUTE À CORRIGER SYSTÉMATIQUEMENT : une grille dont les colonnes sont `["Vrai","Faux"]` ou `["Oui","Non"]`. CONVERTIS-la en `qcm_multiple` :
+
+* `statement` devient « Coche les affirmations vraies. » (ou « Coche tous les nombres qui… ») ;
+* chaque `rows[].label` devient une proposition de `choices` ;
+* `answer` devient `{"type":"choice","correct":[…]}` avec les indices des propositions VRAIES ;
+* il faut au moins une proposition vraie ET une fausse : si la liste n'en contient pas, ajoute la proposition manquante plutôt que de garder la grille.
+
+Exemple : grille Oui/Non « est-ce un diviseur de $28$ ? » sur 10 lignes → `qcm_multiple` « Coche tous les diviseurs de $28$. », `choices` = les 10 nombres.
+
+Quand la grille est légitime : `answer = {"type":"grid","cols":[str] (2-4),"rows":[{"label":str,"correct":int}] (2-12)}`. Vérifie mathématiquement la bonne colonne (`correct`, indice 0-based) de CHAQUE ligne. `statement` ne porte que la consigne commune ; les items vivent dans `rows[].label`.
 
 ---
 
@@ -189,26 +234,33 @@ Pour `qcm_single` et `qcm_multiple` :
 * `statement` contient uniquement la consigne ;
 * `answer.correct` contient des indices 0-based ;
 * VÉRIFIE mathématiquement chaque proposition (ne considère jamais un indice correct au seul motif qu'il est syntaxiquement valide) ;
-* `qcm_single` : exactement un indice correct.
+* `qcm_single` : exactement un indice correct ; `qcm_multiple` : au moins un correct, jamais tous.
+
+PLACE SUR LA PAGE : le nombre de colonnes d'impression dépend de la proposition la PLUS LONGUE (hors `$`) — ≤ 6 caractères et au moins 6 propositions → 3 colonnes ; ≤ 16 caractères → 2 colonnes ; au-delà → 1 colonne (liste), bien plus encombrant. RACCOURCIS une proposition qui déborde en déplaçant le contexte commun dans `statement`, sans changer la tâche.
 
 ---
 
 # `short_text`
 
-Une réponse unique peut être présentée SANS marqueur `{{blank}}` dans le `statement` : la plateforme ajoute automatiquement une case en bloc.
+La case est OBLIGATOIRE : une réponse unique porte EXACTEMENT un `{{blank}}` dans son
+`statement`, à l'endroit le plus naturel de la lecture. Si le candidat n'en a pas, AJOUTE-la.
 
 ```text
-Calcule $17 \times 14$.
+Calcule $17 \times 14$. {{blank}}
 ```
 
-avec `"answer": {"value": "238"}` est parfaitement valide. L'absence de `{{blank}}` n'est PAS une erreur.
+avec `"answer": {"type": "integer", "value": 238}`. `answer.type` est toujours présent
+(`integer`, `decimal`, `rational`, `expression` ou `text`).
 
 ---
 
 # `multi_blank`
 
-* chaque sous-question demandant une réponse possède sa propre case `{{blank}}` ;
-* `answer.values` possède exactement une valeur par case, dans le même ordre ;
+* réservé aux trous qui appartiennent à la PHRASE ou à l'ÉGALITÉ elle-même
+  (« $47 = 5 \times${{blank}}$ +${{blank}} ») ; une série de sous-questions régulières
+  a./b./c. relève du `table_fill` ;
+* `answer.values` possède exactement une valeur par case, dans le même ordre, chaque
+  valeur étant un objet `{"type": ..., "value": ...}` (jamais une chaîne nue) ;
 * ne concatène jamais plusieurs réponses indépendantes en une seule.
 
 ---

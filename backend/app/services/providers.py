@@ -48,8 +48,15 @@ _HTTP_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="llm-http")
 
 
 def _post_with_deadline(url: str, *, headers: dict, json_body: dict,
-                        timeout: float, provider: str) -> httpx.Response:
-    total = settings.llm_call_timeout_s
+                        timeout: float, provider: str,
+                        total_timeout: float | None = None) -> httpx.Response:
+    # `total_timeout` : délai TOTAL propre à l'appelant. Le défaut
+    # (llm_call_timeout_s) est calibré sur des réponses courtes ; une génération
+    # légitimement longue (un LOT d'exercices Indigo = plusieurs milliers de
+    # tokens de sortie) le dépasse sans être bloquée pour autant — l'abandonner
+    # à 180 s faisait échouer TOUS les lots, qui repartaient un par un et
+    # épuisaient le budget quotidien (cf. incident A1.3 du 02/08).
+    total = total_timeout or settings.llm_call_timeout_s
     started = time.monotonic()
     future = _HTTP_POOL.submit(httpx.post, url, headers=headers,
                                json=json_body, timeout=timeout)
@@ -102,6 +109,14 @@ def _today_cost(db: Session, provider: str) -> float:
     rows = db.query(ApiUsageEvent).filter(
         ApiUsageEvent.provider == provider, ApiUsageEvent.created_at >= since).all()
     return sum(r.estimated_cost for r in rows)
+
+
+def budget_state(db: Session, provider: str) -> tuple[float, float]:
+    """(dépense des 24 dernières heures, plafond) pour un fournisseur — de quoi
+    NOMMER la cause quand une pipeline s'arrête sur `BudgetExceeded` au lieu de
+    laisser l'utilisateur deviner (cf. incident A1.3 du 02/08 : 20 exercices
+    « non adaptés », sans un mot sur le plafond atteint)."""
+    return _today_cost(db, provider), float(settings.llm_daily_cost_limit_eur)
 
 
 def _record(db: Session, provider: str, model: str, operation: str, *,
@@ -160,7 +175,11 @@ def mathpix_ocr(db: Session, image_bytes: bytes, correlation_id: str,
     """POST /v3/text sur un crop isolé (jamais la page complète, §6.3).
     Retourne {latex, text, confidence, raw}."""
     cfg = _config(db, "mathpix")
-    if _today_cost(db, "mathpix") > settings.llm_daily_cost_limit_eur * 5:
+    # plafond PROPRE à Mathpix : il était adossé à llm_daily_cost_limit_eur (×5),
+    # si bien que relever le budget des LLM relevait aussi, en silence, celui de
+    # l'OCR des copies — deux dépenses sans rapport (cf. passage de 2 à 10 € le
+    # 02/08). Le défaut reproduit exactement l'ancienne valeur effective.
+    if _today_cost(db, "mathpix") > settings.mathpix_daily_cost_limit_eur:
         raise BudgetExceeded("Quota Mathpix quotidien atteint")
 
     if _mock_enabled(db, cfg):
@@ -209,7 +228,8 @@ def mathpix_ocr(db: Session, image_bytes: bytes, correlation_id: str,
 
 def deepseek_json(db: Session, operation: str, system: str, user_payload: dict,
                   max_tokens: int = 500, reasoning: bool = False,
-                  correlation_id: str | None = None, model: str | None = None) -> dict:
+                  correlation_id: str | None = None, model: str | None = None,
+                  total_timeout: float | None = None) -> dict:
     """Appel DeepSeek en sortie JSON stricte. Une seule tentative corrective (§8.5).
     `model` permet d'imposer un modèle (ex : deepseek-v4-pro pour la création
     d'exercices) ; sinon registre configurable (RM-011)."""
@@ -238,7 +258,8 @@ def deepseek_json(db: Session, operation: str, system: str, user_payload: dict,
     for attempt in range(2):  # un seul retry correctif
         r = _post_with_deadline("https://api.deepseek.com/chat/completions",
                                 headers={"Authorization": f"Bearer {cfg.encrypted_secret}"},
-                                json_body=body, timeout=60, provider="DeepSeek")
+                                json_body=body, timeout=60, provider="DeepSeek",
+                                total_timeout=total_timeout)
         r.raise_for_status()
         data = r.json()
         usage = data.get("usage", {})
@@ -435,7 +456,8 @@ def claude_text(db: Session, operation: str, system: str, user_text: str,
 
 def claude_json(db: Session, operation: str, system: str, payload: dict,
                 max_tokens: int = 500, model: str | None = None,
-                correlation_id: str | None = None) -> dict:
+                correlation_id: str | None = None,
+                total_timeout: float | None = None) -> dict:
     """Claude en mode JSON pour vérification croisée (exercices, rappels) et
     pour l'adaptateur Sésamaths (JSON brut -> contrat app, texte pur, pas
     d'image). `model` explicite prioritaire sur la config."""
@@ -493,7 +515,7 @@ def claude_json(db: Session, operation: str, system: str, payload: dict,
             "system": [{"type": "text", "text": system_text, "cache_control": {"type": "ephemeral"}}],
             "messages": messages,
         },
-        timeout=60, provider="Claude",
+        timeout=60, provider="Claude", total_timeout=total_timeout,
     )
     r.raise_for_status()
     data = r.json()

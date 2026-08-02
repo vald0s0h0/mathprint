@@ -1,0 +1,8 @@
+{
+  // Extensions conseillées pour ce dépôt (VS Code proposera de les installer).
+  "recommendations": [
+    "ms-python.python",
+    "ms-python.debugpy",
+    "ms-python.vscode-pylance"
+  ]
+}

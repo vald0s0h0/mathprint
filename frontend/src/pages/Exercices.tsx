@@ -69,13 +69,17 @@ const isProbleme = (ex: { badge_type: string }) => ex.badge_type === 'probleme' 
 const BADGE_LABEL: Record<string, string> = {
   exercice: 'Exercice', flash: 'Flash', expert: 'Expert', enigme: 'Énigme', probleme: 'Problème',
 }
+// Listés dans l'ORDRE DE PRIORITÉ imposé au générateur (cf.
+// prompts/indigo/generation.txt) : cocher > relier > écrire court > tableau >
+// cases dans le texte > rédiger > tracer.
 const RESPONSE_TYPES = [
   { value: 'qcm_single', label: 'QCM (une réponse)' },
   { value: 'qcm_multiple', label: 'QCM (plusieurs)' },
   { value: 'checkbox_grid', label: 'Grille cochée (Vrai/Faux…)' },
+  { value: 'matching', label: 'Points à relier' },
   { value: 'short_text', label: 'Réponse courte' },
-  { value: 'multi_blank', label: 'Cases à trous' },
   { value: 'table_fill', label: 'Tableau à remplir' },
+  { value: 'multi_blank', label: 'Cases à trous' },
   { value: 'multiline_text', label: 'Raisonnement rédigé' },
   { value: 'manual_drawing', label: 'Tracé (correction manuelle)' },
   { value: 'composite', label: 'Composite (types mixtes)' },
@@ -155,6 +159,39 @@ function ResponseZone({ ex }: { ex: Exercise }) {
       </Table>
     )
   }
+  if (rt === 'matching') {
+    // deux colonnes reliées par l'élève : on montre les pastilles de départ et
+    // d'arrivée, jamais les paires attendues (vue élève).
+    const left: string[] = ex.expected?.left ?? []
+    const right: string[] = ex.expected?.right ?? []
+    const dot = { width: 7, height: 7, borderRadius: 7, background: '#888', flex: '0 0 auto' }
+    return (
+      <Group mt={8} align="flex-start" justify="space-between" wrap="nowrap" gap={24}>
+        <Box style={{ flex: 1 }}>
+          {left.map((l, i) => (
+            <Group key={i} gap={8} wrap="nowrap" mb={6}>
+              <MathText text={l} size="sm" /><Box style={dot} />
+            </Group>
+          ))}
+        </Box>
+        <Box style={{ flex: 1 }}>
+          {right.map((r, i) => (
+            <Group key={i} gap={8} wrap="nowrap" mb={6}>
+              <Box style={dot} /><MathText text={r} size="sm" />
+            </Group>
+          ))}
+        </Box>
+      </Group>
+    )
+  }
+  if (rt === 'manual_drawing')
+    // cadre libre : l'élève trace/complète, la correction est manuelle
+    return (
+      <Box mt={8} style={{ height: 90, border: '1px dashed var(--mantine-color-gray-5)',
+        borderRadius: 3, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <Text size="xs" c="dimmed">Cadre de tracé (correction manuelle)</Text>
+      </Box>
+    )
   if (rt === 'short_text' && !inlineBlank)
     return <Box mt={8} style={{ height: 26, border: '1px solid var(--mantine-color-gray-5)', borderRadius: 3 }} />
   if (rt === 'multiline_text') {

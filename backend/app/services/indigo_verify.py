@@ -30,7 +30,7 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..models import Competency
-from . import exercise_gen, indigo_gemini, indigo_llm, prompts
+from . import exercise_gen, indigo_gemini, indigo_llm, prompts, providers
 from .gemini_gen import _competency_name, _competency_tree
 
 logger = logging.getLogger("app.indigo")
@@ -80,7 +80,7 @@ def _system_prompt(db: Session, competency: Competency, grade: str) -> str:
              .replace("§DOMAIN§", f"{competency.domain_code} {competency.domain_name}".strip())
              .replace("§COMPETENCY_TREE§", _competency_tree(db, competency)))
     contract = exercise_gen.format_contract(
-        intro, geometry_rules=exercise_gen._GEOMETRY_RULES)
+        intro, geometry_rules=indigo_gemini._INDIGO_GEOMETRY_RULES)
     contract += (
         "\n\nAJOUT AU SCHÉMA : chaque objet exercice porte EN PLUS "
         "\"source_number\":str (le numéro du manuel), \"correction_solution\":str "
@@ -206,6 +206,14 @@ def review(db: Session, competency: Competency, grade: str,
                         f"{min(i + len(batch), len(ready))}/{len(ready)}…")
         try:
             corrected = _review_batch(db, competency, grade, batch)
+        except providers.BudgetExceeded as e:
+            # plafond atteint : les lots suivants échoueraient tous à l'identique
+            logger.warning("Indigo/relecture : ARRÊTÉE (%s) — %s ; versions adaptées "
+                           "conservées", competency.code, e)
+            if progress_cb:
+                progress_cb(f"⛔ {competency.short_id or competency.code} : relecture "
+                            f"finale non effectuée — {e}.")
+            break
         except Exception:
             logger.exception("Indigo/relecture : lot échoué (%s) — versions adaptées conservées",
                              competency.code)

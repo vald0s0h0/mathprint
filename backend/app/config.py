@@ -73,9 +73,17 @@ class Settings(BaseSettings):
     indigo_anthropic_segment_model: str = "claude-sonnet-5"
     indigo_anthropic_adapt_model: str = "claude-sonnet-5"
     indigo_anthropic_review_model: str = "claude-opus-5"
-    # plafond de sortie côté Anthropic (Claude gère de larges sorties) ; les lots
-    # Indigo (5-7 / 6-8) tiennent très en dessous.
+    # plafond de sortie côté Anthropic (Claude gère de larges sorties). Mesure
+    # du 02/08 : un exercice adapté coûte 400 à 5 800 tokens de sortie (moyenne
+    # ~1 800), donc un lot de 4 tient sous 16 000 dans le cas courant — et
+    # indigo_llm._output_budgets double/quadruple ce plafond si la réponse est
+    # quand même tronquée, au lieu de perdre le lot entier.
     indigo_anthropic_max_output_tokens: int = 16000
+    # délai TOTAL d'un appel LLM Indigo. Le défaut global (llm_call_timeout_s,
+    # 180 s) est calibré sur des réponses courtes : un lot d'exercices met
+    # plusieurs minutes à s'écrire, et l'abandonner renvoyait tout le lot en
+    # adaptation un par un (5-7x plus d'appels → budget quotidien épuisé).
+    indigo_llm_call_timeout_s: int = 600
     indigo_deepseek_model: str = "deepseek-v4-pro"
     # vérification désactivable seule (appel payant par cible), quel que soit le
     # fournisseur (cf. exercise_gen.format_contract, contrat partagé).
@@ -119,7 +127,20 @@ class Settings(BaseSettings):
     # --- Budgets / quotas par défaut ---
     mathpix_concurrency: int = 3
     mathpix_daily_limit: int = 500
-    llm_daily_cost_limit_eur: float = 2.0
+    # plafond de dépense Mathpix sur 24 h glissantes (OCR des copies élèves).
+    # Réglage PROPRE depuis le 02/08 : il valait llm_daily_cost_limit_eur × 5,
+    # donc relever le budget des LLM relevait aussi celui de l'OCR sans le dire.
+    # 10 € = exactement l'ancienne valeur effective (2 × 5).
+    mathpix_daily_cost_limit_eur: float = 10.0
+    # Plafond de dépense PAR FOURNISSEUR sur 24 h GLISSANTES (pas par jour
+    # calendaire, cf. providers._today_cost). Porté de 2 à 10 € le 02/08 sur
+    # décision de l'utilisateur : une extraction Indigo d'UNE compétence coûte
+    # 0,3 à 0,5 € côté Anthropic (découpage Sonnet + adaptation Sonnet +
+    # relecture Opus), donc 2 € ne couvraient que 4 à 6 compétences — le plafond
+    # tombait au milieu d'une extraction et les exercices restants finissaient
+    # en repli OCR brut (incident A1.3). Surchargeable par
+    # MATHPRINT_LLM_DAILY_COST_LIMIT_EUR.
+    llm_daily_cost_limit_eur: float = 10.0
     # délai TOTAL maximal d'un appel LLM (connexion + réponse complète) :
     # le read-timeout httpx est par lecture socket, pas global — un serveur
     # qui répond au compte-gouttes peut sinon bloquer le worker indéfiniment

@@ -547,6 +547,12 @@ def _validate_exercise(raw: dict, competency: Competency, db: Session,
                 return None
             pstmt = statement_mod.strip_figure_marker(
                 pv["statement"]).replace("{{blank}}", "").strip()
+            # « a. » / « 1. » en tête de sous-question : RETIRÉ. C'est le rendu
+            # qui numérote les parties (pdfgen._composite_layout préfixe chaque
+            # partie par sa lettre) — une étiquette laissée ici s'imprimait en
+            # double (« a. a. Donne la décomposition… »), de façon intermittente
+            # selon que le modèle la mettait ou non.
+            pstmt = statement_mod.strip_subquestion_label(pstmt)
             pexp = dict(pv["expected"] or {})
             pexp.pop("inline", None)
             validated_parts.append({"statement": pstmt, "response_type": pv["response_type"],
@@ -948,8 +954,8 @@ _FORMAT_MENU = (
     "propre format de réponse. Utilise-le dès qu'un même exercice mélange, par "
     "exemple, des affirmations Vrai/Faux (grille) ET une réponse chiffrée "
     "(case). answer = {\"type\":\"composite\",\"parts\":[{\"response_type\":"
-    "\"qcm_single\"|\"qcm_multiple\"|\"checkbox_grid\"|\"short_text\"|"
-    "\"table_fill\"|\"multiline_text\",\"statement\":str (la sous-question, "
+    "\"qcm_single\"|\"qcm_multiple\"|\"checkbox_grid\"|\"matching\"|"
+    "\"short_text\"|\"table_fill\"|\"multiline_text\",\"statement\":str (la sous-question, "
     "courte),\"choices\":[str]?,\"answer\":{…exactement comme le format "
     "autonome correspondant ci-dessous…}}]} (2 à 8 parties). Une partie NE peut "
     "PAS être \"composite\", \"multi_blank\" ni \"manual_drawing\", et NE "

@@ -19,6 +19,12 @@ volumes/
 # Dépendance externe épinglée : clonée à part (README) / par la CI de release
 mathalea/
 
+# Manuels scolaires Indigo (élève + prof) : sous droits, et bien au-delà de la
+# limite de 100 Mo par fichier de GitHub (194 Mo pour l'élève). Ils restent
+# LOCAUX à l'instance admin — cf. settings.indigo_manuals, jamais livrés dans
+# l'image. Les programmes officiels, eux, restent versionnés.
+context/*_indigo*.pdf
+
 # Secrets
 .env
 .env.*

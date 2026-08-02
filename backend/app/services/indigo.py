@@ -535,28 +535,54 @@ def _process_target(db, doc_eleve, doc_prof, grade: str, target: dict,
     #    selon le nombre »). On COLLECTE les (row, manual, valid) sans persister :
     #    la vérification finale (étape 3) travaille sur tout le lot d'un coup.
     triples: list[tuple] = []
+    errors: list[str] = []
+    stopped = ""            # cause d'un ARRÊT net (plafond de dépense atteint)
     batch_size = indigo_gemini.choose_batch_size(len(prepared))
     for i in range(0, len(prepared), batch_size):
         chunk = prepared[i:i + batch_size]
+        if stopped:         # plafond atteint : les appels suivants échoueraient tous
+            triples.extend((row, manual, None) for row, manual in chunk)
+            continue
         try:
-            adapted = indigo_gemini.adapt_batch(db, comp, grade, [m for _r, m in chunk])
-        except Exception:
-            logger.exception("Indigo : lot d'adaptation échoué (%s)", comp.code)
+            adapted = indigo_gemini.adapt_batch(db, comp, grade,
+                                                [m for _r, m in chunk], errors)
+        except providers.BudgetExceeded as e:
+            stopped = str(e)
             adapted = {}
         for row, manual in chunk:
             valid = adapted.get(str(manual["number"]))
-            if valid is None:
+            if valid is None and not stopped:
                 # manquant/refusé dans le lot : 2e chance en SOLO avant l'OCR brut
-                valid = indigo_gemini.adapt_one(db, comp, grade, manual)
+                try:
+                    valid = indigo_gemini.adapt_one(db, comp, grade, manual)
+                except providers.BudgetExceeded as e:
+                    stopped = str(e)
             triples.append((row, manual, valid))
-        progress_cb(f"{comp.short_id or comp.code} : "
-                    f"{min(i + batch_size, len(prepared))}/{len(prepared)} adapté(s)…")
+        done = min(i + batch_size, len(prepared))
+        n_ok = sum(1 for _r, _m, v in triples if v is not None)
+        progress_cb(f"{comp.short_id or comp.code} : {done}/{len(prepared)} traité(s), "
+                    f"{n_ok} adapté(s)…")
+        if stopped:
+            spent, cap = providers.budget_state(db, indigo_llm.config_provider_key(db))
+            progress_cb(f"⛔ {comp.short_id or comp.code} : adaptation ARRÊTÉE — "
+                        f"{stopped} ({spent:.2f} € dépensés sur 24 h, plafond "
+                        f"{cap:.2f} €). Les exercices restants sont en repli OCR "
+                        f"brut : relance l'extraction quand le plafond est "
+                        f"reconduit, ou augmente "
+                        f"MATHPRINT_LLM_DAILY_COST_LIMIT_EUR.")
 
     # 3) VÉRIFICATION FINALE DeepSeek pro, par lots courts (cf. indigo_verify) :
     #    RÉSOUT chaque exercice contre la SOURCE (OCR + corrigé prof) et corrige une
     #    réponse fausse / lecture OCR infidèle / formulation floue, sans réécrire.
     #    Ne dégrade jamais : un exercice non vérifié garde sa version adaptée.
-    reviewed = indigo_verify.review(db, comp, grade, triples, progress_cb)
+    #    Plafond de dépense déjà atteint = on ne la tente même pas (elle
+    #    échouerait lot après lot, en pure perte de temps).
+    if stopped:
+        reviewed = {str(m.get("number", "")).strip(): {k: x for k, x in v.items()
+                                                       if k != "_raw"}
+                    for (_r, m, v) in triples if v is not None}
+    else:
+        reviewed = indigo_verify.review(db, comp, grade, triples, progress_cb)
 
     # 4) persistance (la relecture a pu remplacer la version adaptée)
     made = 0
@@ -570,21 +596,30 @@ def _process_target(db, doc_eleve, doc_prof, grade: str, target: dict,
         if made % 10 == 0:
             db.commit()
     db.commit()
-    # RENDRE VISIBLE l'échec d'adaptation : un exercice non adapté est un repli
-    # OCR brut (short_text, guide/corrigé « à compléter »), pas une « mauvaise
-    # génération ». Si AUCUN n'est adapté, c'est presque toujours la clé du
-    # fournisseur choisi absente/inactive ou le budget atteint — on le dit haut et fort.
+    # RENDRE VISIBLE l'échec d'adaptation, ET SA CAUSE : un exercice non adapté
+    # est un repli OCR brut (short_text, guide/corrigé « à compléter »), pas une
+    # « mauvaise génération ». Le message doit nommer la cause dès qu'il en
+    # manque UN (pas seulement quand il n'y en a aucun) : c'est l'absence de
+    # cause sur un « 1/21 adapté(s) » qui a rendu l'incident A1.3 indéchiffrable.
     fallback = made - adapted_ok
-    if adapted_ok == 0 and made > 0:
+    if fallback and made:
         prov = indigo_llm.label(db)
-        cause = (f"clé {prov} absente/inactive (adaptation en mode hors-ligne)"
-                 if indigo_llm.offline(db) else f"budget atteint ou erreur API {prov}")
-        progress_cb(f"⚠ {comp.short_id or comp.code} : 0/{made} exercice(s) ADAPTÉ(S) "
-                    f"— {cause}. Les exercices sont en repli OCR brut (à corriger). "
+        if indigo_llm.offline(db):
+            cause = f"clé {prov} absente/inactive (adaptation en mode hors-ligne)"
+        elif stopped:
+            cause = f"{stopped} — plafond de dépense quotidien"
+        elif errors:
+            cause = f"erreurs {prov} : " + " ; ".join(dict.fromkeys(errors))[:300]
+        else:
+            cause = ("sorties refusées par le validateur (format non conforme) — "
+                     "voir les journaux serveur pour le détail par exercice")
+        level = "⚠" if adapted_ok else "⛔"
+        progress_cb(f"{level} {comp.short_id or comp.code} : {adapted_ok}/{made} "
+                    f"exercice(s) adapté(s), {fallback} en repli OCR brut — {cause}. "
                     f"Vérifie Paramètres → Fournisseurs ({prov}) et la page Coûts.")
     else:
         progress_cb(f"{comp.short_id or comp.code} : {adapted_ok}/{made} exercice(s) "
-                    f"adapté(s)" + (f", {fallback} en repli OCR brut" if fallback else ""))
+                    f"adapté(s)")
     return made
 
 
@@ -765,15 +800,23 @@ def _persist_exercise(db, row: IndigoExercise, manual: dict, valid: dict | None)
             _fallback_figure_from_crop(row)
         db.add(row)
         return
-    # moteur de champs de réponse : mini-case / case pleine largeur selon la
-    # réponse attendue, une case par sous-question, lignes de raisonnement
-    # dimensionnées sur le corrigé (cf. services.indigo_fields).
-    statement, grading = indigo_fields.adapt_fields(
+    # moteur de champs de réponse : présence du champ (une réponse courte sans
+    # case en reçoit une, une case orpheline est retirée), mini-case / case
+    # pleine largeur selon la réponse attendue, une case par sous-question,
+    # lignes de raisonnement dimensionnées sur le corrigé (services.indigo_fields).
+    anomalies = indigo_fields.audit(valid["statement"], valid["response_type"],
+                                    valid.get("expected"))
+    if anomalies:
+        # jamais bloquant (on ne dégrade pas un exercice pour un champ rattrapé) :
+        # c'est un signal de qualité du prompt d'adaptation, relu dans les journaux.
+        logger.warning("Indigo : champs de réponse n°%s (%s) — %s",
+                       manual.get("number"), valid["response_type"], " ; ".join(anomalies))
+    statement, expected, grading = indigo_fields.adapt_fields(
         valid["statement"], valid["response_type"],
         valid.get("expected"), valid.get("grading"))
     row.statement = statement
     row.response_type = valid["response_type"]
-    row.expected_json = valid.get("expected") or {}
+    row.expected_json = expected
     row.grading_json = grading
     row.effort_points = float(grading.get("bareme_points") or 1.0)
     solution = (valid.get("correction_solution") or "").strip() or prof or _SOLUTION_TODO
@@ -800,9 +843,10 @@ def _persist_exercise(db, row: IndigoExercise, manual: dict, valid: dict | None)
     # contrat archivé : on y reporte l'énoncé et le barème APRÈS le moteur de
     # champs (ce sont eux qui seront rendus/publiés), pas la sortie brute de Gemini.
     row.payload_json = {**{k: valid.get(k) for k in
-                           ("response_type", "expected", "correction",
+                           ("response_type", "correction",
                             "correction_solution", "kind", "figure_json")},
-                        "statement": statement, "grading": grading}
+                        "statement": statement, "expected": expected,
+                        "grading": grading}
     row.raw_ocr_json = {"statement": manual["statement"],
                         "correction": manual["correction"], "adapted": True}
     db.add(row)
@@ -841,6 +885,20 @@ def _run_extraction(db, extraction: IndigoExtraction) -> None:
                  "est HORS-LIGNE — les exercices seront en repli OCR brut, non "
                  "adaptés (ni QCM, ni cases par sous-question, guides/corrigés "
                  f"« à compléter »). Configure Paramètres → Fournisseurs → {prov}.")
+    else:
+        # même logique pour le PLAFOND DE DÉPENSE : le dire AVANT de lancer une
+        # extraction qui finirait en replis OCR bruts (incident A1.3 du 02/08 —
+        # 20 exercices « non adaptés », plafond atteint, aucun message).
+        spent, cap = providers.budget_state(db, indigo_llm.config_provider_key(db))
+        if spent >= cap:
+            progress(f"⛔ Plafond de dépense atteint ({spent:.2f} € sur 24 h pour "
+                     f"{cap:.2f} €) : l'adaptation ÉCHOUERA et les exercices seront "
+                     f"en repli OCR brut. Attends la fin des 24 h glissantes ou "
+                     f"augmente MATHPRINT_LLM_DAILY_COST_LIMIT_EUR.")
+        elif spent >= 0.75 * cap:
+            progress(f"⚠ Plafond de dépense bientôt atteint ({spent:.2f} € sur 24 h "
+                     f"pour {cap:.2f} €) : l'adaptation peut s'arrêter en cours "
+                     f"d'extraction.")
 
     for i, target in enumerate(targets):
         progress(f"Cible {i + 1}/{len(targets)}…", i / max(1, len(targets)))
@@ -1048,6 +1106,12 @@ def update_exercise(db, ex: IndigoExercise, patch: dict) -> IndigoExercise:
             ex.statement = statement_mod.normalize(str(v or ""))
         elif k in _EDITABLE:
             setattr(ex, k, v)
+    # même garantie de champ de réponse qu'à la génération (cf. indigo_fields) :
+    # une édition manuelle ne doit pas plus qu'un LLM laisser une réponse courte
+    # sans case, ni une case orpheline dans un format à zone dessinée.
+    if {"statement", "response_type", "expected"} & set(patch):
+        ex.statement, ex.expected_json = indigo_fields.ensure_answer_field(
+            ex.statement, ex.response_type, ex.expected_json)
     # toute édition sort du statut « validé » (à revalider)
     ex.status = "draft"
     ex.validated_by = None
@@ -1122,9 +1186,16 @@ def regenerate_exercises(db, ids: list[str]) -> dict:
     utile quand le prompt de génération a changé. Rejoue adaptation (solo) +
     vérification, MET À JOUR la ligne en place (garde crop/figure/badge/
     source_number), repasse en brouillon. Un exercice dont la régénération ÉCHOUE
-    (LLM hors-ligne, refus) est LAISSÉ INCHANGÉ (jamais dégradé en repli OCR)."""
+    (LLM hors-ligne, refus) est LAISSÉ INCHANGÉ (jamais dégradé en repli OCR).
+
+    S'ARRÊTE NET au plafond de dépense quotidien, avec la cause dans `stopped` :
+    poursuivre ne produirait que des échecs (cf. incident A1.3 du 02/08)."""
     n_ok = n_fail = 0
+    stopped = ""
     for ex in db.query(IndigoExercise).filter(IndigoExercise.id.in_(list(ids))).all():
+        if stopped:
+            n_fail += 1
+            continue
         comp = db.get(Competency, ex.competency_id)
         raw = ex.raw_ocr_json or {}
         manual = {"number": ex.source_number,
@@ -1140,6 +1211,9 @@ def regenerate_exercises(db, ids: list[str]) -> dict:
                                                     [(ex, manual, valid)])
                     final = (reviewed.get(str(ex.source_number).strip())
                              or indigo_verify._strip_raw(valid))
+            except providers.BudgetExceeded as e:
+                stopped = str(e)
+                final = None
             except Exception:
                 logger.exception("Indigo : régénération de l'exercice %s échouée", ex.id)
                 final = None
@@ -1153,7 +1227,12 @@ def regenerate_exercises(db, ids: list[str]) -> dict:
         ex.updated_at = datetime.now(timezone.utc)
         n_ok += 1
     db.commit()
-    return {"regenerated": n_ok, "failed": n_fail}
+    out = {"regenerated": n_ok, "failed": n_fail}
+    if stopped:
+        spent, cap = providers.budget_state(db, indigo_llm.config_provider_key(db))
+        out["stopped"] = (f"{stopped} ({spent:.2f} € dépensés sur 24 h, plafond "
+                          f"{cap:.2f} €) — exercices inchangés.")
+    return out
 
 
 def validate_exercise(db, ex: IndigoExercise, user_id: str | None) -> IndigoExercise:

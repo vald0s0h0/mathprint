@@ -35,33 +35,33 @@ def test_isolated_short_integer_stays_standard_not_mini():
     # un petit entier dans une phrase ordinaire n'est PAS une équation à trous :
     # la mini-case ne s'applique qu'à une case COLLÉE à une formule (cf. demande
     # utilisateur — mini-case réservée aux équations à trous).
-    st, _ = F.adapt_fields("Le PGCD est {{blank}}", "short_text",
+    st, _e, _g = F.adapt_fields("Le PGCD est {{blank}}", "short_text",
                            {"type": "integer", "value": 12, "inline": True}, {})
     assert S.BLANK_TOKEN in st and S.MINI_TOKEN not in st
 
 
 def test_equation_a_trous_all_mini():
     # « ... » du manuel déjà transformé en {{blank}} par Gemini ; petits entiers
-    st, _ = F.adapt_fields("$60 =${{blank}} $\\times${{blank}}", "multi_blank",
+    st, _e, _g = F.adapt_fields("$60 =${{blank}} $\\times${{blank}}", "multi_blank",
                            _multi([_int(2), _int(30)]), {"max_score": 2})
     assert st.count(S.MINI_TOKEN) == 2 and S.BLANK_TOKEN not in st
 
 
 def test_long_expression_at_eol_becomes_blank_right():
-    st, _ = F.adapt_fields("Développe : {{blank}}", "short_text",
+    st, _e, _g = F.adapt_fields("Développe : {{blank}}", "short_text",
                            {"type": "expression", "value": "2x+6", "inline": True}, {})
     assert st.endswith(S.WIDE_TOKEN)
 
 
 def test_expression_not_at_eol_stays_standard():
     # une case suivie de texte n'est pas éligible à la pleine largeur
-    st, _ = F.adapt_fields("On a {{blank}} donc c'est fini.", "short_text",
+    st, _e, _g = F.adapt_fields("On a {{blank}} donc c'est fini.", "short_text",
                            {"type": "expression", "value": "2x+6", "inline": True}, {})
     assert S.BLANK_TOKEN in st and S.WIDE_TOKEN not in st
 
 
 def test_big_integer_stays_standard_not_mini():
-    st, _ = F.adapt_fields("Résultat {{blank}}", "short_text",
+    st, _e, _g = F.adapt_fields("Résultat {{blank}}", "short_text",
                            {"type": "integer", "value": 12345, "inline": True}, {})
     assert S.BLANK_TOKEN in st and S.MINI_TOKEN not in st
 
@@ -70,7 +70,7 @@ def test_big_integer_stays_standard_not_mini():
 
 def test_answers_dumped_at_end_are_redistributed_per_subquestion():
     st = "a. Calcule $2+3$\nb. Calcule $4-1$\nRéponses : {{blank}} {{blank}}"
-    out, _ = F.adapt_fields(st, "multi_blank", _multi([_int(5), _int(3)]), {})
+    out, _e, _g = F.adapt_fields(st, "multi_blank", _multi([_int(5), _int(3)]), {})
     lines = out.split("\n")
     # a. et b. portent chacune leur case (réponses intermédiaires) — la case
     # rajoutée en fin de ligne n'est pas collée à la formule ($2+3$ est fermée
@@ -84,7 +84,7 @@ def test_answers_dumped_at_end_are_redistributed_per_subquestion():
 def test_inline_blank_in_equation_is_respected_not_moved():
     # chaque sous-question a DÉJÀ sa case au milieu d'une égalité -> on n'y touche pas
     st = "a. $3 \\times${{blank}}$ = 12$\nb. $4 +${{blank}}$ = 9$"
-    out, _ = F.adapt_fields(st, "multi_blank", _multi([_int(4), _int(5)]), {})
+    out, _e, _g = F.adapt_fields(st, "multi_blank", _multi([_int(4), _int(5)]), {})
     # la case reste collée à la formule (pas rejetée en fin de ligne)
     assert "\\times${{mini}}" in out and "+${{mini}}" in out
     assert out.count(S.MINI_TOKEN) == 2
@@ -93,7 +93,7 @@ def test_inline_blank_in_equation_is_respected_not_moved():
 def test_redistribution_skipped_when_counts_mismatch():
     # 3 sous-questions mais 2 réponses : on ne réinvente pas la structure
     st = "a. Observe\nb. Calcule {{blank}}\nc. Calcule {{blank}}"
-    out, _ = F.adapt_fields(st, "multi_blank", _multi([_int(5), _int(8)]), {})
+    out, _e, _g = F.adapt_fields(st, "multi_blank", _multi([_int(5), _int(8)]), {})
     assert not out.split("\n")[0].endswith(S.MINI_TOKEN)  # a. reste sans case
 
 
@@ -103,7 +103,7 @@ def test_reasoning_lines_estimated_from_steps():
     steps = [{"expected_text": "On pose la division euclidienne de 250 par 12.", "points": 1},
              {"expected_text": "$250 = 12 \\times 20 + 10$ donc il reste 10.", "points": 1},
              {"expected_text": "Il faut donc 21 boîtes.", "points": 1}]
-    _, g = F.adapt_fields("Résous le problème.", "multiline_text",
+    _s, _e, g = F.adapt_fields("Résous le problème.", "multiline_text",
                           {"type": "rubric", "steps": steps},
                           {"rubric": steps, "lines": 6})
     assert 3 <= g["lines"] <= 12
@@ -114,15 +114,15 @@ def test_reasoning_lines_estimated_from_steps():
 def test_reasoning_lines_more_for_longer_solution():
     short = [{"expected_text": "x = 4.", "points": 1}, {"expected_text": "y = 2.", "points": 1}]
     longg = [{"expected_text": "x" * 200, "points": 1}, {"expected_text": "y" * 200, "points": 1}]
-    _, gs = F.adapt_fields("Q", "multiline_text", {"type": "rubric", "steps": short},
+    _s, _e, gs = F.adapt_fields("Q", "multiline_text", {"type": "rubric", "steps": short},
                            {"rubric": short})
-    _, gl = F.adapt_fields("Q", "multiline_text", {"type": "rubric", "steps": longg},
+    _s2, _e2, gl = F.adapt_fields("Q", "multiline_text", {"type": "rubric", "steps": longg},
                            {"rubric": longg})
     assert gl["lines"] > gs["lines"]
 
 
 def test_reasoning_lines_falls_back_to_existing_when_no_steps():
-    _, g = F.adapt_fields("Q", "multiline_text", {}, {"lines": 7})
+    _s, _e, g = F.adapt_fields("Q", "multiline_text", {}, {"lines": 7})
     assert g["lines"] == 7
 
 
@@ -131,20 +131,118 @@ def test_reasoning_lines_falls_back_to_existing_when_no_steps():
 def test_engine_is_idempotent():
     st = "$60 =${{blank}} $\\times${{blank}}"
     exp = _multi([_int(2), _int(30)])
-    once, _ = F.adapt_fields(st, "multi_blank", exp, {})
-    twice, _ = F.adapt_fields(once, "multi_blank", exp, {})
+    once, _e, _g = F.adapt_fields(st, "multi_blank", exp, {})
+    twice, _e2, _g2 = F.adapt_fields(once, "multi_blank", exp, {})
     assert once == twice
 
 
 def test_engine_never_raises_on_garbage():
-    st, g = F.adapt_fields(None, "multi_blank", None, None)  # type: ignore[arg-type]
-    assert st is None and isinstance(g, dict)
+    st, _e, g = F.adapt_fields(None, "multi_blank", None, None)  # type: ignore[arg-type]
+    assert st == "" and isinstance(g, dict)
 
 
 def test_non_inline_formats_are_untouched():
     st = "Quelle est la bonne réponse ?"
-    out, _ = F.adapt_fields(st, "qcm_single", {"type": "choice", "correct": [0]}, {})
+    out, _e, _g = F.adapt_fields(st, "qcm_single", {"type": "choice", "correct": [0]}, {})
     assert out == st
+
+
+# ------------------------------------------------------ présence garantie du champ de réponse
+
+def test_short_text_without_blank_gets_one_at_the_end():
+    """Le prompt exige la case ; le moteur la POSE si le modèle l'a oubliée —
+    plus aucun exercice « sans endroit où répondre » (demande utilisateur)."""
+    out, exp, _g = F.adapt_fields("Calcule $17 \\times 14$.", "short_text",
+                                  {"type": "integer", "value": 238}, {})
+    assert out.endswith(S.BLANK_TOKEN)
+    assert exp["inline"] is True          # la case se lit dans le fil du texte
+
+
+def test_added_blank_is_typed_like_any_other():
+    """La case posée d'office passe par le MÊME typage que les autres : une
+    réponse longue en fin de ligne devient une case pleine largeur."""
+    out, _e, _g = F.adapt_fields("Développe et réduis.", "short_text",
+                                 {"type": "expression", "value": "2x+6"}, {})
+    assert out.endswith(S.WIDE_TOKEN)
+
+
+def test_blank_never_lands_on_the_figure_line():
+    out, _e, _g = F.adapt_fields("Observe la figure.\n{{figure}}", "short_text",
+                                 {"type": "integer", "value": 5}, {})
+    lines = out.split("\n")
+    assert lines[0].endswith(S.BLANK_TOKEN) and lines[1] == "{{figure}}"
+
+
+def test_orphan_blank_removed_from_non_inline_formats():
+    """Une case laissée dans un QCM/grille/tableau serait IMPRIMÉE mais jamais
+    relue par la correction : le moteur la retire."""
+    out, _e, _g = F.adapt_fields("Coche la bonne réponse : {{blank}}", "qcm_single",
+                                 {"type": "choice", "correct": [0]}, {})
+    assert not S.has_answer_field(out)
+    assert out == "Coche la bonne réponse :"
+
+
+def test_manual_drawing_needs_no_inline_field():
+    st = "Construis la médiatrice de $[AB]$."
+    out, _e, _g = F.adapt_fields(st, "manual_drawing", {"type": "manual"}, {})
+    assert out == st                      # le cadre de tracé est dessiné par le rendu
+
+
+def test_ensure_answer_field_is_idempotent():
+    once, exp, _g = F.adapt_fields("Calcule $2+3$.", "short_text",
+                                   {"type": "integer", "value": 5}, {})
+    twice, _e, _g2 = F.adapt_fields(once, "short_text", exp, {})
+    assert once == twice
+
+
+# ------------------------------------------------------------- audit (journalisé, non bloquant)
+
+def test_audit_reports_missing_and_orphan_fields():
+    assert F.audit("Calcule $2+3$.", "short_text", {"type": "integer", "value": 5})
+    assert F.audit("Coche : {{blank}}", "qcm_single", {"type": "choice", "correct": [0]})
+    assert not F.audit("Calcule $2+3$. {{blank}}", "short_text",
+                       {"type": "integer", "value": 5, "inline": True})
+
+
+def _grid(cols, n_rows=10):
+    return {"type": "grid", "cols": cols,
+            "rows": [{"label": f"${i}$", "correct": 0} for i in range(n_rows)]}
+
+
+def test_audit_flags_true_false_grid_that_should_be_a_qcm():
+    """Défaut relevé sur A1.3 n°70 : une grille Oui/Non de 10 lignes là où
+    « Coche tous les diviseurs de 28 » tient en 3 colonnes. Les colonnes qui sont
+    des CATÉGORIES (numérateur/dénominateur) restent légitimes, comme une grille
+    à 4 colonnes (plus de 3 cases par ligne)."""
+    assert F.audit("Coche.", "checkbox_grid", _grid(["Oui", "Non"]))
+    assert F.audit("Coche.", "checkbox_grid", _grid(["Vrai", "Faux"]))
+    assert not F.audit("Classe.", "checkbox_grid", _grid(["numérateur", "dénominateur"]))
+    assert not F.audit("Classe.", "checkbox_grid",
+                       _grid(["jamais", "parfois", "souvent", "toujours"]))
+
+
+def test_audit_descends_into_composite_parts():
+    """C'est DANS une sous-question de composite que la grille Oui/Non de
+    l'exercice 70 était passée : l'audit doit y descendre — sans réclamer de case
+    aux sous-questions (leur zone est dessinée sous leur énoncé)."""
+    expected = {"type": "composite", "parts": [
+        {"statement": "Coche s'il divise $28$.", "response_type": "checkbox_grid",
+         "expected": _grid(["Oui", "Non"])},
+        {"statement": "Décomposition de $28$ :", "response_type": "short_text",
+         "expected": {"type": "text", "value": "2^2"}},
+    ]}
+    msgs = F.audit("On donne $28$ et $30$.", "composite", expected)
+    assert len(msgs) == 1
+    assert "sous-question" in msgs[0] and "Oui/Non" in msgs[0]
+
+
+def test_audit_reports_subquestions_without_their_own_field():
+    st = "a. Calcule $2+3$.\nb. Calcule $4-1$. {{blank}}"
+    msgs = F.audit(st, "short_text", {"type": "integer", "value": 5, "inline": True})
+    assert any("sous-questions" in m for m in msgs)
+    msgs = F.audit("a. Démontre.\nb. Conclus.", "multiline_text",
+                   {"type": "rubric", "steps": []})
+    assert any("raisonnement" in m for m in msgs)
 
 
 # ------------------------------------------------------------- tokens sûrs pour normalize
