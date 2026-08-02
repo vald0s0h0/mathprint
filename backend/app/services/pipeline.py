@@ -48,7 +48,8 @@ def _decide_and_store(db: Session, *, item: CopyItem, zone: ResponseZone,
     """Décision de correction pour une zone. Retourne True si revue créée."""
     expected, gpolicy = item.expected_json, item.grading_json
     resp = StudentResponse(copy_item_id=item.id, zone_id=zone.id,
-                           selected_choices=selected or [], final_text=ocr_text)
+                           selected_choices=selected or [], final_text=ocr_text,
+                           selected_pairs=selected_pairs or [])
     db.add(resp)
     db.flush()
 

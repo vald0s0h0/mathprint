@@ -80,6 +80,41 @@ def validate_figure(figure_json) -> dict | None:
     return norm
 
 
+# seuil et granularité choisis empiriquement (cf. app/services/figures.py,
+# aucune image de test n'étant versionnée) : un schéma/diagramme/capture
+# d'écran/dessin en aplats de couleur garde >0.85 après quantification large
+# (16 niveaux/canal) même avec du bruit de scan léger, une photo réelle
+# (dégradés continus + bruit de capteur) tombe largement en dessous.
+_PHOTO_COVERAGE_THRESHOLD = 0.85
+_PHOTO_TOP_COLORS = 24
+_PHOTO_QUANT_BUCKET = 16
+
+
+def is_photograph(png_bytes: bytes) -> bool:
+    """Distingue déterministiquement une photographie d'un schéma/diagramme/
+    figure géométrique/capture d'écran/dessin — aucun LLM, aucune vision par
+    ordinateur entraînée, uniquement des statistiques de pixels.
+
+    Une photo a une palette quasi continue (dégradés naturels, bruit de
+    capteur) : même après quantification large, il faut beaucoup de couleurs
+    pour couvrir l'image. Un schéma/diagramme/BD est fait de larges aplats
+    (fond blanc + quelques traits/couleurs) : un petit nombre de couleurs
+    dominantes couvre l'essentiel des pixels.
+    """
+    from PIL import Image
+
+    img = Image.open(BytesIO(png_bytes)).convert("RGB")
+    img.thumbnail((160, 160))
+    arr = np.asarray(img).reshape(-1, 3).astype(np.int32)
+    if arr.shape[0] == 0:
+        return False
+    quant = (arr // _PHOTO_QUANT_BUCKET) * _PHOTO_QUANT_BUCKET
+    _, counts = np.unique(quant, axis=0, return_counts=True)
+    counts.sort()
+    coverage = counts[::-1][:_PHOTO_TOP_COLORS].sum() / arr.shape[0]
+    return coverage < _PHOTO_COVERAGE_THRESHOLD
+
+
 def render_rectangle(length: float, width: float, unit: str = "cm", show_diagonal: bool = False) -> bytes:
     """Rectangle annoté (longueur, largeur, diagonale optionnelle)."""
     length = _validate_bounds(length, name="length")

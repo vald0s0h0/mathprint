@@ -1578,358 +1578,317 @@
     {
       "grade_level": "3e",
       "cycle": 4,
-      "name": "Programme officiel 3e (cycle 4)",
-      "version": "2026",
+      "program_year": 2026,
+      "name": "Cahier 3e (sommaire) — programme 2026",
+      "version": "2026-cahier",
       "domains": [
         {
+          "code": "A",
           "name": "Nombres et calculs",
-          "code": "NC",
           "chapters": [
             {
+              "code": "A1",
+              "name": "Nombres entiers",
+              "competencies": [
+                {
+                  "code": "A1.1",
+                  "short_id": "A1.1",
+                  "label": "Déterminer les diviseurs d'un nombre entier"
+                },
+                {
+                  "code": "A1.2",
+                  "short_id": "A1.2",
+                  "label": "Reconnaître un nombre premier"
+                },
+                {
+                  "code": "A1.3",
+                  "short_id": "A1.3",
+                  "label": "Décomposer un entier en produit de facteurs premiers"
+                }
+              ]
+            },
+            {
+              "code": "A2",
               "name": "Nombres rationnels",
-              "code": "NOMB",
               "competencies": [
                 {
-                  "code": "3E-NC-NOMB-01",
-                  "label": "Mettre une fraction sous forme irréductible.",
-                  "short_id": ""
+                  "code": "A2.1",
+                  "short_id": "A2.1",
+                  "label": "Calculer avec des nombres relatifs"
                 },
                 {
-                  "code": "3E-NC-NOMB-02",
-                  "label": "Rendre irréductible une fraction.",
-                  "short_id": ""
+                  "code": "A2.2",
+                  "short_id": "A2.2",
+                  "label": "Calculer avec des puissances"
                 },
                 {
-                  "code": "3E-NC-NOMB-03",
-                  "label": "Résoudre des problèmes faisant appel à des fractions.",
-                  "short_id": ""
+                  "code": "A2.3",
+                  "short_id": "A2.3",
+                  "label": "Déterminer la forme irréductible d'une fraction"
+                },
+                {
+                  "code": "A2.4",
+                  "short_id": "A2.4",
+                  "label": "Calculer avec des fractions"
                 }
               ]
             },
             {
-              "name": "Puissances",
-              "code": "PUIS",
+              "code": "A3",
+              "name": "Calcul littéral",
               "competencies": [
                 {
-                  "code": "3E-NC-PUIS-01",
-                  "label": "Définir les puissances d'exposant négatif d'un nombre.",
-                  "short_id": ""
+                  "code": "A3.1",
+                  "short_id": "A3.1",
+                  "label": "Simplifier une expression littérale"
                 },
                 {
-                  "code": "3E-NC-PUIS-02",
-                  "label": "Multiplier et diviser des puissances.",
-                  "short_id": ""
+                  "code": "A3.2",
+                  "short_id": "A3.2",
+                  "label": "Développer un produit"
                 },
                 {
-                  "code": "3E-NC-PUIS-03",
-                  "label": "Déterminer la notation scientifique d'un nombre.",
-                  "short_id": ""
-                },
-                {
-                  "code": "3E-NC-PUIS-04",
-                  "label": "Résoudre des problèmes notamment en utilisant la notation scientifique.",
-                  "short_id": ""
+                  "code": "A3.3",
+                  "short_id": "A3.3",
+                  "label": "Factoriser une somme ou une différence"
                 }
               ]
             },
             {
-              "name": "Racine carrée",
-              "code": "RACI",
+              "code": "A4",
+              "name": "Équations",
               "competencies": [
                 {
-                  "code": "3E-NC-RACI-01",
-                  "label": "Résoudre analytiquement et graphiquement des équations de la forme 𝑥2 = a.",
-                  "short_id": ""
+                  "code": "A4.1",
+                  "short_id": "A4.1",
+                  "label": "Résoudre une équation du premier degré"
                 },
                 {
-                  "code": "3E-NC-RACI-02",
-                  "label": "Résoudre des problèmes utilisant la racine carrée.",
-                  "short_id": ""
-                }
-              ]
-            },
-            {
-              "name": "Calcul littéral et algébrique",
-              "code": "CALC",
-              "competencies": [
-                {
-                  "code": "3E-NC-CALC-01",
-                  "label": "Simplifier des expressions produits ou des rapports comportant des facteurs communs.",
-                  "short_id": ""
+                  "code": "A4.2",
+                  "short_id": "A4.2",
+                  "label": "Résoudre une équation produit"
                 },
                 {
-                  "code": "3E-NC-CALC-02",
-                  "label": "Utiliser la double distributivité pour développer et factoriser des expressions dont le facteur est apparent.",
-                  "short_id": ""
+                  "code": "A4.3",
+                  "short_id": "A4.3",
+                  "label": "Résoudre une équation du type $x^2 = a$"
                 },
                 {
-                  "code": "3E-NC-CALC-03",
-                  "label": "Résoudre analytiquement et graphiquement une inéquation du premier degré du type a𝑥 ⩾ b.",
-                  "short_id": ""
-                },
-                {
-                  "code": "3E-NC-CALC-04",
-                  "label": "Résoudre une équation produit nul.",
-                  "short_id": ""
-                },
-                {
-                  "code": "3E-NC-CALC-05",
-                  "label": "Manipuler les trois identités remarquables pour développer et factoriser : a 2 + 2ab + b 2 = (a + b) 2 a 2 - 2ab + b 2 = (a - b) 2 a 2 - b 2 = (a - b) (a + b)",
-                  "short_id": ""
-                },
-                {
-                  "code": "3E-NC-CALC-06",
-                  "label": "Pratiquer un raisonnement par analyse-synthèse dans le cadre d'une résolution d'équation.",
-                  "short_id": ""
+                  "code": "A4.4",
+                  "short_id": "A4.4",
+                  "label": "Modéliser une situation"
                 }
               ]
             }
           ]
         },
         {
-          "name": "Espace et géométrie",
-          "code": "EG",
+          "code": "B",
+          "name": "Organisation et gestion de données, fonctions",
           "chapters": [
             {
-              "name": "Représentation de l'espace",
-              "code": "REPR",
+              "code": "B1",
+              "name": "Grandeurs et proportionnalité",
               "competencies": [
                 {
-                  "code": "3E-EG-REPR-01",
-                  "label": "Définir la boule et la sphère.",
-                  "short_id": ""
+                  "code": "B1.1",
+                  "short_id": "B1.1",
+                  "label": "Reconnaître une situation de proportionnalité"
                 },
                 {
-                  "code": "3E-EG-REPR-02",
-                  "label": "Définir les grands cercles, le diamètre.",
-                  "short_id": ""
+                  "code": "B1.2",
+                  "short_id": "B1.2",
+                  "label": "Exploiter une situation de proportionnalité"
                 },
                 {
-                  "code": "3E-EG-REPR-03",
-                  "label": "Visualiser et réaliser des sections de pavé parallèlement à une face, de cylindre parallèlement ou perpendiculairement à son axe, d'une boule.",
-                  "short_id": ""
-                },
-                {
-                  "code": "3E-EG-REPR-04",
-                  "label": "Connaitre et utiliser la formule du volume d'une boule de rayon donné.",
-                  "short_id": ""
+                  "code": "B1.3",
+                  "short_id": "B1.3",
+                  "label": "Utiliser des pourcentages"
                 }
               ]
             },
             {
-              "name": "Triangles",
-              "code": "TRIA",
-              "competencies": [
-                {
-                  "code": "3E-EG-TRIA-01",
-                  "label": "Connaitre et appliquer le théorème de Thalès, sa réciproque, sa contraposée (configurations des triangles emboités et configuration dite du papillon).",
-                  "short_id": ""
-                },
-                {
-                  "code": "3E-EG-TRIA-02",
-                  "label": "Connaitre et utiliser les lignes trigonométriques dans le triangle rectangle : cosinus, sinus, tangente.",
-                  "short_id": ""
-                }
-              ]
-            },
-            {
-              "name": "Translations et vecteurs",
-              "code": "TRAN",
-              "competencies": [
-                {
-                  "code": "3E-EG-TRAN-01",
-                  "label": "Définir et utiliser la translation : définition ponctuelle avec parallélogramme.",
-                  "short_id": ""
-                },
-                {
-                  "code": "3E-EG-TRAN-02",
-                  "label": "Définir et utiliser les notions de vecteur, de vecteurs égaux, de vecteur nul, d'opposé d'un vecteur.",
-                  "short_id": ""
-                },
-                {
-                  "code": "3E-EG-TRAN-03",
-                  "label": "Définir et utiliser la somme de deux vecteurs par enchainement de deux translations.",
-                  "short_id": ""
-                },
-                {
-                  "code": "3E-EG-TRAN-04",
-                  "label": "Découvrir et utiliser la relation de Chasles.",
-                  "short_id": ""
-                }
-              ]
-            }
-          ]
-        },
-        {
-          "name": "Organisation et gestion de données et probabilités",
-          "code": "OGD",
-          "chapters": [
-            {
-              "name": "Statistiques",
-              "code": "STAT",
-              "competencies": [
-                {
-                  "code": "3E-OGD-STAT-01",
-                  "label": "Calculer des effectifs cumulés croissants.",
-                  "short_id": ""
-                },
-                {
-                  "code": "3E-OGD-STAT-02",
-                  "label": "Donner les quartiles et la médiane d'une série donnée sous forme de tableau d'effectifs ou de diagramme en barres.",
-                  "short_id": ""
-                },
-                {
-                  "code": "3E-OGD-STAT-03",
-                  "label": "Construire et utiliser des boites à moustache pour représenter les valeurs de position d'une série statistique.",
-                  "short_id": ""
-                },
-                {
-                  "code": "3E-OGD-STAT-04",
-                  "label": "Comprendre et interpréter des données statistiques.",
-                  "short_id": ""
-                },
-                {
-                  "code": "3E-OGD-STAT-05",
-                  "label": "Utiliser le tableur pour calculer une moyenne, une médiane et l'étendue d'une série statistique.",
-                  "short_id": ""
-                }
-              ]
-            },
-            {
-              "name": "Probabilités",
-              "code": "PROB",
-              "competencies": [
-                {
-                  "code": "3E-OGD-PROB-01",
-                  "label": "Connaitre et savoir appliquer la relation 𝑃(𝐴 ∪ 𝐵) + 𝑃(𝐴 ∩ 𝐵) = 𝑃(𝐴) + 𝑃(𝐵).",
-                  "short_id": ""
-                },
-                {
-                  "code": "3E-OGD-PROB-02",
-                  "label": "Simuler des expériences aléatoires indépendantes.",
-                  "short_id": ""
-                },
-                {
-                  "code": "3E-OGD-PROB-03",
-                  "label": "Observer la stabilisation des fréquences lorsqu'on augmente le nombre de répétitions de l'expérience aléatoire, faire le lien entre fréquence et probabilité selon le nombre de répétitions.",
-                  "short_id": ""
-                }
-              ]
-            }
-          ]
-        },
-        {
-          "name": "Proportionnalité, fonctions",
-          "code": "PF",
-          "chapters": [
-            {
-              "name": "Proportionnalité",
-              "code": "PROP",
-              "competencies": [
-                {
-                  "code": "3E-PF-PROP-01",
-                  "label": "Traduire une augmentation ou une diminution en pourcentages.",
-                  "short_id": ""
-                },
-                {
-                  "code": "3E-PF-PROP-02",
-                  "label": "Relier la représentation graphique d'une situation de proportionnalité avec le théorème de Thalès.",
-                  "short_id": ""
-                },
-                {
-                  "code": "3E-PF-PROP-03",
-                  "label": "Connaitre et utiliser les fonctions linéaires.",
-                  "short_id": ""
-                }
-              ]
-            },
-            {
+              "code": "B2",
               "name": "Fonctions",
-              "code": "FONC",
               "competencies": [
                 {
-                  "code": "3E-PF-FONC-01",
-                  "label": "Utiliser les différentes représentations d'une fonction.",
-                  "short_id": ""
+                  "code": "B2.1",
+                  "short_id": "B2.1",
+                  "label": "Déterminer des images et des antécédents"
                 },
                 {
-                  "code": "3E-PF-FONC-02",
-                  "label": "Définir et connaitre le vocabulaire : image, antécédents.",
-                  "short_id": ""
+                  "code": "B2.2",
+                  "short_id": "B2.2",
+                  "label": "Tracer la représentation graphique d'une fonction"
                 },
                 {
-                  "code": "3E-PF-FONC-03",
-                  "label": "Définir et utiliser les fonctions linéaires.",
-                  "short_id": ""
+                  "code": "B2.3",
+                  "short_id": "B2.3",
+                  "label": "Exploiter la représentation graphique d'une fonction"
+                }
+              ]
+            },
+            {
+              "code": "B3",
+              "name": "Fonctions affines",
+              "competencies": [
+                {
+                  "code": "B3.1",
+                  "short_id": "B3.1",
+                  "label": "Reconnaître et utiliser une fonction affine"
                 },
                 {
-                  "code": "3E-PF-FONC-04",
-                  "label": "Résoudre graphiquement des équations et des inéquations linéaires.",
-                  "short_id": ""
+                  "code": "B3.2",
+                  "short_id": "B3.2",
+                  "label": "Interpréter les paramètres d'une fonction affine"
                 },
                 {
-                  "code": "3E-PF-FONC-05",
-                  "label": "Relier fonctions linéaires et proportionnalité.",
-                  "short_id": ""
+                  "code": "B3.3",
+                  "short_id": "B3.3",
+                  "label": "Reconnaître et utiliser une fonction linéaire"
                 },
                 {
-                  "code": "3E-PF-FONC-06",
-                  "label": "Définir et utiliser les fonctions affines.",
-                  "short_id": ""
+                  "code": "B3.4",
+                  "short_id": "B3.4",
+                  "label": "Modéliser une situation de proportionnalité par une fonction linéaire"
+                }
+              ]
+            },
+            {
+              "code": "B4",
+              "name": "Statistiques",
+              "competencies": [
+                {
+                  "code": "B4.1",
+                  "short_id": "B4.1",
+                  "label": "Représenter graphiquement des données"
                 },
                 {
-                  "code": "3E-PF-FONC-07",
-                  "label": "Déterminer graphiquement les coefficients d'une fonction affine.",
-                  "short_id": ""
+                  "code": "B4.2",
+                  "short_id": "B4.2",
+                  "label": "Calculer une moyenne"
                 },
                 {
-                  "code": "3E-PF-FONC-08",
-                  "label": "Représenter la fonction carré.",
-                  "short_id": ""
+                  "code": "B4.3",
+                  "short_id": "B4.3",
+                  "label": "Déterminer une médiane, calculer une étendue"
+                }
+              ]
+            },
+            {
+              "code": "B5",
+              "name": "Probabilités",
+              "competencies": [
+                {
+                  "code": "B5.1",
+                  "short_id": "B5.1",
+                  "label": "Modéliser une expérience aléatoire"
+                },
+                {
+                  "code": "B5.2",
+                  "short_id": "B5.2",
+                  "label": "Déterminer la probabilité d'un évènement"
+                },
+                {
+                  "code": "B5.3",
+                  "short_id": "B5.3",
+                  "label": "Étudier des expériences aléatoires à deux épreuves"
                 }
               ]
             }
           ]
         },
         {
-          "name": "La pensée informatique",
-          "code": "PI",
+          "code": "C",
+          "name": "Espace et géométrie",
           "chapters": [
             {
-              "name": "La pensée informatique",
-              "code": "PENS",
+              "code": "C1",
+              "name": "Construction et transformation de figures",
               "competencies": [
                 {
-                  "code": "3E-PI-PENS-01",
-                  "label": "Approfondir la notion de variables.",
-                  "short_id": ""
+                  "code": "C1.1",
+                  "short_id": "C1.1",
+                  "label": "Transformer une figure par symétrie ou translation"
                 },
                 {
-                  "code": "3E-PI-PENS-02",
-                  "label": "Utiliser des conditions composées.",
-                  "short_id": ""
+                  "code": "C1.2",
+                  "short_id": "C1.2",
+                  "label": "Transformer une figure par rotation"
                 },
                 {
-                  "code": "3E-PI-PENS-03",
-                  "label": "Utiliser une boucle conditionnelle.",
-                  "short_id": ""
+                  "code": "C1.3",
+                  "short_id": "C1.3",
+                  "label": "Transformer une figure par homothétie"
+                }
+              ]
+            },
+            {
+              "code": "C2",
+              "name": "Théorème de Thalès",
+              "competencies": [
+                {
+                  "code": "C2.1",
+                  "short_id": "C2.1",
+                  "label": "Calculer des longueurs avec le théorème de Thalès"
                 },
                 {
-                  "code": "3E-PI-PENS-04",
-                  "label": "Structurer des programmes.",
-                  "short_id": ""
+                  "code": "C2.2",
+                  "short_id": "C2.2",
+                  "label": "Reconnaître des droites parallèles"
                 },
                 {
-                  "code": "3E-PI-PENS-05",
-                  "label": "Écrire un programme donné pour réaliser un objectif ou résoudre un problème.",
-                  "short_id": ""
+                  "code": "C2.3",
+                  "short_id": "C2.3",
+                  "label": "Reconnaître des triangles semblables"
+                }
+              ]
+            },
+            {
+              "code": "C3",
+              "name": "Triangles rectangles",
+              "competencies": [
+                {
+                  "code": "C3.1",
+                  "short_id": "C3.1",
+                  "label": "Utiliser l'égalité de Pythagore"
+                },
+                {
+                  "code": "C3.2",
+                  "short_id": "C3.2",
+                  "label": "Calculer des rapports trigonométriques"
+                },
+                {
+                  "code": "C3.3",
+                  "short_id": "C3.3",
+                  "label": "Utiliser des rapports trigonométriques"
+                }
+              ]
+            },
+            {
+              "code": "C4",
+              "name": "Solides de l'espace",
+              "competencies": [
+                {
+                  "code": "C4.1",
+                  "short_id": "C4.1",
+                  "label": "Se repérer sur une sphère"
+                },
+                {
+                  "code": "C4.2",
+                  "short_id": "C4.2",
+                  "label": "Représenter des solides et calculer des volumes"
+                },
+                {
+                  "code": "C4.3",
+                  "short_id": "C4.3",
+                  "label": "Construire des sections planes de solides"
                 }
               ]
             }
           ]
         }
-      ],
-      "program_year": 2026
+      ]
     }
   ]
 }

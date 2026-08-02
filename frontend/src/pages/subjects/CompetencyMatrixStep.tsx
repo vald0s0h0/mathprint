@@ -48,6 +48,8 @@ export default function CompetencyMatrixStep({
             { value: 'mathalea', label: 'MathALÉA' },
             { value: 'sesamaths', label: 'Sésamaths (5e)' },
             { value: 'gemini', label: 'Gemini' },
+            // exercices repris du manuel Indigo 3e, publiés en dur (onglet Exercices)
+            { value: 'indigo', label: 'Indigo (3e)' },
           ]} />
         </Stack>
         <Badge variant="light">{selected.length} sélectionnée(s)</Badge>

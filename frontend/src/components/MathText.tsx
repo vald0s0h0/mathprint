@@ -35,35 +35,71 @@ function splitMathSpans(text: string): Array<[string, boolean]> {
   return spans
 }
 
-// Case de réponse insérée dans le fil du texte (cf. backend services/statement.py).
-// Le PDF l'imprime en case à remplir ; l'aperçu web doit faire pareil, sinon le
-// marqueur littéral « {{blank}} » s'affiche tel quel dans la banque et les aperçus.
+// Cases de réponse insérées dans le fil du texte (cf. backend services/statement.py
+// et services/indigo_fields.py). Le PDF les imprime en cases à remplir ; l'aperçu
+// web doit faire pareil, sinon le marqueur littéral s'affiche tel quel.
+// - {{blank}}       : case standard (~20 mm) ;
+// - {{mini}}        : mini-case 2 chiffres (~9 mm) — trou d'équation à trous ;
+// - {{blank_right}} : case qui s'étire jusqu'au bord droit (réponse plus longue).
 const BLANK_TOKEN = '{{blank}}'
+const MINI_TOKEN = '{{mini}}'
+const WIDE_TOKEN = '{{blank_right}}'
+// découpe en gardant chaque marque (la plus longue d'abord : blank_right ⊃ blank)
+const ANSWER_SPLIT = /(\{\{blank_right\}\}|\{\{blank\}\}|\{\{mini\}\})/
 
-/** Case de réponse vide, dessinée en ligne à la place du marqueur {{blank}}. */
-function BlankBox() {
-  return (
-    <Box component="span" aria-label="case à remplir" style={{
-      display: 'inline-block', width: '2.6em', height: '1.05em',
-      border: '1px solid var(--mantine-color-gray-5)', borderRadius: 2,
-      margin: '0 0.12em', verticalAlign: '-0.18em',
-    }} />
-  )
+// Espace fine insécable (U+202F) : typographie française. Sans elle, l'aperçu
+// montre une pleine espace avant « ; : ! ? » et à l'intérieur des guillemets
+// « … » (« trop de séparation »). Idempotent (absorbe l'espace déjà présente).
+const NNBSP = ' '
+const SP = '[ \\u00A0\\u202F]'          // espace normale / insécable / fine
+const RE_PUNCT = new RegExp(`${SP}*([;!?%])`, 'g')
+const RE_COLON = new RegExp(`([^0-9\\s])${SP}*:(?=\\s|$)`, 'g')  // pas dans 12:30 ni une URL
+const RE_GUILL_OPEN = new RegExp(`«${SP}*`, 'g')
+const RE_GUILL_CLOSE = new RegExp(`${SP}*»`, 'g')
+
+function frenchSpacing(s: string): string {
+  if (!s) return s
+  return s
+    .replace(RE_PUNCT, `${NNBSP}$1`)
+    .replace(RE_COLON, `$1${NNBSP}:`)
+    .replace(RE_GUILL_OPEN, `«${NNBSP}`)
+    .replace(RE_GUILL_CLOSE, `${NNBSP}»`)
 }
 
-/** Texte brut (hors formule) pouvant contenir des marqueurs {{blank}} : chaque
- *  marqueur devient une case à remplir, le reste est rendu tel quel. */
+/** Case de réponse vide, dessinée en ligne à la place d'un marqueur. La variante
+ *  fixe la largeur (mini = 2 chiffres, standard, ou pleine largeur qui pousse
+ *  jusqu'au bord droit — approché par flex:1 dans le fil de texte). */
+function BlankBox({ kind = 'normal' }: { kind?: 'normal' | 'mini' | 'right' }) {
+  const base = {
+    display: 'inline-block', height: kind === 'mini' ? '0.95em' : '1.05em',
+    border: '1px solid var(--mantine-color-gray-5)', borderRadius: 2,
+    margin: '0 0.12em', verticalAlign: '-0.18em',
+  } as const
+  if (kind === 'right')
+    return <Box component="span" aria-label="case à remplir" style={{ ...base, minWidth: '3em', width: '55%' }} />
+  if (kind === 'mini')
+    return <Box component="span" aria-label="mini-case" style={{ ...base, width: '1.3em' }} />
+  return <Box component="span" aria-label="case à remplir" style={{ ...base, width: '2.6em' }} />
+}
+
+const TOKEN_KIND: Record<string, 'normal' | 'mini' | 'right'> = {
+  [BLANK_TOKEN]: 'normal', [MINI_TOKEN]: 'mini', [WIDE_TOKEN]: 'right',
+}
+
+/** Texte brut (hors formule) pouvant contenir des marqueurs de case : chaque
+ *  marqueur devient une case à remplir de la bonne taille, le reste est rendu
+ *  tel quel (espaces insécables françaises appliquées, cf. frenchSpacing). */
 function TextSpan({ content }: { content: string }) {
-  if (!content.includes(BLANK_TOKEN)) return <span>{content}</span>
-  const parts = content.split(BLANK_TOKEN)
+  const text = frenchSpacing(content)
+  if (!ANSWER_SPLIT.test(text)) return <span>{text}</span>
+  const parts = text.split(ANSWER_SPLIT)
   return (
     <>
-      {parts.map((part, i) => (
-        <React.Fragment key={i}>
-          {part && <span>{part}</span>}
-          {i < parts.length - 1 && <BlankBox />}
-        </React.Fragment>
-      ))}
+      {parts.map((part, i) => {
+        const kind = TOKEN_KIND[part]
+        if (kind) return <BlankBox key={i} kind={kind} />
+        return part ? <span key={i}>{part}</span> : null
+      })}
     </>
   )
 }
@@ -79,54 +115,26 @@ function MathSpan({ latex }: { latex: string }) {
   }
 }
 
-/** Énoncé complet : consigne + expression mise en valeur, centrée. */
+/** Énoncé : texte + formules KaTeX intercalés. La taille de police est
+ *  UNIFORME (pas de mise en valeur automatique après un « : ») — l'ancienne
+ *  heuristique agrandissait arbitrairement l'après-deux-points, ce qui donnait
+ *  des tailles incohérentes d'une ligne à l'autre. Le seul agrandissement
+ *  légitime (lignes portant une case à remplir) est décidé par l'appelant. */
+// Marqueur de PLACEMENT d'image ({{figure}}, cf. backend statement.py) : il ne
+// s'affiche JAMAIS en texte. L'aperçu de l'onglet Exercices l'intercepte pour y
+// poser la figure (StatementPreview) ; partout ailleurs (banque, sujets), on
+// retire simplement sa ligne pour qu'il ne fuite pas dans le rendu.
+const FIGURE_LINE_RE = /^[ \t]*\{\{figure\}\}[ \t]*\n?/gm
+
 export default function MathText({ text, centered = false, size }: {
   text: string; centered?: boolean; size?: string | number
 }) {
-  const spans = useMemo(() => splitMathSpans(text), [text])
-
-  // Rendre tous les spans (maths + texte intercalés)
+  const spans = useMemo(() => splitMathSpans((text || '').replace(FIGURE_LINE_RE, '')), [text])
   const elements = spans.map(([content, isMath], i) =>
-    isMath ? (
-      <MathSpan key={i} latex={content} />
-    ) : (
-      <TextSpan key={i} content={content} />
-    )
+    isMath ? <MathSpan key={i} latex={content} /> : <TextSpan key={i} content={content} />
   )
-
-  // Heuristique optionnelle : si le texte contient ":", proposer une mise en valeur
-  // (facultatif — conserver pour compatibilité avec l'ancienne UI, mais elle n'est plus
-  // nécessaire puisque le balisage LaTeX est explicite).
-  // Réservée aux textes d'UNE ligne, seuls pour lesquels elle a été écrite : sur un
-  // énoncé mis en lignes, le premier ":" est celui d'une énumération, et « tout ce qui
-  // suit » est alors le corps de l'énoncé — pas une expression à mettre en valeur.
-  const singleLine = !text.includes('\n')
-  const colonIdx = singleLine ? text.indexOf(':') : -1
-  const afterColon = colonIdx >= 0 ? text.slice(colonIdx + 1).trim() : ''
-  const splittable = colonIdx >= 0 && afterColon.length > 0 && afterColon.length < 80
-
-  if (splittable && afterColon.split('$').some(s => /\d/.test(s))) {
-    const beforeColon = text.slice(0, colonIdx)
-    const afterSpans = splitMathSpans(afterColon)
-    const afterElements = afterSpans.map(([content, isMath], i) =>
-      isMath ? (
-        <MathSpan key={i} latex={content} />
-      ) : (
-        <TextSpan key={i} content={content} />
-      )
-    )
-
-    return (
-      <Box fz={size} style={{ whiteSpace: 'pre-wrap' }}>
-        <Box component="span"><TextSpan content={beforeColon} /> :</Box>
-        <Box mt={4} ta={centered ? 'center' : 'left'}
-          fz="1.25em" fw={500} style={{ letterSpacing: '0.02em' }}>
-          {afterElements}
-        </Box>
-      </Box>
-    )
-  }
-
+  if (centered)
+    return <Box fz={size} ta="center" style={{ whiteSpace: 'pre-wrap' }}>{elements}</Box>
   return <Box component="span" fz={size} style={{ whiteSpace: 'pre-wrap' }}>{elements}</Box>
 }
 

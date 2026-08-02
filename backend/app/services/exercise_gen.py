@@ -389,8 +389,15 @@ def _diagnose_multi_blank(statement: str, answer: dict) -> str:
 
 
 def _validate_exercise(raw: dict, competency: Competency, db: Session,
-                       existing_norms: set[str]) -> dict | None:
-    """Valide un exercice candidat. Retourne le contrat interne ou None."""
+                       existing_norms: set[str], *,
+                       allow_geometry_text: bool = False) -> dict | None:
+    """Valide un exercice candidat. Retourne le contrat interne ou None.
+
+    `allow_geometry_text` : lève le rejet des verbes de construction en domaine
+    géométrique. La pipeline Indigo l'active car elle conserve la figure du
+    manuel comme IMAGE à côté de l'énoncé — l'élève LIT la figure et répond en
+    QCM/texte, il n'y trace rien, donc un énoncé de géométrie reste corrigeable
+    (cf. services.indigo_gemini)."""
     if not isinstance(raw, dict):
         return None
     rtype = raw.get("response_type", "short_text")
@@ -401,7 +408,8 @@ def _validate_exercise(raw: dict, competency: Competency, db: Session,
     # énoncé mesuré puis normalisé pourrait franchir la longueur maximale, et
     # deux énoncés identiques au saut de ligne près sont un doublon).
     statement = statement_mod.normalize(str(raw.get("statement", "")))
-    correction = str(raw.get("correction", "")).strip()
+    # même corruption \times->tabulation possible dans le corrigé (LaTeX aussi)
+    correction = statement_mod.repair_latex_control_chars(str(raw.get("correction", "")).strip())
     # table_fill : le détail vit dans row_labels/col_labels, "statement" ne
     # porte que la consigne commune (souvent très courte, ex. "Calcule.").
     statement_min = 3 if rtype == "table_fill" else 15
@@ -410,8 +418,11 @@ def _validate_exercise(raw: dict, competency: Competency, db: Session,
 
     is_geometry = competency.domain_code in GEOMETRY_DOMAINS
     # seul manual_drawing autorise les verbes de construction (l'élève y
-    # dessine réellement) ; tout autre format géométrique doit s'en passer
-    if is_geometry and rtype != "manual_drawing" and _is_geometry_verb(statement):
+    # dessine réellement) ; tout autre format géométrique doit s'en passer —
+    # sauf pour Indigo, qui garde la figure en image et n'attend que du texte
+    # coché/écrit (allow_geometry_text).
+    if (is_geometry and not allow_geometry_text and rtype != "manual_drawing"
+            and _is_geometry_verb(statement)):
         return None
 
     kind = raw.get("kind") if raw.get("kind") in ("application", "probleme") else "application"
@@ -796,7 +807,11 @@ _FORMAT_MENU = (
     "PRÉFÈRE ce format à chaque fois qu'une tâche de reconnaissance/classement "
     "le permet, quitte à transformer une question ouverte en QCM à choix "
     "nombreux — un exercice « Vrai ou Faux ? » du manuel devient un "
-    "qcm_single à 2 choix.\n"
+    "qcm_single à 2 choix. NE RÉPÈTE JAMAIS le contenu des propositions dans "
+    "\"statement\" : les propositions vivent UNIQUEMENT dans \"choices\", elles "
+    "sont déjà imprimées à côté de leur case à cocher — \"statement\" ne porte "
+    "que la question/consigne (« Coche la bonne réponse. »), jamais leur liste "
+    "recopiée en toutes lettres ni entre parenthèses.\n"
     "2. CASE SIMPLE AVEC RÉPONSE COURTE (\"short_text\", EN LIGNE) : la "
     "réponse s'insère naturellement au milieu de la phrase ou de l'équation "
     "(texte à trous) — place le marqueur littéral {{blank}} à cet endroit "
@@ -1051,10 +1066,14 @@ def ensure_bank(db: Session, competency: Competency, level: int,
     if source == "gemini":
         from . import gemini_gen
         return gemini_gen.ensure_bank(db, competency, level)
+    if source == "indigo":
+        # pool fini, publié en dur (aucune génération) — cf. services.indigo
+        from . import indigo
+        return indigo.published_rows(db, competency, level)
     raise NotImplementedError(
         f"Génération d'exercices source={source!r} désactivée : seules "
-        "l'extraction Sésamaths (source=\"sesamaths\") et la création Gemini "
-        "(source=\"gemini\") sont actives.")
+        "l'extraction Sésamaths (source=\"sesamaths\"), la création Gemini "
+        "(source=\"gemini\") et le manuel Indigo (source=\"indigo\") sont actives.")
 
 
 def _source_pool(source: str) -> tuple[str, ...] | None:
@@ -1068,6 +1087,8 @@ def _source_pool(source: str) -> tuple[str, ...] | None:
     if source == "gemini":
         from .gemini_gen import SOURCE
         return (SOURCE,)
+    if source == "indigo":
+        return ("indigo",)
     return None
 
 
@@ -1109,7 +1130,8 @@ def filler_bank_rows(db: Session, competency: Competency, level: int,
     temps que les exercices classiques, donc déjà en banque au moment de
     composer le sujet. Retourne [] si rien (source sans remplissage, ou banque
     pas encore constituée)."""
-    if source == "sesamaths":
+    # sources à pool FINI (extraction manuel) : pas de cartes de remplissage
+    if source in ("sesamaths", "indigo"):
         return []
     from .gemini_gen import filler_rows
     for candidate in sorted(range(1, 6), key=lambda l: abs(l - level)):

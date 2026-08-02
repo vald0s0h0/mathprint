@@ -67,7 +67,10 @@ def _lesson_out(sn: LessonSnippet, comp: Competency | None) -> dict:
 @router.get("/summary")
 def summary(grade_level: str | None = None, db: Session = Depends(get_db)):
     """Couverture de la banque par compétence : nb d'exercices actifs par
-    niveau 1-5 et présence des rappels (1-3 / 4-5)."""
+    niveau 1-5, nb de "problèmes" (kind=probleme, badge probleme/énigme
+    confondus), et présence des rappels (1-3 / 4-5). Renvoie aussi domaine/
+    chapitre (codes ET libellés, H1/H2) pour que le front puisse regrouper la
+    table par domaine > chapitre > compétence (H1/H2/H3)."""
     comp_q = (db.query(Competency, CompetencyFramework.grade_level)
               .join(CompetencyFramework,
                     Competency.framework_id == CompetencyFramework.id))
@@ -83,6 +86,14 @@ def summary(grade_level: str | None = None, db: Session = Depends(get_db)):
                         .group_by(GeneratedExercise.competency_id,
                                   GeneratedExercise.difficulty_level)):
         ex_counts.setdefault(cid, {})[lvl] = n
+    # les "problèmes" (kind=probleme, regroupe badge probleme+énigme) mobilisent
+    # souvent plusieurs compétences d'un même chapitre à la fois : comptés par
+    # compétence ici, mais affichés groupés au niveau du chapitre (H2) côté
+    # front (zone fusionnée) plutôt que répétés/éclatés ligne par ligne.
+    prob_counts = dict(
+        db.query(GeneratedExercise.competency_id, func.count())
+        .filter(GeneratedExercise.status == "active", GeneratedExercise.kind == "probleme")
+        .group_by(GeneratedExercise.competency_id).all())
     lessons = dict()
     for sn in db.query(LessonSnippet).filter(LessonSnippet.status == "active"):
         lessons.setdefault(sn.competency_id, []).append(
@@ -96,11 +107,13 @@ def summary(grade_level: str | None = None, db: Session = Depends(get_db)):
             continue  # la banque s'agrandit à la demande : n'afficher que l'existant
         out.append({
             "competency_id": comp.id, "code": comp.code, "short_id": comp.short_id,
-            "label": comp.label,
-            "grade_level": grade, "domain_name": comp.domain_name,
-            "chapter_name": comp.chapter_name,
+            "label": comp.label, "order_index": comp.order_index,
+            "grade_level": grade,
+            "domain_code": comp.domain_code, "domain_name": comp.domain_name,
+            "chapter_code": comp.chapter_code, "chapter_name": comp.chapter_name,
             "by_level": {str(l): by_level.get(l, 0) for l in range(1, 6)},
             "total": sum(by_level.values()),
+            "problems": prob_counts.get(comp.id, 0),
             "lessons": lessons.get(comp.id, []),
         })
     out.sort(key=lambda r: (r["grade_level"], r["code"]))

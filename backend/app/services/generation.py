@@ -214,11 +214,27 @@ def generate_assessment_job(db: Session, assessment: Assessment,
                 lesson_snippet_id=lesson_snippet_id)
             db.add(item)
             db.flush()
+            # exercices Indigo (manuel) : label « Problème/Énigme + titre » affiché
+            # À CÔTÉ du numéro (préfixe de 1re ligne d'énoncé), et statut calculette
+            # dessiné en icône par pdfgen. Les tags du manuel ne sont JAMAIS affichés.
+            indigo_meta = ((row.raw_extract_json or {}).get("indigo")
+                           if row.source == "indigo" else None)
+            disp_statement, calc, is_probleme = row.statement, "autorisee", False
+            if indigo_meta:
+                calc = indigo_meta.get("calculator") or "autorisee"
+                bt = indigo_meta.get("badge_type")
+                if bt in ("probleme", "enigme"):
+                    is_probleme = True          # seuls les problèmes portent une difficulté (3 niveaux)
+                    lbl = "Problème" if bt == "probleme" else "Énigme"
+                    title = (indigo_meta.get("title") or "").strip()
+                    disp_statement = f"{lbl} — {title}\n{row.statement}" if title \
+                        else f"{lbl}\n{row.statement}"
             render_items.append({"kind": "exercise", "item_id": item.id,
-                                 "statement": row.statement,
+                                 "statement": disp_statement,
                                  "correction": row.correction,
                                  "response_type": row.response_type,
                                  "choices": choices, "level5": row.difficulty_level,
+                                 "calc": calc, "is_probleme": is_probleme,
                                  "figure": row.figure_json,
                                  "grading": grading_json,
                                  "inline": bool((row.expected_json or {}).get("inline")),

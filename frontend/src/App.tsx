@@ -3,7 +3,7 @@ import {
   SegmentedControl, Text, Title, Tooltip, useComputedColorScheme, useMantineColorScheme,
 } from '@mantine/core'
 import {
-  GraduationCap, LayoutDashboard, Library, LogOut, Moon,
+  BookOpenCheck, GraduationCap, LayoutDashboard, Library, LogOut, Moon,
   ScanLine, Settings as SettingsIcon, Sun, Target, Users, FileText,
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
@@ -18,13 +18,16 @@ import SettingsPage from './pages/Settings'
 import Setup from './pages/Setup'
 import Students from './pages/Students'
 import Bank from './pages/Bank'
+import Exercices from './pages/Exercices'
 import Subjects from './pages/Subjects'
 import { CYCLES, useAppState, type Cycle } from './state/AppState'
 
+// `admin: true` => réservé au rôle admin (absent des builds utilisateur/correcteur).
 const NAV = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/sujets', label: 'Sujets', icon: FileText },
   { to: '/banque', label: 'Banque', icon: Library },
+  { to: '/exercices', label: 'Exercices', icon: BookOpenCheck, admin: true },
   { to: '/corrections', label: 'Corrections', icon: ScanLine },
   { to: '/eleves', label: 'Élèves', icon: Users },
   { to: '/competences', label: 'Compétences', icon: Target },
@@ -49,13 +52,20 @@ export default function App() {
   const navigate = useNavigate()
   const authed = !!getToken()
   const [needsSetup, setNeedsSetup] = useState<boolean | null>(null)
+  const [role, setRole] = useState<string>('')
   const { cycle, setCycle, activeJobs } = useAppState()
+  const isAdmin = role === 'admin'
+  const nav = NAV.filter((n) => !n.admin || isAdmin)
 
   useEffect(() => {
     api.get<{ needs_setup: boolean }>('/api/setup/status')
       .then((r) => setNeedsSetup(r.needs_setup))
       .catch(() => setNeedsSetup(false))
   }, [])
+
+  useEffect(() => {
+    if (authed) api.get<{ role: string }>('/api/auth/me').then((m) => setRole(m.role)).catch(() => {})
+  }, [authed])
 
   if (needsSetup === null) return null
   if (needsSetup) return <Setup onDone={() => setNeedsSetup(false)} />
@@ -112,7 +122,7 @@ export default function App() {
       </AppShell.Header>
 
       <AppShell.Navbar p="xs">
-        {NAV.map((n) => (
+        {nav.map((n) => (
           <NavLink key={n.to} label={n.label} active={location.pathname === n.to}
             leftSection={<n.icon size={17} strokeWidth={1.9} />}
             style={{ borderRadius: 8 }} fw={500} mb={2}
@@ -126,6 +136,7 @@ export default function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/sujets" element={<Subjects />} />
           <Route path="/banque" element={<Bank />} />
+          {isAdmin && <Route path="/exercices" element={<Exercices />} />}
           <Route path="/corrections" element={<Corrections />} />
           <Route path="/eleves" element={<Students />} />
           <Route path="/competences" element={<Competencies />} />

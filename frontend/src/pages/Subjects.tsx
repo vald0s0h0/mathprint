@@ -61,9 +61,9 @@ export default function Subjects() {
   // étape 2 : compétences cochées + source des exercices (§ Sésamaths)
   const [competencyIds, setCompetencyIds] = useState<string[]>([])
   const [suggestReason, setSuggestReason] = useState('')
-  // Gemini activé par défaut (création ancrée dans l'OCR du manuel 5e) ;
-  // l'utilisateur peut repasser en Automatique/MathALÉA/Sésamaths dans l'assistant
-  const [exerciseSource, setExerciseSource] = useState('gemini')
+  // Indigo activé par défaut (manuel 3e publié en dur, aucune génération) ;
+  // l'utilisateur peut repasser en Sésamaths/Gemini/Automatique/MathALÉA dans l'assistant
+  const [exerciseSource, setExerciseSource] = useState('indigo')
   // étape 3 : adaptation
   const [mode, setMode] = useState('common')
   // étape 4
@@ -91,6 +91,16 @@ export default function Subjects() {
 
   const cycleClasses = classes.filter((c) => matches(c.grade_level))
   const grade = classes.find((c) => c.id === classId)?.grade_level
+
+  // Indigo (manuel 3e, publié en dur) par défaut, mais seulement pour une
+  // classe de 3e : sans exercice publié pour les autres niveaux, un sujet
+  // 6e/5e/4e resterait sans contenu (§ pipeline exercice_source, un item
+  // manquant se contente d'un warning, pas d'une erreur bloquante — d'où
+  // l'intérêt de ne pas laisser Indigo par défaut hors 3e).
+  useEffect(() => {
+    if (!classId) return
+    setExerciseSource(grade === '3e' ? 'indigo' : 'gemini')
+  }, [classId, grade])
 
   const groups = useMemo(() => {
     const filtered = list.filter((a) => matches(a.grade_level))
@@ -159,10 +169,10 @@ export default function Subjects() {
   function reset() {
     setOpen(false); setStep(0); setAssessmentId(null)
     setCompetencyIds([]); setTitle(''); setSuggestReason('')
-    // Gemini par défaut, comme à l'initialisation de l'état : "auto" n'a plus
+    // Indigo par défaut, comme à l'initialisation de l'état : "auto" n'a plus
     // aucune pipeline derrière depuis le 16/07, un assistant rouvert après un
     // reset repartait donc sur une source morte.
-    setMode('common'); setType('training'); setPages(1); setExerciseSource('gemini')
+    setMode('common'); setType('training'); setPages(1); setExerciseSource('indigo')
     setNoteBase('20')
   }
 

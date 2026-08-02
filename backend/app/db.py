@@ -73,6 +73,12 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, ...]]] = {
     "competencies": [
         ("short_id", "TEXT"),
     ],
+    "student_responses": [
+        ("selected_pairs", "JSON"),
+    ],
+    "indigo_exercises": [
+        ("figure_required", "BOOLEAN"),
+    ],
 }
 
 # renommages de colonnes (hiérarchie H1/H2 documentée sur `Competency` :

@@ -42,6 +42,12 @@ class Settings(BaseSettings):
     deepseek_reasoning_model: str = "deepseek-v4-flash-thinking"
     # création d'exercices et de rappels de leçon : modèle pro
     deepseek_pro_model: str = "deepseek-v4-pro"
+    # plafond de tokens de SORTIE d'un appel DeepSeek JSON. Bien plus bas que les
+    # budgets Claude (16k-48k) : les modèles DeepSeek coupent la sortie autour de
+    # 8k. Un lot dont la sortie dépasse ce plafond échoue au parsing JSON et
+    # retombe proprement (adaptation en solo, vérification = version adaptée
+    # gardée) ; il pilote donc AUSSI les tailles de lot de la pipeline Indigo.
+    deepseek_max_output_tokens: int = 8192
     claude_model: str = "claude-haiku-4-5-20251001"
     # extraction Sésamaths (lecture fidèle des pages de manuel) : Mistral OCR,
     # moteur de reconnaissance de document dédié (pas un modèle de chat) —
@@ -55,6 +61,25 @@ class Settings(BaseSettings):
     # seul exercice en banque", 17/07) ; Sonnet, un seul modèle, pas de repli
     # (un 2e modèle "correcteur" ajoutait de la complexité sans fiabiliser)
     claude_adapt_model: str = "claude-sonnet-5"
+    # Pipeline Indigo (onglet Exercices) : les TROIS étapes LLM (découpage,
+    # génération, vérification) passent par UN fournisseur choisi à l'exécution
+    # depuis l'onglet (toggle, persisté dans SystemSetting 'indigo_llm_provider',
+    # cf. services.indigo_llm). Défaut = Anthropic. Deux câblages :
+    #   • anthropic : découpage + génération = Sonnet, vérification = Opus ;
+    #   • deepseek  : les trois étapes = DeepSeek pro v4 (clé « deepseek-pro »).
+    # Sans la clé du fournisseur choisi, les trois étapes tournent hors-ligne
+    # (replis OCR bruts). Indigo n'utilise plus Gemini.
+    indigo_llm_provider_default: str = "anthropic"
+    indigo_anthropic_segment_model: str = "claude-sonnet-5"
+    indigo_anthropic_adapt_model: str = "claude-sonnet-5"
+    indigo_anthropic_review_model: str = "claude-opus-5"
+    # plafond de sortie côté Anthropic (Claude gère de larges sorties) ; les lots
+    # Indigo (5-7 / 6-8) tiennent très en dessous.
+    indigo_anthropic_max_output_tokens: int = 16000
+    indigo_deepseek_model: str = "deepseek-v4-pro"
+    # vérification désactivable seule (appel payant par cible), quel que soit le
+    # fournisseur (cf. exercise_gen.format_contract, contrat partagé).
+    indigo_review_enabled: bool = True
     # création d'exercices (pipeline Gemini, cf. services/gemini_gen.py) :
     # création ANCRÉE dans les pages du manuel traitant la compétence (OCR
     # Mistral de la Série, partagé avec la pipeline Sésamaths).
@@ -138,6 +163,33 @@ class Settings(BaseSettings):
     # l'identique en dev et dans l'image Docker — cf. _APP_DIR ci-dessus.
     sesamaths_manuals: dict[str, str] = {"5e": str(_APP_DIR / "data" / "manuals" / "5.pdf")}
     sesamaths_schema_version: str = "6"   # bump -> invalide l'ancien cache (texte)
+
+    # --- Indigo (onglet Exercices, admin) : copie/adaptation d'exercices d'un
+    # manuel réel. Deux PDF par niveau : "eleve" (énoncés, badges) et "prof"
+    # (corrigés). TROP GROS pour être versionnés (manuel élève ~200 Mo) : ils
+    # restent LOCAUX à l'instance admin (dossier context/), jamais livrés dans
+    # l'image. L'onglet est admin-only et la construction se fait sur cette
+    # instance ; seuls les CROPS validés (petits PNG) sont ensuite publiés dans
+    # le repo (backend/app/data/indigo/), eux livrés à tous. Résolution via le
+    # même _resolve_manual_path que Sésamaths (essaie context/, data_dir/…).
+    indigo_manuals: dict[str, dict[str, str]] = {
+        "3e": {"eleve": str(_REPO_ROOT / "context" / "3_indigo.pdf"),
+               "prof": str(_REPO_ROOT / "context" / "3_indigo_prof.pdf")},
+    }
+    indigo_schema_version: str = "1"
+
+    # --- Prompts LLM éditables (hors code) ---
+    # Les prompts des pipelines de CRÉATION d'exercices (Indigo côté API, cli-exos
+    # côté abonnement) vivent dans des fichiers texte, organisés par pipeline :
+    # `prompts/<pipeline>/<étape>.txt` (ex. prompts/indigo/generation.txt). On peut
+    # les éditer sans toucher au code, pour affiner la qualité des appels LLM.
+    # Comme les manuels Indigo (context/…), ce dossier est à la RACINE du repo et
+    # reste local à l'instance qui fait la construction (il n'est pas dans l'image
+    # Docker slim, qui ne copie que app/). Le chargement est PARESSEUX (jamais à
+    # l'import) : l'app démarre normalement même sans ce dossier ; seule une
+    # extraction qui tourne réellement a besoin des fichiers (cf. services.prompts).
+    # Surchargeable par MATHPRINT_PROMPTS_DIR.
+    prompts_dir: Path = _REPO_ROOT / "prompts"
 
     # --- Impression (CUPS local ou IPP réseau, §11.5) ---
     printing_enabled: bool = True

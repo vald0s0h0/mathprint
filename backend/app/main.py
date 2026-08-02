@@ -6,11 +6,11 @@ from fastapi.responses import JSONResponse
 
 from .db import Base, SessionLocal, engine, run_migrations
 from .routers import (
-    assessments, auth, content, data_admin, misc, org, printing, scans, setup,
-    students, system,
+    assessments, auth, content, data_admin, indigo as indigo_router, misc, org,
+    printing, scans, setup, students, system,
 )
 from .seed import seed
-from .services import errorlog, job_worker
+from .services import errorlog, indigo, job_worker
 from .services.bootstrap import ensure_strong_secrets
 
 app = FastAPI(title="MathPrint", version="0.9.0",
@@ -25,7 +25,7 @@ app.add_middleware(
 
 for r in (setup.router, auth.router, org.router, assessments.router, scans.router,
           students.router, misc.router, printing.router, system.router,
-          content.router, data_admin.router):
+          content.router, data_admin.router, indigo_router.router):
     app.include_router(r)
 
 
@@ -49,10 +49,13 @@ def startup():
     db = SessionLocal()
     try:
         seed(db)
+        indigo.seed_published(db)   # exercices Indigo publiés -> banque (tous déploiements)
         job_worker.resume_stuck_jobs(db)
+        indigo.resume_stuck(db)
     finally:
         db.close()
     job_worker.start_worker()
+    indigo.start_worker()
 
 
 @app.get("/api/health")

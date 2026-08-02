@@ -63,7 +63,7 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..models import CompetencyFramework, GeneratedExercise, SesamathsChapterExtraction, SesamathsLlmCache
-from . import exercise_gen, providers, sesamaths_pdf
+from . import exercise_gen, figures, providers, sesamaths_pdf
 
 logger = logging.getLogger(__name__)
 
@@ -324,7 +324,13 @@ def _to_candidate(item: dict, doc, blocks_by_index: dict[int, dict], competency,
                 f"{page_idx}|{item.get('statement', '')}".encode()).hexdigest()[:16]
             fig_path = out_dir / f"p{page_idx}_{fname}.png"
             if sesamaths_pdf.crop_bbox_png(doc, page_idx, image_block["bbox_pct"], fig_path):
-                item["figure"] = {"type": "image", "params": {"path": str(fig_path)}}
+                # moteur déterministe (aucun LLM) : une photographie est
+                # toujours illustrative, jamais insérée dans l'énoncé imprimé
+                # — cf. figures.is_photograph.
+                if figures.is_photograph(fig_path.read_bytes()):
+                    fig_path.unlink(missing_ok=True)
+                else:
+                    item["figure"] = {"type": "image", "params": {"path": str(fig_path)}}
 
     valid = exercise_gen._validate_exercise(item, competency, db, existing_norms)
     if valid is None:

@@ -40,9 +40,10 @@ class AssessmentPatch(BaseModel):
     personalization_mode: Literal["common", "common_variants", "individual"] | None = None
     competency_ids: list[str] | None = None
     # source des exercices : "sesamaths" = extraction du manuel, "gemini" =
-    # création par LLM (services.gemini_gen). "auto"/"mathalea" sont des
-    # valeurs héritées, sans pipeline derrière depuis le 16/07.
-    exercise_source: Literal["auto", "mathalea", "sesamaths", "gemini"] | None = None
+    # création par LLM (services.gemini_gen), "indigo" = manuel 3e publié en
+    # dur (services.indigo). "auto"/"mathalea" sont des valeurs héritées, sans
+    # pipeline derrière depuis le 16/07.
+    exercise_source: Literal["auto", "mathalea", "sesamaths", "gemini", "indigo"] | None = None
 
 
 class GenerateIn(BaseModel):

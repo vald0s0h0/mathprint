@@ -33,92 +33,88 @@ EXERCISE_COMPETENCY_KEYWORDS: dict[str, tuple[str, list[str]]] = {
 }
 
 
-def seed_frameworks(db: Session) -> dict[str, list[Competency]]:
-    """Charge les grilles officielles. Retourne les compétences par grade."""
-    data = json.loads(COMPETENCIES_JSON.read_text(encoding="utf-8"))
-    by_grade: dict[str, list[Competency]] = {}
-    for fw_data in data["frameworks"]:
-        fw = CompetencyFramework(
-            grade_level=fw_data["grade_level"], cycle=fw_data.get("cycle"),
-            program_year=fw_data.get("program_year"),
-            name=fw_data["name"], version=fw_data["version"],
-            status="published", source="programme_officiel")
-        db.add(fw)
-        db.flush()
-        order = 0
-        comps = []
-        for dom in fw_data["domains"]:
-            for chap in dom["chapters"]:
-                for c in chap["competencies"]:
-                    comp = Competency(
-                        framework_id=fw.id, code=c["code"],
-                        short_id=c.get("short_id", ""), label=c["label"],
-                        order_index=order,
-                        domain_code=dom["code"], domain_name=dom["name"],
-                        chapter_code=chap["code"], chapter_name=chap["name"])
-                    db.add(comp)
-                    comps.append(comp)
-                    order += 1
-        db.flush()
-        by_grade[fw_data["grade_level"]] = comps
-    return by_grade
-
-
-NEW_5E_VERSION = "2026-cahier"
-
-
-def migrate_5e_framework(db: Session):
-    """Purge l'ancien référentiel 5e (objectifs fins du programme officiel,
-    ~100 items) et le remplace par la nouvelle hiérarchie domaine > chapitre >
-    compétence tirée du sommaire du cahier 5e (66 compétences, IDs courts
-    type A1.1). Ne touche pas aux autres niveaux, qui gardent l'ancien
-    modèle en attendant leur propre refonte. Idempotent : ne fait rien une
-    fois la migration effectuée (détectée via `version=NEW_5E_VERSION`)."""
-    old = (db.query(CompetencyFramework)
-           .filter(CompetencyFramework.grade_level == "5e",
-                   CompetencyFramework.version != NEW_5E_VERSION).all())
-    if not old:
-        return
-    old_ids = [f.id for f in old]
-    comp_ids = [c.id for c in
-                db.query(Competency.id).filter(Competency.framework_id.in_(old_ids))]
-    if comp_ids:
-        db.query(ExerciseCompetency).filter(
-            ExerciseCompetency.competency_id.in_(comp_ids)).delete(synchronize_session=False)
-        db.query(CompetencyEvidence).filter(
-            CompetencyEvidence.competency_id.in_(comp_ids)).delete(synchronize_session=False)
-        db.query(StudentCompetencyState).filter(
-            StudentCompetencyState.competency_id.in_(comp_ids)).delete(synchronize_session=False)
-        db.query(CompetencyStateHistory).filter(
-            CompetencyStateHistory.competency_id.in_(comp_ids)).delete(synchronize_session=False)
-        db.query(GeneratedExercise).filter(
-            GeneratedExercise.competency_id.in_(comp_ids)).delete(synchronize_session=False)
-        db.query(LessonSnippet).filter(
-            LessonSnippet.competency_id.in_(comp_ids)).delete(synchronize_session=False)
-        db.query(Competency).filter(Competency.id.in_(comp_ids)).delete(synchronize_session=False)
-    db.query(CompetencyFramework).filter(CompetencyFramework.id.in_(old_ids)).delete(
-        synchronize_session=False)
-    db.flush()
-
-    data = json.loads(COMPETENCIES_JSON.read_text(encoding="utf-8"))
-    fw_data = next(f for f in data["frameworks"] if f["grade_level"] == "5e")
+def _seed_framework(db: Session, fw_data: dict) -> list[Competency]:
+    """Crée un référentiel (framework + compétences) depuis un bloc du JSON.
+    Retourne les compétences créées, dans l'ordre du sommaire."""
     fw = CompetencyFramework(
-        grade_level="5e", cycle=fw_data.get("cycle"), program_year=fw_data.get("program_year"),
+        grade_level=fw_data["grade_level"], cycle=fw_data.get("cycle"),
+        program_year=fw_data.get("program_year"),
         name=fw_data["name"], version=fw_data["version"],
         status="published", source="programme_officiel")
     db.add(fw)
     db.flush()
     order = 0
+    comps = []
     for dom in fw_data["domains"]:
         for chap in dom["chapters"]:
             for c in chap["competencies"]:
-                db.add(Competency(
-                    framework_id=fw.id, code=c["code"], short_id=c.get("short_id", ""),
-                    label=c["label"], order_index=order,
+                comp = Competency(
+                    framework_id=fw.id, code=c["code"],
+                    short_id=c.get("short_id", ""), label=c["label"],
+                    order_index=order,
                     domain_code=dom["code"], domain_name=dom["name"],
-                    chapter_code=chap["code"], chapter_name=chap["name"]))
+                    chapter_code=chap["code"], chapter_name=chap["name"])
+                db.add(comp)
+                comps.append(comp)
                 order += 1
-    db.commit()
+    db.flush()
+    return comps
+
+
+def seed_frameworks(db: Session) -> dict[str, list[Competency]]:
+    """Charge les grilles officielles. Retourne les compétences par grade."""
+    data = json.loads(COMPETENCIES_JSON.read_text(encoding="utf-8"))
+    return {fw_data["grade_level"]: _seed_framework(db, fw_data)
+            for fw_data in data["frameworks"]}
+
+
+CAHIER_VERSION = "2026-cahier"
+# Niveaux refondus sur le sommaire du cahier (hiérarchie domaine > chapitre >
+# compétence, IDs courts type A1.1). Les autres niveaux gardent l'ancien
+# modèle (objectifs fins) en attendant leur propre refonte.
+CAHIER_GRADES = ("5e", "3e")
+
+# rétro-compat : d'anciens imports/commentaires référencent ces noms.
+NEW_5E_VERSION = CAHIER_VERSION
+
+
+def _purge_frameworks(db: Session, frameworks: list[CompetencyFramework]):
+    """Supprime des référentiels et toutes les lignes qui en dépendent
+    (liens exercices, preuves, états élèves, historiques, exercices générés,
+    extraits de leçon)."""
+    old_ids = [f.id for f in frameworks]
+    comp_ids = [c.id for c in
+                db.query(Competency.id).filter(Competency.framework_id.in_(old_ids))]
+    if comp_ids:
+        for model in (ExerciseCompetency, CompetencyEvidence, StudentCompetencyState,
+                      CompetencyStateHistory, GeneratedExercise, LessonSnippet):
+            db.query(model).filter(
+                model.competency_id.in_(comp_ids)).delete(synchronize_session=False)
+        db.query(Competency).filter(Competency.id.in_(comp_ids)).delete(synchronize_session=False)
+    db.query(CompetencyFramework).filter(CompetencyFramework.id.in_(old_ids)).delete(
+        synchronize_session=False)
+    db.flush()
+
+
+def migrate_cahier_frameworks(db: Session):
+    """Purge les anciens référentiels des niveaux refondus sur le sommaire du
+    cahier (cf. CAHIER_GRADES) et les recharge depuis le JSON (hiérarchie
+    domaine > chapitre > compétence, IDs courts type A1.1). Ne touche pas aux
+    autres niveaux. Idempotent : pour chaque niveau, ne fait rien une fois la
+    version en base alignée sur `CAHIER_VERSION`."""
+    data = None
+    for grade in CAHIER_GRADES:
+        old = (db.query(CompetencyFramework)
+               .filter(CompetencyFramework.grade_level == grade,
+                       CompetencyFramework.version != CAHIER_VERSION).all())
+        if not old:
+            continue
+        _purge_frameworks(db, old)
+        if data is None:
+            data = json.loads(COMPETENCIES_JSON.read_text(encoding="utf-8"))
+        fw_data = next(f for f in data["frameworks"] if f["grade_level"] == grade)
+        _seed_framework(db, fw_data)
+        db.commit()
 
 
 def _find_competency(comps: list[Competency], keywords: list[str]) -> Competency | None:
@@ -151,7 +147,7 @@ def seed_exercises(db: Session, by_grade: dict[str, list[Competency]]):
 
 
 def seed(db: Session):
-    migrate_5e_framework(db)
+    migrate_cahier_frameworks(db)
     if db.query(CompetencyFramework).first():
         return  # contenu déjà amorcé (indépendant de la création du 1er compte)
 

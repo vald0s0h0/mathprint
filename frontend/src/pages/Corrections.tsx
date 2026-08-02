@@ -46,7 +46,8 @@ type Item = {
   response_id: string; review_id: string | null; flagged: boolean
   category: string | null; student: string; statement: string
   expected: Record<string, unknown>; correction: string; ocr_text: string
-  selected_choices: number[]; ocr_confidence: number | null; reason_code: string
+  selected_choices: number[]; selected_pairs: number[][]
+  ocr_confidence: number | null; reason_code: string
   decision_source: string; proposed_score: number; max_score: number
   current_points: number; full_credit: boolean; cancelled: boolean
   bareme_points: number; zone_id: string | null; has_scan: boolean
@@ -212,6 +213,53 @@ function ScanImage({ responseId, cellIndex }: { responseId: string; cellIndex?: 
     <img src={url} alt="Scan de la réponse de l'élève"
       style={{ maxWidth: '100%', maxHeight: 260, objectFit: 'contain',
         border: '1px solid var(--mantine-color-gray-3)', borderRadius: 4, background: '#fff' }} />
+  )
+}
+
+// « points à relier » (matching) attendus : deux colonnes reliées par des
+// traits — comparaison rapide avec le scan de l'élève (colonne de gauche de la
+// modale, qui montre déjà les traits qu'il a tracés à la règle).
+function MatchingPairs({ left, right, pairs, lineColor }: {
+  left: string[]; right: string[]; pairs: number[][]
+  // couleur par trait (ex. vert/rouge selon la justesse) ; par défaut, indigo neutre
+  // (diagramme de la réponse ATTENDUE, où la notion de « juste » ne s'applique pas).
+  lineColor?: (li: number, ri: number) => string
+}) {
+  const rows = Math.max(left.length, right.length, 1)
+  const rowH = 30
+  const height = rows * rowH
+  return (
+    <Box pos="relative" style={{ height }}>
+      <svg width="100%" height={height} viewBox={`0 0 100 ${height}`} preserveAspectRatio="none"
+        style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
+        {pairs.map(([li, ri], k) => (
+          <line key={k} x1={2} y1={li * rowH + rowH / 2} x2={98} y2={ri * rowH + rowH / 2}
+            stroke={lineColor ? lineColor(li, ri) : 'var(--mantine-color-indigo-5)'}
+            strokeWidth={1.4} vectorEffect="non-scaling-stroke" />
+        ))}
+      </svg>
+      <Group justify="space-between" align="flex-start" wrap="nowrap" gap="md"
+        style={{ position: 'relative', height }}>
+        <Stack gap={0} style={{ flex: 1, minWidth: 0 }}>
+          {left.map((txt, i) => (
+            <Group key={i} gap={6} wrap="nowrap" align="center" style={{ height: rowH }}>
+              <Box style={{ width: 7, height: 7, borderRadius: 999, flexShrink: 0,
+                background: 'var(--mantine-color-indigo-6)' }} />
+              <Text size="sm" truncate><MathText text={txt} /></Text>
+            </Group>
+          ))}
+        </Stack>
+        <Stack gap={0} style={{ flex: 1, minWidth: 0 }}>
+          {right.map((txt, i) => (
+            <Group key={i} gap={6} wrap="nowrap" align="center" justify="flex-end" style={{ height: rowH }}>
+              <Text size="sm" ta="right" truncate><MathText text={txt} /></Text>
+              <Box style={{ width: 7, height: 7, borderRadius: 999, flexShrink: 0,
+                background: 'var(--mantine-color-indigo-6)' }} />
+            </Group>
+          ))}
+        </Stack>
+      </Group>
+    </Box>
   )
 }
 
@@ -932,6 +980,24 @@ export default function Corrections() {
                   <Text size="xs" c="dimmed" fw={600} tt="uppercase" mb={4}>
                     Scan de l'élève{cur.mode === 'cells' && curCell?.label ? ` — ${curCell.label}` : ''}
                   </Text>
+                  {cur.mode !== 'cells' && curItem.response_type === 'matching'
+                    && curItem.selected_pairs?.length > 0 && (
+                    <Box mb={8}>
+                      <Text size="xs" c="dimmed" mb={4}>
+                        Reconstitué depuis les traits détectés (vert = juste, rouge = faux) :
+                      </Text>
+                      <MatchingPairs
+                        left={((curItem.expected as { left?: string[] })?.left) || []}
+                        right={((curItem.expected as { right?: string[] })?.right) || []}
+                        pairs={curItem.selected_pairs}
+                        lineColor={(li, ri) => {
+                          const expectedPairs = ((curItem.expected as { pairs?: number[][] })?.pairs) || []
+                          const ok = expectedPairs.some(([a, b]) => a === li && b === ri)
+                          return ok ? 'var(--mantine-color-green-6)' : 'var(--mantine-color-red-6)'
+                        }}
+                      />
+                    </Box>
+                  )}
                   <ScanImage responseId={cur.respId}
                     cellIndex={cur.mode === 'cells' ? cur.cellIndex : null} />
                 </Card>
@@ -939,16 +1005,27 @@ export default function Corrections() {
                   <Text size="xs" c="dimmed" fw={600} tt="uppercase" mb={4}>
                     Réponse attendue{curCell?.label ? ` — ${curCell.label}` : ''}
                   </Text>
-                  <Box fz="1.7rem" fw={700} style={{ lineHeight: 1.3 }}>
-                    <MathText text={(cur.mode === 'cells' ? curCell?.expected_display
-                      : curItem.expected_display) || '—'} />
-                  </Box>
+                  {cur.mode !== 'cells' && curItem.response_type === 'matching' ? (
+                    <MatchingPairs
+                      left={((curItem.expected as { left?: string[] })?.left) || []}
+                      right={((curItem.expected as { right?: string[] })?.right) || []}
+                      pairs={((curItem.expected as { pairs?: number[][] })?.pairs) || []}
+                    />
+                  ) : (
+                    <Box fz="1.7rem" fw={700} style={{ lineHeight: 1.3 }}>
+                      <MathText text={(cur.mode === 'cells' ? curCell?.expected_display
+                        : curItem.expected_display) || '—'} />
+                    </Box>
+                  )}
                   <Text size="xs" c="dimmed" mt={8}>
-                    OCR / CV a lu : {cur.mode === 'cells'
-                      ? (curCell?.ocr_text || '∅')
-                      : (curItem.ocr_text || (curItem.selected_choices.length
-                          ? `cases ${curItem.selected_choices.join(', ')}` : '∅'))}
-                    {cur.mode !== 'cells' && curItem.ocr_confidence != null
+                    {cur.mode !== 'cells' && curItem.response_type === 'matching'
+                      ? 'Compare avec les traits tracés à la règle sur le scan ci-contre.'
+                      : `OCR / CV a lu : ${cur.mode === 'cells'
+                          ? (curCell?.ocr_text || '∅')
+                          : (curItem.ocr_text || (curItem.selected_choices.length
+                              ? `cases ${curItem.selected_choices.join(', ')}` : '∅'))}`}
+                    {cur.mode !== 'cells' && curItem.response_type !== 'matching'
+                      && curItem.ocr_confidence != null
                       && ` · confiance ${(curItem.ocr_confidence * 100).toFixed(0)} %`}
                   </Text>
                   {cur.mode !== 'cells' && curItem.reason_code &&

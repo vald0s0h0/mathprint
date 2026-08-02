@@ -1,0 +1,108 @@
+"""Aiguillage du fournisseur LLM de la pipeline Indigo (onglet Exercices).
+
+Les TROIS étapes LLM Indigo — découpage (indigo_segment), génération
+(indigo_gemini) et vérification (indigo_verify) — passent par CE module, qui
+choisit le fournisseur à l'EXÉCUTION selon un réglage persisté (SystemSetting
+« indigo_llm_provider »), réglable par un toggle dans l'onglet Exercices. Défaut :
+Anthropic. Deux câblages :
+  • anthropic : découpage + génération = Sonnet, vérification = Opus ;
+  • deepseek  : les trois étapes = DeepSeek pro v4.
+
+Les tailles de lot (indigo_gemini.choose_batch_size = 5-7,
+indigo_verify.choose_review_batch_size = 6-8) sont dimensionnées sur le plafond
+de sortie le plus BAS (DeepSeek ≈ 8k) : elles restent donc valides pour les deux
+fournisseurs (Claude, qui accepte de plus larges sorties, les traite sans souci).
+"""
+from __future__ import annotations
+
+import time
+
+from sqlalchemy.orm import Session
+
+from ..config import settings
+from . import providers
+from .runtime_settings import get_setting
+
+PROVIDERS = ("anthropic", "deepseek")
+SETTING_KEY = "indigo_llm_provider"
+
+# stage -> nom d'opération (traçabilité des coûts, page Coûts)
+_OPERATION = {"segment": "indigo_segment", "adapt": "indigo_adapt", "review": "indigo_review"}
+
+
+def get_provider(db: Session) -> str:
+    """Fournisseur choisi (persisté), ou le défaut de config si absent/invalide."""
+    val = (get_setting(db, SETTING_KEY) or {}).get("value")
+    return val if val in PROVIDERS else settings.indigo_llm_provider_default
+
+
+def set_provider(db: Session, provider: str, updated_by: str | None = None) -> str:
+    """Persiste le fournisseur (rejette une valeur inconnue). Retourne la valeur."""
+    if provider not in PROVIDERS:
+        raise ValueError(f"Fournisseur inconnu : {provider!r} (attendu {PROVIDERS})")
+    from ..models import SystemSetting
+    row = db.get(SystemSetting, SETTING_KEY)
+    if row is None:
+        row = SystemSetting(key=SETTING_KEY)
+        db.add(row)
+    row.value_json = {"value": provider}
+    row.version = (row.version or 0) + 1
+    row.updated_by = updated_by
+    db.commit()
+    return provider
+
+
+def _anthropic_model(stage: str) -> str:
+    return {"segment": settings.indigo_anthropic_segment_model,
+            "adapt": settings.indigo_anthropic_adapt_model,
+            "review": settings.indigo_anthropic_review_model}[stage]
+
+
+def model_for(db: Session, stage: str) -> str:
+    """Modèle réellement utilisé pour une étape selon le fournisseur choisi —
+    sert AUSSI de provenance (`IndigoExercise.model`)."""
+    if get_provider(db) == "deepseek":
+        return settings.indigo_deepseek_model
+    return _anthropic_model(stage)
+
+
+def config_provider_key(db: Session) -> str:
+    """Clé de configuration de fournisseur (Paramètres → Fournisseurs) dont dépend
+    l'étape LLM : « deepseek-pro » (modèle « pro ») ou « anthropic »."""
+    return "deepseek-pro" if get_provider(db) == "deepseek" else "anthropic"
+
+
+def label(db: Session) -> str:
+    return "DeepSeek pro" if get_provider(db) == "deepseek" else "Anthropic (Claude)"
+
+
+def offline(db: Session) -> bool:
+    """Vrai si le fournisseur CHOISI n'a pas de clé configurée (les étapes LLM
+    tournent alors sur le repli déterministe → exercices en repli OCR brut)."""
+    return providers.offline(db, config_provider_key(db))
+
+
+def call(db: Session, stage: str, system: str, payload: dict,
+         correlation_id: str) -> dict | None:
+    """Appelle l'étape `stage` (« segment » | « adapt » | « review ») sur le
+    fournisseur choisi, sortie JSON. Retry sur rate-limit ; sinon lève (l'appelant
+    dégrade proprement : repli OCR brut pour l'adaptation, version adaptée gardée
+    pour la vérification, découpage géométrique pour le découpage)."""
+    if get_provider(db) == "deepseek":
+        fn, model, max_tokens = (providers.deepseek_json,
+                                 settings.indigo_deepseek_model,
+                                 settings.deepseek_max_output_tokens)
+    else:
+        fn, model, max_tokens = (providers.claude_json, _anthropic_model(stage),
+                                 settings.indigo_anthropic_max_output_tokens)
+    op = _OPERATION[stage]
+    for attempt in range(3):
+        try:
+            return fn(db, op, system, payload, max_tokens=max_tokens,
+                      model=model, correlation_id=correlation_id)
+        except Exception as e:
+            if providers.is_rate_limited(e) and attempt < 2:
+                time.sleep(providers.retry_after_s(e, attempt))
+                continue
+            raise
+    return None

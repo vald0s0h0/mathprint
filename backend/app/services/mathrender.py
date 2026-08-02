@@ -129,6 +129,10 @@ def to_mathtext(s: str) -> str:
     s = re.sub(r"\\(?:,|;|!|:)", r"\\/", s)
     s = s.replace(r"\qquad", r"\ \ ").replace(r"\quad", r"\ ")
     s = s.replace(r"\dots", r"\ldots")
+    # mathtext ne connaît que les formes longues \leq / \geq (KaTeX accepte les
+    # deux) : le lookahead évite de toucher \leq, \geq, \leftarrow, \gets…
+    s = re.sub(r"\\le(?![a-zA-Z])", r"\\leq", s)
+    s = re.sub(r"\\ge(?![a-zA-Z])", r"\\geq", s)
     return s
 
 

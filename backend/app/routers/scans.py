@@ -461,6 +461,7 @@ def _review_unit(db: Session, resp: StudentResponse, item: CopyItem, copy: Copy,
         "statement": item.statement, "expected": item.expected_json,
         "correction": item.correction,
         "ocr_text": resp.final_text, "selected_choices": resp.selected_choices,
+        "selected_pairs": resp.selected_pairs,
         "ocr_confidence": ocr.confidence if ocr else None,
         "reason_code": decision.reason_code if decision else "",
         # source de la note actuelle, pour distinguer auto vs correction prof

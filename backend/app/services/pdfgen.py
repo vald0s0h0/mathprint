@@ -86,6 +86,39 @@ def _difficulty_color(level5: int) -> Color:
         lvl = 3
     return DIFFICULTY_COLORS[min(5, max(1, lvl))]
 
+
+# Couleur du badge numéroté d'un exercice. La difficulté 1-5 n'est PLUS affichée
+# sur les exercices ordinaires (demande utilisateur) : ils portent tous une
+# teinte NEUTRE. Seuls les PROBLÈMES gardent une difficulté, en TROIS niveaux
+# (facile / moyen / difficile), lue par CV sur la couleur du titre du manuel et
+# stockée en 2/3/4 (cf. indigo_cv.DIFFICULTY_BY_LEVEL).
+EXERCISE_BADGE = HexColor("#455A64")            # gris-bleu neutre (= DOT_ON)
+PROBLEME_COLORS = {
+    2: HexColor("#16A34A"),   # facile — vert
+    3: HexColor("#EA580C"),   # moyen  — orange
+    4: HexColor("#DC2626"),   # difficile — rouge
+}
+
+
+def _probleme_color(level: int) -> Color:
+    """Couleur d'un PROBLÈME selon sa difficulté (3 niveaux). Tolère une échelle
+    1-5 résiduelle en la repliant sur facile/moyen/difficile."""
+    try:
+        lvl = int(level)
+    except (TypeError, ValueError):
+        lvl = 3
+    if lvl <= 2:
+        return PROBLEME_COLORS[2]
+    if lvl == 3:
+        return PROBLEME_COLORS[3]
+    return PROBLEME_COLORS[4]
+
+
+def _exercise_badge_color(level5: int, probleme: bool) -> Color:
+    """Teinte du badge numéroté + des pastilles de sous-question : neutre pour un
+    exercice ordinaire, graduée par difficulté (3 niveaux) pour un problème."""
+    return _probleme_color(level5) if probleme else EXERCISE_BADGE
+
 # encarts typés d'un rappel de leçon (§ rendu rappels) : trois icônes/couleurs
 # fixes indépendantes du thème de la carte, pour rester reconnaissables quelle
 # que soit la couleur choisie par l'enseignant dans l'éditeur de gabarit.
@@ -468,6 +501,22 @@ BLANK_TOKEN = statement_mod.BLANK_TOKEN
 BLANK_W = 20 * mm
 BLANK_H = 8 * mm
 BLANK_FONT_BOOST = 2.0
+# Deux variantes de case, choisies par services.indigo_fields selon la réponse
+# attendue (cf. statement.MINI_TOKEN / WIDE_TOKEN) :
+# - MINI : 9 x 7 mm, deux chiffres — réservée à un trou d'ÉQUATION À TROUS
+#   (case collée à une formule). La case elle-même reste petite (contrainte
+#   physique), mais le CORPS DE TEXTE de sa ligne grandit comme pour une case
+#   standard (has_answer_field ne distingue plus les tailles) : une même phrase
+#   ne mélange jamais deux corps de police selon la case qu'elle porte ;
+# - RIGHT : case standard (hauteur BLANK_H) qui s'ÉTIRE jusqu'au bord droit de la
+#   colonne pour maximiser la place. Sa largeur n'est pas fixe : elle est calée à
+#   la mise en page (_rich_layout) sur l'espace restant de sa ligne, avec un
+#   minimum de sécurité MIN_RIGHT_BLANK_W (sinon le repli met une case ridicule).
+MINI_BLANK_W = 9 * mm
+MINI_BLANK_H = 7 * mm
+MIN_RIGHT_BLANK_W = 22 * mm
+MINI_TOKEN = statement_mod.MINI_TOKEN
+WIDE_TOKEN = statement_mod.WIDE_TOKEN
 
 
 def _zone_font_size(response_type: str, font_size: float) -> float:
@@ -490,11 +539,28 @@ def _seg_glue(seg: tuple) -> bool:
     return bool(seg[-1])
 
 
+def _blank_seg(kind: str, fs: float, glue: bool) -> tuple:
+    """Segment de case selon sa variante (cf. statement tokens). Format :
+    ("blank", w, asc, desc, kind, glue). Pour "right", `w` est un MINIMUM que la
+    mise en page étirera ensuite jusqu'au bord de colonne."""
+    desc = fs * 0.24
+    if kind == "mini":
+        return ("blank", MINI_BLANK_W, MINI_BLANK_H - desc, desc, "mini", glue)
+    if kind == "right":
+        return ("blank", MIN_RIGHT_BLANK_W, BLANK_H - desc, desc, "right", glue)
+    return ("blank", BLANK_W, BLANK_H - desc, desc, "normal", glue)
+
+
+# Découpe un texte sur les trois marques de case en gardant leur nature.
+_ANSWER_SPLIT = re.compile(r"(\{\{blank_right\}\}|\{\{blank\}\}|\{\{mini\}\})")
+_TOKEN_KIND = {WIDE_TOKEN: "right", BLANK_TOKEN: "normal", MINI_TOKEN: "mini"}
+
+
 def _paragraph_segs(text: str, fs: float, math_fs: float) -> list[tuple]:
     """Segments d'UNE ligne logique d'énoncé (elle peut encore se replier sur
     plusieurs lignes de rendu). seg = ("word", texte, glue) |
-    ("math", img, w, h, d, glue) | ("blank", w, asc, desc, glue) ; glue = collé
-    au segment précédent SANS espace (ponctuation après une formule, etc.)."""
+    ("math", img, w, h, d, glue) | ("blank", w, asc, desc, kind, glue) ; glue =
+    collé au segment précédent SANS espace (ponctuation après une formule, etc.)."""
     from . import mathrender
     segs: list[tuple] = []
     prev_no_space = False  # le flux précédent se termine sans espace
@@ -520,14 +586,15 @@ def _paragraph_segs(text: str, fs: float, math_fs: float) -> list[tuple]:
                 for j, w in enumerate(_pdf_safe(mathrender.strip_math(f"${content}$")).split()):
                     segs.append(("word", w, j == 0 and prev_no_space and bool(segs)))
             prev_no_space = True
-        elif BLANK_TOKEN in content:
-            parts = content.split(BLANK_TOKEN)
-            for pi, part in enumerate(parts):
-                _emit_words(part)
-                if pi < len(parts) - 1:
-                    segs.append(("blank", BLANK_W, BLANK_H - fs * 0.24,
-                                 fs * 0.24, False))
+        elif statement_mod.has_answer_field(content):
+            # découpe en gardant chaque marque de case (blank / blank_right / mini)
+            for piece in _ANSWER_SPLIT.split(content):
+                kind = _TOKEN_KIND.get(piece)
+                if kind is not None:
+                    segs.append(_blank_seg(kind, fs, False))
                     prev_no_space = False
+                else:
+                    _emit_words(piece)
         else:
             _emit_words(content)
     return segs
@@ -570,7 +637,7 @@ def _rich_layout(text: str, width: float, fs: float, math_fs: float | None = Non
             badge, para = lab
         # le corps suit la case quand la ligne en porte une — décidé APRÈS
         # l'étiquette, qui ne change pas la nature de la phrase
-        p_fs = blank_fs if (blank_fs and statement_mod.has_blank(para)) else fs
+        p_fs = blank_fs if (blank_fs and statement_mod.has_answer_field(para)) else fs
         p_math_fs = math_fs or p_fs
         badge_w = (_badge_metrics(p_fs)[0] + BADGE_GAP) if badge is not None else 0.0
         # retrait PENDANT sous une pastille : les lignes suivantes de la
@@ -601,6 +668,23 @@ def _rich_layout(text: str, width: float, fs: float, math_fs: float | None = Non
         # sa pastille : sans ça, « a. » suivi d'une figure disparaîtrait
         if not raw_lines and badge is not None:
             raw_lines = [[]]
+
+        # CASE DE DROITE ({{blank_right}}) : sa largeur n'est connue qu'ICI, une
+        # fois la ligne repliée. Dernière de sa ligne, elle s'étire pour combler
+        # tout l'espace restant jusqu'au bord de la colonne (avec un minimum).
+        for i, line in enumerate(raw_lines):
+            if not line or line[-1][0] != "blank" or line[-1][4] != "right":
+                continue
+            avail_i = max(1.0, width - (head_indent if i == 0 else cont_indent))
+            used = 0.0
+            for k, s in enumerate(line):
+                if k > 0 and not _seg_glue(s):
+                    used += space_w
+                if k < len(line) - 1:            # tout sauf la case de droite
+                    used += _seg_w(s, p_fs)
+            b = line[-1]
+            line[-1] = ("blank", max(MIN_RIGHT_BLANK_W, avail_i - used),
+                        b[2], b[3], "right", b[5])
 
         for i, line in enumerate(raw_lines):
             asc, desc = p_fs * 0.78, p_fs * 0.24
@@ -662,13 +746,13 @@ def _draw_rich(c: canvas.Canvas, x: float, y_top: float, layout: dict,
                 c.drawString(cx, y_base, seg[1])
                 cx += stringWidth(seg[1], font, fs)
             elif seg[0] == "blank":
-                _, w, asc, desc, _glue = seg
+                _, w, asc, desc, kind, _glue = seg
                 c.setStrokeColor(DROPOUT)
                 c.setLineWidth(0.9)
                 c.roundRect(cx, y_base - desc, w, asc + desc, 0.8 * mm)
                 if blanks is not None:
                     blanks.append({"x_pt": cx, "y_pt": y_base - desc,
-                                  "w_pt": w, "h_pt": asc + desc})
+                                  "w_pt": w, "h_pt": asc + desc, "kind": kind})
                 c.setFillColor(color)
                 cx += w
             else:
@@ -681,6 +765,9 @@ def _draw_rich(c: canvas.Canvas, x: float, y_top: float, layout: dict,
 
 
 _FIGURE_DPI = 150  # dpi de rasterisation dans services/figures.py
+# Marge verticale (au-dessus ET en dessous) d'une figure insérée AU MARQUEUR
+# {{figure}}, au milieu de l'énoncé — cf. _statement_layout.
+_FIG_MARKER_GAP = 1.5 * mm
 
 
 def _figure_image(figure_json: dict | None, max_w: float, max_h: float):
@@ -744,7 +831,43 @@ def _statement_layout(statement: str, width: float, font_size: float,
     # rejoue. C'est la MÊME fonction des deux côtés, pas une seconde règle de
     # mise en lignes — et elle est idempotente, donc un énoncé déjà bien formé la
     # traverse inchangé.
-    statement = _legacy_to_tagged(statement_mod.normalize(statement))
+    statement = statement_mod.normalize(statement)
+    figure = _figure_image(figure_json, min(width, 62 * mm), 42 * mm)
+
+    # PLACEMENT DE L'IMAGE (§ demande utilisateur) : si l'énoncé porte le
+    # marqueur « {{figure}} » ET qu'une image est attachée, on coupe l'énoncé au
+    # marqueur et on insère la figure À CET ENDROIT (avant/après). Sans image, le
+    # marqueur est retiré pour ne pas s'imprimer. Sans marqueur, comportement
+    # historique : la figure est placée à la fin de l'énoncé.
+    if statement_mod.has_figure_marker(statement) and figure is not None:
+        before, after = statement_mod.split_figure_marker(statement)
+        intro = _rich_layout(_legacy_to_tagged(before), width, font_size,
+                             first_indent=first_indent, first_min_asc=first_min_asc,
+                             blank_fs=blank_fs, sub_badge_color=sub_badge_color)
+        display, intro_after = None, None
+        after = after or ""
+        if after.strip():
+            body_after, expr = _display_split(after)
+            if expr is not None:
+                im = _math_image(expr, math_size)
+                if im is not None and im[1] <= width - 4:
+                    display = im
+                else:
+                    body_after = after
+            if body_after.strip():
+                intro_after = _rich_layout(body_after, width, font_size,
+                                           blank_fs=blank_fs, sub_badge_color=sub_badge_color)
+        height = intro["height"] + 2 * _FIG_MARKER_GAP + figure[2]
+        if intro_after:
+            height += intro_after["height"]
+        if display:
+            height += display[2] + 2.5 * mm
+        return {"intro": intro, "intro_after": intro_after, "display": display,
+                "figure": figure, "figure_inline": True, "height": height}
+    if statement_mod.has_figure_marker(statement):
+        statement = statement_mod.strip_figure_marker(statement)
+
+    statement = _legacy_to_tagged(statement)
     display = None
     body, expr = _display_split(statement)
     if expr is not None:
@@ -756,13 +879,13 @@ def _statement_layout(statement: str, width: float, font_size: float,
     intro = _rich_layout(body, width, font_size, first_indent=first_indent,
                          first_min_asc=first_min_asc, blank_fs=blank_fs,
                          sub_badge_color=sub_badge_color)
-    figure = _figure_image(figure_json, min(width, 62 * mm), 42 * mm)
     height = intro["height"]
     if display:
         height += display[2] + 2.5 * mm
     if figure:
         height += figure[2] + 2 * mm
-    return {"intro": intro, "display": display, "figure": figure, "height": height}
+    return {"intro": intro, "intro_after": None, "display": display,
+            "figure": figure, "figure_inline": False, "height": height}
 
 
 # Correction QCM en overlay : à gauche de CHAQUE case élève, l'overlay peut
@@ -789,6 +912,30 @@ CELL_MARK_SIZE = 1.9 * mm
 QCM_MARK_SIZE = CELL_MARK_SIZE + 2.0 * mm
 
 
+# Longueur (en caractères, formules dépouillées) au-delà de laquelle une
+# proposition de QCM est jugée « longue » : on bascule alors en liste (1 col).
+# Seuils choisis pour que « $12$ », « isocèle » restent en colonnes et qu'une
+# phrase (« la somme des angles vaut 180° ») passe en liste (cf. demande
+# utilisateur : colonnes pour les réponses courtes/nombreuses uniquement).
+QCM_COL_MAX_CHARS = 16          # au-delà : 1 colonne (liste)
+QCM_COL_MINI_CHARS = 6          # en deçà (et beaucoup de choix) : jusqu'à 3 colonnes
+
+
+def _qcm_ncols_cap(choices: list[str]) -> int:
+    """Plafond de colonnes SELON LE CONTENU (indépendant de la géométrie) :
+    liste (1 col) pour des propositions longues, 2 à 3 colonnes réservées aux
+    réponses courtes et nombreuses. Frontend (Exercices.ResponseZone) applique
+    la MÊME règle pour un aperçu fidèle à l'impression."""
+    from . import mathrender
+    n = len(choices)
+    maxchars = max((len(mathrender.strip_math(str(c))) for c in choices), default=0)
+    if maxchars > QCM_COL_MAX_CHARS or n < 4:
+        return 1
+    if maxchars <= QCM_COL_MINI_CHARS and n >= 6:
+        return 3
+    return 2
+
+
 def _qcm_layout(choices: list[str], width: float,
                 font_size: int) -> tuple[list[dict], float, int]:
     """Disposition en colonnes (remplies colonne par colonne). Les labels sont
@@ -809,7 +956,13 @@ def _qcm_layout(choices: list[str], width: float,
     nat = [max((ln["w"] for ln in _rich_layout(ch, solo_w, font_size)["lines"]),
                default=0.0) for ch in choices]
     item_w = gutter + pad + (max(nat) if nat else 0.0) + gap_x
-    ncols = max(1, min(3, n, int(width // item_w) if item_w > 0 else 1))
+    # Colonnes RÉSERVÉES aux réponses COURTES et NOMBREUSES (type chiffres, cf.
+    # demande utilisateur) : dès qu'une proposition est longue (phrase), on
+    # reste en UNE colonne (liste) — deux colonnes de phrases longues sont
+    # illisibles et débordent. Plafond de colonnes déduit de la longueur du plus
+    # long libellé, en plus du plafond géométrique (combien d'item_w tiennent).
+    ncols = max(1, min(_qcm_ncols_cap(choices), n,
+                       int(width // item_w) if item_w > 0 else 1))
     nrows = -(-n // ncols)  # ceil
 
     col_total = width / ncols
@@ -835,15 +988,61 @@ MULTILINE_ROW_H = 9 * mm
 _TABLE_HEAD_H = 6.0 * mm
 _TABLE_CELL_PAD = 1.2 * mm
 _TABLE_COL_W = BLANK_W + 2 * _TABLE_CELL_PAD     # colonne « confortable » : case pleine taille
+_TABLE_MINI_COL_W = MINI_BLANK_W + 2 * _TABLE_CELL_PAD    # colonne étroite : petit entier (0-99)
+_TABLE_WIDE_COL_W = _TABLE_COL_W + 14 * mm                # colonne large : expression/décimal/texte
 _TABLE_MIN_COL_W = 10.0 * mm                     # plancher quand les colonnes sont nombreuses
 _TABLE_ROW_MIN_H = BLANK_H + 2 * _TABLE_CELL_PAD
 _TABLE_ROWLAB_MIN_W = 18.0 * mm
-_TABLE_ROWLAB_LABEL = 44.0 * mm    # largeur « confortable » de la colonne énoncé d'un tableau FIN
 _TABLE_BANK_GAP = 6.0 * mm         # séparation VISIBLE entre les deux bandes d'un tableau à 2 bandes
 _TABLE_TWO_BANK_MIN_ROWS = 6       # au-delà, un tableau fin passe à 2 bandes (2de moitié à côté)
 _MATCHING_PASTILLE = 2.2 * mm
 _MATCHING_COL_GAP = 10.0 * mm
 _MANUAL_DRAWING_H = 60.0 * mm
+
+
+def _cell_is_mini(v: dict) -> bool:
+    """Petit entier 0-99 : la case peut être étroite (même seuil que
+    services.indigo_fields._is_short_numeric, pour un rendu cohérent avec les
+    cases à trous en ligne)."""
+    if not isinstance(v, dict) or v.get("type") != "integer":
+        return False
+    try:
+        return 0 <= int(v.get("value")) <= 99
+    except (TypeError, ValueError):
+        return False
+
+
+def _cell_is_wide(v: dict) -> bool:
+    """Réponse longue (expression, fraction, décimal, ou texte de plus de deux
+    caractères) : a besoin d'une colonne plus large qu'une case standard."""
+    if not isinstance(v, dict):
+        return False
+    t = v.get("type")
+    if t in ("expression", "rational", "decimal"):
+        return True
+    if t == "text":
+        return len(str(v.get("value", "")).strip()) > 2
+    return False
+
+
+def _col_kind(cells: list[list[dict]], j: int) -> str:
+    """'mini'/'wide'/'normal' selon les réponses ÉDITABLES de la colonne j (les
+    cellules "given", déjà imprimées dans le manuel, ne comptent pas) : étroite
+    si TOUTES sont de petits entiers, large si au moins une est longue."""
+    editable = [row[j] for row in cells if j < len(row) and not (row[j] or {}).get("given")]
+    if not editable:
+        return "normal"
+    if all(_cell_is_mini(c) for c in editable):
+        return "mini"
+    if any(_cell_is_wide(c) for c in editable):
+        return "wide"
+    return "normal"
+
+
+_COL_KIND_WIDTH = {"mini": _TABLE_MINI_COL_W, "wide": _TABLE_WIDE_COL_W, "normal": _TABLE_COL_W}
+_COL_KIND_BOX = {"mini": (MINI_BLANK_W, MINI_BLANK_H),
+                 "wide": (_TABLE_WIDE_COL_W - 2 * _TABLE_CELL_PAD, BLANK_H),
+                 "normal": (BLANK_W, BLANK_H)}
 
 
 def _table_geometry(w: float, col_labels: list | None, row_labels: list | None,
@@ -854,10 +1053,14 @@ def _table_geometry(w: float, col_labels: list | None, row_labels: list | None,
 
     Le tableau est un vrai mini-tableau à cadre : la 1re colonne porte l'énoncé
     (row_labels[i], sans pastille a./b./c.), les suivantes les cases à remplir.
-    Il est CENTRÉ dans la carte (jamais justifié à droite). Un tableau FIN
-    (≤ 2 colonnes) avec BEAUCOUP de lignes est coupé en DEUX BANDES posées côte
-    à côte (la 2de moitié des lignes à droite de la 1re) : moins de hauteur,
-    largeur mieux occupée — d'où deux petits tableaux visuellement séparés.
+    Il occupe TOUJOURS toute la largeur de la carte (jamais un petit tableau
+    compact perdu au milieu) : les colonnes de réponse gardent la taille
+    adaptée à ce qu'elles contiennent (mini/normal/wide), c'est la colonne
+    ÉNONCÉ qui absorbe l'espace restant — priorité aux cases élèves. Un tableau
+    FIN (≤ 2 colonnes) avec BEAUCOUP de lignes est coupé en DEUX BANDES posées
+    côte à côte (la 2de moitié des lignes à droite de la 1re) : moins de
+    hauteur, largeur mieux occupée — d'où deux petits tableaux visuellement
+    séparés, chacun pleine largeur de sa moitié.
 
     `sub_badge_color` n'est plus appliqué aux libellés de ligne (les pastilles
     a./b./c. par ligne sont volontairement supprimées, § présentation)."""
@@ -868,6 +1071,14 @@ def _table_geometry(w: float, col_labels: list | None, row_labels: list | None,
     has_labels = bool(row_labels)
     thin = cols <= 2
 
+    # largeur DÉSIRÉE de chaque colonne selon ce que l'élève doit y écrire
+    # (petit entier -> étroite, expression/texte long -> large, cf. § adapter
+    # la largeur des cellules à la réponse attendue) — mise à l'échelle
+    # ci-dessous dans l'espace réellement disponible.
+    col_kinds = [_col_kind(cells, j) for j in range(cols)]
+    desired = [_COL_KIND_WIDTH[k] for k in col_kinds]
+    sum_desired = sum(desired)
+
     # deux bandes ? tableau fin, assez de lignes, et la place d'y loger deux
     # blocs « libellé + case » côte à côte.
     banks = 2 if (thin and rows >= _TABLE_TWO_BANK_MIN_ROWS
@@ -875,21 +1086,37 @@ def _table_geometry(w: float, col_labels: list | None, row_labels: list | None,
                   + _TABLE_BANK_GAP) else 1
     avail = inner if banks == 1 else (inner - _TABLE_BANK_GAP) / 2
 
-    # largeur d'une bande : compacte (centrée) pour un tableau fin, pleine
-    # largeur pour une grille de valeurs (≥ 3 colonnes).
-    want = _TABLE_ROWLAB_LABEL + cols * _TABLE_COL_W if thin else avail
-    bank_w = min(avail, want)
+    # tableau TOUJOURS pleine largeur (une bande occupe tout `avail`). La colonne
+    # ÉNONCÉ (rowlab_w) prend ce qu'il lui FAUT — pas plus : sinon elle absorbait
+    # tout le blanc et les cases élève finissaient riquiqui (bug « colonne énoncé
+    # pleine de blanc, colonne élève étroite »). On la dimensionne sur la largeur
+    # NATURELLE du plus long libellé (bornée), et l'espace restant va aux CASES,
+    # qui s'ÉLARGISSENT (scale ≥ 1) — priorité à l'espace d'écriture de l'élève.
+    bank_w = avail
     if has_labels:
-        rowlab_w = max(_TABLE_ROWLAB_MIN_W,
-                       min(bank_w - cols * _TABLE_MIN_COL_W, bank_w - cols * _TABLE_COL_W))
+        # largeur naturelle du libellé le plus large (mesuré sans contrainte forte)
+        solo_lab_w = max(8 * mm, bank_w - sum_desired - 2 * _TABLE_CELL_PAD)
+        nat_lab = max((max((ln["w"] for ln in _rich_layout(str(lbl), solo_lab_w, lab_fs)["lines"]),
+                           default=0.0) for lbl in row_labels), default=0.0)
+        need = nat_lab + 2 * _TABLE_CELL_PAD
+        # bornes : au moins _TABLE_ROWLAB_MIN_W, au plus ~55 % de la bande (et il
+        # reste toujours de quoi loger les colonnes de réponse à leur minimum).
+        hi = min(bank_w - cols * _TABLE_MIN_COL_W, bank_w * 0.55)
+        rowlab_w = max(_TABLE_ROWLAB_MIN_W, min(need, max(_TABLE_ROWLAB_MIN_W, hi)))
     else:
         rowlab_w = 0.0
-    col_w = (bank_w - rowlab_w) / cols
+    cols_avail = bank_w - rowlab_w
+    # mise à l'échelle proportionnelle : les colonnes gardent leurs proportions
+    # relatives (mini < normal < wide). Le surplus (colonne énoncé bornée) ÉLARGIT
+    # les cases (scale ≥ 1) au lieu d'être perdu en blanc dans la colonne énoncé.
+    scale = (cols_avail / sum_desired) if sum_desired > 0 else 1.0
+    col_ws = [d * scale for d in desired]
+    col_offsets = [sum(col_ws[:j]) for j in range(cols)]
     total_w = banks * bank_w + (banks - 1) * _TABLE_BANK_GAP
 
     # bandeau de tête dimensionné sur les libellés RÉELS (répété dans chaque bande).
-    col_lays = [_rich_layout(str(lbl), col_w - 2 * mm, lab_fs)
-                for lbl in (col_labels or [])]
+    col_lays = [_rich_layout(str(lbl), col_ws[j] - 2 * mm, lab_fs)
+                for j, lbl in enumerate(col_labels or [])]
     head_h = (max([_TABLE_HEAD_H]
                   + [lay["height"] + 2 * _TABLE_CELL_PAD for lay in col_lays])
               if col_labels else 0.0)
@@ -911,7 +1138,8 @@ def _table_geometry(w: float, col_labels: list | None, row_labels: list | None,
     body_h = max((head_h + sum(row_hs[i] for i in br)) for br in bank_rows) if bank_rows else head_h
 
     return {"rows": rows, "cols": cols, "banks": banks, "head_h": head_h,
-            "rowlab_w": rowlab_w, "grid_w": col_w * cols, "col_w": col_w,
+            "rowlab_w": rowlab_w, "grid_w": cols_avail, "col_ws": col_ws,
+            "col_offsets": col_offsets, "col_kinds": col_kinds,
             "bank_w": bank_w, "total_w": total_w, "col_lays": col_lays,
             "row_lays": row_lays, "row_hs": row_hs, "lab_fs": lab_fs,
             "bank_rows": bank_rows, "height": body_h + 2 * mm}
@@ -976,7 +1204,8 @@ def _draw_table_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float,
     geo = _table_geometry(w, col_labels, row_labels, cells, font_size,
                           sub_badge_color)
     cols = geo["cols"]
-    head_h, col_w, lab_fs = geo["head_h"], geo["col_w"], geo["lab_fs"]
+    head_h, lab_fs = geo["head_h"], geo["lab_fs"]
+    col_ws, col_offsets, col_kinds = geo["col_ws"], geo["col_offsets"], geo["col_kinds"]
     rowlab_w, bank_w = geo["rowlab_w"], geo["bank_w"]
     inner = w - 2 * CARD_PAD
     # tableau CENTRÉ dans la carte (jamais justifié à droite)
@@ -1001,9 +1230,9 @@ def _draw_table_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float,
         if col_labels:
             c.setFillColor(black)
             for j, lay in enumerate(geo["col_lays"]):
-                _draw_rich(c, grid_x + j * col_w + 1 * mm,
+                _draw_rich(c, grid_x + col_offsets[j] + 1 * mm,
                            grid_top - (head_h - lay["height"]) / 2, lay,
-                           centered=True, width=col_w - 2 * mm)
+                           centered=True, width=col_ws[j] - 2 * mm)
             c.setStrokeColor(DROPOUT)
             c.line(bank_x, grid_top - head_h, bank_x + bank_w, grid_top - head_h)
         # séparateurs verticaux (toute la hauteur) : colonne énoncé | cases, puis
@@ -1012,7 +1241,8 @@ def _draw_table_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float,
         if rowlab_w > 0:
             c.line(grid_x, grid_bottom, grid_x, grid_top)
         for j in range(1, cols):
-            c.line(grid_x + j * col_w, grid_bottom, grid_x + j * col_w, grid_top)
+            cx_sep = grid_x + col_offsets[j]
+            c.line(cx_sep, grid_bottom, cx_sep, grid_top)
 
         ry_top = grid_top - head_h
         for local_i, i in enumerate(rows_in_bank):
@@ -1027,11 +1257,14 @@ def _draw_table_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float,
                 _draw_rich(c, bank_x + _TABLE_CELL_PAD, ry_top - (row_h - lay["height"]) / 2,
                            lay, centered=True, width=rowlab_w - 2 * _TABLE_CELL_PAD)
             for j in range(cols):
-                cx = grid_x + j * col_w
-                # case centrée dans la cellule, plafonnée à la taille d'écriture
-                # manuscrite (BLANK_W x BLANK_H) — une cellule large ne l'étire pas
-                bw = min(BLANK_W, col_w - 2 * _TABLE_CELL_PAD)
-                bh = min(BLANK_H, row_h - 2 * _TABLE_CELL_PAD)
+                col_w = col_ws[j]
+                cx = grid_x + col_offsets[j]
+                # case centrée dans la cellule, plafonnée à la taille adaptée à
+                # la réponse attendue (mini/normal/wide, cf. _col_kind) — une
+                # cellule large ne l'étire pas au-delà de cette taille
+                box_w, box_h = _COL_KIND_BOX[col_kinds[j]]
+                bw = min(box_w, col_w - 2 * _TABLE_CELL_PAD)
+                bh = min(box_h, row_h - 2 * _TABLE_CELL_PAD)
                 bx = cx + (col_w - bw) / 2
                 by = ry_top - row_h + (row_h - bh) / 2
                 cell = cells[i][j] if i < len(cells) and j < len(cells[i]) else None
@@ -1183,11 +1416,40 @@ def _exercise_card_h(layout: dict, zone_h: float, strip_h: float,
     return layout["height"] + zone_h + strip_h + STRIP_GAP + 3 * CARD_PAD
 
 
+def _draw_calc_icon(c: canvas.Canvas, x_right: float, y_top: float, size: float,
+                    forbidden: bool) -> None:
+    """Petite icône calculette au coin haut-droit d'une carte. `forbidden` la
+    barre en rouge (interdite) ; sinon bleue (nécessaire). Rien n'est dessiné
+    pour « autorisée » (l'appelant ne nous appelle pas dans ce cas)."""
+    w, h = size, size * 1.28
+    x, y = x_right - w, y_top - h
+    accent = HexColor("#C0392B") if forbidden else HexColor("#2D6CDF")
+    c.saveState()
+    c.setLineWidth(0.8)
+    c.setStrokeColor(accent)
+    c.setFillColor(white)
+    c.roundRect(x, y, w, h, size * 0.16, stroke=1, fill=1)
+    c.setFillColor(HexColor("#F7E4E1") if forbidden else HexColor("#E8EEF9"))
+    c.rect(x + w * 0.16, y + h * 0.66, w * 0.68, h * 0.2, stroke=0, fill=1)   # écran
+    c.setFillColor(accent)
+    for r in range(3):                                                        # touches
+        for col in range(3):
+            c.circle(x + w * 0.26 + col * w * 0.24, y + h * 0.14 + r * h * 0.16,
+                     size * 0.05, stroke=0, fill=1)
+    if forbidden:
+        c.setStrokeColor(HexColor("#C0392B"))
+        c.setLineWidth(1.3)
+        c.line(x, y, x + w, y + h)
+    c.restoreState()
+
+
 def _draw_exercise_card(c: canvas.Canvas, x: float, y_top: float, w: float,
                         seq: int, layout: dict, zone_h: float, strip: dict,
                         level5: int, response_type: str, choices: list[str],
                         tpl: dict, font_size: float, zone_fs: float,
-                        grading: dict | None = None) -> tuple[float, dict, dict]:
+                        grading: dict | None = None,
+                        calc: str = "autorisee",
+                        probleme: bool = False) -> tuple[float, dict, dict]:
     """Carte exercice + bande de correction hors carte (§ correction).
     Retourne (hauteur totale, geo zone réponse, meta).
 
@@ -1221,20 +1483,43 @@ def _draw_exercise_card(c: canvas.Canvas, x: float, y_top: float, w: float,
     # Le badge numéroté occupe le retrait réservé en tête de 1re ligne.
     ty = card_bottom + card_h_body - CARD_PAD
     inline_blanks: list = []
+    badge_color = _exercise_badge_color(level5, probleme)
     first = layout["intro"]["lines"][0] if layout["intro"]["lines"] else None
     _draw_badge(c, x + CARD_PAD, ty - (first["asc"] if first else font_size * 0.78),
-                font_size, str(seq), _difficulty_color(level5))
+                font_size, str(seq), badge_color)
     line_y = _draw_rich(c, x + CARD_PAD, ty, layout["intro"], blanks=inline_blanks)
-    if layout["display"]:
-        img, dw, dh, _dd = layout["display"]
-        c.drawImage(img, x + (w - dw) / 2, line_y - dh - 1 * mm, width=dw,
-                    height=dh, mask="auto", preserveAspectRatio=True)
-        line_y -= dh + 2.5 * mm
-    if layout["figure"]:
+    # figure INSÉRÉE au marqueur {{figure}} : image entre l'avant et l'après de
+    # l'énoncé (§ demande utilisateur — image placée au bon endroit, pas en fin).
+    if layout.get("figure_inline") and layout["figure"]:
         fimg, fw, fh = layout["figure"]
-        c.drawImage(fimg, x + (w - fw) / 2, line_y - fh - 0.5 * mm, width=fw,
+        c.drawImage(fimg, x + (w - fw) / 2, line_y - _FIG_MARKER_GAP - fh, width=fw,
                     height=fh, mask="auto", preserveAspectRatio=True)
+        line_y -= 2 * _FIG_MARKER_GAP + fh
+        if layout.get("intro_after"):
+            line_y = _draw_rich(c, x + CARD_PAD, line_y, layout["intro_after"],
+                                blanks=inline_blanks)
+        if layout["display"]:
+            img, dw, dh, _dd = layout["display"]
+            c.drawImage(img, x + (w - dw) / 2, line_y - dh - 1 * mm, width=dw,
+                        height=dh, mask="auto", preserveAspectRatio=True)
+            line_y -= dh + 2.5 * mm
+    else:
+        if layout["display"]:
+            img, dw, dh, _dd = layout["display"]
+            c.drawImage(img, x + (w - dw) / 2, line_y - dh - 1 * mm, width=dw,
+                        height=dh, mask="auto", preserveAspectRatio=True)
+            line_y -= dh + 2.5 * mm
+        if layout["figure"]:
+            fimg, fw, fh = layout["figure"]
+            c.drawImage(fimg, x + (w - fw) / 2, line_y - fh - 0.5 * mm, width=fw,
+                        height=fh, mask="auto", preserveAspectRatio=True)
     c.setFillColor(black)
+
+    # icône calculette (exercices Indigo) au coin haut-droit de la carte :
+    # nécessaire => bleue, interdite => barrée rouge, autorisée => rien.
+    if calc in ("necessaire", "interdite"):
+        _draw_calc_icon(c, x + w - 1.4 * mm, card_bottom + card_h_body - 1.4 * mm,
+                        3.6 * mm, forbidden=(calc == "interdite"))
 
     # zone réponse élève (saumon) — sauf short_text/multi_blank inline : la ou
     # les case(s) font déjà partie de l'énoncé (inline_blanks), pas de zone
@@ -1257,7 +1542,7 @@ def _draw_exercise_card(c: canvas.Canvas, x: float, y_top: float, w: float,
                             "w_pt": b["w_pt"], "h_pt": b["h_pt"]} for b in inline_blanks]]}
     else:
         meta = _draw_answer_zone(c, x, zone_y, w, zone_h, response_type, choices,
-                                 zone_fs, grading, _difficulty_color(level5))
+                                 zone_fs, grading, badge_color)
         zone_geo = {"x_pt": x, "y_pt": zone_y, "w_pt": w, "h_pt": zone_h}
 
     # bande de correction : HORS carte, collée (espace blanc visible, jamais
@@ -1523,16 +1808,17 @@ def _exercise_layout(item: dict, font_size: int,
     l'overlay l'imprime en entier — d'où les valeurs distinctes."""
     rtype = item["response_type"]
     badge_w, _bh, _bfs = _badge_metrics(font_size)
+    sub_color = _exercise_badge_color(item.get("level5", 3), item.get("is_probleme", False))
     layout = _statement_layout(item["statement"], COL_W - 2 * CARD_PAD, font_size,
                                math_fs, item.get("figure"),
                                first_indent=badge_w + BADGE_GAP,
                                first_min_asc=_badge_min_asc(font_size),
                                blank_fs=font_size + BLANK_FONT_BOOST,
-                               sub_badge_color=_difficulty_color(item.get("level5", 3)))
+                               sub_badge_color=sub_color)
     zone_fs = _zone_font_size(rtype, font_size)
     zone_h = _zone_height(rtype, item.get("choices", []), COL_W, zone_fs,
                           item.get("grading"), item.get("inline", False),
-                          _difficulty_color(item.get("level5", 3)))
+                          sub_color)
     strip = _correction_strip_layout(item.get("correction", ""), COL_W, font_size)
     return layout, zone_fs, zone_h, strip
 
@@ -1633,7 +1919,8 @@ def render_copy(pdf_canvas: canvas.Canvas, *, student_name: str, class_name: str
         _, zone_geo, meta = _draw_exercise_card(
             pdf_canvas, x, y_cursor, col_w, seq, layout, zone_h, strip,
             item.get("level5", 3), item["response_type"], choices, ex_tpl,
-            font_size, zone_fs, item.get("grading"))
+            font_size, zone_fs, item.get("grading"), item.get("calc", "autorisee"),
+            probleme=item.get("is_probleme", False))
         zones.append({
             "item_id": item["item_id"], "page_index": page_idx,
             "page_id": pages_meta[page_idx]["page_id"],

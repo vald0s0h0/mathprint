@@ -118,9 +118,11 @@ def _config(db: Session, provider: str) -> ProviderConfig | None:
 
 # Familles de modèles Claude qui REFUSENT (400) un préremplissage assistant :
 # tout 4.6 et au-delà. Haiku 4.5 (et antérieurs) l'acceptent encore. Voir
-# claude_json : le prefill "{" force la sortie JSON.
-_NO_PREFILL_MODELS = ("opus-4-6", "opus-4-7", "opus-4-8", "sonnet-4-6",
-                      "sonnet-5", "fable-5", "mythos-5")
+# claude_json : le prefill "{" force la sortie JSON. Opus 5 (vérification Indigo)
+# fait partie de cette famille 4.6+ : sans "opus-5" ici, la relecture Opus
+# échouerait systématiquement en 400.
+_NO_PREFILL_MODELS = ("opus-4-6", "opus-4-7", "opus-4-8", "opus-5",
+                      "sonnet-4-6", "sonnet-5", "fable-5", "mythos-5")
 
 
 def _supports_assistant_prefill(model: str | None) -> bool:

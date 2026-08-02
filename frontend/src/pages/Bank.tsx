@@ -10,7 +10,7 @@ import { notifications } from '@mantine/notifications'
 import {
   AlertTriangle, BookOpen, ChevronDown, ChevronUp, Lightbulb, Library, RefreshCw, ScanText, Trash2,
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../api'
 import FigurePreview from '../components/FigurePreview'
 import MathText from '../components/MathText'
@@ -18,8 +18,9 @@ import { useAppState } from '../state/AppState'
 
 type Summary = {
   competency_id: string; code: string; short_id: string; label: string; grade_level: string
-  domain_name: string; chapter_name: string
-  by_level: Record<string, number>; total: number
+  order_index: number
+  domain_code: string; domain_name: string; chapter_code: string; chapter_name: string
+  by_level: Record<string, number>; total: number; problems: number
   lessons: { level_min: number; level_max: number; validated: boolean }[]
 }
 type Exercise = {
@@ -27,11 +28,12 @@ type Exercise = {
   statement: string; correction: string; response_type: string
   choices: string[]; source: string; kind: string
   quality: Record<string, number>; figure: Record<string, any> | null
-  // extraction brute (source="sesamaths" uniquement) dont provient cette
-  // ligne : les blocs OCR Mistral (title/text/table/list/equation/image/...)
-  // utilisés par l'adaptateur pour la construire, avant adaptation au format
-  // de la plateforme
-  raw: { blocks: { i: number; page: number; type: string; content: string }[] } | null
+  // extraction brute dont provient cette ligne : shape variable selon la
+  // source. Seule source="sesamaths" porte des blocs OCR Mistral affichables
+  // (title/text/table/list/equation/image/...) ; les autres sources (indigo,
+  // gemini, mathalea) stockent ici des métadonnées de forme différente ou
+  // rien — ne JAMAIS supposer `.blocks` présent sans vérifier.
+  raw: Record<string, any> | null
 }
 type Lesson = {
   id: string; competency_id: string; level_min: number; level_max: number
@@ -82,6 +84,11 @@ function QualityBadge({ quality }: { quality: Record<string, number> }) {
 
 function ExerciseCard({ ex, onRetire }: { ex: Exercise; onRetire: (id: string) => void }) {
   const [showRaw, setShowRaw] = useState(false)
+  // seule la source Sésamaths porte des blocs OCR affichables ici ; les
+  // autres sources (indigo, gemini...) ont un raw_extract_json de forme
+  // différente (ou absente) — vérifier la forme, pas juste la présence, sinon
+  // .map() plante et fait disparaître toute la page (cf. incident du 31/07).
+  const rawBlocks = Array.isArray(ex.raw?.blocks) ? ex.raw!.blocks : null
   return (
     <Card withBorder radius="md" p="sm">
       <Group justify="space-between" wrap="nowrap" align="flex-start" mb={6}>
@@ -95,7 +102,7 @@ function ExerciseCard({ ex, onRetire }: { ex: Exercise; onRetire: (id: string) =
           <QualityBadge quality={ex.quality} />
         </Group>
         <Group gap={4} wrap="nowrap">
-          {ex.raw && (
+          {rawBlocks && (
             <Tooltip label={showRaw ? 'Masquer le texte original' : 'Voir le texte original extrait du manuel'}>
               <ActionIcon variant="subtle" color="gray" size="sm" onClick={() => setShowRaw((v) => !v)}>
                 {showRaw ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
@@ -109,13 +116,13 @@ function ExerciseCard({ ex, onRetire }: { ex: Exercise; onRetire: (id: string) =
           </Tooltip>
         </Group>
       </Group>
-      {ex.raw && (
+      {rawBlocks && (
         <Collapse in={showRaw}>
           <Paper bg="var(--mantine-color-default-hover)" p={8} radius="sm" mb={8}
             style={{ borderLeft: '3px solid var(--mantine-color-gray-5)' }}>
             <Text size="xs" c="dimmed" fw={600} mb={4}>Blocs OCR d'origine (Mistral)</Text>
             <Stack gap={4}>
-              {ex.raw.blocks.map((b) => (
+              {rawBlocks.map((b) => (
                 <Group key={b.i} gap={6} wrap="nowrap" align="flex-start">
                   <Badge size="xs" variant="outline" color="gray" style={{ flexShrink: 0 }}>
                     {b.type} p.{b.page}
@@ -400,6 +407,30 @@ export default function Bank() {
     () => (summary ?? []).filter((s) => matches(s.grade_level)),
     [summary, matches])
 
+  // regroupe la liste plate (déjà triée grade+code côté serveur, donc déjà
+  // dans le bon ordre domaine>chapitre) en domaine (H1) > chapitre (H2) >
+  // compétences (H3), pour un tableau lisible avec en-têtes de domaine et une
+  // zone fusionnée par chapitre pour les problèmes (transverses aux
+  // compétences d'un même chapitre, donc affichés une seule fois par
+  // chapitre plutôt que répétés/éclatés sur chaque ligne H3).
+  const domainGroups = useMemo(() => {
+    const byDomain = new Map<string, { name: string; chapters: Map<string, { name: string; comps: Summary[] }> }>()
+    for (const s of rows) {
+      let d = byDomain.get(s.domain_code)
+      if (!d) { d = { name: s.domain_name, chapters: new Map() }; byDomain.set(s.domain_code, d) }
+      let c = d.chapters.get(s.chapter_code)
+      if (!c) { c = { name: s.chapter_name, comps: [] }; d.chapters.set(s.chapter_code, c) }
+      c.comps.push(s)
+    }
+    return Array.from(byDomain.entries()).map(([domain_code, d]) => ({
+      domain_code, domain_name: d.name,
+      chapters: Array.from(d.chapters.entries()).map(([chapter_code, c]) => ({
+        chapter_code, chapter_name: c.name, comps: c.comps,
+        problems: c.comps.reduce((n, x) => n + x.problems, 0),
+      })),
+    }))
+  }, [rows])
+
   const shownExercises = useMemo(
     () => (exercises ?? []).filter((e) => levelFilter === 'all' || e.level === Number(levelFilter)),
     [exercises, levelFilter])
@@ -442,40 +473,71 @@ export default function Bank() {
               <Table highlightOnHover verticalSpacing={4} fz="sm">
                 <Table.Thead>
                   <Table.Tr>
+                    <Table.Th>Chapitre</Table.Th>
                     <Table.Th>Compétence</Table.Th>
-                    {!selected && <Table.Th>Chapitre</Table.Th>}
-                    <Table.Th ta="center">Niv. 1-5</Table.Th>
-                    <Table.Th ta="center">Rappels</Table.Th>
+                    <Table.Th ta="center">Exercices</Table.Th>
+                    {!selected && <Table.Th ta="center">Niv. 1-5</Table.Th>}
+                    <Table.Th ta="center">Problèmes</Table.Th>
+                    {!selected && <Table.Th ta="center">Rappels</Table.Th>}
                   </Table.Tr>
                 </Table.Thead>
                 <Table.Tbody>
-                  {rows.map((s) => (
-                    <Table.Tr key={s.competency_id}
-                      style={{ cursor: 'pointer' }}
-                      bg={selected?.competency_id === s.competency_id ? 'var(--mantine-color-default-hover)' : undefined}
-                      onClick={() => loadDetail(s)}>
-                      <Table.Td>
-                        <Text size="sm" fw={500} lineClamp={1}>{s.short_id || s.code} — {s.label}</Text>
-                      </Table.Td>
-                      {!selected && <Table.Td><Text size="xs" c="dimmed" lineClamp={1}>{s.chapter_name}</Text></Table.Td>}
-                      <Table.Td ta="center">
-                        <Group gap={3} justify="center" wrap="nowrap">
-                          {[1, 2, 3, 4, 5].map((l) => (
-                            <Tooltip key={l} label={`Niveau ${l} : ${s.by_level[String(l)]} exercice(s)`}>
-                              <Box w={9} h={9} style={{
-                                borderRadius: 2,
-                                background: s.by_level[String(l)] > 0
-                                  ? 'var(--mantine-color-indigo-5)'
-                                  : 'var(--mantine-color-default-border)',
-                              }} />
-                            </Tooltip>
-                          ))}
-                        </Group>
-                      </Table.Td>
-                      <Table.Td ta="center">
-                        <Text size="xs">{s.lessons.length}</Text>
-                      </Table.Td>
-                    </Table.Tr>
+                  {domainGroups.map((dg) => (
+                    <Fragment key={dg.domain_code}>
+                      <Table.Tr bg="var(--mantine-color-default-hover)">
+                        <Table.Td colSpan={selected ? 4 : 6}>
+                          <Text size="xs" fw={700} tt="uppercase" c="dimmed">
+                            {dg.domain_code ? `${dg.domain_code} — ` : ''}{dg.domain_name || 'Domaine'}
+                          </Text>
+                        </Table.Td>
+                      </Table.Tr>
+                      {dg.chapters.map((ch) => ch.comps.map((s, i) => (
+                        <Table.Tr key={s.competency_id}
+                          style={{ cursor: 'pointer' }}
+                          bg={selected?.competency_id === s.competency_id ? 'var(--mantine-color-default-hover)' : undefined}
+                          onClick={() => loadDetail(s)}>
+                          {i === 0 && (
+                            <Table.Td rowSpan={ch.comps.length} style={{ verticalAlign: 'top' }}>
+                              <Text size="xs" c="dimmed" fw={600} lineClamp={2}>
+                                {ch.chapter_code ? `${ch.chapter_code} — ` : ''}{ch.chapter_name}
+                              </Text>
+                            </Table.Td>
+                          )}
+                          <Table.Td>
+                            <Text size="sm" fw={500} lineClamp={1}>{s.short_id || s.code} — {s.label}</Text>
+                          </Table.Td>
+                          <Table.Td ta="center"><Text size="xs">{s.total}</Text></Table.Td>
+                          {!selected && (
+                            <Table.Td ta="center">
+                              <Group gap={3} justify="center" wrap="nowrap">
+                                {[1, 2, 3, 4, 5].map((l) => (
+                                  <Tooltip key={l} label={`Niveau ${l} : ${s.by_level[String(l)]} exercice(s)`}>
+                                    <Box w={9} h={9} style={{
+                                      borderRadius: 2,
+                                      background: s.by_level[String(l)] > 0
+                                        ? 'var(--mantine-color-indigo-5)'
+                                        : 'var(--mantine-color-default-border)',
+                                    }} />
+                                  </Tooltip>
+                                ))}
+                              </Group>
+                            </Table.Td>
+                          )}
+                          {i === 0 && (
+                            <Table.Td ta="center" rowSpan={ch.comps.length} style={{ verticalAlign: 'top' }}>
+                              <Tooltip label="Problèmes du chapitre — transverses aux compétences, comptés une seule fois pour tout le chapitre">
+                                <Text size="xs" c={ch.problems > 0 ? undefined : 'dimmed'}>{ch.problems || '—'}</Text>
+                              </Tooltip>
+                            </Table.Td>
+                          )}
+                          {!selected && (
+                            <Table.Td ta="center">
+                              <Text size="xs">{s.lessons.length}</Text>
+                            </Table.Td>
+                          )}
+                        </Table.Tr>
+                      )))}
+                    </Fragment>
                   ))}
                 </Table.Tbody>
               </Table>

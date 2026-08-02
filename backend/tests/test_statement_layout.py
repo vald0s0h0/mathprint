@@ -76,9 +76,10 @@ def _validated(statement_text: str, **over) -> dict | None:
 
 def test_a_created_exercise_reaches_the_bank_already_laid_out():
     """« cette information saut de ligne doit clairement passer à travers la
-    pipeline » : le `\\n` est stocké tel quel, il n'est pas une affaire de rendu."""
+    pipeline » : le `\\n` est stocké tel quel, il n'est pas une affaire de rendu.
+    Les puces en tiret deviennent « • » (une ligne ne commence jamais par « - »)."""
     ex = _validated("Trois nombres :\n- $2$\n- $3$\nCalcule leur somme.")
-    assert ex["statement"] == "Trois nombres :\n- $2$\n- $3$\nCalcule leur somme."
+    assert ex["statement"] == "Trois nombres :\n• $2$\n• $3$\nCalcule leur somme."
 
 
 def test_the_validator_lays_out_subquestions_the_model_ran_together():
@@ -106,11 +107,13 @@ def test_two_statements_differing_only_by_line_breaks_are_one_duplicate():
 # ------------------------------------------------------- format du texte
 
 def test_line_breaks_survive_normalization():
-    """Le cas du rapport de bug, tel que le modèle doit l'écrire."""
+    """Le cas du rapport de bug, tel que le modèle doit l'écrire. Les sauts de
+    ligne survivent ; les puces en tiret sont converties en « • »."""
     raw = ("Un randonneur parcourt un sentier de grande randonnée en quatre jours :\n"
            "- Jour 1 : $12{,}4\\ \\text{km}$\n- Jour 2 : $9{,}8\\ \\text{km}$\n"
            "Coche toutes les affirmations qui sont exactes.")
-    assert statement.normalize(raw) == raw
+    expected = raw.replace("\n- ", "\n• ")
+    assert statement.normalize(raw) == expected
 
 
 def test_normalize_is_idempotent():
@@ -121,7 +124,7 @@ def test_normalize_is_idempotent():
 
 def test_normalize_strips_blank_lines_and_trailing_spaces():
     got = statement.normalize("Contexte :   \n\n\n- une donnée  \n\nConclusion.\n\n")
-    assert got == "Contexte :\n- une donnée\nConclusion."
+    assert got == "Contexte :\n• une donnée\nConclusion."
 
 
 def test_normalize_accepts_windows_line_endings():
@@ -228,7 +231,8 @@ def test_blank_box_is_8mm_high():
     from reportlab.lib.units import mm
     for fs in (7, 9, 12):
         (blank,) = [s for s in pdfgen._paragraph_segs("{{blank}}", fs, fs) if s[0] == "blank"]
-        _, w, asc, desc, _glue = blank
+        _, w, asc, desc, kind, _glue = blank
+        assert kind == "normal"
         assert w == pytest.approx(20 * mm)
         assert asc + desc == pytest.approx(8 * mm)
 

@@ -350,6 +350,90 @@ class SesamathsLlmCache(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
 
+# --------------------------------------------------- Indigo (onglet Exercices, admin)
+
+class IndigoExtraction(Base):
+    """Un RUN du pipeline Exercices : l'admin choisit une ou plusieurs
+    compétences 3e, des pages du manuel ÉLÈVE (énoncés) et des pages du manuel
+    PROF (corrigés) ; le pipeline (file de fond dédiée, cf. services.indigo)
+    passe l'OCR Mistral, segmente en exercices, découpe les crops, lit la
+    couleur des badges (CV) puis met au propre via Gemini → lignes
+    `IndigoExercise` en statut brouillon. Machine à états portée par `status`."""
+    __tablename__ = "indigo_extractions"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
+    grade_level: Mapped[str] = mapped_column(String, default="3e")
+    # une cible = {competency_id, eleve_pages:[int], prof_pages:[int]} (index de
+    # page 0-based). Plusieurs compétences peuvent être traitées dans un même run,
+    # chacune avec son propre jeu de pages élève/prof.
+    targets_json: Mapped[list] = mapped_column(JSON, default=list)
+    status: Mapped[str] = mapped_column(String, default="pending")    # pending|running|done|failed
+    progress: Mapped[int] = mapped_column(Integer, default=0)
+    progress_message: Mapped[str] = mapped_column(String, default="")
+    error_message: Mapped[str] = mapped_column(Text, default="")
+    stats_json: Mapped[dict] = mapped_column(JSON, default=dict)      # {exercises, per_competency, ...}
+    log_text: Mapped[str] = mapped_column(Text, default="")
+    created_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
+class IndigoExercise(Base):
+    """Un exercice « Indigo » repris d'un manuel : 1 exercice du manuel → 1
+    ligne. Brouillon (status=draft) tant que l'admin ne l'a pas validé
+    (status=validated). Les exercices VALIDÉS sont ensuite PUBLIÉS (bake) vers
+    des fichiers versionnés du repo, livrés en lecture seule à tous les
+    déploiements — la DB ne sert qu'à la construction sur l'instance admin."""
+    __tablename__ = "indigo_exercises"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
+    extraction_id: Mapped[str | None] = mapped_column(
+        ForeignKey("indigo_extractions.id"), nullable=True)
+    competency_id: Mapped[str] = mapped_column(ForeignKey("competencies.id"))
+    grade_level: Mapped[str] = mapped_column(String, default="3e")
+    # --- provenance dans le manuel ---
+    source_page: Mapped[int] = mapped_column(Integer, default=0)      # index de page PDF élève
+    source_number: Mapped[str] = mapped_column(String, default="")    # n° imprimé de l'exercice
+    order_index: Mapped[int] = mapped_column(Integer, default=0)       # ordre dans la page
+    # crop (rectangle éditable, en pixels du raster à `raster_dpi`) + PNG sur disque
+    crop_box_json: Mapped[dict] = mapped_column(JSON, default=dict)    # {page_index,x0,y0,x1,y1,raster_dpi,img_w,img_h}
+    crop_path: Mapped[str] = mapped_column(String, default="")         # relatif à data_dir
+    has_figure: Mapped[bool] = mapped_column(Boolean, default=False)
+    figure_box_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    figure_path: Mapped[str] = mapped_column(String, default="")
+    # l'exercice a-t-il BESOIN d'un schéma/image pour être compréhensible, que
+    # l'OCR en ait effectivement trouvé un ou non ? Signal de la « couche
+    # supplémentaire » (indices textuels + jugement Claude) — cf. services.indigo.
+    # Sert à repérer un exercice incomplet quand figure_required=True mais
+    # has_figure=False (aucun crop n'a pu être rattaché, même en repli).
+    figure_required: Mapped[bool] = mapped_column(Boolean, default=False)
+    # --- métadonnées lues par CV (badge/titre) ---
+    badge_type: Mapped[str] = mapped_column(String, default="exercice")
+    # exercice | flash | expert | enigme | probleme
+    difficulty: Mapped[int] = mapped_column(Integer, default=3)        # 1-5
+    badge_color_json: Mapped[dict] = mapped_column(JSON, default=dict) # {rgb, category, confidence} recalibrable
+    title: Mapped[str] = mapped_column(String, default="")             # titre (problème/énigme)
+    tags_json: Mapped[list] = mapped_column(JSON, default=list)        # ["Raisonner","Calculer"] (problèmes)
+    calculator: Mapped[str] = mapped_column(String, default="autorisee")  # necessaire|interdite|autorisee
+    # --- contenu mis au propre par Gemini ---
+    statement: Mapped[str] = mapped_column(Text, default="")
+    response_type: Mapped[str] = mapped_column(String, default="short_text")
+    expected_json: Mapped[dict] = mapped_column(JSON, default=dict)    # answer/choices/cells (contrat app)
+    grading_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    effort_points: Mapped[float] = mapped_column(Float, default=1.0)
+    correction_solution: Mapped[str] = mapped_column(Text, default="")  # VRAIE solution recopiée du manuel prof
+    correction_guide: Mapped[str] = mapped_column(Text, default="")     # guide d'auto-correction dérivé (overlay élève)
+    # contrat app complet (statement/response_type/answer/choices/…), prêt pour rendu/publication
+    payload_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    raw_ocr_json: Mapped[dict] = mapped_column(JSON, default=dict)     # blocs OCR bruts (affichage avant/après)
+    # --- cycle de vie ---
+    status: Mapped[str] = mapped_column(String, default="draft")       # draft | validated
+    validated_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    validated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    model: Mapped[str] = mapped_column(String, default="")
+    prompt_version: Mapped[str] = mapped_column(String, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
 # ------------------------------------------------------------- scans & correction
 
 class ScanBatch(Base):
@@ -417,6 +501,10 @@ class StudentResponse(Base):
     zone_id: Mapped[str | None] = mapped_column(String, nullable=True)
     normalized_json: Mapped[dict] = mapped_column(JSON, default=dict)
     selected_choices: Mapped[list] = mapped_column(JSON, default=list)
+    # paires [gauche,droite] détectées par CV pour un exercice "matching" (les
+    # traits que l'élève a tracés à la règle) — persistées pour que la modale
+    # de correction reconstruise un diagramme, pas seulement le scan photo.
+    selected_pairs: Mapped[list] = mapped_column(JSON, default=list)
     final_text: Mapped[str] = mapped_column(Text, default="")
 
 

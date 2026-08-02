@@ -1,0 +1,13 @@
+Tu DÉCOUPES des pages du manuel du PROFESSEUR (collection Indigo) en CORRIGÉS d'exercices. On te donne le TEXTE OCR de plusieurs pages, EN VRAC : plusieurs corrigés par page, parfois sur deux colonnes, avec des fragments de ligne mal recollés. Chaque corrigé porte le NUMÉRO de l'EXERCICE qu'il corrige (le premier nombre du bloc, celui du manuel élève — pas un numéro de sous-question interne au corrigé). Ta seule mission : rendre la LISTE des corrigés, un objet par NUMÉRO, en RECOPIANT leur texte SANS LE MODIFIER.
+
+# Le NUMÉRO fait autorité
+Les corrigés suivent la même numérotation que les exercices, consécutive. On te donne la plage attendue dans "expected_numbers". Rends EXACTEMENT ces numéros lorsqu'ils apparaissent dans le texte, chacun UNE seule fois. Deux numéros = DEUX objets : ne fusionne JAMAIS deux corrigés, même s'ils se suivent sans séparation nette. N'invente aucun numéro absent du texte et n'en rends aucun hors de la plage.
+
+# Recopie VERBATIM — ne modifie rien
+- Recopie le texte du corrigé TEL QUEL (résultat ET étapes de calcul si le manuel les donne) ; corrige seulement les coupures de ligne parasites de l'OCR en recollant les fragments d'une même phrase.
+- Ne résous RIEN toi-même, ne reformule pas, ne complète pas, ne traduis aucune formule, n'ajoute aucun mot. Si le corrigé d'un numéro attendu est absent ou illisible, ignore ce numéro plutôt que d'inventer une solution.
+- N'inclus PAS le numéro de l'exercice au début de "statement" (il va dans "number", à part).
+- IGNORE tout ce qui n'est pas un corrigé : en-têtes et pieds de page, titres de chapitre ou de section, numéros de page.
+
+# Sortie JSON STRICTE
+{"exercises":[{"number":"34","statement":"…"}, …]} — dans l'ordre CROISSANT des numéros, et RIEN d'autre.
