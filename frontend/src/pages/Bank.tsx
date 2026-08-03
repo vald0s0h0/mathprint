@@ -28,6 +28,7 @@ type Exercise = {
   statement: string; correction: string; response_type: string
   choices: string[]; source: string; kind: string
   quality: Record<string, number>; figure: Record<string, any> | null
+  bareme_points: number
   // extraction brute dont provient cette ligne : shape variable selon la
   // source. Seule source="sesamaths" porte des blocs OCR Mistral affichables
   // (title/text/table/list/equation/image/...) ; les autres sources (indigo,
@@ -58,9 +59,16 @@ type SesamathsRaw = {
 const RESPONSE_LABELS: Record<string, string> = {
   short_text: 'réponse courte', multiline_text: 'raisonnement rédigé',
   qcm_single: 'QCM', qcm_multiple: 'QCM multiple',
+  checkbox_grid: 'grille cochée', multi_blank: 'cases à trous',
   table_fill: 'tableau à remplir', matching: 'points à relier',
   manual_drawing: 'tracé / dessin (correction manuelle)',
+  composite: 'types mixtes',
 }
+
+/** Barème en écriture française : « 1,5 » et non « 1.5 », entier sans décimale. */
+// 3 décimales (pas du barème = 0,125), zéros inutiles retirés — cf. Exercices.tsx
+const formatPoints = (v: number) =>
+  (Number.isInteger(v) ? String(v) : v.toFixed(3).replace(/0+$/, '').replace('.', ','))
 
 const SOURCE_LABELS: Record<string, string> = {
   mathalea: 'MathALÉA', sesamaths: 'Sésamaths', sesamaths_deepseek: 'Sésamaths (IA)',
@@ -99,6 +107,13 @@ function ExerciseCard({ ex, onRetire }: { ex: Exercise; onRetire: (id: string) =
           <Badge size="xs" variant="light" color={SOURCE_COLORS[ex.source] ?? 'blue'}>
             {SOURCE_LABELS[ex.source] ?? 'IA vérifiée'}
           </Badge>
+          {/* barème d'effort : ce que l'exercice VAUT, résolu côté API (repli
+              déterministe compris) — même information que dans l'onglet Exercices. */}
+          {ex.bareme_points > 0 && (
+            <Tooltip label="Barème : ce que l'exercice vaut (effort demandé), utilisé pour la note">
+              <Badge size="xs" variant="light" color="teal">{formatPoints(ex.bareme_points)} pt</Badge>
+            </Tooltip>
+          )}
           <QualityBadge quality={ex.quality} />
         </Group>
         <Group gap={4} wrap="nowrap">

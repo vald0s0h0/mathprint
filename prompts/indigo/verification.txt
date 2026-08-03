@@ -64,7 +64,7 @@ choices             (QCM uniquement)
 answer
 correction          guide élève court
 correction_solution corrigé de référence
-effort_points
+bareme_points       barème de l'exercice (cf. BARÈME du contrat de format)
 kind
 needs_figure
 ```
@@ -188,6 +188,12 @@ RETIRER.
 
 Une réponse constituée d'un ENSEMBLE dont l'ordre d'écriture est libre — tous les diviseurs, tous les multiples, les nombres premiers d'une liste, les fractions vérifiant une propriété… — doit être un `qcm_multiple` avec une consigne « Coche… ». Les propositions sont dans `choices`, JAMAIS recopiées dans `statement`.
 
+EXCEPTION : quand l'exercice demande de PRODUIRE la liste sans qu'aucun candidat ne soit
+proposé (« écris tous les diviseurs de $24$ »), il n'y a rien à cocher. C'est alors un
+`table_fill` d'UNE case par réponse attendue, avec `"unordered": true`, et l'énoncé DIT
+combien il y a de réponses. Ce n'est jamais une seule case où l'élève listerait les
+valeurs séparées par des virgules : une case ne contient qu'UNE réponse (voir plus bas).
+
 ---
 
 # UNE SOUS-QUESTION = UN CHAMP DE RÉPONSE (contrôle STRUCTUREL)
@@ -251,6 +257,10 @@ Calcule $17 \times 14$. {{blank}}
 
 avec `"answer": {"type": "integer", "value": 238}`. `answer.type` est toujours présent
 (`integer`, `decimal`, `rational`, `expression` ou `text`).
+
+FAUTE à corriger : une case qui attendrait PLUSIEURS réponses (« sépare les valeurs par
+des virgules », `"value"` du genre `"2, 3 et 5"`). Une case = une réponse. Restructure
+en `table_fill`, une case par réponse, `"unordered": true` si l'ordre est libre.
 
 ---
 

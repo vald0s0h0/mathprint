@@ -19,7 +19,7 @@ from ..models import (
     Competency, CompetencyFramework, GeneratedExercise, LessonSnippet,
     SesamathsChapterExtraction, SesamathsLlmCache,
 )
-from ..services import exercise_gen, figures
+from ..services import exercise_gen, figures, scoring
 
 router = APIRouter(prefix="/api/content", tags=["content"],
                    dependencies=[Depends(current_user)])
@@ -38,6 +38,10 @@ def _exercise_out(ex: GeneratedExercise, comp: Competency | None) -> dict:
         "choices": (ex.grading_json or {}).get("choices", []),
         "expected": ex.expected_json,
         "source": ex.source or "deepseek", "kind": ex.kind or "application",
+        # barème d'EFFORT (ce que l'exercice vaut, cf. services.scoring) : il
+        # vit dans grading_json, avec un repli déterministe quand le LLM n'en a
+        # pas produit — la banque doit l'afficher comme l'onglet Exercices.
+        "bareme_points": scoring.item_bareme(ex.grading_json or {}, ex.response_type),
         "quality": ex.quality_json or {},
         "figure": ex.figure_json,
         "status": ex.status,

@@ -32,11 +32,12 @@ type Batch = {
   error: string | null; pending_reviews: number; segments: Segment[]; created_at: string
 }
 // une case à corriger d'un tableau / de cases à trous (table_fill, multi_blank) :
-// sa réponse attendue lisible, ce que l'OCR a lu, le verdict auto du moteur
-// (auto_ok) et le verdict éventuellement déjà posé par le professeur (teacher_ok).
+// sa réponse attendue lisible, ce que l'OCR a lu, le crédit calculé par le moteur
+// (auto_credit) et celui éventuellement déjà posé par le professeur (teacher_credit).
 type Cell = {
   index: number; label: string; expected_display: string
-  ocr_text: string; auto_ok: boolean | null; teacher_ok: boolean | null
+  // crédit 1 (juste) / 0.5 (demi-point) / 0 (faux) ; null = non tranché
+  ocr_text: string; auto_credit: number | null; teacher_credit: number | null
 }
 // mode de correction manuelle piloté par le backend (cf. scans._grade_mode)
 type GradeMode = 'cells' | 'binary' | 'partial'
@@ -54,6 +55,10 @@ type Item = {
   group_key: string; group_label: string; response_type: string; sequence: number
   // correction manuelle : mode d'UI, réponse attendue lisible, détail par case
   grade_mode: GradeMode; expected_display: string; cells: Cell[]
+  // verdicts du correcteur LLM (raisonnements, réponses écrites longues) : le
+  // professeur relit ce qu'il a décidé, champ par champ, avant de valider
+  llm_notes: { champ: string; points: number; bareme: number
+               verdict: string; motif: string }[]
 }
 // Unité ATOMIQUE de correction manuelle : UNE case à trous, UN QCM, ou UNE
 // réponse rédigée. La file des réponses est aplatie en unités puis regroupée par
@@ -141,7 +146,9 @@ function SegmentBar({ segments }: { segments: Segment[] }) {
 }
 
 // points à la française pour l'affichage (1,5 — et 2 plutôt que 2,0)
-const fmtPts = (v: number) => (Math.round(v * 100) / 100).toString().replace('.', ',')
+// arrondi au millième pour l'AFFICHAGE seulement : les points d'un exercice ne
+// sont jamais arrondis dans le calcul (§ barème), et le pas est 0,125.
+const fmtPts = (v: number) => (Math.round(v * 1000) / 1000).toString().replace('.', ',')
 
 // clé de regroupement : réponse attendue normalisée (retire $, LaTeX léger,
 // accolades, espaces) pour rapprocher les cases IDENTIQUES à travers exercices,
@@ -163,8 +170,8 @@ function buildUnits(items: Item[], scope: Scope): Unit[] {
         // case VIDE (aucune encre → jamais envoyée à Mathpix) : compte faux et
         // n'est JAMAIS montrée au professeur (§ demande). Son verdict false reste
         // porté par les `verdicts` amorcés → set_cells de la réponse parente OK.
-        if (!c.ocr_text.trim() && c.teacher_ok == null) return
-        const undecided = c.auto_ok === null && c.teacher_ok == null
+        if (!c.ocr_text.trim() && c.teacher_credit == null) return
+        const undecided = c.auto_credit === null && c.teacher_credit == null
         if (scope === 'flagged' && !undecided) return
         us.push({
           key: `${it.response_id}:${ci}`, respId: it.response_id, mode: 'cells',
@@ -270,6 +277,11 @@ function ItemStatus({ it }: { it: Item }) {
     return <Badge size="sm" variant="light" color="indigo">corrigé — {fmtPts(it.current_points)}/{fmtPts(it.bareme_points)}</Badge>
   if (it.flagged)
     return <Badge size="sm" variant="light" color="orange">à vérifier{it.category ? ` — ${CATEGORY_LABELS[it.category] ?? it.category}` : ''}</Badge>
+  // note posée par le correcteur LLM (raisonnement rédigé, réponse écrite
+  // longue) : distincte du déterministe, pour que le professeur sache où
+  // regarder en priorité s'il veut relire.
+  if (it.decision_source === 'deepseek')
+    return <Badge size="sm" variant="light" color="cyan">IA — {fmtPts(it.current_points)}/{fmtPts(it.bareme_points)}</Badge>
   if (it.full_credit) return <Badge size="sm" variant="light" color="green">auto ✓ {fmtPts(it.bareme_points)}/{fmtPts(it.bareme_points)}</Badge>
   return <Badge size="sm" variant="light" color="yellow">auto — {fmtPts(it.current_points)}/{fmtPts(it.bareme_points)}</Badge>
 }
@@ -282,13 +294,15 @@ export default function Corrections() {
   const [validateBatch, setValidateBatch] = useState<Batch | null>(null)
   const [summary, setSummary] = useState<BatchSummary | null>(null)
   const [mathpixOk, setMathpixOk] = useState(true)
+  const [llmOk, setLlmOk] = useState(true)
   const [previewId, setPreviewId] = useState<string | null>(null)
   const [idx, setIdx] = useState(0)
   // file APLATIE en unités (une case / un QCM / une réponse rédigée), regroupées
   // par réponse attendue ; + verdicts Juste(true)/Faux(false)/à trancher(null)
-  // par case et par réponse (set_cells exige des verdicts complets à l'envoi).
+  // par case et par réponse : CRÉDIT 1 (juste) / 0,5 (demi-point) / 0 (faux) /
+  // null (à trancher) — set_cells exige des verdicts complets à l'envoi.
   const [units, setUnits] = useState<Unit[]>([])
-  const [verdicts, setVerdicts] = useState<Record<string, (boolean | null)[]>>({})
+  const [verdicts, setVerdicts] = useState<Record<string, (number | null)[]>>({})
   const [scoreInput, setScoreInput] = useState<number | ''>('')
   const [loaded, setLoaded] = useState(false)
   const [resetTarget, setResetTarget] = useState<Batch | null>(null)
@@ -304,8 +318,8 @@ export default function Corrections() {
       .then((s) => setShortcuts({ ...DEFAULT_SHORTCUTS, ...(s.correction_shortcuts ?? {}) }))
       .catch(() => {})
     // sans clé Mathpix, la correction est indisponible : on prévient et on bloque
-    api.get<{ mathpix_configured: boolean }>('/api/scans/config')
-      .then((c) => setMathpixOk(c.mathpix_configured))
+    api.get<{ mathpix_configured: boolean; correction_llm_configured: boolean }>('/api/scans/config')
+      .then((c) => { setMathpixOk(c.mathpix_configured); setLlmOk(c.correction_llm_configured) })
       .catch(() => {})
   }, [])
 
@@ -349,10 +363,10 @@ export default function Corrections() {
     setUnits(buildUnits(rs, s))
     // amorce les verdicts par case : verdict déjà posé par le prof, sinon celui
     // du moteur (auto_ok) — seules les cases non tranchées (null) restent à faire
-    const vmap: Record<string, (boolean | null)[]> = {}
+    const vmap: Record<string, (number | null)[]> = {}
     for (const it of rs)
       if (it.grade_mode === 'cells')
-        vmap[it.response_id] = it.cells.map((c) => (c.teacher_ok != null ? c.teacher_ok : c.auto_ok))
+        vmap[it.response_id] = it.cells.map((c) => (c.teacher_credit != null ? c.teacher_credit : c.auto_credit))
     setVerdicts(vmap)
     setIdx(0); setScoreInput('')
   }, [])
@@ -396,7 +410,7 @@ export default function Corrections() {
       action === 'cancel_item'
         ? { ...x, decision_source: 'teacher', cancelled: true, full_credit: false, current_points: 0 }
         : { ...x, decision_source: 'teacher', cancelled: false, full_credit: r >= 0.999,
-            current_points: Math.round(r * x.bareme_points * 100) / 100 }
+            current_points: Math.round(r * x.bareme_points * 1000) / 1000 }
     )))
     setScoreInput('')
     advance()
@@ -406,28 +420,31 @@ export default function Corrections() {
   // enregistre une réponse à cases dès que TOUTES ses cases sont tranchées
   // (set_cells exige des verdicts complets) : le backend recalcule le barème
   // (points = nombre de cases justes) et rend l'overlay cohérent avec la note.
-  async function submitCellsFor(rid: string, arr: (boolean | null)[]) {
-    const verdictsB = arr.map((v) => !!v)
+  async function submitCellsFor(rid: string, arr: (number | null)[]) {
+    const credits = arr.map((v) => Math.max(0, Math.min(1, v ?? 0)))
     try {
       await api.post(`/api/scans/responses/${rid}/resolve`,
-        { action: 'set_cells', cell_verdicts: verdictsB })
+        { action: 'set_cells', cell_verdicts: credits })
     } catch (e) {
       notifications.show({ color: 'red', message: (e as Error).message })
       return
     }
-    const correct = verdictsB.filter(Boolean).length
+    // le score d'une réponse à cases est la SOMME des crédits (un demi-point
+    // compte pour 0,5), rapportée au barème de l'exercice — même règle qu'au
+    // serveur (scans.resolve, action set_cells).
+    const earned = credits.reduce((a, b) => a + b, 0)
     setItems((prev) => prev.map((x) => x.response_id !== rid ? x : ({
       ...x, decision_source: 'teacher', cancelled: false,
-      full_credit: correct === verdictsB.length,
-      current_points: verdictsB.length
-        ? Math.round((correct / verdictsB.length) * x.bareme_points * 100) / 100 : 0,
-      cells: x.cells.map((c, ci) => ({ ...c, teacher_ok: verdictsB[ci] })),
+      full_credit: earned === credits.length,
+      current_points: credits.length
+        ? Math.round((earned / credits.length) * x.bareme_points * 1000) / 1000 : 0,
+      cells: x.cells.map((c, ci) => ({ ...c, teacher_credit: credits[ci] })),
     })))
   }
 
   // pose le verdict d'UNE case (unité courante) et avance ; dès que la réponse
   // parente n'a plus aucune case en attente, elle est enregistrée automatiquement.
-  function markCellUnit(val: boolean) {
+  function markCellUnit(val: number) {
     const u = units[idx]
     if (!u || u.mode !== 'cells' || u.cellIndex == null) return
     const rid = u.respId, ci = u.cellIndex
@@ -450,8 +467,9 @@ export default function Corrections() {
       if (e.key === 'ArrowRight') { setIdx((i) => Math.min(i + 1, units.length - 1)); return }
       if (e.key === 'ArrowLeft') { setIdx((i) => Math.max(i - 1, 0)); return }
       if (u.mode === 'cells') {
-        if (k === shortcuts.full) markCellUnit(true)
-        else if (k === shortcuts.zero) markCellUnit(false)
+        if (k === shortcuts.full) markCellUnit(1)
+        else if (k === shortcuts.two_thirds) markCellUnit(0.5)   // demi-point
+        else if (k === shortcuts.zero) markCellUnit(0)
         return
       }
       if (u.mode === 'binary') {
@@ -587,6 +605,17 @@ export default function Corrections() {
           </Text>
         </div>
       </Group>
+
+      {mathpixOk && !llmOk && (
+        <Alert color="yellow" variant="light" icon={<AlertTriangle size={18} />}
+          title="Correcteur des réponses rédigées non configuré">
+          Sans clé DeepSeek, les raisonnements rédigés et les réponses écrites
+          longues ne sont pas notés automatiquement : ils arrivent dans votre
+          file de correction manuelle (jamais de note simulée). Le reste du
+          sujet — QCM, grilles, tableaux, réponses courtes — est corrigé
+          normalement. Clé à ajouter dans <b>Paramètres → API</b>.
+        </Alert>
+      )}
 
       {!mathpixOk && (
         <Alert color="red" variant="light" icon={<AlertTriangle size={18} />}
@@ -1030,18 +1059,32 @@ export default function Corrections() {
                   </Text>
                   {cur.mode !== 'cells' && curItem.reason_code &&
                     <Text size="xs" c="dimmed">Motif : {curItem.reason_code}</Text>}
+                  {(curItem.llm_notes ?? []).map((n, i) => (
+                    <Text key={i} size="xs" c="cyan.7">
+                      IA — {n.champ ? `${n.champ} : ` : ''}{n.verdict}
+                      {' '}({fmtPts(n.points)}/{fmtPts(n.bareme)})
+                      {n.motif ? ` · ${n.motif}` : ''}
+                    </Text>
+                  ))}
                 </Card>
               </SimpleGrid>
 
               {/* actions — ordre gauche→droite : Faux … Juste (§ demande) */}
               {cur.mode === 'cells' ? (
                 <Group>
-                  <Button color="red" variant={cellVal === false ? 'filled' : 'light'}
-                    onClick={() => markCellUnit(false)}>
+                  <Button color="red" variant={cellVal === 0 ? 'filled' : 'light'}
+                    onClick={() => markCellUnit(0)}>
                     Faux <Kbd ml={6}>{shortcuts.zero.toUpperCase()}</Kbd>
                   </Button>
-                  <Button color="green" variant={cellVal === true ? 'filled' : 'light'}
-                    onClick={() => markCellUnit(true)}>
+                  {/* demi-point : arrondi correct, erreur très légère — la case
+                      vaut alors la moitié de ses points (cf. grading.numeric_credit,
+                      qui le propose déjà tout seul sur un arrondi juste). */}
+                  <Button color="orange" variant={cellVal === 0.5 ? 'filled' : 'light'}
+                    onClick={() => markCellUnit(0.5)}>
+                    ½ point <Kbd ml={6}>{shortcuts.two_thirds.toUpperCase()}</Kbd>
+                  </Button>
+                  <Button color="green" variant={cellVal === 1 ? 'filled' : 'light'}
+                    onClick={() => markCellUnit(1)}>
                     Juste <Kbd ml={6}>{shortcuts.full.toUpperCase()}</Kbd>
                   </Button>
                 </Group>
@@ -1074,8 +1117,8 @@ export default function Corrections() {
                     </Button>
                   </Group>
                   <Group>
-                    <NumberInput placeholder="points" w={120} min={0} max={curItem.bareme_points} step={0.5}
-                      decimalScale={2} value={scoreInput}
+                    <NumberInput placeholder="points" w={120} min={0} max={curItem.bareme_points} step={0.125}
+                      decimalScale={3} value={scoreInput}
                       onChange={(v) => setScoreInput(v === '' ? '' : Number(v))} />
                     <Button variant="light" disabled={scoreInput === '' || !curItem.bareme_points}
                       onClick={() => gradeRatio(Number(scoreInput) / curItem.bareme_points)}>

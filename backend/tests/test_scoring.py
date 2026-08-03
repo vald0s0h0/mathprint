@@ -46,13 +46,15 @@ def db_session(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("raw, expected", [
     (1, 1.0), (0.5, 0.5), (2.5, 2.5), (5, 5.0),
-    (1.2, 1.0),          # tout barème est ramené à un multiple de 0,5...
-    (1.3, 1.5),
-    ("2,5", 2.5),        # ... y compris écrit à la française par le modèle
-    (0.1, 0.5),          # ... et borné : jamais 0 point (l'exercice vaut quelque chose)
+    (0.125, 0.125), (2.125, 2.125),   # le pas est le HUITIÈME de point...
+    (0.375, 0.375), (1.75, 1.75),
+    (1.2, 1.25),         # ... tout barème y est ramené...
+    (1.3, 1.25),
+    ("2,125", 2.125),    # ... y compris écrit à la française par le modèle
+    (0.01, 0.125),       # ... et borné : jamais 0 point (l'exercice vaut quelque chose)
     (99, 5.0),           # ... jamais un quart d'un sujet noté sur 20
 ])
-def test_snap_bareme_always_yields_a_half_point_multiple(raw, expected):
+def test_snap_bareme_always_yields_an_eighth_point_multiple(raw, expected):
     assert scoring.snap_bareme(raw) == expected
 
 
@@ -152,7 +154,7 @@ def test_exercise_without_bareme_falls_back_instead_of_being_worth_zero():
     ]:
         bareme = scoring.item_bareme(grading, rtype)
         assert scoring.BAREME_MIN <= bareme <= scoring.BAREME_MAX
-        assert (bareme * 2) % 1 == 0        # toujours un multiple de 0,5
+        assert (bareme * 8) % 1 == 0        # toujours un multiple de 0,125
 
 
 def test_fallback_bareme_grows_with_the_work_demanded():
@@ -209,20 +211,22 @@ def _seed_domain(db, domain_code="A") -> Competency:
 
 
 @needs_manual
-def test_gemini_prompt_asks_for_an_effort_bareme_not_a_difficulty(db_session):
-    """Le cœur de la demande côté prompt : le modèle doit noter l'EFFORT (temps
-    de réflexion) et surtout pas le niveau de l'élève — un élève fragile fournit
+def test_prompt_asks_for_a_reflection_bareme_not_a_difficulty(db_session):
+    """Le cœur de la demande côté prompt : le modèle doit noter la RÉFLEXION et
+    la complexité, surtout pas le niveau de l'élève — un élève fragile fournit
     plus d'effort sur un exercice facile qu'un bon élève sur un exercice moyen."""
     comp = _seed_domain(db_session)
     prompt = gemini_gen._system_prompt(db_session, comp, "5e", 5, "(title) 1 Calcule.")
 
-    assert "effort_points" in prompt
+    assert "bareme_points" in prompt
     assert "TEMPS DE RÉFLEXION" in prompt
-    assert "multiple de 0,5" in prompt
+    assert "multiple de 0,125" in prompt
     # la consigne « ne dépend pas du niveau de l'élève » est explicite, et
     # l'exemple qui la motive présent
-    assert "Il ne dépend JAMAIS du niveau de l'élève" in prompt
+    assert "ne dépend JAMAIS du niveau de l'élève" in prompt
     assert "élève fragile" in prompt
+    # la COMPLEXITÉ est l'autre moitié de l'échelle, et le problème rapporte plus
+    assert "COMPLEXITÉ" in prompt and "PROBLÈME" in prompt
     # la difficulté reste, elle, non demandée : les deux grandeurs ne doivent
     # pas se confondre dans le prompt
     assert "AUCUN niveau de difficulté" in prompt
@@ -238,7 +242,7 @@ def test_every_created_exercise_carries_a_half_point_bareme(db_session):
         bareme = r.grading_json.get("bareme_points")
         assert bareme is not None, "exercice créé sans barème"
         assert scoring.BAREME_MIN <= bareme <= scoring.BAREME_MAX
-        assert (bareme * 2) % 1 == 0
+        assert (bareme * 8) % 1 == 0
         # l'échelle interne du moteur est intacte à côté
         assert r.grading_json.get("max_score")
 
@@ -247,7 +251,7 @@ def test_validator_snaps_an_off_scale_bareme_instead_of_rejecting(db_session):
     # Un barème hors normes n'est pas un motif de rejet : l'exercice est bon,
     # seul son étiquetage est douteux — on le recale (l'exercice est payé).
     comp = _seed_domain(db_session)
-    raw = {"kind": "application", "effort_points": 42,
+    raw = {"kind": "application", "bareme_points": 42,
            "statement": "Calcule $12 + 8$.", "correction": "$12 + 8 = 20$.",
            "response_type": "short_text", "answer": {"type": "integer", "value": 20}}
     valid = exercise_gen._validate_exercise(raw, comp, db_session, set())
@@ -263,6 +267,56 @@ def test_validator_falls_back_when_the_model_omits_the_bareme(db_session):
     valid = exercise_gen._validate_exercise(raw, comp, db_session, set())
     assert valid is not None
     assert valid["grading"]["bareme_points"] == 1.0
+
+
+def test_validator_keeps_an_eighth_of_a_point_bareme(db_session):
+    # Le pas de 0,125 n'est pas décoratif : un barème de QCM par case tombe
+    # souvent dessus (5 cases immédiates = 0,625) et doit survivre intact.
+    comp = _seed_domain(db_session)
+    raw = {"kind": "application", "bareme_points": 0.625,
+           "statement": "Coche les nombres pairs.",
+           "correction": "$12$ et $8$ sont pairs.",
+           "response_type": "qcm_multiple",
+           "choices": ["$12$", "$7$", "$8$", "$3$", "$5$"],
+           "answer": {"type": "choice", "correct": [0, 2]}}
+    valid = exercise_gen._validate_exercise(raw, comp, db_session, set())
+    assert valid is not None
+    assert valid["grading"]["bareme_points"] == 0.625
+    # échelle interne : une unité par CASE, pas 1 pour tout le QCM
+    assert valid["grading"]["max_score"] == 5
+    assert valid["grading"]["exclusive"] is False
+
+
+def test_composite_bareme_is_the_sum_of_its_subquestions(db_session):
+    # Un composite est déplié en un CopyItem par partie : son barème doit être
+    # la SOMME des barèmes de ses sous-questions, pas un nombre annoncé à part
+    # qui ne serait jamais lu (il l'était, et divergeait).
+    comp = _seed_domain(db_session)
+    raw = {"kind": "application", "bareme_points": 4,
+           "statement": "On considère le nombre $24$.",
+           "correction": "$24 = 2^3 \\times 3$.",
+           "response_type": "composite",
+           "answer": {"type": "composite", "parts": [
+               {"response_type": "qcm_single", "statement": "Coche un diviseur de $24$.",
+                "bareme_points": 0.25, "choices": ["$5$", "$6$", "$7$"],
+                "answer": {"type": "choice", "correct": [1]}},
+               {"response_type": "short_text", "statement": "Calcule $24 \\div 6$.",
+                "bareme_points": 0.5, "answer": {"type": "integer", "value": 4}},
+           ]}}
+    valid = exercise_gen._validate_exercise(raw, comp, db_session, set())
+    assert valid is not None
+    parts = valid["grading"]["parts"]
+    assert [p["grading"]["bareme_points"] for p in parts] == [0.25, 0.5]
+    assert valid["grading"]["bareme_points"] == 0.75
+
+
+def test_points_of_an_exercise_are_never_rounded(db_session):
+    # Le SEUL arrondi de la chaîne est celui de la note (règle de trois). Un
+    # QCM de 8 cases à 1 point dont 5 sont justes vaut 0,625, pas 0,5 ni 0,6.
+    assert scoring.earned_points(5, 8, 1.0) == 0.625
+    assert scoring.earned_points(3, 8, 2.125) == pytest.approx(0.796875)
+    # ... et la note, elle, reste arrondie au 0,5 supérieur
+    assert scoring.note_from_points(0.625, 1.0, 20)[1] == 12.5
 
 
 # ================================================================ chaîne complète

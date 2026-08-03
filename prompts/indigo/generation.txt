@@ -339,6 +339,10 @@ Utilise `short_text` pour UNE réponse courte et unique :
 * unité ;
 * mot mathématique très court si réellement nécessaire.
 
+UNE case ne contient JAMAIS plusieurs réponses. « Donne les diviseurs de $24$ séparés
+par des virgules », « écris les deux solutions dans la case » : interdit. Dès qu'il y a
+plusieurs réponses à écrire, c'est un `table_fill` (priorité 4), une case par réponse.
+
 Exemple :
 
 « Calcule $17 \times 14$. {{blank}} »
@@ -377,6 +381,22 @@ c. Calcule $15 \times 8$.
 NE doit PAS devenir trois cases dans le fil du texte : c'est un tableau à 3 lignes,
 `row_labels` = [« $15 + 8 =$ », « $15 - 8 =$ », « $15 \times 8 =$ »], une cellule à
 remplir par ligne.
+
+C'est aussi le format des LISTES de résultats. Un exercice qui demande « tous les
+diviseurs de $24$ », « toutes les solutions », « les nombres premiers inférieurs à
+$20$ » devient un `table_fill` d'UNE case par réponse attendue, avec
+`"unordered": true` : l'élève remplit les cases dans l'ordre qu'il veut, la correction
+apparie ses réponses à celles attendues. Deux obligations :
+
+* dis dans l'énoncé COMBIEN il y a de réponses (« Il y en a $8$. ») — l'élève ne peut
+  pas le deviner, et le nombre de cases le lui dirait de toute façon ;
+* n'utilise `"unordered": true` que si la liste attendue est UNIQUE. « Cite trois
+  multiples de $7$ » n'est pas corrigeable (plusieurs listes sont justes) : reformule
+  en « les trois plus petits multiples de $7$ ».
+
+`"unordered": false` (ou absent) dès que la place d'une réponse EST une réponse :
+ranger dans l'ordre croissant, compléter un tableau de proportionnalité, une table de
+valeurs. Le drapeau est ignoré si une cellule est `"given"`.
 
 Règles :
 
@@ -774,11 +794,15 @@ sans `type`, ou dont le `type` ne correspond pas, fait rejeter l'exercice.
 | `checkbox_grid` | `grid` | `"cols": [str]` (2-4, JAMAIS Vrai/Faux ni Oui/Non), `"rows": [{"label": str, "correct": int}]` (2-12) |
 | `matching` | `matching` | `"left": [str]`, `"right": [str]` (2-6 chacune), `"pairs": [[i, j]]` |
 | `short_text` | `integer` / `decimal` / `rational` / `expression` / `text` | `"value"` (et `"variable"` pour une expression) |
-| `table_fill` | `table` | `"rows"`, `"cols"`, `"row_labels"`, `"col_labels"?`, `"cells"` |
+| `table_fill` | `table` | `"rows"`, `"cols"`, `"row_labels"`, `"col_labels"?`, `"unordered"?`, `"cells"` |
 | `multi_blank` | `blanks` | `"values": [{"type": ..., "value": ...}]`, une par `{{blank}}` |
 | `multiline_text` | `rubric` | `"steps": [{...}]`, `"lines": int` |
 | `manual_drawing` | — | `answer` peut être omis |
 | `composite` | `composite` | `"parts": [{...}]` (2 à 8) |
+
+Dans TOUS les formats, une case de réponse ne reçoit qu'UNE SEULE réponse : jamais deux
+valeurs séparées par une virgule, jamais une liste. Plusieurs réponses = plusieurs
+cases (`table_fill`).
 
 Dans une cellule de tableau (`cells`) comme dans une valeur de `multi_blank` (`values`),
 chaque entrée est un OBJET `{"type": ..., "value": ...}` — jamais une chaîne nue. Les

@@ -1,24 +1,29 @@
-"""Barème d'effort et notation d'une copie (§ barème).
+"""Barème et notation d'une copie (§ barème).
 
-DEUX ÉCHELLES cohabitent dans la plateforme, et les confondre est la principale
-source d'erreur :
+`bareme_points` est le SEUL barème de la plateforme, de la création d'un
+exercice jusqu'à la note imprimée. Il vit à UN seul endroit —
+`grading_json["bareme_points"]` — et tout ce qui a besoin du barème passe par
+`item_bareme` ci-dessous. (Il a existé un champ `effort_points` doublonnant, à
+la fois dans le contrat du modèle et en colonne d'IndigoExercise : deux noms
+pour une même valeur, dont l'un était silencieusement ignoré par la banque.)
+
+DEUX ÉCHELLES cohabitent, et les confondre est la principale source d'erreur :
 
   - l'échelle INTERNE du moteur de correction (services.grading) : le
     `max_score` de grading_json, exprimé en « unités vérifiables » — 1 par
-    cellule de tableau à remplir, 1 par QCM, 2 pour une expression, la somme
-    des points de rubrique... Elle sert à mesurer CE QUI EST JUSTE, et pas du
-    tout ce que ça vaut. Elle ne doit JAMAIS être écrasée par le barème : le
-    moteur compare `score` à `max_score` (auto-vérification des exercices
-    créés, notation par cellule), un tableau de 4 cases y vaut forcément 4.
+    cellule de tableau à remplir, 1 par CASE de QCM, 2 pour une expression, la
+    somme des points de rubrique... Elle sert à mesurer CE QUI EST JUSTE, et
+    pas du tout ce que ça vaut. Elle ne doit JAMAIS être écrasée par le
+    barème : le moteur compare `score` à `max_score` (auto-vérification des
+    exercices créés, notation par cellule), un tableau de 4 cases y vaut
+    forcément 4.
 
-  - le BARÈME (`bareme_points`), en points professeur, multiples de 0,5 : ce
-    que l'exercice VAUT dans le sujet. Il récompense l'EFFORT demandé pour
-    résoudre — le temps de réflexion, le nombre d'étapes de raisonnement —
-    JAMAIS le niveau de l'élève : un élève fragile fournit plus d'effort sur
-    un exercice facile qu'un bon élève sur un exercice moyen, et c'est
-    l'effort qu'on récompense. Il est demandé au modèle à la CRÉATION de
-    l'exercice (cf. exercise_gen._BAREME_RULES, champ "effort_points"), figé
-    sur la copie à la génération du sujet, et sert jusqu'à la note finale.
+  - le BARÈME (`bareme_points`), en points professeur, multiples de 0,125 : ce
+    que l'exercice VAUT dans le sujet. Il combine le TEMPS DE RÉFLEXION et la
+    COMPLEXITÉ (un problème rapporte plus qu'une application directe), JAMAIS
+    le niveau de l'élève. Il est demandé au modèle à la CRÉATION de l'exercice
+    (cf. exercise_gen._BAREME_RULES), figé sur la copie à la génération du
+    sujet, et sert jusqu'à la note finale.
 
 Le passage de l'une à l'autre est un simple ratio :
 
@@ -27,9 +32,12 @@ Le passage de l'une à l'autre est un simple ratio :
 et la note finale une règle de trois sur la base choisie par le professeur à
 la création du sujet (/5, /10 ou /20, contrôle uniquement).
 
-ARRONDIS : barèmes d'exercice et notes d'élève sont des multiples de 0,5. La
-note imprimée est arrondie AU SUPÉRIEUR (jamais au plus proche : on ne retire
-pas un demi-point à un élève), mais la note EXACTE est conservée en base
+ARRONDIS — un seul dans toute la chaîne. Les points d'un exercice ne sont
+JAMAIS arrondis : un QCM de 8 cases à 1 point dont 5 sont justes vaut 0,625, et
+c'est cette valeur exacte qui est sommée. Le pas de 0,125 existe précisément
+pour que ces partages tombent juste. Le SEUL arrondi est celui de la note, à la
+règle de trois : au 0,5 SUPÉRIEUR (jamais au plus proche — on ne retire pas un
+demi-point à un élève), la note EXACTE restant conservée en base
 (CopyResult.note_raw) — c'est elle qui doit servir aux moyennes et au suivi,
 arrondir puis moyenner accumulant le biais d'arrondi.
 """
@@ -49,16 +57,22 @@ DEFAULT_NOTE_BASE = 20
 # base pour le suivi, seule la note n'a pas de sens.
 NOTE_BASE_UNGRADED = 0
 
-BAREME_STEP = 0.5
-BAREME_MIN = 0.5
+# 0,125 = 1/8 de point : le pas le plus fin du barème. Il n'est pas cosmétique —
+# c'est lui qui permet à une CASE de QCM ou à une cellule de tableau de valoir sa
+# part exacte sans forcer le total de l'exercice à tomber rond (2,125 points est
+# un barème parfaitement légitime, et on n'ajuste JAMAIS un exercice pour
+# arrondir son barème). Toutes les fractions usuelles du barème (1/8, 1/4, 1/2,
+# 3/4) sont des multiples exacts, donc représentables sans perte en binaire.
+BAREME_STEP = 0.125
+BAREME_MIN = 0.125
 # 5 points : au-delà, un seul exercice pèserait un quart d'un sujet noté sur 20
 # — c'est un problème complet, pas un exercice.
 BAREME_MAX = 5.0
 
 
 def snap_bareme(value) -> float | None:
-    """Barème brut (renvoyé par le modèle) -> multiple de 0,5 dans
-    [0,5 ; 5]. None si la valeur est inexploitable — l'appelant se rabat alors
+    """Barème brut (renvoyé par le modèle) -> multiple de 0,125 dans
+    [0,125 ; 5]. None si la valeur est inexploitable — l'appelant se rabat alors
     sur `fallback_bareme`, jamais sur un refus de l'exercice : un barème
     manquant se recalcule, un exercice jeté est repayé."""
     try:
@@ -80,32 +94,45 @@ def round_half_up(value: float) -> float:
     return math.ceil(round(value * 2, 6)) / 2
 
 
+# Prix de l'UNITÉ vérifiable, par comparateur, pour le repli déterministe. Ce
+# n'est pas BAREME_STEP : le pas du barème (0,125) est la finesse de la grille,
+# ces valeurs-ci sont ce que vaut une case / une cellule / une étape.
+_UNIT_PRICE = {
+    "table_cells": 0.5,     # une cellule = un petit calcul à poser
+    "rubric": 0.5,          # par point d'étape (1-3 par étape) : la rédaction coûte
+    "matching": 0.5,        # par paire à relier
+    "qcm": 0.25,            # par CASE (cochée ou laissée vide à raison)
+    "grid": 0.25,           # par ligne de grille
+}
+
+
 def fallback_bareme(response_type: str, grading: dict) -> float:
     """Barème d'un exercice dont la source n'en a pas fourni : banque
-    antérieure au barème, extraction Sésamaths d'un lot déjà en cache, modèle
-    qui a omis le champ. Déterministe et calé sur la même idée d'effort que le
-    prompt — ce que l'exercice demande de TRAVAIL, lu sur sa structure (une
-    case à cocher n'est pas un tableau de 6 cellules, qui n'est pas un
+    antérieure au barème, exercice réécrit par un correctif qui ne l'a pas
+    reposé, modèle qui a omis le champ. Déterministe et calé sur la même idée
+    que le prompt — ce que l'exercice demande de TRAVAIL, lu sur sa structure
+    (une case à cocher n'est pas un tableau de 6 cellules, qui n'est pas un
     raisonnement rédigé en 4 étapes).
 
-    Volontairement conservateur : il ne cherche pas à imiter finement le
-    jugement du modèle, seulement à ne jamais laisser un exercice sans barème
-    (qui vaudrait 0 dans la note, en silence)."""
+    Ce n'est PAS une seconde échelle : c'est la réparation d'un
+    `bareme_points` manquant, pour ne jamais laisser un exercice valoir 0 en
+    silence. Volontairement conservateur — il ne cherche pas à imiter finement
+    le jugement du modèle."""
     comparator = (grading or {}).get("comparator")
     max_score = float((grading or {}).get("max_score") or 1)
 
-    if comparator == "table_cells":
-        # une case = un petit calcul : 0,5 point par case à remplir
-        return snap_bareme(BAREME_STEP * max_score) or BAREME_MIN
-    if comparator == "rubric":
-        # max_score = somme des points d'étapes (1-3 par étape) : un
-        # raisonnement rédigé coûte cher en réflexion
-        return snap_bareme(BAREME_STEP * max_score) or BAREME_MIN
+    if comparator in ("qcm", "grid"):
+        # nombre de CASES : `choices`/`rows` font foi (le max_score des QCM
+        # d'avant le comptage par case vaut 1, il sous-estimerait l'exercice).
+        units = float(len((grading or {}).get("choices")
+                          or (grading or {}).get("rows") or []) or max_score)
+    else:
+        units = max_score
+    if comparator in _UNIT_PRICE:
+        return snap_bareme(_UNIT_PRICE[comparator] * units) or BAREME_MIN
     if comparator in ("rational_equiv", "symbolic_equiv"):
         return 1.5     # une fraction/expression se calcule, pas se lit
-    if comparator == "matching":
-        return snap_bareme(BAREME_STEP * max_score) or BAREME_MIN
-    return 1.0         # QCM, réponse courte, tracé : l'unité de référence
+    return 1.0         # réponse courte, tracé : l'unité de référence
 
 
 def item_bareme(grading: dict, response_type: str) -> float:
@@ -264,6 +291,9 @@ def copy_result(db: Session, copy: Copy, assessment: Assessment) -> CopyResult |
 
 def format_points(value: float) -> str:
     """Points/notes à la française pour l'impression : 1,5 — et 2 plutôt que
-    2,0 (un barème entier ne s'écrit pas avec une décimale sur une copie)."""
-    text = f"{round(value, 2):g}"
+    2,0 (un barème entier ne s'écrit pas avec une décimale sur une copie).
+
+    3 décimales, pas 2 : le pas du barème est 0,125, qu'un arrondi au centième
+    afficherait « 0,13 » — un huitième de point imprimé faux sur la copie."""
+    text = f"{round(value, 3):g}"
     return text.replace(".", ",")

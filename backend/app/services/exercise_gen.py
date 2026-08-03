@@ -507,16 +507,16 @@ def _validate_exercise(raw: dict, competency: Competency, db: Session,
         if key in existing_norms:
             return None
         existing_norms.add(key)
-        # Barème d'effort (§ barème) AJOUTÉ à gpolicy, jamais à la place de
-        # `max_score` : ce dernier est l'échelle interne du moteur de correction
-        # (1 par cellule de tableau…) et le validateur s'en sert juste en
-        # dessous pour vérifier que la réponse de référence obtient bien le
-        # maximum. Un barème hors normes ou absent est REMPLACÉ par le repli
-        # déterministe, jamais motif de rejet : l'exercice est bon, seul son
-        # étiquetage est douteux (cf. services.scoring).
+        # Barème (§ barème) AJOUTÉ à gpolicy, jamais à la place de `max_score` :
+        # ce dernier est l'échelle interne du moteur de correction (1 par
+        # cellule de tableau, 1 par case de QCM…) et le validateur s'en sert
+        # juste en dessous pour vérifier que la réponse de référence obtient
+        # bien le maximum. Un barème hors normes ou absent est REMPLACÉ par le
+        # repli déterministe, jamais motif de rejet : l'exercice est bon, seul
+        # son étiquetage est douteux (cf. services.scoring).
         gpolicy = dict(gpolicy)
         gpolicy["bareme_points"] = scoring.item_bareme(
-            {**gpolicy, "bareme_points": raw.get("effort_points")}, rtype)
+            {**gpolicy, "bareme_points": raw.get("bareme_points")}, rtype)
         return {"statement": statement, "correction": correction,
                 "response_type": rtype, "expected": expected, "grading": gpolicy,
                 "figure_json": figure_json, "kind": kind}
@@ -562,7 +562,19 @@ def _validate_exercise(raw: dict, competency: Competency, db: Session,
             return None
         expected = {"type": "composite", "parts": validated_parts}
         gpolicy = {"max_score": total, "comparator": "composite", "parts": validated_parts}
-        return _contract(expected, gpolicy, rtype)
+        out = _contract(expected, gpolicy, rtype)
+        if out is not None:
+            # Un composite est DÉPLIÉ en un CopyItem par sous-question : ce que
+            # l'élève peut gagner est la SOMME des barèmes de ses parties. Un
+            # barème donné à part pour l'exercice entier ne serait jamais lu (il
+            # l'était, et divergeait : « 4 » annoncé pour 3 parties valant 3).
+            # Pas de plafond ici — BAREME_MAX borne le poids d'UN exercice, un
+            # composite en porte plusieurs.
+            total_bareme = sum(float((p["grading"] or {}).get("bareme_points") or 0)
+                               for p in validated_parts)
+            out["grading"]["bareme_points"] = round(
+                total_bareme / scoring.BAREME_STEP) * scoring.BAREME_STEP
+        return out
 
     # ---------------- QCM ----------------
     if rtype in ("qcm_single", "qcm_multiple"):
@@ -585,7 +597,14 @@ def _validate_exercise(raw: dict, competency: Competency, db: Session,
         if len(correct) >= len(choices):
             return None  # « tout est juste » n'évalue rien
         expected = {"type": "choice", "correct": correct}
-        gpolicy = {"max_score": 1, "comparator": "qcm", "negative": 0, "choices": choices}
+        # max_score = une unité par CASE (comme une cellule de tableau) : chaque
+        # case est une décision de l'élève, et chaque décision juste — cocher ce
+        # qu'il fallait cocher COMME laisser vide ce qu'il fallait laisser vide —
+        # rapporte sa part du barème (cf. grading.qcm_credit). `exclusive` marque
+        # le choix UNIQUE, qui reste tout ou rien : l'élève n'y prend qu'une
+        # décision, la compter case par case paierait une croix au hasard.
+        gpolicy = {"max_score": len(choices), "comparator": "qcm", "negative": 0,
+                   "choices": choices, "exclusive": rtype == "qcm_single"}
         return _contract(expected, gpolicy, rtype, choices=choices)
 
     # ---------------- grille cochée (Vrai/Faux, Oui/Non) — corrigée par CV ----------------
@@ -668,9 +687,17 @@ def _validate_exercise(raw: dict, competency: Competency, db: Session,
         fillable = [c for r in validated_cells for c in r if not c.get("given")]
         if not fillable:
             return None  # un tableau entièrement "given" n'a rien à faire remplir
-        expected = {"type": "table", "rows": rows, "cols": cols, "cells": validated_cells}
+        # LISTE de résultats (les diviseurs de 24, les solutions d'une équation) :
+        # l'ordre des cases n'a aucun sens, la correction les APPARIE (cf.
+        # grading.table_credits). Refusé dès qu'une cellule est « given » : une
+        # valeur déjà imprimée fixe la place des autres, l'ordre redevient
+        # signifiant. Le drapeau est retiré, jamais motif de rejet.
+        unordered = bool(answer.get("unordered")) and len(fillable) == len(
+            [c for r in validated_cells for c in r])
+        expected = {"type": "table", "rows": rows, "cols": cols,
+                    "cells": validated_cells, "unordered": unordered}
         gpolicy = {"max_score": len(fillable), "comparator": "table_cells",
-                  "cells": validated_cells,
+                  "cells": validated_cells, "unordered": unordered,
                   "col_labels": [str(c) for c in col_labels] if col_labels else None,
                   "row_labels": [str(r) for r in row_labels] if row_labels else None}
         # grade(table_cells) attend un cell_texts À PLAT, une entrée par cellule
@@ -1041,8 +1068,16 @@ _FORMAT_MENU = (
     "remplir), marque ces cellules \"given\":true — imprimées telles quelles, "
     "non éditables, non notées (au moins une cellule de la grille doit rester "
     "non \"given\"). "
+    "C'est AUSSI le format des LISTES de résultats (« tous les diviseurs de "
+    "$24$ », « toutes les solutions ») : une case par réponse attendue, et "
+    "\"unordered\":true — l'élève remplit alors les cases dans l'ordre qu'il "
+    "veut, la correction apparie ses réponses. Prévois EXACTEMENT autant de "
+    "cases que de réponses attendues et dis dans l'énoncé combien il y en a "
+    "(« Il y en a $8$. ») : sans ce nombre, l'élève ne peut pas savoir quand "
+    "s'arrêter. \"unordered\" est ignoré si une cellule est \"given\".\n"
     "answer = {\"type\":\"table\",\"rows\":int (2-12),\"cols\":int (1-6),"
-    "\"col_labels\":[str]?,\"row_labels\":[str]?,\"cells\":[[{\"type\":\"integer\"|"
+    "\"col_labels\":[str]?,\"row_labels\":[str]?,\"unordered\":bool?,"
+    "\"cells\":[[{\"type\":\"integer\"|"
     "\"decimal\"|\"rational\"|\"expression\"|\"text\",\"value\":...,\"given\":bool?}]]} "
     "(une ligne = une liste de cellules, \"rational\" a value=[num,den]).\n"
     "6. MULTI-LIGNE POUR RÉPONSE RAISONNÉE (\"multiline_text\", "
@@ -1069,36 +1104,115 @@ _FORMAT_MENU = (
     "omis. Utilise CE format plutôt que d'omettre l'exercice.\n\n"
 )
 
-# Barème d'effort, demandé à la CRÉATION de l'exercice (§ barème). Il vit dans
-# le contrat PARTAGÉ, avec le reste du format, pour la raison habituelle : le
-# validateur qui le lit (_validate_exercise -> grading["bareme_points"]) est
-# partagé lui aussi, et un prompt qui décrirait le champ autrement produirait
-# des barèmes silencieusement remplacés par le repli (services.scoring.
-# fallback_bareme).
+# Barème, demandé à la CRÉATION de l'exercice (§ barème). Il vit dans le contrat
+# PARTAGÉ, avec le reste du format, pour la raison habituelle : le validateur qui
+# le lit (_validate_exercise -> grading["bareme_points"]) est partagé lui aussi,
+# et un prompt qui décrirait le champ autrement produirait des barèmes
+# silencieusement remplacés par le repli (services.scoring.fallback_bareme).
+# C'est aussi le prompt que lit le RELECTEUR (indigo_verify) : une seule
+# définition, sinon la relecture réécrirait les barèmes de la génération.
 _BAREME_RULES = (
-    "BARÈME (obligatoire, un par exercice) : \"effort_points\" = ce que "
-    "l'exercice VAUT, un multiple de 0,5 entre 0,5 et 5.\n"
-    "Il récompense l'EFFORT qu'il faut fournir pour le résoudre, c'est-à-dire "
-    "le TEMPS DE RÉFLEXION et le nombre d'étapes de raisonnement. Il ne "
-    "dépend JAMAIS du niveau de l'élève, ni d'une difficulté que tu "
-    "attribuerais à l'exercice : un élève fragile fournit plus d'effort sur un "
-    "exercice facile qu'un bon élève sur un exercice moyen, et c'est l'effort "
-    "qu'on récompense. Deux exercices qui demandent le même travail valent le "
-    "même nombre de points, quel que soit leur habillage.\n"
-    "Repères (temps de réflexion d'un élève de la classe, sans compter "
-    "l'écriture) :\n"
-    "- 0,5 : réponse immédiate, une seule lecture, aucun calcul à poser "
-    "(moins de 30 secondes) ;\n"
-    "- 1 : une opération, ou l'application directe d'une règle du cours "
-    "(environ 1 minute) ;\n"
-    "- 1,5 à 2 : deux étapes enchaînées, ou une méthode à choisir avant de "
-    "calculer (2 à 3 minutes) ;\n"
-    "- 2,5 à 3,5 : plusieurs étapes, une mise en équation, ou un tableau à "
-    "compléter en entier (4 à 6 minutes) ;\n"
-    "- 4 à 5 : problème complet à raisonnement rédigé, avec plusieurs "
-    "résultats intermédiaires (7 minutes et plus).\n"
-    "Un exercice à PLUSIEURS cases de réponse (tableau, {{blank}}, "
-    "sous-questions) vaut l'effort de l'ENSEMBLE des cases, pas d'une seule.\n\n"
+    "═══ BARÈME (\"bareme_points\", obligatoire, un par exercice) ═══\n"
+    "\n"
+    "C'est le SEUL barème de la plateforme : ce que l'exercice VAUT en points "
+    "professeur. Il n'existe aucun autre champ de points.\n"
+    "\n"
+    "── Ce que le barème mesure ──\n"
+    "Deux choses, MULTIPLIÉES l'une par l'autre :\n"
+    "1. le TEMPS DE RÉFLEXION d'un élève de la classe (sans compter le temps "
+    "d'écriture) ;\n"
+    "2. la COMPLEXITÉ : nombre d'étapes à enchaîner, méthode à CHOISIR avant "
+    "de calculer, informations à extraire d'un énoncé, résultats "
+    "intermédiaires à réutiliser.\n"
+    "Un PROBLÈME rapporte donc structurellement plus qu'une application "
+    "directe, même à durée égale : y penser coûte plus cher que l'appliquer.\n"
+    "Le barème ne dépend JAMAIS du niveau de l'élève : un élève fragile fournit "
+    "plus d'effort sur un exercice facile qu'un bon élève sur un exercice "
+    "moyen, et ce n'est pas ce qu'on mesure. Deux exercices qui demandent le "
+    "même travail valent le même nombre de points, quel que soit leur "
+    "habillage.\n"
+    "\n"
+    "── Valeurs autorisées ──\n"
+    "Un multiple de 0,125 (un huitième de point) entre 0,125 et 5.\n"
+    "Valeurs utilisables : 0,125 · 0,25 · 0,375 · 0,5 · 0,625 · 0,75 · 0,875 · "
+    "1 · 1,125 · 1,25 … jusqu'à 5.\n"
+    "Le total d'un exercice N'A AUCUNE RAISON de tomber rond : 2,125 est un "
+    "barème parfaitement normal. Tu ne dois JAMAIS modifier un exercice "
+    "(ajouter, retirer ou fusionner une question, une case, une ligne de "
+    "tableau) dans le but d'obtenir un barème rond — ce serait dégrader "
+    "l'exercice pour une raison purement cosmétique. Le pas de 0,125 existe "
+    "exactement pour ça.\n"
+    "\n"
+    "── Méthode : additionner les UNITÉS DE RÉPONSE ──\n"
+    "Un exercice vaut la somme de ce que vaut chacune de ses unités de réponse "
+    "(une case à cocher, une cellule de tableau, un trou, une paire à relier, "
+    "une étape de raisonnement). Le prix d'une unité dépend de la réflexion "
+    "qu'elle demande, PAS du temps de l'écrire :\n"
+    "- 0,125 : la trancher est immédiat (lecture seule, reconnaissance d'une "
+    "forme, case évidente) ;\n"
+    "- 0,25 : une petite vérification mentale, un calcul en une opération ;\n"
+    "- 0,5 : un calcul à poser, une conversion, une comparaison à justifier ;\n"
+    "- 0,75 à 1 : une unité qui demande de choisir une méthode, ou qui "
+    "réutilise un résultat obtenu plus haut ;\n"
+    "- 1 à 2 : une étape de raisonnement rédigée (mise en équation, "
+    "justification, démonstration courte).\n"
+    "\n"
+    "CAS DES QCM À CHOIX MULTIPLES (\"qcm_multiple\", important) : chaque CASE "
+    "compte, pas seulement les bonnes réponses. L'élève est noté sur chaque "
+    "case : cocher une case qu'il fallait cocher rapporte ses points, et "
+    "LAISSER VIDE une case qu'il ne fallait pas cocher rapporte EXACTEMENT "
+    "AUTANT — décider qu'une proposition est fausse est une réponse juste. Le "
+    "barème d'un qcm_multiple est donc le prix d'une case × le NOMBRE TOTAL de "
+    "cases (bonnes et mauvaises réponses confondues).\n"
+    "CAS DU QCM À RÉPONSE UNIQUE (\"qcm_single\") : l'élève ne prend qu'UNE "
+    "décision (laquelle cocher), c'est donc tout ou rien. Son barème est le "
+    "prix d'UNE décision, jamais multiplié par le nombre de propositions.\n"
+    "\n"
+    "── Exemples chiffrés (à suivre à la lettre) ──\n"
+    "- qcm_single, 4 propositions, lire un résultat déjà calculé : 0,25 (UNE "
+    "décision immédiate — surtout pas 4 × quelque chose).\n"
+    "- qcm_single, 4 propositions, il faut poser l'opération pour trancher : "
+    "0,5.\n"
+    "- qcm_single, 4 propositions, il faut choisir une méthode avant de "
+    "calculer : 1.\n"
+    "- qcm_multiple 4 cases, reconnaître une écriture fractionnaire déjà vue : "
+    "4 × 0,125 = 0,5.\n"
+    "- qcm_multiple 4 cases, chaque case demande un petit calcul mental pour "
+    "trancher : 4 × 0,25 = 1.\n"
+    "- qcm_multiple 6 cases, chaque case demande de poser une opération : "
+    "6 × 0,25 = 1,5.\n"
+    "- qcm_multiple 3 cases dont chacune exige d'appliquer une propriété du "
+    "cours : 3 × 0,5 = 1,5.\n"
+    "- qcm_multiple « coche les affirmations vraies », 5 cases, réponse "
+    "immédiate à chacune : 5 × 0,125 = 0,625.\n"
+    "- Grille cochée 4 lignes × 2 colonnes (une décision par ligne, calcul "
+    "mental) : 4 × 0,25 = 1.\n"
+    "- Relier 4 expressions à 4 résultats, calcul en une opération chacun : "
+    "4 × 0,25 = 1.\n"
+    "- Une seule case de réponse, résultat d'une opération à poser : 0,5.\n"
+    "- Une seule case, mais il faut d'abord choisir la bonne méthode : 1.\n"
+    "- Tableau de 6 cellules à compléter, une multiplication par cellule : "
+    "6 × 0,25 = 1,5.\n"
+    "- Tableau de 5 cellules, chaque cellule est une conversion à poser : "
+    "5 × 0,5 = 2,5.\n"
+    "- Phrase à trous, 3 trous, chacun demande une lecture attentive de "
+    "l'énoncé : 3 × 0,25 = 0,75.\n"
+    "- Problème court : 2 étapes enchaînées, réponse rédigée : 1 + 1 = 2.\n"
+    "- Problème complet : extraire les données, mettre en équation, résoudre, "
+    "conclure par une phrase : 0,5 + 1,25 + 1 + 0,375 = 3,125 (barème non "
+    "rond : c'est NORMAL, on ne l'ajuste pas).\n"
+    "- Énigme demandant une recherche par essais successifs puis une "
+    "justification : 4,5.\n"
+    "- Tracé/construction géométrique en 3 gestes (report de longueur, "
+    "perpendiculaire, nommage) : 3 × 0,5 = 1,5.\n"
+    "\n"
+    "── Sous-questions (exercice \"composite\") ──\n"
+    "CHAQUE partie porte SON PROPRE \"bareme_points\", calculé par la même "
+    "méthode : c'est une question à part entière pour l'élève. Ne donne pas de "
+    "barème global à l'exercice composite — la plateforme fait la somme.\n"
+    "Exemple : a. QCM 4 cases immédiates (0,5) · b. une case, calcul à poser "
+    "(0,5) · c. raisonnement rédigé en 2 étapes (2) → l'exercice vaut 3.\n"
+    "\n"
 )
 
 # Mise en ligne de l'énoncé (§ services/statement.py). Dans le contrat PARTAGÉ,
@@ -1164,6 +1278,45 @@ _BLANK_WRITING_RULES = (
     "case, pas dans la case.\n\n"
 )
 
+# Une case = une réponse. Règle de CORRECTION avant d'être une règle de
+# rédaction : le moteur compare une case à UNE valeur attendue (services.grading),
+# une case qui en contient trois ne peut être ni notée automatiquement, ni notée
+# partiellement — l'élève qui en trouve deux sur trois n'a rien. Le validateur ne
+# peut pas la vérifier (« 2, 3 et 5 » est un texte valide), d'où sa place ici.
+_ONE_ANSWER_PER_BOX_RULES = (
+    "UNE CASE = UNE SEULE RÉPONSE (règle absolue) : ne demande JAMAIS à l'élève "
+    "d'écrire plusieurs réponses dans la même case de réponse. Sont INTERDITES "
+    "les consignes du genre « sépare les valeurs par des virgules », « donne les "
+    "deux solutions dans la case », « écris la liste ». Une case contenant "
+    "plusieurs réponses ne peut être notée ni automatiquement, ni partiellement.\n"
+    "À la place, un TABLEAU À REMPLIR (\"table_fill\") avec UNE case par réponse "
+    "attendue, et \"unordered\":true si l'ordre des réponses n'a pas "
+    "d'importance. Deux précautions dans l'énoncé :\n"
+    "- DIS COMBIEN il y a de réponses (« Il y a $8$ diviseurs. », « Cette "
+    "équation a $2$ solutions. ») : l'élève ne peut pas le deviner, et le "
+    "nombre de cases le lui soufflerait de toute façon ;\n"
+    "- si le nombre exact fait partie de ce qui est cherché, prévois quelques "
+    "cases de plus et écris-le (« Tu n'utiliseras peut-être pas toutes les "
+    "cases. ») — les cases laissées vides ne sont alors pas comptées justes, "
+    "donc n'en mets pas plus de deux en trop.\n"
+    "À NE PAS ÉCRIRE -> À ÉCRIRE :\n"
+    "- « Donne tous les diviseurs de $24$, séparés par des virgules. » "
+    "(short_text) -> « Écris tous les diviseurs de $24$, un par case. Il y en a "
+    "$8$. » (table_fill, 8 cases, \"unordered\":true)\n"
+    "- « Quelles sont les deux solutions ? » (une seule case) -> « Écris les "
+    "deux solutions, une par case. » (table_fill, 2 cases, "
+    "\"unordered\":true)\n"
+    "- « Range ces nombres dans l'ordre croissant. » -> table_fill AUSSI, mais "
+    "\"unordered\":false : ici la place de chaque réponse EST la réponse.\n"
+    "Ne mets \"unordered\":true que si la liste attendue est UNIQUE. Une "
+    "consigne dont plusieurs listes différentes seraient justes (« cite trois "
+    "multiples de $7$ ») n'est pas corrigeable : reformule-la pour que la "
+    "réponse soit unique (« les trois plus petits multiples de $7$ »).\n"
+    "Cette règle vaut AUSSI pour les cases d'un tableau, les cases à trous "
+    "({{blank}}) et les sous-questions d'un composite : partout où l'élève "
+    "écrit, il écrit UNE réponse.\n\n"
+)
+
 _FIGURE_RULES = (
     "FIGURES : si une figure aide (géométrie, droite graduée, repère), ajoute "
     "\"figure\": {\"type\": \"rectangle\"|\"triangle\"|\"circle\"|\"angle\"|"
@@ -1176,8 +1329,8 @@ _FIGURE_RULES = (
 
 _JSON_CONTRACT = (
     "Réponds UNIQUEMENT en JSON strictement valide :\n"
-    '{"exercises":[{"kind":"application"|"probleme","effort_points":number '
-    "(multiple de 0,5 entre 0,5 et 5, cf. BARÈME),"
+    '{"exercises":[{"kind":"application"|"probleme","bareme_points":number '
+    "(multiple de 0,125 entre 0,125 et 5, cf. BARÈME),"
     '"statement":str,"correction":str '
     "(corrigé TRÈS SUCCINCT, 1 à 3 lignes au maximum, jamais une résolution "
     "pas-à-pas ; formules en $...$ et sauts de ligne \\n comme dans statement ; "
@@ -1186,10 +1339,12 @@ _JSON_CONTRACT = (
     '"multi_blank"|"multiline_text"|"table_fill"|"matching"|"manual_drawing"|"composite",'
     '"choices":[str]?,"answer":{"type":"integer"|"decimal"|"rational"|"expression"|'
     '"text"|"choice"|"grid"|"rubric"|"table"|"blanks"|"matching"|"composite","value":...,"variable":str?,'
-    '"parts":[{"response_type":str,"statement":str,"choices":[str]?,"answer":{...}}]?,'
+    '"parts":[{"response_type":str,"statement":str,"bareme_points":number '
+    "(le barème de CETTE sous-question, cf. BARÈME),"
+    '"choices":[str]?,"answer":{...}}]?,'
     '"correct":[int]?,"cols":[str]?,"rows":[{"label":str,"correct":int}]?,'
     '"steps":[{"description":str,"expected_text":str,"points":int}]?,'
-    '"lines":int?,"col_labels":[str]?,"row_labels":[str]?,'
+    '"lines":int?,"col_labels":[str]?,"row_labels":[str]?,"unordered":bool?,'
     '"cells":[[{"type":str,"value":...}]]?,"values":[{"type":str,"value":...}]?,'
     '"left":[str]?,"right":[str]?,"pairs":[[int,int]]?},'
     '"figure":{...}?,"source_blocks":[int]?}]}'
@@ -1198,15 +1353,15 @@ _JSON_CONTRACT = (
 
 def format_contract(intro: str, *, geometry_rules: str = "") -> str:
     """Bloc de prompt décrivant le contrat de sortie attendu par
-    `_validate_exercise` : menu des 8 formats de réponse, barème d'effort, mise
-    en lignes, rédaction des phrases à trous, figures, règles LaTeX, schéma
-    JSON. `intro` cadre la MISSION de la pipeline appelante (adapter un exercice
+    `_validate_exercise` : menu des 8 formats de réponse, barème, mise en
+    lignes, une case = une réponse, rédaction des phrases à trous, figures,
+    règles LaTeX, schéma JSON. `intro` cadre la MISSION de la pipeline appelante (adapter un exercice
     existant vs en inventer un) ; tout le reste est commun, et doit le rester —
     un prompt qui décrirait le contrat autrement que le validateur produit des
     rejets silencieux."""
     return (intro + _FORMAT_MENU + geometry_rules + _BAREME_RULES
-            + _LAYOUT_RULES + _BLANK_WRITING_RULES + _FIGURE_RULES
-            + _GEN_FORMAT_RULES + "\n\n" + _JSON_CONTRACT)
+            + _LAYOUT_RULES + _ONE_ANSWER_PER_BOX_RULES + _BLANK_WRITING_RULES
+            + _FIGURE_RULES + _GEN_FORMAT_RULES + "\n\n" + _JSON_CONTRACT)
 
 
 _GEOMETRY_RULES = (

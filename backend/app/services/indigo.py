@@ -33,7 +33,7 @@ from ..db import SessionLocal
 from ..models import (Competency, CompetencyFramework, GeneratedExercise,
                       IndigoExercise, IndigoExtraction, uid)
 from . import (figures, indigo_cv, indigo_fields, indigo_gemini, indigo_llm,
-               indigo_manual, indigo_segment, indigo_verify, providers)
+               indigo_manual, indigo_segment, indigo_verify, providers, scoring)
 from . import statement as statement_mod
 
 logger = logging.getLogger("app.indigo")
@@ -818,7 +818,6 @@ def _persist_exercise(db, row: IndigoExercise, manual: dict, valid: dict | None)
     row.response_type = valid["response_type"]
     row.expected_json = expected
     row.grading_json = grading
-    row.effort_points = float(grading.get("bareme_points") or 1.0)
     solution = (valid.get("correction_solution") or "").strip() or prof or _SOLUTION_TODO
     guide = (valid.get("correction") or "").strip()
     # garde-fou : un guide vide OU recopié depuis la solution (même texte) est
@@ -1051,7 +1050,9 @@ def exercise_out(db, ex: IndigoExercise) -> dict:
         # nombre EXACT de lignes du champ « raisonnement rédigé » (multiline_text),
         # tel qu'il sera imprimé — pour un aperçu fidèle dans l'onglet Exercices
         "lines": grading.get("lines"),
-        "effort_points": ex.effort_points,
+        # barème : LU dans grading_json, jamais dupliqué en colonne (§ barème).
+        # `item_bareme` résout le repli des exercices d'avant le champ.
+        "bareme_points": scoring.item_bareme(grading, ex.response_type),
         # normalisés à l'affichage comme l'énoncé : puces « • » (jamais « - »),
         # pastilles a./b./1., espaces — l'aperçu du guide/corrigé est cohérent
         "correction_solution": statement_mod.normalize(ex.correction_solution or ""),
@@ -1093,13 +1094,20 @@ def list_exercises(db, competency_id: str | None = None,
 
 _EDITABLE = {"statement", "response_type", "expected_json", "grading_json",
              "correction_solution", "correction_guide", "badge_type", "difficulty",
-             "calculator", "title", "tags_json", "effort_points"}
+             "calculator", "title", "tags_json"}
 
 
 def update_exercise(db, ex: IndigoExercise, patch: dict) -> IndigoExercise:
     for k, v in patch.items():
         if k == "expected":
             ex.expected_json = v or {}
+        elif k == "bareme_points":
+            # le barème s'édite LÀ OÙ il vit (grading_json), calé sur la même
+            # grille de 0,125 que celle imposée au modèle — pas de colonne
+            # parallèle qui divergerait de la note réellement calculée.
+            ex.grading_json = {**(ex.grading_json or {}),
+                               "bareme_points": scoring.snap_bareme(v)
+                               or scoring.BAREME_MIN}
         elif k == "tags":
             ex.tags_json = v or []
         elif k == "statement":
@@ -1325,8 +1333,8 @@ def publish(db) -> dict:
             "badge_type": ex.badge_type, "difficulty": ex.difficulty,
             "calculator": ex.calculator, "title": ex.title, "tags": ex.tags_json,
             "statement": ex.statement, "response_type": ex.response_type,
+            # `grading` porte le barème (bareme_points) : rien à publier à côté
             "expected": ex.expected_json, "grading": ex.grading_json,
-            "effort_points": ex.effort_points,
             "correction_guide": ex.correction_guide,
             "correction_solution": ex.correction_solution,
             "has_figure": ex.has_figure, "crop_file": crop_file, "figure_file": fig_file,

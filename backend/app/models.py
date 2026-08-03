@@ -417,8 +417,10 @@ class IndigoExercise(Base):
     statement: Mapped[str] = mapped_column(Text, default="")
     response_type: Mapped[str] = mapped_column(String, default="short_text")
     expected_json: Mapped[dict] = mapped_column(JSON, default=dict)    # answer/choices/cells (contrat app)
+    # le barème vit dans grading_json["bareme_points"], nulle part ailleurs
+    # (§ services.scoring) : une colonne de plus finirait par diverger, et
+    # c'est déjà arrivé (`effort_points`, supprimée — cf. db._DROPPED_COLUMNS).
     grading_json: Mapped[dict] = mapped_column(JSON, default=dict)
-    effort_points: Mapped[float] = mapped_column(Float, default=1.0)
     correction_solution: Mapped[str] = mapped_column(Text, default="")  # VRAIE solution recopiée du manuel prof
     correction_guide: Mapped[str] = mapped_column(Text, default="")     # guide d'auto-correction dérivé (overlay élève)
     # contrat app complet (statement/response_type/answer/choices/…), prêt pour rendu/publication

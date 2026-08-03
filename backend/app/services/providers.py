@@ -161,7 +161,7 @@ def offline(db: Session, provider: str) -> bool:
     return _mock_enabled(db, _config(db, provider))
 
 
-def _provider_for_model(model: str) -> str:
+def provider_for_model(model: str) -> str:
     """Retourne le provider DeepSeek approprié selon le modèle demandé."""
     if model and "pro" in model:
         return "deepseek-pro"
@@ -234,7 +234,7 @@ def deepseek_json(db: Session, operation: str, system: str, user_payload: dict,
     `model` permet d'imposer un modèle (ex : deepseek-v4-pro pour la création
     d'exercices) ; sinon registre configurable (RM-011)."""
     model = model or (settings.deepseek_reasoning_model if reasoning else settings.deepseek_model)
-    provider = _provider_for_model(model)
+    provider = provider_for_model(model)
     cfg = _config(db, provider)
 
     if _today_cost(db, provider) > settings.llm_daily_cost_limit_eur:
@@ -401,12 +401,6 @@ def _deepseek_mock(operation: str, payload: dict) -> dict:
                 {"type": "attention",
                  "texte": "Ne confonds pas l'ordre des opérations avec l'ordre de l'énoncé."}],
             "confidence": 0.9, "reason_code": "mock_lesson"}
-    if operation == "rubric_grading":
-        rubric = payload.get("rubric", [])
-        return {"steps": [{"step": s.get("step"), "observed": True, "points": s.get("points", 1),
-                           "evidence": "mock"} for s in rubric],
-                "total_points": sum(s.get("points", 1) for s in rubric),
-                "confidence": 0.9, "reason_code": "mock_rubric", "evidence_ids": []}
     if operation == "level_proposal":
         return {"proposed_level": payload.get("current_level", 5), "confidence": 0.7,
                 "reason_code": "mock_stable", "evidence_ids": []}
@@ -648,8 +642,8 @@ def _gemini_mock(payload: dict) -> dict:
     2e appel et la boucle de remplissage de banque ne serait jamais exercée
     en test.
 
-    "effort_points" est renseigné comme le ferait le vrai modèle (barème
-    d'effort, § barème) : sans lui, le mode mock ne passerait que par le repli
+    "bareme_points" est renseigné comme le ferait le vrai modèle (§ barème) :
+    sans lui, le mode mock ne passerait que par le repli
     de services.scoring et la chaîne de notation ne serait jamais exercée.
 
     Les énoncés sont MIS EN LIGNES comme le vrai modèle (§ services/statement) :
@@ -669,7 +663,7 @@ def _gemini_mock(payload: dict) -> dict:
             rng.shuffle(choices)
             exercises.append({
                 "kind": "application",
-                "effort_points": 0.5,   # une addition à cocher : réponse immédiate
+                "bareme_points": 0.5,   # 4 cases à 0,125 : trancher chacune est immédiat
                 "statement": (f"Lina pose l'addition suivante :\n- premier terme : ${a}$\n"
                               f"- second terme : ${b}$\nCoche le résultat de ${a} + {b}$."),
                 "correction": f"${a} + {b} = {good}$ (on additionne les unités puis les dizaines).",
@@ -679,7 +673,7 @@ def _gemini_mock(payload: dict) -> dict:
         elif i == 3:  # 1 réponse écrite, en phrase à trous
             exercises.append({
                 "kind": "application",
-                "effort_points": 1,     # une multiplication à poser
+                "bareme_points": 1,     # une multiplication à poser, méthode à choisir
                 "statement": (f"Un carton contient ${b}$ billes.\n"
                               f"${a}$ cartons contiennent {{{{blank}}}} billes."),
                 "correction": f"${a} \\times {b} = {a * b}$.",
@@ -690,7 +684,7 @@ def _gemini_mock(payload: dict) -> dict:
             total = price * qty
             exercises.append({
                 "kind": "probleme",
-                "effort_points": 3,     # deux étapes + une soustraction à rédiger
+                "bareme_points": 3,     # deux étapes + une soustraction à rédiger
                 "statement": (f"Pour repeindre sa chambre, Sacha achète {qty} pots de "
                               f"peinture à ${price}\\ \\text{{€}}$ l'unité.\n"
                               "Il paie avec un billet de $50\\ \\text{€}$.\n"
@@ -806,21 +800,21 @@ def _sesamaths_adapt_mock(correlation_id: str) -> dict:
     la dernière page mockées (0-1-2-3 puis 4-5) — permet de tester la
     reconstruction de `raw_extract_json` sans dépendre du contenu réel.
 
-    "effort_points" (barème d'effort, § barème) est renseigné comme le ferait
+    "bareme_points" (§ barème) est renseigné comme le ferait
     le vrai adaptateur : le contrat de format est partagé avec la pipeline
     Gemini (exercise_gen.format_contract), le champ l'est donc aussi."""
     import random
     rng = random.Random(correlation_id or "sesa-adapt")
     a, b = rng.randint(2, 20), rng.randint(2, 20)
     exercises = [
-        {"kind": "application", "effort_points": 1,
+        {"kind": "application", "bareme_points": 1,
          "statement": f"Voici une liste de nombres : $221$, $4\\,065$, $940$. "
                       f"Combien valent ${a} + {b}$ ?",
          "correction": f"${a} + {b} = {a + b}$",
          "response_type": "short_text",
          "answer": {"type": "integer", "value": a + b},
          "difficulty": rng.randint(1, 3), "source_blocks": [0, 1]},
-        {"kind": "application", "effort_points": 2,
+        {"kind": "application", "bareme_points": 2,
          "statement": "Complète le tableau de la division euclidienne de $87$ par $9$.",
          "correction": "$87 = 9 \\times 9 + 6$",
          "response_type": "table_fill",
@@ -830,7 +824,7 @@ def _sesamaths_adapt_mock(correlation_id: str) -> dict:
                     "cells": [[{"type": "integer", "value": 9}, {"type": "integer", "value": 6}],
                               [{"type": "integer", "value": 95}, {"type": "integer", "value": 4}]]},
          "difficulty": 2, "source_blocks": [2, 3]},
-        {"kind": "application", "effort_points": 0.5,
+        {"kind": "application", "bareme_points": 0.5,
          "statement": f"Que vaut ${a} \\times {b}$ ?",
          "correction": f"${a} \\times {b} = {a * b}$",
          "response_type": "qcm_single",

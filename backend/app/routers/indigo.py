@@ -233,7 +233,7 @@ class ExercisePatch(BaseModel):
     calculator: str | None = None
     title: str | None = None
     tags: list[str] | None = None
-    effort_points: float | None = None
+    bareme_points: float | None = None
 
 
 @router.patch("/exercises/{exercise_id}")

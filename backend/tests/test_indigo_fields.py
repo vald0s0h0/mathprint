@@ -351,6 +351,28 @@ def test_table_rowlab_capped_and_answer_columns_widen():
     assert geo["col_ws"][0] > pdfgen._COL_KIND_WIDTH[geo["col_kinds"][0]]
 
 
+def test_table_answer_box_fills_its_cell():
+    """La case à remplir OCCUPE sa cellule (au retrait près) : elle était
+    plafonnée à 20x8 mm, ce qui laissait le reste de la cellule en blanc perdu
+    et l'élève écrivait à l'étroit. La cellule, elle, ne bouge pas."""
+    import tempfile
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+    cells = [[_int(4)], [_int(9)], [_int(16)]]
+    row_labels = ["$2^2 =$", "$3^2 =$", "$4^2 =$"]
+    w = pdfgen.COL_W
+    geo = pdfgen._table_geometry(w, None, row_labels, cells, 9)
+    h = pdfgen._table_zone_height(w, None, row_labels, cells, 9)
+    c = canvas.Canvas(str(Path(tempfile.mkdtemp()) / "t.pdf"), pagesize=A4)
+    meta = pdfgen._draw_table_zone(c, 0, 0, w, h, None, row_labels, cells, 9)
+    pad = pdfgen._TABLE_CELL_PAD
+    for i, row in enumerate(meta["cells"]):
+        for j, box in enumerate(row):
+            assert abs(box["w_pt"] - (geo["col_ws"][j] - 2 * pad)) < 0.01
+            assert abs(box["h_pt"] - (geo["row_hs"][i] - 2 * pad)) < 0.01
+            assert box["w_pt"] > pdfgen.BLANK_W      # nettement plus large qu'avant
+
+
 def test_full_copy_renders_with_mini_and_blank_right():
     """Rendu bout-en-bout : une copie qui mélange mini-cases (multi_blank) et
     case pleine largeur (short_text) se dessine sans erreur, et chaque marque de

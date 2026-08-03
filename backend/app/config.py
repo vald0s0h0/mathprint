@@ -48,6 +48,15 @@ class Settings(BaseSettings):
     # retombe proprement (adaptation en solo, vérification = version adaptée
     # gardée) ; il pilote donc AUSSI les tailles de lot de la pipeline Indigo.
     deepseek_max_output_tokens: int = 8192
+    # Correcteur des réponses écrites (services.llm_grader) : DeepSeek Flash v4,
+    # PAS la variante "thinking" — la tâche est courte et cadrée (un barème, une
+    # réponse attendue, une réponse d'élève), et elle tourne sur toutes les
+    # copies d'une classe : la latence et le coût priment sur la réflexion.
+    correction_model: str = "deepseek-v4-flash"
+    # nombre de réponses envoyées dans le MÊME appel. Elles viennent d'un seul
+    # exercice tant qu'il y en a (l'énoncé n'est alors écrit qu'une fois) ; au-delà
+    # d'une dizaine, la sortie JSON s'allonge assez pour risquer la troncature.
+    correction_batch_size: int = 8
     claude_model: str = "claude-haiku-4-5-20251001"
     # extraction Sésamaths (lecture fidèle des pages de manuel) : Mistral OCR,
     # moteur de reconnaissance de document dédié (pas un modèle de chat) —

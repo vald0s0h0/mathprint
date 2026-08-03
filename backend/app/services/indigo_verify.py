@@ -98,7 +98,7 @@ def _review_item(number: str, manual: dict, valid: dict) -> dict | None:
       • le CANDIDAT à contrôler, DANS LE FORMAT DE SORTIE (celui que le modèle doit
         reproduire) : énoncé/corrigés pris sur la version validée (normalisée,
         telle qu'imprimée), schéma structuré de la réponse (answer/choices/kind/
-        effort_points) pris sur le contrat brut archivé (`_raw`).
+        bareme_points) pris sur le contrat brut archivé (`_raw`).
     None si le contrat brut manque : on ne vérifie pas à l'aveugle un exercice
     dont on ne peut pas montrer la réponse attendue."""
     raw = valid.get("_raw")
@@ -116,7 +116,7 @@ def _review_item(number: str, manual: dict, valid: dict) -> dict | None:
         "correction": valid.get("correction", ""),
         "correction_solution": valid.get("correction_solution", ""),
         "kind": raw.get("kind", "application"),
-        "effort_points": raw.get("effort_points"),
+        "bareme_points": raw.get("bareme_points"),
         "answer": raw.get("answer"),
         "needs_figure": bool(valid.get("needs_figure")),
     }

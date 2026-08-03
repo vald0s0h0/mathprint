@@ -1,7 +1,7 @@
 {
  "version": "1",
  "grade_level": "3e",
- "generated_at": "2026-08-02T16:50:20.446279+00:00",
+ "generated_at": "2026-08-02T17:17:21.283221+00:00",
  "exercises": [
   {
    "id": "544c55cb-225a-47b9-a569-902f2b0e6e90",
@@ -33,7 +33,6 @@
     ],
     "bareme_points": 1.5
    },
-   "effort_points": 1.5,
    "correction_guide": "Cherche si le nombre à droite est bien une puissance entière de la base indiquée.",
    "correction_solution": "$3^2 = 9$ donc l'égalité $3^n = 9$ est vraie pour $n = 2$.\n$10$ n'est pas une puissance de $2$ (il vaut $2 \\times 5$), donc $2^n = 10$ est fausse pour tout entier $n$.\n$5^3 = 125$ donc l'égalité $5^n = 125$ est vraie pour $n = 3$.",
    "has_figure": false,
@@ -72,7 +71,6 @@
     ],
     "bareme_points": 1.0
    },
-   "effort_points": 1.0,
    "correction_guide": "Dans une décomposition en facteurs premiers, chaque facteur doit être un nombre premier ; $4$, $6$, $8$ ne le sont pas.",
    "correction_solution": "$24 = 2 \\times 2 \\times 2 \\times 3$ : c'est la seule écriture où tous les facteurs ($2$ et $3$) sont premiers.",
    "has_figure": false,
@@ -162,7 +160,6 @@
     ],
     "bareme_points": 2.0
    },
-   "effort_points": 2.0,
    "correction_guide": "Cherche d'abord le plus petit facteur premier possible (2, puis 3, puis 5...) et divise successivement jusqu'à obtenir 1.",
    "correction_solution": "a. $12 = 2^2 \\times 3$\nb. $30 = 2 \\times 3 \\times 5$\nc. $40 = 2^3 \\times 5$\nd. $100 = 2^2 \\times 5^2$",
    "has_figure": false,
@@ -239,7 +236,6 @@
     ],
     "bareme_points": 1.5
    },
-   "effort_points": 1.5,
    "correction_guide": "Pour retrouver le nombre, effectue le produit des facteurs premiers en tenant compte des puissances.",
    "correction_solution": "$A = 2^2 \\times 3^2 \\times 5 = 4 \\times 9 \\times 5 = 180$\n$B = 2^3 \\times 3 \\times 5 = 8 \\times 3 \\times 5 = 120$\n$C = 2 \\times 3 \\times 5^2 = 2 \\times 3 \\times 25 = 150$",
    "has_figure": false,
@@ -410,7 +406,6 @@
     ],
     "bareme_points": 2.0
    },
-   "effort_points": 2.0,
    "correction_guide": "Vérifie que chaque facteur obtenu est un nombre premier ; sinon, il faut continuer la décomposition.",
    "correction_solution": "Le produit de Yasmine est bien égal à $594$, mais $9$ n'est pas un nombre premier : elle n'a pas terminé la décomposition. Comme $9 = 3 \\times 3$, la décomposition correcte est $594 = 2 \\times 3 \\times 3 \\times 3 \\times 11$.",
    "has_figure": false,
@@ -571,7 +566,6 @@
     ],
     "bareme_points": 4.0
    },
-   "effort_points": 4.0,
    "correction_guide": "Pour savoir si un nombre premier (ou un produit de nombres premiers) divise $A$ ou $B$, compare-le aux facteurs premiers présents dans leur décomposition, sans calculer $A$ ni $B$.",
    "correction_solution": "• $2$ divise $A$ et $B$ car $2$ apparaît dans leurs décompositions.\n• $B$ est multiple de $7$ (facteur présent) mais pas $A$ (facteur absent).\n• $6 = 2 \\times 3$ : $A$ et $B$ contiennent bien $2$ et $3$, donc les deux sont divisibles par $6$.\n• $18 = 2 \\times 3^2$ : $A$ contient $2 \\times 3^2$ donc $18$ divise $A$ ; $B$ ne contient que $3^1$ donc $18$ ne divise pas $B$.\n• Le plus grand diviseur commun de $A$ et $B$ est obtenu en prenant les facteurs communs à la plus petite puissance : $2 \\times 3 \\times 5 = 30$.\n• $A \\times B = 2^3 \\times 3^3 \\times 5^3 \\times 7$ et $72 = 2^3 \\times 3^2$ : $72$ divise bien $A \\times B$.",
    "has_figure": false,
@@ -661,7 +655,6 @@
     ],
     "bareme_points": 2.5
    },
-   "effort_points": 2.5,
    "correction_guide": "Divise successivement le nombre par les nombres premiers dans l'ordre croissant ($2$, $3$, $5$, $7$…) jusqu'à obtenir $1$.",
    "correction_solution": "a. $36 = 2^2 \\times 3^2$\nb. $64 = 2^6$\nc. $135 = 3^3 \\times 5$\nd. $200 = 2^3 \\times 5^2$",
    "has_figure": false,
@@ -764,7 +757,6 @@
     ],
     "bareme_points": 1.5
    },
-   "effort_points": 1.5,
    "correction_guide": "Une décomposition en facteurs premiers ne doit contenir que des nombres premiers : vérifie que chaque facteur est bien premier.",
    "correction_solution": "1. $4$ et $9$ ne sont pas des nombres premiers ($4 = 2^2$, $9 = 3^2$), donc l'écriture de Matéo n'est pas une décomposition en facteurs premiers.\n2. $180 = 18 \\times 10 = 2 \\times 3^2 \\times 2 \\times 5 = 2^2 \\times 3^2 \\times 5$.",
    "has_figure": false,
@@ -841,7 +833,6 @@
     ],
     "bareme_points": 2.0
    },
-   "effort_points": 2.0,
    "correction_guide": "Divise successivement l'entier par les nombres premiers dans l'ordre croissant ($2$, $3$, $5$, $7$...) jusqu'à obtenir $1$. Regroupe les facteurs identiques avec des puissances.",
    "correction_solution": "a. $42 = 2 \\times 3 \\times 7$\nb. $75 = 3 \\times 5 \\times 5 = 3 \\times 5^2$\nc. $164 = 2 \\times 2 \\times 41 = 2^2 \\times 41$",
    "has_figure": false,
@@ -918,7 +909,6 @@
     ],
     "bareme_points": 2.5
    },
-   "effort_points": 2.5,
    "correction_guide": "Divise successivement l'entier par les nombres premiers dans l'ordre croissant ($2$, $3$, $5$, $7$...) jusqu'à obtenir $1$. Regroupe les facteurs identiques avec des puissances.",
    "correction_solution": "a. $630 = 2 \\times 3 \\times 3 \\times 5 \\times 7 = 2 \\times 3^2 \\times 5 \\times 7$\nb. $5\\,005 = 5 \\times 7 \\times 11 \\times 13$\nc. $3\\,192 = 2 \\times 2 \\times 2 \\times 3 \\times 7 \\times 19 = 2^3 \\times 3 \\times 7 \\times 19$",
    "has_figure": false,
@@ -995,7 +985,6 @@
     ],
     "bareme_points": 3.0
    },
-   "effort_points": 3.0,
    "correction_guide": "Divise successivement l'entier par les nombres premiers dans l'ordre croissant ($2$, $3$, $5$, $7$...) jusqu'à obtenir $1$. Regroupe les facteurs identiques avec des puissances.",
    "correction_solution": "a. $6\\,615 = 3 \\times 3 \\times 3 \\times 5 \\times 7 \\times 7 = 3^3 \\times 5 \\times 7^2$\nb. $7\\,986 = 2 \\times 3 \\times 11 \\times 11 \\times 11 = 2 \\times 3 \\times 11^3$\nc. $17\\,745 = 3 \\times 5 \\times 7 \\times 13 \\times 13 = 3 \\times 5 \\times 7 \\times 13^2$",
    "has_figure": false,
@@ -1072,11 +1061,220 @@
     ],
     "bareme_points": 2.0
    },
-   "effort_points": 2.0,
    "correction_guide": "Décompose chaque facteur du produit donné en facteurs premiers, puis regroupe les puissances identiques.",
    "correction_solution": "$196 = 14 \\times 14 = (2\\times7)\\times(2\\times7) = 2^2 \\times 7^2$\n$225 = 15 \\times 15 = (3\\times5)\\times(3\\times5) = 3^2 \\times 5^2$\n$256 = 16 \\times 16 = 2^4 \\times 2^4 = 2^8$",
    "has_figure": false,
    "crop_file": "",
+   "figure_file": "",
+   "model": "claude-sonnet-5",
+   "prompt_version": "indigo-adapt-6-priorites"
+  },
+  {
+   "id": "b1c5b091-2f57-46c5-8a75-1d91537c504d",
+   "competency_code": "A1.3",
+   "grade_level": "3e",
+   "source_number": "70",
+   "badge_type": "exercice",
+   "difficulty": 3,
+   "calculator": "autorisee",
+   "title": "",
+   "tags": [],
+   "statement": "On considère les nombres $28$ et $30$.\nDécompose chacun en produit de facteurs premiers, puis utilise cette décomposition pour déterminer tous leurs diviseurs.",
+   "response_type": "composite",
+   "expected": {
+    "type": "composite",
+    "parts": [
+     {
+      "statement": "Donne la décomposition en produit de facteurs premiers de $28$.",
+      "response_type": "short_text",
+      "expected": {
+       "type": "text",
+       "value": "2^2 \\times 7"
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "text_equal",
+       "bareme_points": 1.0
+      }
+     },
+     {
+      "statement": "Donne la décomposition en produit de facteurs premiers de $30$.",
+      "response_type": "short_text",
+      "expected": {
+       "type": "text",
+       "value": "2 \\times 3 \\times 5"
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "text_equal",
+       "bareme_points": 1.0
+      }
+     },
+     {
+      "statement": "Coche tous les diviseurs de $28$.",
+      "response_type": "qcm_multiple",
+      "expected": {
+       "type": "choice",
+       "correct": [
+        0,
+        1,
+        3,
+        4,
+        5,
+        7
+       ]
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "qcm",
+       "negative": 0,
+       "choices": [
+        "$1$",
+        "$2$",
+        "$3$",
+        "$4$",
+        "$7$",
+        "$14$",
+        "$21$",
+        "$28$"
+       ],
+       "bareme_points": 1.0
+      }
+     },
+     {
+      "statement": "Coche tous les diviseurs de $30$.",
+      "response_type": "qcm_multiple",
+      "expected": {
+       "type": "choice",
+       "correct": [
+        0,
+        1,
+        2,
+        4,
+        5,
+        6,
+        7
+       ]
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "qcm",
+       "negative": 0,
+       "choices": [
+        "$1$",
+        "$2$",
+        "$3$",
+        "$4$",
+        "$5$",
+        "$6$",
+        "$15$",
+        "$30$"
+       ],
+       "bareme_points": 1.0
+      }
+     }
+    ]
+   },
+   "grading": {
+    "max_score": 4.0,
+    "comparator": "composite",
+    "parts": [
+     {
+      "statement": "Donne la décomposition en produit de facteurs premiers de $28$.",
+      "response_type": "short_text",
+      "expected": {
+       "type": "text",
+       "value": "2^2 \\times 7"
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "text_equal",
+       "bareme_points": 1.0
+      }
+     },
+     {
+      "statement": "Donne la décomposition en produit de facteurs premiers de $30$.",
+      "response_type": "short_text",
+      "expected": {
+       "type": "text",
+       "value": "2 \\times 3 \\times 5"
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "text_equal",
+       "bareme_points": 1.0
+      }
+     },
+     {
+      "statement": "Coche tous les diviseurs de $28$.",
+      "response_type": "qcm_multiple",
+      "expected": {
+       "type": "choice",
+       "correct": [
+        0,
+        1,
+        3,
+        4,
+        5,
+        7
+       ]
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "qcm",
+       "negative": 0,
+       "choices": [
+        "$1$",
+        "$2$",
+        "$3$",
+        "$4$",
+        "$7$",
+        "$14$",
+        "$21$",
+        "$28$"
+       ],
+       "bareme_points": 1.0
+      }
+     },
+     {
+      "statement": "Coche tous les diviseurs de $30$.",
+      "response_type": "qcm_multiple",
+      "expected": {
+       "type": "choice",
+       "correct": [
+        0,
+        1,
+        2,
+        4,
+        5,
+        6,
+        7
+       ]
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "qcm",
+       "negative": 0,
+       "choices": [
+        "$1$",
+        "$2$",
+        "$3$",
+        "$4$",
+        "$5$",
+        "$6$",
+        "$15$",
+        "$30$"
+       ],
+       "bareme_points": 1.0
+      }
+     }
+    ],
+    "bareme_points": 3.0
+   },
+   "correction_guide": "Pour décomposer un nombre, divise-le successivement par les nombres premiers ($2$, $3$, $5$, $7$…). Les diviseurs s'obtiennent en combinant les facteurs premiers trouvés.",
+   "correction_solution": "$28 = 2^2 \\times 7$ ; ses diviseurs sont $1$, $2$, $4$, $7$, $14$ et $28$.\n$30 = 2 \\times 3 \\times 5$ ; ses diviseurs sont $1$, $2$, $3$, $5$, $6$, $10$, $15$ et $30$.",
+   "has_figure": false,
+   "crop_file": "b1c5b091-2f57-46c5-8a75-1d91537c504d.png",
    "figure_file": "",
    "model": "claude-sonnet-5",
    "prompt_version": "indigo-adapt-6-priorites"
@@ -1231,7 +1429,6 @@
     ],
     "bareme_points": 2.5
    },
-   "effort_points": 2.5,
    "correction_guide": "Pour simplifier une fraction, décompose numérateur et dénominateur en facteurs premiers puis simplifie les facteurs communs.",
    "correction_solution": "$540 = 2^2 \\times 3^3 \\times 5$ ; $630 = 2 \\times 3^2 \\times 5 \\times 7$.\n$\\dfrac{540}{630} = \\dfrac{2^2\\times3^3\\times5}{2\\times3^2\\times5\\times7} = \\dfrac{2\\times3}{7} = \\dfrac{6}{7}$",
    "has_figure": false,
@@ -1263,7 +1460,6 @@
     "tolerance": 0,
     "bareme_points": 2.0
    },
-   "effort_points": 2.0,
    "correction_guide": "Cherche le plus petit multiple commun non nul des deux durées : liste les multiples de chaque nombre jusqu'à trouver le premier commun.",
    "correction_solution": "Multiples de $4$ : $4, 8, 12, 16, 20, 24...$\nMultiples de $6$ : $6, 12, 18...$\nLe plus petit multiple commun de $4$ et $6$ est $12$.\nCe phénomène se reproduira pour la première fois au bout de $12$ secondes.",
    "has_figure": false,
@@ -1580,7 +1776,6 @@
     ],
     "bareme_points": 3.5
    },
-   "effort_points": 3.5,
    "correction_guide": "Deux roues dentées en prise tournent toujours en sens contraire. Pour comparer leur rotation, utilise le nombre total de dents parcourues (nombre de tours $\\times$ nombre de dents).",
    "correction_solution": "1. La roue A et la roue B sont en prise : elles tournent en sens contraire l'une de l'autre.\n2. Si la roue A fait $8$ tours, elle fait avancer $8 \\times 36 = 288$ dents. La roue B effectue donc $288 \\div 16 = 18$ tours.\n3. $36 = 2^2 \\times 3^2$ et $16 = 2^4$.\n4.\na. Le PPCM de $36$ et $16$, obtenu à partir des décompositions, est $2^4 \\times 3^2 = 144$. Chaque roue aura donc tourné de $144$ dents.\nb. La roue A aura fait $144 \\div 36 = 4$ tours et la roue B aura fait $144 \\div 16 = 9$ tours.",
    "has_figure": true,
@@ -1883,7 +2078,6 @@
     ],
     "bareme_points": 4.0
    },
-   "effort_points": 4.0,
    "correction_guide": "Pour quadriller un rectangle avec des carrés de côté entier, ce côté doit être un diviseur commun des deux dimensions. Utilise les décompositions en facteurs premiers pour trouver les diviseurs communs.",
    "correction_solution": "1. $858 \\div 33 = 26$ et $660 \\div 33 = 20$ : $33$ divise bien les deux dimensions, donc on peut quadriller le terrain avec des carrés de $33\\ \\text{cm}$ de côté.\n2. $660 = 2^2 \\times 3 \\times 5 \\times 11$ et $858 = 2 \\times 3 \\times 11 \\times 13$.\n3. Un diviseur commun de $660$ et $858$ supérieur à $33$ est $2 \\times 3 \\times 11 = 66$. On peut donc utiliser des carrés de $66\\ \\text{cm}$ de côté.\n$858 \\div 66 = 13$ carrés dans la longueur et $660 \\div 66 = 10$ carrés dans la largeur, soit $13 \\times 10 = 130$ carrés au total.",
    "has_figure": false,
@@ -1948,7 +2142,6 @@
     "row_labels": null,
     "bareme_points": 2.5
    },
-   "effort_points": 2.5,
    "correction_guide": "Cherche le plus petit multiple commun des deux durées en décomposant $112$ et $104$ en produits de facteurs premiers, puis convertis le résultat en minutes et secondes.",
    "correction_solution": "$112 = 2^4 \\times 7$ et $104 = 2^3 \\times 13$.\nLe plus petit multiple commun est $2^4 \\times 7 \\times 13 = 1\\,456$.\nLes deux phares s'allumeront donc de nouveau en même temps au bout de $1\\,456$ secondes.\n$1\\,456 = 24 \\times 60 + 16$, donc $1\\,456$ secondes $= 24$ min $16$ s.\nLes phares s'allumeront donc en même temps à $10$ h $24$ min $16$ s.",
    "has_figure": false,
@@ -2038,7 +2231,6 @@
     ],
     "bareme_points": 3.0
    },
-   "effort_points": 3.0,
    "correction_guide": "Cherche le plus petit multiple commun des nombres de dents, double-le, puis divise ce nombre par le nombre de dents de chaque roue.",
    "correction_solution": "$20 = 2^2 \\times 5$ ; $8 = 2^3$ ; $10 = 2 \\times 5$ et $7$ est premier.\nLe plus petit multiple commun est $2^3 \\times 5 \\times 7 = 280$.\nPour revenir pour la deuxième fois dans la position initiale, les roues auront tourné de $280 \\times 2 = 560$ dents.\n$560 \\div 20 = 28$ tours pour la roue A.\n$560 \\div 8 = 70$ tours pour la roue B.\n$560 \\div 10 = 56$ tours pour la roue C.\n$560 \\div 7 = 80$ tours pour la roue D.",
    "has_figure": true,
@@ -2367,7 +2559,6 @@
     ],
     "bareme_points": 3.5
    },
-   "effort_points": 3.5,
    "correction_guide": "Le nombre de sachets doit être un diviseur commun des deux quantités. Utilise les décompositions en produits de facteurs premiers pour trouver le plus grand diviseur commun.",
    "correction_solution": "$140 \\div 14 = 10$ et $350 \\div 14 = 25$ : la boulangère peut préparer $14$ sachets, chacun avec $10$ réglisses et $25$ têtes brûlées.\n$140 \\div 28 = 5$ mais $350 \\div 28$ n'est pas entier : $28$ n'est pas un diviseur de $350$, elle ne peut donc pas préparer $28$ sachets.\nOn décompose : $140 = 2^2 \\times 5 \\times 7$ et $350 = 2 \\times 5^2 \\times 7$.\nLe plus grand diviseur commun est $2 \\times 5 \\times 7 = 70$.\nLa boulangère peut préparer $70$ sachets au maximum, chacun avec $140 \\div 70 = 2$ réglisses et $350 \\div 70 = 5$ têtes brûlées.",
    "has_figure": true,
@@ -2405,7 +2596,6 @@
     ],
     "bareme_points": 1.0
    },
-   "effort_points": 1.0,
    "correction_guide": "Un nombre premier possède exactement deux diviseurs distincts : $1$ et lui-même. Attention à $0$ et $1$, cas particuliers à connaître par cœur.",
    "correction_solution": "a. Faux : $1$ n'a qu'un seul diviseur, ce n'est pas un nombre premier.\nb. Faux : $0$ possède une infinité de diviseurs, ce n'est pas un nombre premier.\nc. Vrai : $2$ n'a que deux diviseurs ($1$ et $2$), c'est le seul nombre premier pair.",
    "has_figure": false,
@@ -2445,7 +2635,6 @@
     ],
     "bareme_points": 2.0
    },
-   "effort_points": 2.0,
    "correction_guide": "Un nombre premier n'a que deux diviseurs : $1$ et lui-même. Pense aux critères de divisibilité par $2$, $3$, $5$ pour éliminer rapidement certains nombres.",
    "correction_solution": "$256$ est pair (divisible par $2$) donc n'est pas premier.\n$11$ n'est divisible que par $1$ et $11$ : il est premier.\n$37$ n'est divisible que par $1$ et $37$ : il est premier.\nPour $4233$ : $4+2+3+3=12$, multiple de $3$, donc $4233$ est divisible par $3$ et n'est pas premier.\nLes nombres premiers sont donc $11$ et $37$.",
    "has_figure": false,
@@ -2488,7 +2677,6 @@
     ],
     "bareme_points": 1.5
    },
-   "effort_points": 1.5,
    "correction_guide": "Un nombre premier n'a que deux diviseurs : $1$ et lui-même. Cherche un diviseur autre que $1$ et lui-même parmi $3$, $5$, $7$...",
    "correction_solution": "$9 = 3 \\times 3$, $15 = 3 \\times 5$ et $21 = 3 \\times 7$ ne sont pas premiers. $11$, $17$ et $23$ sont premiers (aucun diviseur autre que $1$ et eux-mêmes).",
    "has_figure": false,
@@ -2609,7 +2797,6 @@
     "row_labels": null,
     "bareme_points": 2.0
    },
-   "effort_points": 2.0,
    "correction_guide": "Un nombre premier possède exactement deux diviseurs : $1$ et lui-même. Attention, $1$ n'est pas premier ; teste chaque entier jusqu'à $29$.",
    "correction_solution": "Les nombres premiers inférieurs à $30$ sont : $2$, $3$, $5$, $7$, $11$, $13$, $17$, $19$, $23$ et $29$.",
    "has_figure": false,
@@ -2651,7 +2838,6 @@
     ],
     "bareme_points": 2.0
    },
-   "effort_points": 2.0,
    "correction_guide": "Rappelle-toi la définition d'un nombre premier (exactement deux diviseurs : $1$ et lui-même) et celle d'un diviseur ($a$ divise $b$ si $b = a \\times k$).\nAttention aux cas particuliers $0$ et $1$, souvent source d'erreurs.",
    "correction_solution": "a. Faux : $0$ n'est pas diviseur de lui-même.\nb. Faux : $15$ est impair mais non premier ($15 = 3 \\times 5$).\nc. Vrai : il existe une infinité de nombres premiers (propriété du cours).\nd. Faux : $1$ n'admet qu'un seul diviseur, lui-même.\ne. Vrai : pour tout entier $n$, $n = 1 \\times n$.\nf. Faux : on ne peut pas diviser par $0$.",
    "has_figure": false,
@@ -2689,9 +2875,9 @@
      "108",
      "123",
      "456"
-    ]
+    ],
+    "bareme_points": 2.0
    },
-   "effort_points": 2.0,
    "correction_guide": "Un nombre premier n'a que deux diviseurs : $1$ et lui-même. Teste la divisibilité par $2$, $3$, $5$, $7$... Attention : un nombre pair (sauf $2$) n'est jamais premier, et pense au critère de divisibilité par $3$ (somme des chiffres).",
    "correction_solution": "$23$ n'est divisible que par $1$ et lui-même : il est premier.\n$27 = 3 \\times 9$ : non premier.\n$51 = 3 \\times 17$ : non premier.\n$108$ est pair : non premier.\n$123$ : $1+2+3=6$, multiple de $3$, donc $123$ est divisible par $3$ : non premier.\n$456$ est pair : non premier.\nSeul $23$ est premier.",
    "has_figure": true,
@@ -2727,9 +2913,9 @@
      "199",
      "271",
      "437"
-    ]
+    ],
+    "bareme_points": 2.5
    },
-   "effort_points": 2.5,
    "correction_guide": "Rappel : un nombre est premier s'il n'admet aucun diviseur autre que $1$ et lui-même parmi les entiers jusqu'à $\\sqrt{n}$.\nAttention, un nombre qui semble ne pas se diviser facilement peut avoir un diviseur \"caché\" comme $19$.",
    "correction_solution": "$199$ : $\\sqrt{199}\\approx 14{,}1$. Aucun diviseur entre $2$ et $14$ ne convient, donc $199$ est premier.\n$271$ : $\\sqrt{271}\\approx 16{,}5$. Aucun diviseur entre $2$ et $16$ ne convient, donc $271$ est premier.\n$437$ : $\\sqrt{437}\\approx 20{,}9$. On trouve $437 = 19 \\times 23$, donc $437$ n'est pas premier.",
    "has_figure": false,
@@ -2810,7 +2996,6 @@
     "lines": 12,
     "bareme_points": 3.5
    },
-   "effort_points": 3.5,
    "correction_guide": "Un nombre est premier s'il n'a aucun diviseur autre que $1$ et lui-même parmi tous les entiers jusqu'à $\\sqrt{n}$, pas seulement jusqu'à $10$.\nPense aux critères de divisibilité (par $2$, $3$, $5$, $9$, $10$...) pour éviter d'utiliser la calculatrice à chaque fois.",
    "correction_solution": "a. $523$ est impair (non divisible par $2$, donc ni par $4$, $6$, $8$) ; $5+2+3=10$ n'est multiple ni de $3$ ni de $9$ ; le chiffre des unités n'est ni $0$ ni $5$ (non divisible par $5$ ni $10$). Seule la division par $7$ nécessite la calculatrice : $523 = 7\\times74+5$.\nb. Comme $\\sqrt{523}\\approx 22{,}8$, il faudrait avoir testé tous les entiers jusqu'à $22$ pour conclure, pas seulement jusqu'à $10$. Thomas ne peut donc pas encore conclure.\nc. En testant les nombres impairs restants : $523=11\\times47+6$ ; $523=13\\times40+3$ ; $523=17\\times30+13$ ; $523=19\\times27+10$. Aucun n'est diviseur de $523$, donc $523$ est un nombre premier.",
    "has_figure": false,
@@ -2847,7 +3032,6 @@
     ],
     "bareme_points": 1.5
    },
-   "effort_points": 1.5,
    "correction_guide": "Pense à un contre-exemple avec deux petits nombres premiers : leur somme est-elle toujours premiere ? Il suffit d'un seul cas où ce n'est pas vrai pour invalider l'affirmation.",
    "correction_solution": "Jade a tort. Contre-exemple : $3$ et $5$ sont premiers mais $3+5=8$ n'est pas premier (divisible par $2$). Donc la somme de deux nombres premiers n'est pas toujours un nombre premier.",
    "has_figure": false,
@@ -2943,7 +3127,6 @@
     "lines": 8,
     "bareme_points": 4.5
    },
-   "effort_points": 4.5,
    "correction_guide": "Rappel : un nombre est premier s'il n'a que deux diviseurs, $1$ et lui-même.\nPour la partie b., utilise la règle $a^{m+n} = a^m \\times a^n$ pour transformer $2^{2^{n+1}}$, puis factorise l'expression obtenue.",
    "correction_solution": "a. $F_0 = 2^{2^0}+1 = 2^1+1 = 3$ (premier)\n$F_1 = 2^{2^1}+1 = 2^2+1 = 5$ (premier)\n$F_2 = 2^{2^2}+1 = 2^4+1 = 17$ (premier)\n$F_3 = 2^{2^3}+1 = 2^8+1 = 257$ (premier)\nb. $F_{n+1} - F_n = 2^{2^{n+1}} + 1 - (2^{2^n}+1) = 2^{2^n \\times 2} - 2^{2^n} = (2^{2^n})^2 - 2^{2^n} = 2^{2^n}(2^{2^n}-1)$\nDonc $F_{n+1}-F_n$ s'écrit sous la forme $2^{2^n} \\times k$ où $k$ est un entier : c'est bien un multiple de $2^{2^n}$.",
    "has_figure": false,
@@ -2986,9 +3169,9 @@
      "133",
      "139",
      "147"
-    ]
+    ],
+    "bareme_points": 3.0
    },
-   "effort_points": 3.0,
    "correction_guide": "Rappel : un nombre est premier s'il n'est divisible que par $1$ et lui-même. Pour tester, essaie les diviseurs premiers jusqu'à $\\sqrt{150} \\approx 12$ (soit $2, 3, 5, 7, 11$).\nAttention aux carrés parfaits comme $121 = 11 \\times 11$, qui ne sont pas premiers.",
    "correction_solution": "$101$ est premier.\n$111 = 3 \\times 37$ n'est pas premier.\n$113$ est premier.\n$121 = 11 \\times 11$ n'est pas premier.\n$127$ est premier.\n$133 = 7 \\times 19$ n'est pas premier.\n$139$ est premier.\n$147 = 3 \\times 49$ n'est pas premier.\nLes nombres premiers de la liste sont donc $101$, $113$, $127$ et $139$.",
    "has_figure": false,
@@ -3018,7 +3201,6 @@
     "comparator": "text_equal",
     "bareme_points": 3.0
    },
-   "effort_points": 3.0,
    "correction_guide": "Rappelle-toi la liste des nombres premiers inférieurs à $100$, puis vérifie pour chacun si le nombre obtenu en inversant ses chiffres est aussi premier.\nAttention à ne pas oublier certains nombres premiers de la liste.",
    "correction_solution": "Les nombres premiers inférieurs à $100$ sont : $2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71, 73, 79, 83, 89, 97$.\nEn vérifiant lesquels restent premiers après inversion des chiffres, on obtient : $11, 13, 17, 31, 37, 71, 73, 79, 97$.",
    "has_figure": false,
@@ -3083,7 +3265,6 @@
     "row_labels": null,
     "bareme_points": 3.0
    },
-   "effort_points": 3.0,
    "correction_guide": "Teste successivement les nombres premiers $2, 3, 5, 7, ...$ en vérifiant si la différence avec le nombre donné est aussi premier.\nAttention : il existe plusieurs décompositions possibles, on cherche celle avec le plus petit premier terme.",
    "correction_solution": "$26 = 3 + 23$ (autres possibilités : $7+19$, $13+13$)\n$58 = 5 + 53$ (autres possibilités : $11+47$, $17+41$, $29+29$)\n$138 = 7 + 131$ (autres possibilités : $11+127$, $29+109$, $31+107$, $37+101$, $41+97$, $59+79$, $67+71$)",
    "has_figure": false,
@@ -3119,119 +3300,15 @@
      "3",
      "5",
      "7"
-    ]
+    ],
+    "bareme_points": 2.0
    },
-   "effort_points": 2.0,
    "correction_guide": "Calcule $2n-1$ pour chaque valeur de $n$ proposée, puis vérifie si ce résultat possède un diviseur autre que $1$ et lui-même.\nAttention : un nombre qui se termine par un chiffre impair n'est pas forcément premier.",
    "correction_solution": "Pour $n=2$ : $2n-1=3$, qui est premier.\nPour $n=3$ : $2n-1=5$, qui est premier.\nPour $n=5$ : $2n-1=9=3\\times 3$, qui n'est pas premier.\nDonc $n=5$ est un contre-exemple : l'affirmation est fausse.",
    "has_figure": true,
    "crop_file": "42e573d4-5ba0-45e3-80cb-306edf0401e8.png",
    "figure_file": "",
    "model": "gemini-flash-latest",
-   "prompt_version": "indigo-adapt-5-matching"
-  },
-  {
-   "id": "934f58bd-9f23-4102-880e-d51bca554bb4",
-   "competency_code": "A1.1",
-   "grade_level": "3e",
-   "source_number": "39",
-   "badge_type": "exercice",
-   "difficulty": 3,
-   "calculator": "autorisee",
-   "title": "",
-   "tags": [],
-   "statement": "1. Si la roue A tourne dans le sens de la flèche, dans quel sens tourne la roue B ?\n2. Si la roue A fait 6 tours complets, combien en fait la roue B ?\n3. Combien de tours complets fait la roue A si la roue B en fait 3 ?",
-   "response_type": "short_text",
-   "expected": {},
-   "grading": {},
-   "effort_points": 1.0,
-   "correction_guide": "À compléter : guide d'auto-correction (rappel de leçon + piège), à saisir.",
-   "correction_solution": "À compléter : corrigé de référence à saisir.",
-   "has_figure": true,
-   "crop_file": "934f58bd-9f23-4102-880e-d51bca554bb4.png",
-   "figure_file": "934f58bd-9f23-4102-880e-d51bca554bb4.png",
-   "model": "",
-   "prompt_version": ""
-  },
-  {
-   "id": "4538c9f8-36e2-4cf7-aa2a-263ba34e005d",
-   "competency_code": "A1.1",
-   "grade_level": "3e",
-   "source_number": "42",
-   "badge_type": "expert",
-   "difficulty": 5,
-   "calculator": "autorisee",
-   "title": "",
-   "tags": [],
-   "statement": "Prouve que la somme d'un nombre pair et d'un nombre impair est toujours un nombre impair.",
-   "response_type": "multiline_text",
-   "expected": {
-    "type": "rubric",
-    "steps": [
-     {
-      "description": "Écrire un nombre pair sous forme littérale",
-      "expected_text": "$2a$",
-      "points": 1
-     },
-     {
-      "description": "Écrire un nombre impair sous forme littérale",
-      "expected_text": "$2b+1$",
-      "points": 1
-     },
-     {
-      "description": "Additionner et conclure sur la parité",
-      "expected_text": "$2a+(2b+1)=2(a+b)+1$, qui est impair",
-      "points": 1
-     }
-    ]
-   },
-   "grading": {
-    "max_score": 3,
-    "comparator": "rubric",
-    "steps": [
-     {
-      "description": "Écrire un nombre pair sous forme littérale",
-      "expected_text": "$2a$",
-      "points": 1
-     },
-     {
-      "description": "Écrire un nombre impair sous forme littérale",
-      "expected_text": "$2b+1$",
-      "points": 1
-     },
-     {
-      "description": "Additionner et conclure sur la parité",
-      "expected_text": "$2a+(2b+1)=2(a+b)+1$, qui est impair",
-      "points": 1
-     }
-    ],
-    "rubric": [
-     {
-      "description": "Écrire un nombre pair sous forme littérale",
-      "expected_text": "$2a$",
-      "points": 1
-     },
-     {
-      "description": "Écrire un nombre impair sous forme littérale",
-      "expected_text": "$2b+1$",
-      "points": 1
-     },
-     {
-      "description": "Additionner et conclure sur la parité",
-      "expected_text": "$2a+(2b+1)=2(a+b)+1$, qui est impair",
-      "points": 1
-     }
-    ],
-    "lines": 5,
-    "bareme_points": 2.0
-   },
-   "effort_points": 2.0,
-   "correction_guide": "Un nombre pair s'écrit $2a$ et un nombre impair s'écrit $2b+1$, avec $a$ et $b$ des entiers naturels. Utilise deux lettres différentes pour les deux nombres avant de les additionner.",
-   "correction_solution": "Soit $a$ et $b$ deux entiers naturels. Un nombre pair s'écrit sous la forme $2a$ et un nombre impair s'écrit sous la forme $2b+1$.\nLeur somme est $2a+(2b+1)=2(a+b)+1$.\nCette expression est de la forme $2k+1$ (avec $k=a+b$ entier naturel), donc la somme d'un nombre pair et d'un nombre impair est toujours un nombre impair.",
-   "has_figure": true,
-   "crop_file": "4538c9f8-36e2-4cf7-aa2a-263ba34e005d.png",
-   "figure_file": "",
-   "model": "claude-sonnet-5",
    "prompt_version": "indigo-adapt-5-matching"
   }
  ]

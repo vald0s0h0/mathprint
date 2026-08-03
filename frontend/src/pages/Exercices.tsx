@@ -48,7 +48,7 @@ type Exercise = {
   statement: string; response_type: string; expected: Record<string, any>; choices: string[]
   adapted: boolean
   row_labels: string[] | null; col_labels: string[] | null; lines: number | null
-  effort_points: number; correction_solution: string; correction_guide: string
+  bareme_points: number; correction_solution: string; correction_guide: string
   status: string; crop_url: string | null; figure_url: string | null
   // provenance brute : raw_ocr.pipeline vaut "cli-exos" pour la pipeline CLI
   // (agents/cli-exos, abonnement Claude) — sinon c'est l'extraction Indigo (API).
@@ -95,6 +95,11 @@ function badgeColor(ex: { badge_type: string; difficulty: number }) {
   return BADGE_COLOR[ex.badge_type] ?? 'gray'
 }
 const rtLabel = (v: string) => RESPONSE_TYPES.find((r) => r.value === v)?.label ?? v
+/** Barème en écriture française : « 1,5 » et non « 1.5 », entier sans décimale. */
+// pas du barème = 0,125 : `toFixed(1)` afficherait « 0,1 » pour un huitième de
+// point. On garde 3 décimales et on retire les zéros inutiles (1,5 pas 1,500).
+export const formatPoints = (v: number) =>
+  (Number.isInteger(v) ? String(v) : v.toFixed(3).replace(/0+$/, '').replace('.', ','))
 
 function CalcIcon({ mode, size = 18 }: { mode: string; size?: number }) {
   if (mode === 'autorisee') return null
@@ -383,6 +388,13 @@ function BadgeRow({ ex }: { ex: Exercise }) {
       </Badge>
       <CalcIcon mode={ex.calculator} size={16} />
       <Badge variant="outline" color="gray" size="xs">{rtLabel(ex.response_type)}</Badge>
+      {/* barème : ce que l'exercice VAUT (multiple de 0,125, jusqu'à 5). Affiché
+          ici comme dans la Banque — c'est LE barème qui pilote la note finale. */}
+      {ex.bareme_points > 0 && (
+        <Tooltip label="Barème : ce que l'exercice vaut (réflexion × complexité), utilisé pour la note">
+          <Badge variant="light" color="teal" size="xs">{formatPoints(ex.bareme_points)} pt</Badge>
+        </Tooltip>
+      )}
       {/* provenance : distingue la pipeline CLI (abonnement Claude) de l'extraction
           Indigo (API). Purement informatif — le CRUD/validation/publication est commun. */}
       {ex.raw_ocr?.pipeline === 'cli-exos' && (
@@ -428,9 +440,19 @@ function ExerciseCard({ ex, onEdit, onChange, onDelete, selectable, selected, on
     notifications.show({ color: 'green', message: `${ex.ref} validé` })
   }
   const color = badgeColor(ex)
+  // Exercice VALIDÉ = travail terminé : la carte est grisée et atténuée pour que
+  // les brouillons restants ressortent d'un coup d'œil. Elle reste entièrement
+  // lisible et actionnable (on doit pouvoir la relire, la modifier, l'invalider).
+  const done = ex.status === 'validated'
   return (
     <Card withBorder radius="md" p="sm"
-      style={{ width: CARD_W, outline: selected ? '2px solid var(--mantine-color-blue-5)' : undefined }}>
+      style={{
+        width: CARD_W,
+        outline: selected ? '2px solid var(--mantine-color-blue-5)' : undefined,
+        background: done ? 'var(--mantine-color-gray-1)' : undefined,
+        borderColor: done ? 'var(--mantine-color-gray-4)' : undefined,
+        opacity: done ? 0.72 : undefined,
+      }}>
       {/* sélection (mode « régénérer ») */}
       {selectable && (
         <Checkbox mb={8} checked={!!selected} label={<Text size="xs" fw={600}>Sélectionner</Text>}
@@ -515,16 +537,22 @@ function EditModal({ ex, onClose, onSaved, onChange }: {
       statement: form.statement, response_type: form.response_type,
       correction_solution: form.correction_solution, correction_guide: form.correction_guide,
       badge_type: form.badge_type, difficulty: form.difficulty, calculator: form.calculator,
-      title: form.title, tags: form.tags, effort_points: form.effort_points, expected: form.expected,
+      title: form.title, tags: form.tags, bareme_points: form.bareme_points, expected: form.expected,
     }
+    // le barème est REPORTÉ dans chaque grading_json réécrit : l'omettre le
+    // faisait disparaître de l'exercice à la première édition, qui repartait
+    // alors sur le repli déterministe (cf. 4 QCM de la banque sans barème).
+    // max_score = une unité par CASE (chaque case cochée/laissée vide à raison
+    // rapporte sa part, cf. grading.qcm_credit).
     if (form.response_type.startsWith('qcm'))
-      p.grading_json = { comparator: 'qcm', max_score: 1, negative: 0, choices: form.choices }
+      p.grading_json = { comparator: 'qcm', max_score: form.choices.length, negative: 0,
+        choices: form.choices, bareme_points: form.bareme_points }
     if (form.response_type === 'checkbox_grid') {
       const cols = form.expected?.cols ?? []
       const rows = form.expected?.rows ?? []
       p.expected = { type: 'grid', cols, rows }
       p.grading_json = { comparator: 'grid', max_score: rows.length, cols, rows,
-        bareme_points: form.effort_points }
+        bareme_points: form.bareme_points }
     }
     return p
   }
@@ -561,8 +589,9 @@ function EditModal({ ex, onClose, onSaved, onChange }: {
             <SegmentedControl size="xs" fullWidth data={CALC_OPTS} value={form.calculator}
               onChange={(v) => setForm({ ...form, calculator: v })} />
           </Box>
-          <NumberInput label="Barème (effort)" min={0.5} max={5} step={0.5} value={form.effort_points}
-            onChange={(v) => setForm({ ...form, effort_points: Number(v) || 1 })} />
+          <NumberInput label="Barème (points)" min={0.125} max={5} step={0.125} decimalScale={3}
+            value={form.bareme_points}
+            onChange={(v) => setForm({ ...form, bareme_points: Number(v) || 1 })} />
         </Group>
         {isProb && (
           <Group grow>

@@ -136,7 +136,7 @@ def _finalize(raw: dict, competency: Competency, db: Session, manual: dict) -> d
     # quel au modèle et re-valide sa sortie par le MÊME chemin, sans avoir à
     # reconstruire `answer` depuis la forme interne `expected`. Non persisté
     # (retiré avant l'enregistrement, cf. indigo._persist_exercise).
-    valid["_raw"] = {"kind": valid["kind"], "effort_points": raw.get("effort_points"),
+    valid["_raw"] = {"kind": valid["kind"], "bareme_points": raw.get("bareme_points"),
                      "choices": raw.get("choices"), "answer": raw.get("answer")}
     return valid
 

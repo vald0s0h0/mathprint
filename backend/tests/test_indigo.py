@@ -284,7 +284,7 @@ def test_matching_answer_schema_validates(db):
     bug d'origine mettait left/right/pairs à la racine (jamais validé)."""
     from app.services import indigo_gemini
     comp = _comp(db)
-    raw = {"kind": "application", "effort_points": 1,
+    raw = {"kind": "application", "bareme_points": 1,
            "statement": "Associe chaque calcul à son résultat.",
            "response_type": "matching",
            "answer": {"type": "matching", "left": ["$2+3$", "$4+5$"],
@@ -300,7 +300,7 @@ def test_matching_answer_schema_validates(db):
 
 
 def _grid_raw(correct=(0, 1, 0)):
-    return {"kind": "application", "effort_points": 2,
+    return {"kind": "application", "bareme_points": 2,
             "statement": "Pour chaque affirmation, coche la bonne case.",
             "response_type": "checkbox_grid",
             "answer": {"type": "grid", "cols": ["Vrai", "Faux"],
@@ -364,7 +364,7 @@ def test_detect_grid_picks_checked_column_per_row(monkeypatch):
 
 
 def _composite_raw():
-    return {"kind": "application", "effort_points": 3,
+    return {"kind": "application", "bareme_points": 3,
             "statement": "On considère $A = 2 \\times 3^2$ et $B = 2^2 \\times 3 \\times 7$.",
             "response_type": "composite",
             "answer": {"type": "composite", "parts": [
@@ -565,7 +565,7 @@ def _adapted_valid(db, comp, number="34"):
     """Un exercice adapté (contrat interne enrichi + `_raw`), tel que
     indigo_gemini.adapt_batch le produit, obtenu via le VRAI validateur."""
     from app.services import indigo_gemini
-    raw = {"kind": "application", "effort_points": 1,
+    raw = {"kind": "application", "bareme_points": 1,
            "statement": "Calcule $2+3$ : {{blank}}", "response_type": "short_text",
            "answer": {"type": "integer", "value": 5},
            "correction": "Additionne les deux nombres.",
@@ -804,6 +804,48 @@ def test_exercise_out_flags_unadapted_fallback(db):
     indigo._persist_exercise(db, row2, {"number": "15", "statement": "x", "correction": ""}, valid)
     db.commit()
     assert indigo.exercise_out(db, row2)["adapted"] is True
+
+
+def test_bareme_lives_only_in_grading_json(db):
+    """`bareme_points` est le SEUL barème, et il vit dans grading_json — plus de
+    colonne parallèle (`effort_points`) que la banque ignorait et qui pouvait
+    diverger de la note réellement calculée."""
+    c = _comp(db)
+    row = IndigoExercise(id="b1", extraction_id="e", competency_id=c.id, grade_level="3e",
+                         source_page=1, source_number="20", order_index=0)
+    valid = {"statement": "Coche les nombres pairs.", "response_type": "qcm_multiple",
+             "expected": {"type": "choice", "correct": [0, 2]},
+             "grading": {"comparator": "qcm", "max_score": 4, "bareme_points": 0.625,
+                         "choices": ["$2$", "$3$", "$8$", "$5$"]},
+             "correction": "Un nombre pair finit par 0, 2, 4, 6 ou 8.",
+             "correction_solution": "$2$ et $8$"}
+    indigo._persist_exercise(db, row, {"number": "20", "statement": "x", "correction": ""}, valid)
+    db.commit()
+    assert not hasattr(row, "effort_points")
+    assert row.grading_json["bareme_points"] == 0.625
+    assert indigo.exercise_out(db, row)["bareme_points"] == 0.625
+
+    # édition manuelle : le barème s'écrit LÀ où il vit, calé sur le pas de 0,125
+    indigo.update_exercise(db, row, {"bareme_points": 1.3})
+    assert row.grading_json["bareme_points"] == 1.25
+    assert row.grading_json["choices"] == ["$2$", "$3$", "$8$", "$5$"]   # rien d'autre perdu
+
+
+def test_exercise_without_bareme_is_repaired_not_worth_zero(db):
+    """Un exercice réécrit par un correctif qui n'a pas reposé le barème (c'est
+    arrivé : 4 QCM de la banque) vaut son repli, jamais 0 en silence."""
+    c = _comp(db)
+    row = IndigoExercise(id="b2", extraction_id="e", competency_id=c.id, grade_level="3e",
+                         source_page=1, source_number="21", order_index=1)
+    valid = {"statement": "Coche les multiples de $3$.", "response_type": "qcm_multiple",
+             "expected": {"type": "choice", "correct": [1]},
+             "grading": {"comparator": "qcm", "max_score": 3,
+                         "choices": ["$4$", "$9$", "$10$"]},   # pas de bareme_points
+             "correction": "Un multiple de 3 a une somme de chiffres multiple de 3.",
+             "correction_solution": "$9$"}
+    indigo._persist_exercise(db, row, {"number": "21", "statement": "x", "correction": ""}, valid)
+    db.commit()
+    assert indigo.exercise_out(db, row)["bareme_points"] == 0.75   # 3 cases × 0,25
 
 
 def test_persist_applies_field_engine_mini_case(db):
@@ -1072,7 +1114,7 @@ def test_manual_drawing_is_no_longer_refused(db):
     l'adaptation ne le rejette plus."""
     from app.services import indigo_gemini
     comp = _comp(db)
-    raw = {"kind": "application", "effort_points": 1,
+    raw = {"kind": "application", "bareme_points": 1,
            "statement": "Construis la médiatrice du segment $[AB]$ ci-contre.",
            "response_type": "manual_drawing",
            "correction": "Reporte la même ouverture de compas de part et d'autre.",

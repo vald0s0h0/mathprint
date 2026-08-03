@@ -50,8 +50,16 @@ MATHPIX_REQUIRED = ("La clé Mathpix est indispensable pour corriger ces copies.
 
 @router.get("/config")
 def scan_config(db: Session = Depends(get_db)):
-    """Capacités de correction visibles par le professeur (bannière/boutons)."""
-    return {"mathpix_configured": not providers.offline(db, "mathpix")}
+    """Capacités de correction visibles par le professeur (bannière/boutons).
+
+    `correction_llm_configured` : sans clé DeepSeek, les raisonnements rédigés
+    et les réponses écrites longues ne sont PAS notés automatiquement (jamais de
+    note simulée sur une vraie copie, cf. services.llm_grader) — ils arrivent
+    dans la file de correction manuelle. Le reste du sujet est corrigé
+    normalement, d'où un avertissement et non un blocage."""
+    llm_provider = providers.provider_for_model(settings.correction_model)
+    return {"mathpix_configured": not providers.offline(db, "mathpix"),
+            "correction_llm_configured": not providers.offline(db, llm_provider)}
 
 
 def _run_pipeline(batch_id: str):
@@ -342,7 +350,10 @@ def _open_review_for_response(db: Session, response_id: str) -> ManualReview | N
 def _grade_mode(response_type: str) -> str:
     if response_type in ("table_fill", "multi_blank", "checkbox_grid"):
         return "cells"
-    if response_type.startswith("qcm"):
+    # « juste / faux » n'a de sens que là où il n'y a qu'UNE case à cocher : un
+    # QCM à choix multiples se note par parts (cf. grading.qcm_credit), le
+    # professeur qui le reprend doit pouvoir en faire autant.
+    if response_type == "qcm_single":
         return "binary"
     return "partial"
 
@@ -389,14 +400,28 @@ def _cell_units(item: CopyItem, ocr: OcrAttempt | None,
                 decision: GradingDecision | None) -> list[dict]:
     """Une entrée PAR CASE à corriger d'un tableau / de cases à trous (cellules
     « given » exclues, déjà imprimées et non notées). Chaque case porte sa
-    réponse attendue lisible, ce que l'OCR a cru lire, le verdict automatique du
-    moteur (`auto_ok`) et, s'il existe, le verdict déjà posé par le professeur
-    (`teacher_ok`). La modale ne met en validation QUE les cases non tranchées."""
+    réponse attendue lisible, ce que l'OCR a cru lire, le CRÉDIT automatique du
+    moteur (`auto_credit` : 1 juste, 0,5 arrondi correct, 0 faux, null illisible)
+    et, s'il existe, celui déjà posé par le professeur (`teacher_credit`). La
+    modale ne met en validation QUE les cases non tranchées."""
     exp_cells = (item.expected_json or {}).get("cells") or []
     ocr_cells = ((ocr.raw_json or {}).get("cells") if ocr else None) or []
     g = item.grading_json or {}
     row_labels = g.get("row_labels") or []
     col_labels = g.get("col_labels") or []
+    # Crédits automatiques : ceux du dernier essai s'il en porte (correcteur LLM,
+    # cf. services.llm_grader), sinon la comparaison déterministe — la MÊME que
+    # la note et que les marques d'overlay (grading.table_credits, qui apparie
+    # les cases d'un tableau à ordre libre au lieu de les comparer en place).
+    auto_credits = ((ocr.raw_json or {}).get("cell_credits") if ocr else None)
+    if auto_credits is None:
+        auto_credits = grading.table_credits(g, ocr_cells)
+    # tableau-LISTE : la place d'une case ne désigne aucune réponse précise, on
+    # montre donc au professeur l'ensemble attendu, pas la cellule de même rang.
+    unordered = bool(g.get("unordered"))
+    all_expected = "  ·  ".join(
+        _fmt_value_latex(c["type"], c["value"])
+        for c in grading.fillable_cells(g)) if unordered else ""
     # verdicts professeur déjà enregistrés (set_cells) — pour rouvrir la modale
     # sur SES choix, pas re-déduire d'un texte de cellule réécrit "" côté faux.
     teacher = None
@@ -420,10 +445,15 @@ def _cell_units(item: CopyItem, ocr: OcrAttempt | None,
                 label = f"Case {k + 1}"
             out.append({
                 "index": k, "label": label,
-                "expected_display": _fmt_value_latex(cell["type"], cell["value"]),
+                "expected_display": (all_expected if unordered
+                                     else _fmt_value_latex(cell["type"], cell["value"])),
                 "ocr_text": raw or "",
-                "auto_ok": grading._cell_ok(cell, raw),
-                "teacher_ok": (teacher[k] if teacher and k < len(teacher) else None),
+                # crédit automatique : 1 (juste), 0,5 (arrondi correct), 0
+                # (faux), null (illisible) — la modale pré-sélectionne le bouton
+                # correspondant, demi-point compris.
+                "auto_credit": (auto_credits[k] if k < len(auto_credits) else None),
+                "teacher_credit": (float(teacher[k]) if teacher and k < len(teacher)
+                                   else None),
             })
             k += 1
     return out
@@ -460,8 +490,11 @@ def _grid_units(item: CopyItem, ocr: OcrAttempt | None,
             "index": i, "label": str(r.get("label", f"Ligne {i + 1}")),
             "expected_display": _col(correct) or "",
             "ocr_text": _col(s) or _GRID_NONE,
-            "auto_ok": (s == correct),
-            "teacher_ok": (teacher[i] if teacher and i < len(teacher) else None),
+            # une ligne de grille est cochée ou non : pas de demi-crédit
+            # automatique, mais le professeur peut en accorder un.
+            "auto_credit": float(s == correct),
+            "teacher_credit": (float(teacher[i]) if teacher and i < len(teacher)
+                               else None),
         })
     return out
 
@@ -503,10 +536,15 @@ def _review_unit(db: Session, resp: StudentResponse, item: CopyItem, copy: Copy,
         "reason_code": decision.reason_code if decision else "",
         # source de la note actuelle, pour distinguer auto vs correction prof
         "decision_source": src,
+        # ce que le correcteur LLM a décidé champ par champ, et pourquoi — le
+        # professeur relit sa note avant de valider (cf. services.llm_grader)
+        "llm_notes": (decision.evidence_json or {}).get("llm") or [] if decision else [],
         "proposed_score": decision.score if decision else 0.0,
         "max_score": decision.max_score if decision else 0.0,
         # points de barème actuellement attribués (ratio × barème)
-        "current_points": round(earned, 2),
+        # 3 décimales : le pas du barème est 0,125 (un arrondi au centième
+        # afficherait « 0,13 »). Affichage seulement — le calcul n'arrondit pas.
+        "current_points": round(earned, 3),
         "full_credit": full, "cancelled": cancelled,
         # barème réel (points professeur) de l'exercice, pour l'affichage
         "bareme_points": bareme,
@@ -719,7 +757,9 @@ class ResolveIn(BaseModel):
     # correction CASE PAR CASE d'un tableau / de cases à trous : un booléen par
     # case NON-"given" (ordre ligne par ligne). Le script en déduit le barème
     # (points = nombre de cases justes), le professeur ne saisit que Juste/Faux.
-    cell_verdicts: list[bool] | None = None
+    # crédit par case : 1 (juste), 0.5 (demi-point : arrondi correct, erreur
+    # très légère), 0 (faux). Les booléens d'avant restent acceptés tels quels.
+    cell_verdicts: list[float] | None = None
     corrected_text: str | None = None
     note: str = ""
 
@@ -749,11 +789,12 @@ def _apply_resolution(db: Session, resp: StudentResponse, body: ResolveIn) -> di
         max_score = 0.0
     elif body.action == "set_cells":
         # validation case par case : le barème se recalcule tout seul depuis les
-        # verdicts Juste/Faux du professeur (points = nombre de cases justes).
+        # crédits du professeur (1 juste, 0,5 demi-point, 0 faux) — leur SOMME
+        # est le score, sur un maximum d'une unité par case.
         if body.cell_verdicts is None:
             raise HTTPException(422, "cell_verdicts requis")
         item = db.get(CopyItem, resp.copy_item_id)
-        verdicts = [bool(v) for v in body.cell_verdicts]
+        verdicts = [min(1.0, max(0.0, float(v))) for v in body.cell_verdicts]
         if item and item.response_type == "checkbox_grid":
             # grille cochée : une ligne = une « case ». Verdicts LIGNE PAR LIGNE.
             rows = ((item.grading_json or {}).get("rows")
@@ -768,9 +809,9 @@ def _apply_resolution(db: Session, resp: StudentResponse, body: ResolveIn) -> di
             # restent cohérentes avec la note. Attempt « teacher » = le plus récent.
             if resp.zone_id:
                 ncols = max(1, len((item.grading_json or {}).get("cols") or []))
-                grid_sel = [r.get("correct") if ok
+                grid_sel = [r.get("correct") if v >= 1.0
                             else ((int(r.get("correct", 0)) + 1) % ncols)
-                            for r, ok in zip(rows, verdicts)]
+                            for r, v in zip(rows, verdicts)]
                 db.add(OcrAttempt(zone_id=resp.zone_id, provider="teacher",
                                   raw_json={"grid_selected": grid_sel}, confidence=1.0))
         else:
@@ -782,14 +823,17 @@ def _apply_resolution(db: Session, resp: StudentResponse, body: ResolveIn) -> di
             max_score = float(len(verdicts))
             evidence["cell_verdicts"] = verdicts
             # réécrit le texte de CHAQUE case selon le verdict (juste → valeur
-            # canonique, faux → vide) pour que la marque ✓/✗ imprimée par l'overlay
-            # (dérivée du texte de cellule via grading.cell_marks) reste cohérente
-            # avec la note. Attempt « teacher » : devient le plus récent, fait foi.
+            # canonique, faux → vide) pour que la marque imprimée par l'overlay
+            # reste cohérente avec la note, ET joint les CRÉDITS bruts : un
+            # demi-point ne peut pas s'exprimer par un texte de cellule réécrit,
+            # c'est donc `cell_credits` qui fait foi (cf. grading.cell_marks).
+            # Attempt « teacher » : devient le plus récent, fait foi.
             if resp.zone_id:
-                corrected = [grading.cell_reference_text(c) if ok else ""
-                             for c, ok in zip(flat, verdicts)]
+                corrected = [grading.cell_reference_text(c) if v >= 1.0 else ""
+                             for c, v in zip(flat, verdicts)]
                 db.add(OcrAttempt(zone_id=resp.zone_id, provider="teacher",
-                                  raw_json={"cells": corrected}, confidence=1.0))
+                                  raw_json={"cells": corrected,
+                                            "cell_credits": verdicts}, confidence=1.0))
     if body.corrected_text is not None:
         resp.final_text = body.corrected_text
 

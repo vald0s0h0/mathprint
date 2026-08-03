@@ -1039,10 +1039,12 @@ def _col_kind(cells: list[list[dict]], j: int) -> str:
     return "normal"
 
 
+# Largeur DÉSIRÉE d'une colonne selon la réponse attendue : c'est elle qui
+# dimensionne la cellule. La case à remplir, elle, OCCUPE ENSUITE toute sa
+# cellule (cf. _draw_table_zone) — il n'y a plus de taille de case plafonnée :
+# une cellule large offrait une case étroite entourée de blanc perdu, alors que
+# c'est justement la place d'écriture de l'élève qu'il faut maximiser.
 _COL_KIND_WIDTH = {"mini": _TABLE_MINI_COL_W, "wide": _TABLE_WIDE_COL_W, "normal": _TABLE_COL_W}
-_COL_KIND_BOX = {"mini": (MINI_BLANK_W, MINI_BLANK_H),
-                 "wide": (_TABLE_WIDE_COL_W - 2 * _TABLE_CELL_PAD, BLANK_H),
-                 "normal": (BLANK_W, BLANK_H)}
 
 
 def _table_geometry(w: float, col_labels: list | None, row_labels: list | None,
@@ -1207,7 +1209,7 @@ def _draw_table_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float,
                           sub_badge_color)
     cols = geo["cols"]
     head_h, lab_fs = geo["head_h"], geo["lab_fs"]
-    col_ws, col_offsets, col_kinds = geo["col_ws"], geo["col_offsets"], geo["col_kinds"]
+    col_ws, col_offsets = geo["col_ws"], geo["col_offsets"]
     rowlab_w, bank_w = geo["rowlab_w"], geo["bank_w"]
     inner = w - 2 * CARD_PAD
     # tableau CENTRÉ dans la carte (jamais justifié à droite)
@@ -1261,12 +1263,14 @@ def _draw_table_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float,
             for j in range(cols):
                 col_w = col_ws[j]
                 cx = grid_x + col_offsets[j]
-                # case centrée dans la cellule, plafonnée à la taille adaptée à
-                # la réponse attendue (mini/normal/wide, cf. _col_kind) — une
-                # cellule large ne l'étire pas au-delà de cette taille
-                box_w, box_h = _COL_KIND_BOX[col_kinds[j]]
-                bw = min(box_w, col_w - 2 * _TABLE_CELL_PAD)
-                bh = min(box_h, row_h - 2 * _TABLE_CELL_PAD)
+                # La case REMPLIT sa cellule (un simple retrait pour ne pas
+                # toucher les traits du tableau) : c'est la cellule qui est
+                # dimensionnée sur la réponse attendue (cf. _col_kind /
+                # _COL_KIND_WIDTH), la case n'a aucune raison d'être plus petite
+                # qu'elle. Avant, une case plafonnée à 20x8 mm laissait le reste
+                # de la cellule en blanc perdu, et l'élève écrivait à l'étroit.
+                bw = max(4 * mm, col_w - 2 * _TABLE_CELL_PAD)
+                bh = max(4 * mm, row_h - 2 * _TABLE_CELL_PAD)
                 bx = cx + (col_w - bw) / 2
                 by = ry_top - row_h + (row_h - bh) / 2
                 cell = cells[i][j] if i < len(cells) and j < len(cells[i]) else None
@@ -2165,16 +2169,28 @@ def render_copy(pdf_canvas: canvas.Canvas, *, student_name: str, class_name: str
 
 # ------------------------------------------------------------------ overlay
 
-def _mark(c: canvas.Canvas, x: float, y: float, ok: bool, size: float = 2.4 * mm):
-    """Coche ou croix vectorielle (fiable quel que soit le lecteur PDF)."""
+def _mark(c: canvas.Canvas, x: float, y: float, ok: bool, size: float = 2.4 * mm,
+          credit: float | None = None, credit_label: str | None = None):
+    """Marque vectorielle d'un champ (fiable quel que soit le lecteur PDF) :
+    coche si juste, croix si faux, et **coche suivie de la part obtenue** pour un
+    crédit PARTIEL (arrondi correct cf. grading.numeric_credit, QCM multiple à
+    moitié coché cf. grading.qcm_credit) — l'élève doit voir d'un coup d'œil ce
+    qu'il a gagné, jamais une croix là où il a des points. `credit_label` porte
+    la fraction lisible (« ½ », « 2/3 ») ; à défaut, le demi."""
+    half = credit is not None and 0.0 < credit < 1.0
     c.saveState()
     c.setLineWidth(1.1)
-    if ok:
+    if ok or half:
         c.line(x, y + size * 0.35, x + size * 0.35, y)
         c.line(x + size * 0.35, y, x + size, y + size * 0.9)
     else:
         c.line(x, y, x + size * 0.8, y + size * 0.8)
         c.line(x, y + size * 0.8, x + size * 0.8, y)
+    if half:
+        # part obtenue collée à la coche : sans ambiguïté possible
+        c.setLineWidth(0.7)
+        c.setFont("Helvetica-Bold", size * 0.95 / mm * 2.0)
+        c.drawString(x + size * 1.05, y + size * 0.05, credit_label or "½")
     c.restoreState()
 
 
@@ -2206,14 +2222,16 @@ def _draw_zone_marks(c: canvas.Canvas, z: dict, col):
     m = 0.6 * mm
     if kind == "single_tr":       # short_text : coche/croix en HAUT à droite
         _mark(c, z["x_pt"] + z["w_pt"] - m - 2.4 * mm,
-              z["y_pt"] + z["h_pt"] - m - 2.4 * mm, marks["ok"])
+              z["y_pt"] + z["h_pt"] - m - 2.4 * mm, marks["ok"],
+              credit=marks.get("credit"))
     elif kind == "single_br":     # multiline_text : en BAS à droite de la zone
-        _mark(c, z["x_pt"] + z["w_pt"] - m - 2.4 * mm, z["y_pt"] + m, marks["ok"])
+        _mark(c, z["x_pt"] + z["w_pt"] - m - 2.4 * mm, z["y_pt"] + m, marks["ok"],
+              credit=marks.get("credit"))
     elif kind == "cells":         # table_fill/multi_blank : chaque cellule marquée
         for cell in marks["cells"]:
             _mark(c, cell["x_pt"] + cell["w_pt"] - 0.4 * mm - CELL_MARK_SIZE,
                   cell["y_pt"] + cell["h_pt"] - 0.4 * mm - CELL_MARK_SIZE,
-                  cell["ok"], size=CELL_MARK_SIZE)
+                  cell["ok"], size=CELL_MARK_SIZE, credit=cell.get("credit"))
     elif kind == "qcm":
         # AUCUNE marque par-dessus les cases de l'élève : sa copie reste intacte
         # (coches et cases vides visibles). À gauche, la colonne « correction »
@@ -2227,9 +2245,12 @@ def _draw_zone_marks(c: canvas.Canvas, z: dict, col):
                     continue
                 is_correct = b.get("state") in ("ok", "missed")
                 _draw_corr_checkbox(c, {**cb, "should_check": is_correct}, col)
-        # récap de la CARTE en bas à droite : coche si zéro erreur, croix sinon
+        # récap de la CARTE en bas à droite : coche si zéro erreur, croix si tout
+        # est faux, coche + part obtenue (« 2/3 ») si le QCM multiple est
+        # partiellement juste.
         _mark(c, z["x_pt"] + z["w_pt"] - QCM_MARK_SIZE - m, z["y_pt"] + m,
-              not marks.get("any_error"), size=QCM_MARK_SIZE)
+              not marks.get("any_error"), size=QCM_MARK_SIZE,
+              credit=marks.get("credit"), credit_label=marks.get("credit_label"))
     elif kind == "grid":
         # grille cochée : sur CHAQUE case, coche (cochée à raison) / croix (cochée
         # à tort) ; une bonne réponse OUBLIÉE est montrée en case REMPLIE (comme la
@@ -2244,7 +2265,8 @@ def _draw_zone_marks(c: canvas.Canvas, z: dict, col):
             elif state == "missed" and marks.get("any_error"):
                 _draw_corr_checkbox(c, {**box, "should_check": True}, col)
         _mark(c, z["x_pt"] + z["w_pt"] - QCM_MARK_SIZE - m, z["y_pt"] + m,
-              not marks.get("any_error"), size=QCM_MARK_SIZE)
+              not marks.get("any_error"), size=QCM_MARK_SIZE,
+              credit=marks.get("credit"), credit_label=marks.get("credit_label"))
         c.setFillColor(col)
     elif kind == "matching":
         c.saveState()

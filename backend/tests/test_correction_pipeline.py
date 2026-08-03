@@ -250,11 +250,13 @@ def test_retry_after_overlay_error_rebuilds_only_overlays(mock_db, tmp_path, mon
     assert tasks.tasks[0].func is scans_router._run_build_overlays
 
 
-def test_scan_config_flags_missing_mathpix(mock_db):
+def test_scan_config_flags_missing_keys(mock_db):
     """Sans clé Mathpix configurée, la correction se déclare indisponible (l'UI
-    bloque le dépôt et affiche la bannière)."""
+    bloque le dépôt et affiche la bannière) ; sans clé DeepSeek, elle prévient
+    que les réponses rédigées resteront à corriger à la main."""
     db = mock_db
-    assert scans_router.scan_config(db) == {"mathpix_configured": False}
+    assert scans_router.scan_config(db) == {"mathpix_configured": False,
+                                            "correction_llm_configured": False}
 
 
 def test_batch_summary_previews_notes(mock_db, tmp_path, monkeypatch):
@@ -381,27 +383,30 @@ def test_cell_by_cell_correction(mock_db, tmp_path, monkeypatch):
     assert it["grade_mode"] == "cells"
     assert [c["expected_display"] for c in it["cells"]] == ["$5$", "$8$", r"$\dfrac{1}{2}$"]
     assert [c["ocr_text"] for c in it["cells"]] == ["5", "9", "?"]
-    assert [c["auto_ok"] for c in it["cells"]] == [True, False, None]
+    # crédits automatiques : juste, faux, illisible (OCR « ? »)
+    assert [c["auto_credit"] for c in it["cells"]] == [1.0, 0.0, None]
     assert [c["label"] for c in it["cells"]] == ["L1 · A", "L1 · B", "L2 · A"]
-    assert [c["teacher_ok"] for c in it["cells"]] == [None, None, None]
+    assert [c["teacher_credit"] for c in it["cells"]] == [None, None, None]
 
     # le prof tranche : case 1 juste, case 2 finalement juste (OCR a mal lu),
-    # case 3 fausse → 2 justes / 3 → 2/3 × 1,5 = 1,0 pt
-    body = scans_router.ResolveIn(action="set_cells", cell_verdicts=[True, True, False])
+    # case 3 à DEMI-POINT (arrondi/erreur légère) → 2,5 / 3
+    body = scans_router.ResolveIn(action="set_cells", cell_verdicts=[1, 1, 0.5])
     scans_router.resolve_response(resp.id, body, db, None)
     dec = scans_router._latest_decision_for_response(db, resp.id)
-    assert dec.source == "teacher" and dec.score == 2.0 and dec.max_score == 3.0
-    assert dec.evidence_json["cell_verdicts"] == [True, True, False]
+    assert dec.source == "teacher" and dec.score == 2.5 and dec.max_score == 3.0
+    assert dec.evidence_json["cell_verdicts"] == [1.0, 1.0, 0.5]
 
-    # marques d'overlay dérivées du texte de cellule réécrit = verdicts du prof
+    # marques d'overlay : les CRÉDITS explicites du prof font foi (un demi-point
+    # ne peut pas s'exprimer par le texte de cellule réécrit)
     tocr = (db.query(OcrAttempt).filter_by(zone_id=resp.zone_id)
             .order_by(OcrAttempt.created_at.desc()).first())
-    assert grading.cell_marks(grading_json, tocr.raw_json["cells"]) == [True, True, False]
+    assert grading.cell_marks(grading_json, tocr.raw_json["cells"],
+                              tocr.raw_json.get("cell_credits")) == [1.0, 1.0, 0.5]
 
     it2 = scans_router.list_items(batch.id, "all", db)[0]
     assert it2["decision_source"] == "teacher"
-    assert abs(it2["current_points"] - 1.0) < 1e-6
-    assert [c["teacher_ok"] for c in it2["cells"]] == [True, True, False]
+    assert abs(it2["current_points"] - 1.25) < 1e-6      # 2,5/3 × 1,5 pt
+    assert [c["teacher_credit"] for c in it2["cells"]] == [1.0, 1.0, 0.5]
     assert scans_router.list_items(batch.id, "flagged", db) == []
 
 

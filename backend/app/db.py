@@ -91,6 +91,17 @@ _RENAMED_COLUMNS: dict[str, list[tuple[str, str]]] = {
     ],
 }
 
+# colonnes SUPPRIMÉES du modèle : {table: [colonne, ...]}. Il ne suffit pas de
+# les retirer du modèle — une colonne NOT NULL sans défaut SQL laissée en base
+# fait échouer tous les INSERT suivants (Postgres refuse, SQLite laisse passer :
+# le même piège que le type DATETIME, invisible en test local).
+# `indigo_exercises.effort_points` doublonnait `grading_json["bareme_points"]`,
+# qui est le SEUL barème (§ services.scoring) : la banque ne lisait déjà que
+# celui-ci, la colonne ne servait qu'à l'affichage et pouvait diverger.
+_DROPPED_COLUMNS: dict[str, list[str]] = {
+    "indigo_exercises": ["effort_points"],
+}
+
 
 def _default_sql(col_type: str) -> str:
     """Défaut SQL d'une colonne ajoutée, quand l'appelant n'en impose pas.
@@ -119,6 +130,13 @@ def run_migrations():
                 if old_name in existing and new_name not in existing:
                     conn.execute(text(
                         f"ALTER TABLE {table} RENAME COLUMN {old_name} TO {new_name}"))
+        for table, columns in _DROPPED_COLUMNS.items():
+            if table not in tables:
+                continue
+            existing = {c["name"] for c in insp.get_columns(table)}
+            for name in columns:
+                if name in existing:
+                    conn.execute(text(f"ALTER TABLE {table} DROP COLUMN {name}"))
         for table, columns in _ADDED_COLUMNS.items():
             if table not in tables:
                 continue

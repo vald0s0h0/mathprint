@@ -66,7 +66,7 @@ def _validated(statement_text: str, **over) -> dict | None:
     comp = Competency(code="A1.1", short_id="A1.1", label="Opérations",
                       domain_code="A", domain_name="Nombres et calculs",
                       chapter_code="A1", chapter_name="Opérations", order_index=0)
-    raw = {"kind": "application", "effort_points": 1, "statement": statement_text,
+    raw = {"kind": "application", "bareme_points": 1, "statement": statement_text,
            "correction": "On additionne : le total vaut $5$.",
            "response_type": "short_text",
            "answer": {"type": "integer", "value": 5}}
@@ -94,7 +94,7 @@ def test_two_statements_differing_only_by_line_breaks_are_one_duplicate():
     comp = Competency(code="A1.1", short_id="A1.1", label="Opérations",
                       domain_code="A", domain_name="Nombres et calculs",
                       chapter_code="A1", chapter_name="Opérations", order_index=0)
-    raw = {"kind": "application", "effort_points": 1,
+    raw = {"kind": "application", "bareme_points": 1,
            "statement": "Calcule. a) $2+3$ b) $1+4$",
            "correction": "On additionne : le total vaut $5$.",
            "response_type": "short_text", "answer": {"type": "integer", "value": 5}}

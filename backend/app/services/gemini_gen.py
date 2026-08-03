@@ -55,7 +55,7 @@ pas le niveau et cette pipeline ne produit donc QUE du niveau 3 ; un appel pour
 un autre niveau ne génère rien et laisse exercise_gen.bank_rows_near_level se
 rabattre sur le 3.
 
-Barème : le modèle renvoie en revanche un "effort_points" par exercice — ce
+Barème : le modèle renvoie en revanche un "bareme_points" par exercice — ce
 n'est PAS la difficulté déguisée (cf. point précédent), mais ce que l'exercice
 VAUT d'après l'effort qu'il exige (temps de réflexion). Les deux grandeurs sont
 volontairement distinctes : on ne note pas le niveau de l'élève, on récompense
@@ -205,7 +205,7 @@ _INTRO = (
     "- respecter le programme français de §GRADE§ ;\n"
     "- viser une difficulté MOYENNE, pour un élève médian de §GRADE§ ; "
     "n'évalue et ne renvoie AUCUN niveau de difficulté, ce n'est pas demandé ;\n"
-    "- donner à chaque exercice son barème \"effort_points\" (cf. BARÈME dans "
+    "- donner à chaque exercice son barème \"bareme_points\" (cf. BARÈME dans "
     "le contrat de format) : ce que l'exercice coûte en TEMPS DE RÉFLEXION, "
     "jamais le niveau de l'élève ni la difficulté de l'exercice — c'est une "
     "grandeur différente de celle du point précédent, ne les confonds pas ;\n"
@@ -313,8 +313,8 @@ _FILLER_INTRO = (
     "# Contraintes de rédaction\n"
     "- respecter le programme français de §GRADE§, difficulté MOYENNE ; "
     "n'évalue ni ne renvoie aucun niveau de difficulté ;\n"
-    "- donner à chaque exercice son barème \"effort_points\" (cf. BARÈME) : ces "
-    "cartes sont courtes, donc leur effort est FAIBLE (le plus souvent 0,5) ;\n"
+    "- donner à chaque exercice son barème \"bareme_points\" (cf. BARÈME) : ces "
+    "cartes sont courtes, donc leur barème est FAIBLE (le plus souvent 0,5) ;\n"
     "- des nombres qui donnent des résultats simples (calcul de tête ou posé) ;\n"
     "- VÉRIFIER chaque résultat deux fois avant de répondre ;\n"
     "- rédiger \"correction\" pour l'ÉLÈVE (pas le professeur) : PAS le résultat "

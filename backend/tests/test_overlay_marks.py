@@ -208,6 +208,15 @@ def test_zone_marks_qcm_shows_correct_boxes_only_on_error():
     assert [b["state"] for b in rmarks["boxes"]] == [None, "ok"]
     assert "wrong" not in {b["state"] for b in rmarks["boxes"]}
 
+    # QCM multiple à moitié juste : le récap porte la PART obtenue, lisible en
+    # fraction — jamais une croix « tout faux » sur une réponse qui a des points
+    partial = GradingDecision(response_id=resp.id, source="deterministic",
+                              score=2 / 3, max_score=1, status="auto", tier="A")
+    pmarks = pipeline._zone_marks(db, item, zone, partial)
+    assert pmarks["any_error"] is True
+    assert pmarks["credit_label"] == "2/3"
+    assert pipeline._credit_label(0.5) == "½"
+
 
 class _FakeCanvas:
     """Canvas espion : enregistre les rect (avec leur remplissage) et compte les
