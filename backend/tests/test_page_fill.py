@@ -72,6 +72,20 @@ def test_pages_needed_empty_copy_is_one_page():
     assert pdfgen.pages_needed([]) == 1
 
 
+def test_first_page_header_is_governed_by_the_unchanged_qr_height():
+    """L'assistant manuel consomme column_metrics : cette géométrie partagée
+    garantit que le gain de place de l'en-tête est réellement disponible à
+    l'écran et dans le PDF, sans réduire le QR physique de 24 mm."""
+    assert pdfgen.HEADER_H == pdfgen.QR_MAIN == 24 * pdfgen.mm
+    geo = pdfgen.header_geometry("control")
+    for zone in ("note", "appreciation", "meta", "qr"):
+        assert geo[zone]["y"] == geo["qr"]["y"]
+        assert geo[zone]["h"] == geo["qr"]["h"]
+    metrics = pdfgen.column_metrics(1)
+    assert metrics["column_h"][0] == pytest.approx(
+        pdfgen._top_of_page(0) - pdfgen._BOTTOM_LIMIT)
+
+
 def test_pages_needed_counts_the_lost_bottom_of_column():
     # Le cœur du bug : 4 cartes de 60 % de colonne = 240 % de colonne, soit
     # « 1,2 page » en somme brute — mais aucune ne se coupant en deux, il en

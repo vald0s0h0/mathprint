@@ -7,7 +7,7 @@ import {
   Stack, Stepper, Text, TextInput, Title, Tooltip,
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
-import { AlertTriangle, Eye, FileText, Plus, RotateCcw, ScrollText } from 'lucide-react'
+import { AlertTriangle, Copy, Eye, FileText, Plus, RotateCcw, ScrollText, Wand2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api } from '../api'
@@ -16,6 +16,7 @@ import PdfPreviewModal from '../components/PdfPreview'
 import PrintButton from '../components/PrintButton'
 import AdaptationStep from './subjects/AdaptationStep'
 import CompetencyMatrixStep from './subjects/CompetencyMatrixStep'
+import ManualWizard from './subjects/ManualWizard'
 import { useAppState } from '../state/AppState'
 
 type Cls = { id: string; name: string; grade_level: string }
@@ -25,6 +26,14 @@ type Assessment = {
   personalization_mode: string; error_message: string | null
   // base de notation d'un contrôle (§ barème) : null pour un entraînement
   note_base: number | null
+  // sujet composé à la main (assistant « Créer mon sujet ») et nature de ses
+  // variantes : '' | 'none' | 'anticheat' | 'level'
+  manual: boolean; variant_kind: string; duplicate_version: number
+}
+
+const VARIANT_LABEL: Record<string, string> = {
+  anticheat: 'variantes anti-triche',
+  level: 'variantes par niveau',
 }
 
 // bases proposées pour un contrôle noté — le barème d'effort des exercices est
@@ -46,9 +55,11 @@ export default function Subjects() {
   const [list, setList] = useState<Assessment[]>([])
   const [classes, setClasses] = useState<Cls[]>([])
   const [open, setOpen] = useState(false)
+  const [manualOpen, setManualOpen] = useState(false)
   const [step, setStep] = useState(0)
   const [previewId, setPreviewId] = useState<string | null>(null)
   const [logAssessment, setLogAssessment] = useState<Assessment | null>(null)
+  const [duplicatingId, setDuplicatingId] = useState<string | null>(null)
   const { cycle, matches } = useAppState()
   const [params, setParams] = useSearchParams()
 
@@ -166,6 +177,22 @@ export default function Subjects() {
     }
   }
 
+  async function duplicate(a: Assessment) {
+    setDuplicatingId(a.id)
+    try {
+      const created = await api.post<{ title: string }>(`/api/assessments/${a.id}/duplicate`)
+      notifications.show({
+        color: 'blue',
+        message: `« ${created.title} » est en file de génération`,
+      })
+      refresh()
+    } catch (e) {
+      notifications.show({ color: 'red', message: (e as Error).message })
+    } finally {
+      setDuplicatingId(null)
+    }
+  }
+
   function reset() {
     setOpen(false); setStep(0); setAssessmentId(null)
     setCompetencyIds([]); setTitle(''); setSuggestReason('')
@@ -185,9 +212,18 @@ export default function Subjects() {
             {cycle === 'all' ? 'Tous les cycles' : `Cycle ${cycle}`} — groupés par classe
           </Text>
         </div>
-        <Button leftSection={<Plus size={18} />} onClick={() => setOpen(true)}>
-          Créer un sujet
-        </Button>
+        <Group gap="xs">
+          {/* Pipeline historique, inchangée : la plateforme choisit et place
+              les exercices à partir des compétences cochées. */}
+          <Button variant="default" leftSection={<Wand2 size={18} />}
+            onClick={() => setOpen(true)}>
+            Création automatique
+          </Button>
+          {/* Assistant complet : le professeur compose lui-même ses pages. */}
+          <Button leftSection={<Plus size={18} />} onClick={() => setManualOpen(true)}>
+            Créer mon sujet
+          </Button>
+        </Group>
       </Group>
 
       {groups.length === 0 && (
@@ -196,12 +232,20 @@ export default function Subjects() {
             <FileText size={36} strokeWidth={1.4} opacity={0.5} />
             <Text fw={600}>Aucun sujet {cycle !== 'all' && `en ${cycle}`}</Text>
             <Text size="sm" c="dimmed" ta="center">
-              Créez votre premier sujet : choix de la classe, des compétences,
-              du mode d'adaptation, puis génération en file de fond.
+              <b>Création automatique</b> : cochez des compétences, la plateforme
+              choisit et place les exercices.<br />
+              <b>Créer mon sujet</b> : composez vous-même vos pages, exercice par
+              exercice, avec vos variantes.
             </Text>
-            <Button mt="xs" leftSection={<Plus size={16} />} onClick={() => setOpen(true)}>
-              Créer un sujet
-            </Button>
+            <Group mt="xs">
+              <Button variant="default" leftSection={<Wand2 size={16} />}
+                onClick={() => setOpen(true)}>
+                Création automatique
+              </Button>
+              <Button leftSection={<Plus size={16} />} onClick={() => setManualOpen(true)}>
+                Créer mon sujet
+              </Button>
+            </Group>
           </Stack>
         </Card>
       )}
@@ -229,7 +273,19 @@ export default function Subjects() {
                         </Tooltip>
                       )}
                       <Text fw={600} lineClamp={1}>{a.title}</Text>
+                      {a.duplicate_version > 1 && (
+                        <Badge size="sm" variant="filled" color="indigo">
+                          v{a.duplicate_version}
+                        </Badge>
+                      )}
                       <Badge size="sm" variant="dot" color={st.color}>{st.label}</Badge>
+                      {a.manual && (
+                        <Tooltip label={VARIANT_LABEL[a.variant_kind]
+                          ? `Composé à la main — ${VARIANT_LABEL[a.variant_kind]}`
+                          : 'Composé à la main'}>
+                          <Badge size="sm" variant="light" color="grape">sur mesure</Badge>
+                        </Tooltip>
+                      )}
                     </Group>
                     <Group gap="xs" wrap="nowrap">
                       {['queued', 'generating', 'error'].includes(a.status) && (
@@ -247,6 +303,17 @@ export default function Subjects() {
                       )}
                       {['ready', 'printed', 'scanning', 'finalized'].includes(a.status) && (
                         <>
+                          {a.manual && (
+                            <Tooltip label="Recréer le même sujet avec la même variante pour chaque élève">
+                              <Button size="xs" variant="light" color="indigo"
+                                leftSection={<Copy size={14} />}
+                                loading={duplicatingId === a.id}
+                                disabled={duplicatingId !== null && duplicatingId !== a.id}
+                                onClick={() => duplicate(a)}>
+                                Dupliquer
+                              </Button>
+                            </Tooltip>
+                          )}
                           <Button size="xs" variant="light" leftSection={<Eye size={14} />}
                             onClick={() => setPreviewId(a.id)}>
                             Aperçu
@@ -279,7 +346,11 @@ export default function Subjects() {
       <GenerationLogModal assessmentId={logAssessment?.id ?? null}
         title={logAssessment?.title} onClose={() => setLogAssessment(null)} />
 
-      <Modal opened={open} onClose={reset} title={<Text fw={650}>Créer un sujet</Text>} size="xl">
+      <ManualWizard opened={manualOpen} classes={cycleClasses}
+        onClose={() => setManualOpen(false)} onCreated={refresh} />
+
+      <Modal opened={open} onClose={reset}
+        title={<Text fw={650}>Création automatique</Text>} size="xl">
         <Stepper active={step} onStepClick={setStep} allowNextStepsSelect={false} size="sm">
           <Stepper.Step label="Contexte">
             <Stack mt="md">

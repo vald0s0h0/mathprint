@@ -19,6 +19,7 @@ from app.db import Base
 from app.models import (Competency, CompetencyFramework, GeneratedExercise,
                         IndigoExercise)
 from app.services import exercise_gen, figures, indigo, indigo_cv, pdfgen
+from app.routers.indigo import summary as indigo_summary
 
 
 # ------------------------------------------------------------------- CV couleur
@@ -910,6 +911,98 @@ def _comp(db):
                    chapter_name="Nombres entiers", order_index=1)
     db.add(c); db.commit()
     return c
+
+
+def test_summary_separates_competency_exercises_from_chapter_problems(db):
+    c1 = _comp(db)
+    c2 = Competency(framework_id=c1.framework_id, code="A1.2", short_id="A1.2",
+                    label="Multiples", domain_code="A", domain_name="Nombres",
+                    chapter_code="A1", chapter_name="Nombres entiers", order_index=2)
+    db.add(c2); db.flush()
+    db.add_all([
+        IndigoExercise(id="summary-ex", competency_id=c1.id, badge_type="exercice", status="draft"),
+        IndigoExercise(id="summary-p1", competency_id=c1.id, badge_type="probleme", status="draft"),
+        IndigoExercise(id="summary-p2", competency_id=c2.id, badge_type="enigme", status="validated"),
+        GeneratedExercise(id="summary-pub-ex", competency_id=c1.id, difficulty_level=2,
+                          statement="Exercice", source="indigo", kind="application"),
+        GeneratedExercise(id="summary-pub-p", competency_id=c2.id, difficulty_level=3,
+                          statement="Problème", source="indigo", kind="probleme"),
+    ])
+    db.commit()
+
+    rows = indigo_summary("3e", db)
+    by_id = {r["competency_id"]: r for r in rows}
+    assert (by_id[c1.id]["draft"], by_id[c1.id]["validated"], by_id[c1.id]["published"]) == (1, 0, 1)
+    assert (by_id[c2.id]["draft"], by_id[c2.id]["validated"], by_id[c2.id]["published"]) == (0, 0, 0)
+    # Compteurs communs au chapitre, identiques sur les deux lignes pour rowSpan.
+    for row in by_id.values():
+        assert (row["problem_draft"], row["problem_validated"], row["problem_published"]) == (1, 1, 1)
+
+
+def test_figure_editor_recrops_original_and_keeps_white_masks(db, tmp_path, monkeypatch):
+    """Dé-rogner repart de la page PDF et un cache validé ne réapparaît pas
+    lorsque le cadrage est ensuite agrandi."""
+    c = _comp(db)
+    raster = np.zeros((80, 100, 3), np.uint8)
+    raster[:, :, 0] = np.arange(100, dtype=np.uint8)
+
+    class Doc:
+        page_count = 1
+
+    monkeypatch.setattr(indigo.indigo_manual, "open_doc", lambda *_: Doc())
+    monkeypatch.setattr(indigo.indigo_manual, "raster_page", lambda *_: raster.copy())
+    row = IndigoExercise(id="figure-edit", competency_id=c.id, grade_level="3e",
+                         source_page=0, statement="Observe la figure.",
+                         has_figure=True, figure_path="indigo/drafts/figure-edit.png",
+                         figure_box_json={"page_index": 0, "x0": 30, "y0": 20,
+                                          "x1": 60, "y1": 50})
+    db.add(row); db.commit()
+    old_url = indigo.exercise_out(db, row)["figure_url"]
+
+    indigo.edit_figure(db, row, {"x0": 10, "y0": 10, "x1": 70, "y1": 60},
+                       [{"x0": 20, "y0": 20, "x1": 40, "y1": 35}])
+    assert indigo.exercise_out(db, row)["figure_url"] != old_url
+    saved = cv2.imread(str(tmp_path / row.figure_path))
+    assert saved.shape[:2] == (50, 60)
+    assert np.all(saved[10:25, 10:30] == 255)
+    assert row.figure_box_json["masks"] == [{"x0": 20, "y0": 20, "x1": 40, "y1": 35}]
+    assert "{{figure}}" in row.statement
+
+    # Deuxième édition : le crop s'agrandit et l'UI renvoie sa liste de caches.
+    mask = {"x0": 20, "y0": 20, "x1": 40, "y1": 35}
+    indigo.edit_figure(db, row, {"x0": 0, "y0": 0, "x1": 90, "y1": 70}, [mask])
+    saved = cv2.imread(str(tmp_path / row.figure_path))
+    assert saved.shape[:2] == (70, 90)
+    assert np.all(saved[20:35, 20:40] == 255)
+
+    # Suppression individuelle du dernier cache : le PNG est reconstruit depuis
+    # le PDF original, donc les pixels source réapparaissent proprement.
+    indigo.edit_figure(db, row, {"x0": 0, "y0": 0, "x1": 90, "y1": 70}, [])
+    saved = cv2.imread(str(tmp_path / row.figure_path))
+    assert not np.all(saved[20:35, 20:40] == 255)
+    assert row.figure_box_json["masks"] == []
+
+
+def test_add_figure_uses_pdf_even_without_crop_file(db, tmp_path, monkeypatch):
+    """L'ajout manuel ne dépend ni du verdict LLM ni d'un crop PNG existant."""
+    c = _comp(db)
+    raster = np.full((60, 90, 3), 170, np.uint8)
+
+    class Doc:
+        page_count = 1
+
+    monkeypatch.setattr(indigo.indigo_manual, "open_doc", lambda *_: Doc())
+    monkeypatch.setattr(indigo.indigo_manual, "raster_page", lambda *_: raster.copy())
+    row = IndigoExercise(id="figure-add", competency_id=c.id, grade_level="3e",
+                         source_page=0, statement="Calcule.", has_figure=False,
+                         crop_path="", crop_box_json={})
+    db.add(row); db.commit()
+
+    indigo.add_figure(db, row)
+    assert row.has_figure is True
+    assert row.figure_box_json["x1"] == 90 and row.figure_box_json["y1"] == 60
+    assert (tmp_path / row.figure_path).exists()
+    assert "{{figure}}" in row.statement
 
 
 def test_publish_seed_and_bank_source(db, tmp_path):

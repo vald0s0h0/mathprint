@@ -30,7 +30,7 @@ def get_db():
 # notion de base de notation étaient tous notés sur 20).
 _ADDED_COLUMNS: dict[str, list[tuple[str, ...]]] = {
     "scan_batches": [("overlay_printed", "BOOLEAN"), ("overlay_distributed", "BOOLEAN")],
-    "copies": [("appreciation_json", "JSON")],
+    "copies": [("appreciation_json", "JSON"), ("variant_key", "TEXT")],
     "generated_exercises": [
         ("verifier_model", "TEXT"),
         ("verifier_verdict_json", "JSON"),

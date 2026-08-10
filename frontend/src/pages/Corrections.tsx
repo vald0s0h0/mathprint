@@ -160,22 +160,27 @@ function normKey(s: string): string {
 
 // aplatit les réponses en UNITÉS et les regroupe : d'abord les cases (mode
 // cells), puis les QCM, puis les rédigées ; à mode égal, mêmes réponses
-// attendues consécutives. En scope « à vérifier » on ne garde que les cases où
-// l'OCR a échoué (auto_ok null) et les réponses signalées non corrigées.
+// attendues consécutives. En scope « à vérifier », UNE REVUE OUVERTE sur une
+// réponse à cellules rend toutes ses cellules visibles : un verdict automatique
+// par cellule n'est qu'une proposition, jamais une validation du professeur.
+// L'ancien filtre ne gardait que `auto_credit === null` : une réponse signalée
+// pour confiance globale faible pouvait donc compter dans le badge backend tout
+// en disparaissant entièrement de la modale.
 function buildUnits(items: Item[], scope: Scope): Unit[] {
   const us: Unit[] = []
   for (const it of items) {
     if (it.grade_mode === 'cells') {
+      const responseAttention = it.flagged && it.decision_source !== 'teacher'
       it.cells.forEach((c, ci) => {
         // case VIDE (aucune encre → jamais envoyée à Mathpix) : compte faux et
-        // n'est JAMAIS montrée au professeur (§ demande). Son verdict false reste
-        // porté par les `verdicts` amorcés → set_cells de la réponse parente OK.
-        if (!c.ocr_text.trim() && c.teacher_credit == null) return
-        const undecided = c.auto_credit === null && c.teacher_credit == null
-        if (scope === 'flagged' && !undecided) return
+        // reste cachée dans « Toutes les réponses ». Mais si la RÉPONSE est
+        // signalée, même le blanc est à confirmer : une trace pâle sous le seuil
+        // CV peut précisément être la cause de la revue.
+        if (!responseAttention && !c.ocr_text.trim() && c.teacher_credit == null) return
+        if (scope === 'flagged' && !responseAttention) return
         us.push({
           key: `${it.response_id}:${ci}`, respId: it.response_id, mode: 'cells',
-          cellIndex: ci, expectedKey: normKey(c.expected_display), attention: undecided,
+          cellIndex: ci, expectedKey: normKey(c.expected_display), attention: responseAttention,
         })
       })
     } else {
@@ -361,12 +366,18 @@ export default function Corrections() {
     const rs = await api.get<Item[]>(`/api/scans/batches/${b.id}/items?scope=${s}`)
     setItems(rs)
     setUnits(buildUnits(rs, s))
-    // amorce les verdicts par case : verdict déjà posé par le prof, sinon celui
-    // du moteur (auto_ok) — seules les cases non tranchées (null) restent à faire
+    // Une réponse SIGNALÉE doit être validée explicitement : ses crédits auto
+    // restent affichés comme information (`auto_credit`) mais ne pré-cochent pas
+    // les choix du professeur. Sinon toutes les cases semblaient déjà résolues
+    // et la modale annonçait « rien à vérifier » dès son ouverture.
     const vmap: Record<string, (number | null)[]> = {}
-    for (const it of rs)
-      if (it.grade_mode === 'cells')
-        vmap[it.response_id] = it.cells.map((c) => (c.teacher_credit != null ? c.teacher_credit : c.auto_credit))
+    for (const it of rs) {
+      if (it.grade_mode !== 'cells') continue
+      const needsTeacher = it.flagged && it.decision_source !== 'teacher'
+      vmap[it.response_id] = it.cells.map((c) => (
+        c.teacher_credit != null ? c.teacher_credit : needsTeacher ? null : c.auto_credit
+      ))
+    }
     setVerdicts(vmap)
     setIdx(0); setScoreInput('')
   }, [])
@@ -473,6 +484,15 @@ export default function Corrections() {
         return
       }
       if (u.mode === 'binary') {
+        if (k === shortcuts.full) gradeRatio(1)
+        else if (k === shortcuts.zero) gradeRatio(0)
+        return
+      }
+      // Un matching se note par nombre entier de liaisons justes. Les
+      // raccourcis 1/3 et 2/3 d'une réponse rédigée seraient faux pour 2, 4,
+      // 5 ou 6 liens ; seuls tout juste / tout faux restent non ambigus.
+      const current = items.find((it) => it.response_id === u.respId)
+      if (current?.response_type === 'matching') {
         if (k === shortcuts.full) gradeRatio(1)
         else if (k === shortcuts.zero) gradeRatio(0)
         return
@@ -585,14 +605,13 @@ export default function Corrections() {
   const sameGroup = cur ? units.filter((u) => u.mode === cur.mode && u.expectedKey === cur.expectedKey) : []
   const samePos = cur ? sameGroup.findIndex((u) => u.key === cur.key) + 1 : 0
 
-  // une unité est « réglée » : case → verdict posé ; bloc → note passée en teacher
-  const unitResolved = (u: Unit): boolean => {
-    if (u.mode === 'cells' && u.cellIndex != null) return verdicts[u.respId]?.[u.cellIndex] != null
-    return items.find((x) => x.response_id === u.respId)?.decision_source === 'teacher'
-  }
-  // réponses encore à vérifier (unités qui réclamaient le prof, pas encore réglées)
+  // La navigation est par unité/cellule, mais le badge métier compte des
+  // RÉPONSES individuelles, comme pending_reviews côté backend. Une réponse
+  // tableau de 5 cellules ne doit ni apparaître comme 5 réponses, ni disparaître.
   const attentionUnits = units.filter((u) => u.attention)
-  const remaining = attentionUnits.filter((u) => !unitResolved(u)).length
+  const remaining = new Set(items
+    .filter((it) => it.flagged && it.decision_source !== 'teacher')
+    .map((it) => it.response_id)).size
 
   return (
     <Stack gap="lg">
@@ -967,7 +986,7 @@ export default function Corrections() {
             <SegmentedControl size="xs" value={scope}
               onChange={(v) => changeScope(v as Scope)}
               data={[
-                { label: `À vérifier${attentionUnits.length ? ` (${remaining})` : ''}`, value: 'flagged' },
+                { label: `À vérifier${remaining ? ` (${remaining})` : ''}`, value: 'flagged' },
                 { label: 'Toutes les réponses', value: 'all' },
               ]} />
             {units.length > 0 && (
@@ -1100,6 +1119,37 @@ export default function Corrections() {
                     Annuler la question
                   </Button>
                 </Group>
+              ) : curItem.response_type === 'matching' ? (
+                <>
+                  {(() => {
+                    const expectedPairs = ((curItem.expected as { pairs?: number[][] })
+                      ?.pairs) || []
+                    const total = Math.max(1, expectedPairs.length)
+                    return (
+                      <Group gap="xs">
+                        {Array.from({ length: total + 1 }, (_, correct) => (
+                          <Button key={correct}
+                            color={correct === 0 ? 'red' : correct === total ? 'green' : 'teal'}
+                            variant={correct === total ? 'filled' : 'light'}
+                            onClick={() => gradeRatio(correct / total)}>
+                            {correct === 0 ? '0 liaison juste — 0'
+                              : `${correct}/${total} liaison${correct > 1 ? 's' : ''} — `
+                                + fmtPts(curItem.bareme_points * correct / total)}
+                          </Button>
+                        ))}
+                      </Group>
+                    )
+                  })()}
+                  <Text size="xs" c="dimmed">
+                    Chaque liaison vaut la même part du barème :{' '}
+                    {fmtPts(curItem.bareme_points / Math.max(1,
+                      ((curItem.expected as { pairs?: number[][] })?.pairs || []).length))} point(s).
+                  </Text>
+                  <Button w="fit-content" variant="subtle" color="gray"
+                    onClick={() => gradeBlock('cancel_item')}>
+                    Annuler la question
+                  </Button>
+                </>
               ) : (
                 <>
                   <Group>

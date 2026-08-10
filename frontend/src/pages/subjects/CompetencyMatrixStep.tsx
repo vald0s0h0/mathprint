@@ -14,11 +14,14 @@ type ChapterGroup = { code: string; name: string; competencies: CompRow[] }
 type DomainGroup = { code: string; name: string; chapters: ChapterGroup[] }
 type Matrix = { classes: ClassRef[]; domains: DomainGroup[] }
 
+// `source`/`onSourceChange` sont OPTIONNELS : l'assistant « Créer mon sujet »
+// ne choisit pas de source d'exercices, il propose directement ce qui est en
+// banque pour les compétences cochées (le sélecteur n'a alors aucun sens).
 export default function CompetencyMatrixStep({
   gradeLevel, selected, onChange, source, onSourceChange,
 }: {
   gradeLevel?: string; selected: string[]; onChange: (ids: string[]) => void
-  source: string; onSourceChange: (source: string) => void
+  source?: string; onSourceChange?: (source: string) => void
 }) {
   const [matrix, setMatrix] = useState<Matrix>({ classes: [], domains: [] })
 
@@ -38,20 +41,22 @@ export default function CompetencyMatrixStep({
   return (
     <Stack gap="xs">
       <Group justify="space-between" align="flex-end">
-        <Stack gap={2}>
-          <Text size="xs" c="dimmed" fw={600}>Source des exercices</Text>
-          {/* Les deux sources lisent le manuel 5e : Sésamaths en ADAPTE les
-              exercices, Gemini s'en sert de référence (programme, niveau) pour
-              en CRÉER d'autres — pas de géométrie pour l'instant. */}
-          <SegmentedControl size="xs" value={source} onChange={onSourceChange} data={[
-            { value: 'auto', label: 'Automatique' },
-            { value: 'mathalea', label: 'MathALÉA' },
-            { value: 'sesamaths', label: 'Sésamaths (5e)' },
-            { value: 'gemini', label: 'Gemini' },
-            // exercices repris du manuel Indigo 3e, publiés en dur (onglet Exercices)
-            { value: 'indigo', label: 'Indigo (3e)' },
-          ]} />
-        </Stack>
+        {onSourceChange ? (
+          <Stack gap={2}>
+            <Text size="xs" c="dimmed" fw={600}>Source des exercices</Text>
+            {/* Les deux sources lisent le manuel 5e : Sésamaths en ADAPTE les
+                exercices, Gemini s'en sert de référence (programme, niveau) pour
+                en CRÉER d'autres — pas de géométrie pour l'instant. */}
+            <SegmentedControl size="xs" value={source} onChange={onSourceChange} data={[
+              { value: 'auto', label: 'Automatique' },
+              { value: 'mathalea', label: 'MathALÉA' },
+              { value: 'sesamaths', label: 'Sésamaths (5e)' },
+              { value: 'gemini', label: 'Gemini' },
+              // exercices repris du manuel Indigo 3e, publiés en dur (onglet Exercices)
+              { value: 'indigo', label: 'Indigo (3e)' },
+            ]} />
+          </Stack>
+        ) : <div />}
         <Badge variant="light">{selected.length} sélectionnée(s)</Badge>
       </Group>
       <Group justify="space-between">

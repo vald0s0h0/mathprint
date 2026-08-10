@@ -1126,9 +1126,10 @@ _BAREME_RULES = (
     "intermédiaires à réutiliser.\n"
     "Un PROBLÈME rapporte donc structurellement plus qu'une application "
     "directe, même à durée égale : y penser coûte plus cher que l'appliquer.\n"
-    "Le barème ne dépend JAMAIS du niveau de l'élève : un élève fragile fournit "
-    "plus d'effort sur un exercice facile qu'un bon élève sur un exercice "
-    "moyen, et ce n'est pas ce qu'on mesure. Deux exercices qui demandent le "
+    "Le barème ne dépend JAMAIS du niveau de l'élève : un élève de niveau 1 à 4 "
+    "peut fournir plus d'effort sur un exercice facile qu'un élève de niveau "
+    "supérieur sur un exercice moyen, et ce n'est pas ce qu'on mesure. Deux "
+    "exercices qui demandent le "
     "même travail valent le même nombre de points, quel que soit leur "
     "habillage.\n"
     "\n"
@@ -1506,7 +1507,7 @@ def ensure_catalog_ref(db: Session, competency: Competency) -> ExerciseCatalog:
 # ================================================================ rappels de leçon
 
 def ensure_lesson(db: Session, competency: Competency, level: int) -> LessonSnippet:
-    """Rappel de leçon pour élève fragile, par compétence × tranche de niveau
+    """Rappel de leçon pour un élève de niveau 1 à 4, par compétence × tranche de niveau
     (1-3 / 4-5) — sert d'abord ce qui est déjà en banque (actif).
 
     La génération DeepSeek d'un rappel a été retirée (16/07) en même temps que

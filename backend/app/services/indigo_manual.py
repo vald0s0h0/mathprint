@@ -10,7 +10,7 @@ Tout le pipeline Indigo travaille dans UN seul espace de coordonnées : le
 raster de la page à `RASTER_DPI`. L'OCR Mistral renvoie ses bbox dans SES
 propres dimensions de page ; on les remet à l'échelle du raster (cf.
 `services.indigo`). Ainsi crop affiché et analyse CV partagent exactement le
-même repère, et l'ajustement des bords (+/-) est un simple recadrage pixel.
+même repère, et l'éditeur peut redéfinir librement le recadrage en pixels.
 """
 from __future__ import annotations
 

@@ -9,7 +9,7 @@ import io
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..db import get_db
@@ -151,34 +151,57 @@ def dismiss_extraction(extraction_id: str, db: Session = Depends(get_db)):
 
 @router.get("/summary")
 def summary(grade_level: str = "3e", db: Session = Depends(get_db)):
-    """Tableau de TOUTES les compétences de la classe (même à 0 exercice) avec
-    le compte brouillon / validé / publié et un indicateur « terminé » (tout
-    validé et publié)."""
-    from sqlalchemy import func
+    """Arbre Domaine > Chapitre > Compétence avec compteurs séparés.
+
+    Les exercices sont rattachés à une compétence. Les problèmes sont
+    transverses et agrégés une seule fois au niveau du chapitre ; les mêmes
+    compteurs de chapitre sont renvoyés sur chaque ligne afin que l'UI puisse
+    les afficher dans des cellules fusionnées.
+    """
     fw = db.query(CompetencyFramework).filter_by(grade_level=grade_level).first()
     if fw is None:
         return []
-    work: dict[str, dict] = {}
-    for ex in db.query(IndigoExercise).all():
-        c = work.setdefault(ex.competency_id, {"draft": 0, "validated": 0})
-        c["validated" if ex.status == "validated" else "draft"] += 1
-    pub: dict[str, int] = dict(
-        db.query(GeneratedExercise.competency_id, func.count())
-        .filter(GeneratedExercise.source == "indigo")
-        .group_by(GeneratedExercise.competency_id).all())
     rows = (db.query(Competency).filter_by(framework_id=fw.id)
             .order_by(Competency.order_index).all())
+    by_id = {c.id: c for c in rows}
+    chapter_key = lambda c: f"{c.domain_code}\0{c.chapter_code}"
+    work: dict[str, dict] = {}
+    problem_work: dict[str, dict] = {}
+    for ex in db.query(IndigoExercise).filter(IndigoExercise.competency_id.in_(list(by_id))).all():
+        status = "validated" if ex.status == "validated" else "draft"
+        comp = by_id[ex.competency_id]
+        if ex.badge_type in ("probleme", "enigme"):
+            problem_work.setdefault(chapter_key(comp), {"draft": 0, "validated": 0})[status] += 1
+        else:
+            work.setdefault(ex.competency_id, {"draft": 0, "validated": 0})[status] += 1
+    pub: dict[str, int] = {}
+    problem_pub: dict[str, int] = {}
+    published = (db.query(GeneratedExercise)
+                 .filter(GeneratedExercise.source == "indigo",
+                         GeneratedExercise.competency_id.in_(list(by_id))).all())
+    for ex in published:
+        comp = by_id[ex.competency_id]
+        if ex.kind == "probleme":
+            key = chapter_key(comp)
+            problem_pub[key] = problem_pub.get(key, 0) + 1
+        else:
+            pub[ex.competency_id] = pub.get(ex.competency_id, 0) + 1
     out = []
     for c in rows:
         w = work.get(c.id, {"draft": 0, "validated": 0})
         p = pub.get(c.id, 0)
+        pw = problem_work.get(chapter_key(c), {"draft": 0, "validated": 0})
+        pp = problem_pub.get(chapter_key(c), 0)
         total = w["draft"] + w["validated"]
         done = total > 0 and w["draft"] == 0 and p > 0 and p >= w["validated"]
         out.append({"competency_id": c.id, "short_id": c.short_id, "label": c.label,
                     "domain_code": c.domain_code, "domain_name": c.domain_name,
                     "chapter_code": c.chapter_code, "chapter_name": c.chapter_name,
                     "draft": w["draft"], "validated": w["validated"],
-                    "published": p, "done": done})
+                    "published": p, "done": done,
+                    "problem_draft": pw["draft"],
+                    "problem_validated": pw["validated"],
+                    "problem_published": pp})
     return out
 
 
@@ -253,6 +276,23 @@ class CropNudge(BaseModel):
     bottom: int = 0
 
 
+class FigureBoxIn(BaseModel):
+    x0: int
+    y0: int
+    x1: int
+    y1: int
+
+
+class FigureEditIn(BaseModel):
+    """Géométrie exprimée dans le raster source à RASTER_DPI.
+
+    Le navigateur travaille donc dans le même repère que le pipeline OCR : il
+    peut agrandir un crop trop serré sans extrapoler depuis l'image déjà coupée.
+    """
+    crop: FigureBoxIn
+    masks: list[FigureBoxIn] = Field(default_factory=list)
+
+
 @router.post("/exercises/{exercise_id}/figure")
 def nudge_figure(exercise_id: str, body: CropNudge, db: Session = Depends(get_db)):
     """Ajuste le cadrage de la FIGURE (schéma/dessin) de l'énoncé — seul crop
@@ -264,10 +304,24 @@ def nudge_figure(exercise_id: str, body: CropNudge, db: Session = Depends(get_db
     return indigo.exercise_out(db, ex)
 
 
+@router.post("/exercises/{exercise_id}/figure/edit")
+def edit_figure(exercise_id: str, body: FigureEditIn, db: Session = Depends(get_db)):
+    """Remplace précisément le cadrage et la liste des caches blancs."""
+    ex = db.get(IndigoExercise, exercise_id)
+    if ex is None:
+        raise HTTPException(404, "Exercice introuvable")
+    try:
+        indigo.edit_figure(db, ex, body.crop.model_dump(),
+                           [m.model_dump() for m in body.masks])
+    except RuntimeError as e:
+        raise HTTPException(422, str(e))
+    return indigo.exercise_out(db, ex)
+
+
 @router.post("/exercises/{exercise_id}/figure/add")
 def add_figure(exercise_id: str, db: Session = Depends(get_db)):
-    """Ajoute une image à l'énoncé (amorcée depuis l'extrait du manuel) quand le
-    LLM n'en a rattaché aucune — l'admin affine ensuite le cadrage."""
+    """Ajoute une image à l'énoncé depuis sa page PDF source, y compris quand
+    le moteur n'avait détecté aucun besoin de figure."""
     ex = db.get(IndigoExercise, exercise_id)
     if ex is None:
         raise HTTPException(404, "Exercice introuvable")
@@ -345,3 +399,25 @@ def exercise_figure(exercise_id: str, db: Session = Depends(get_db)):
     if not path.exists():
         raise HTTPException(404, "Fichier de figure absent")
     return FileResponse(path, media_type="image/png")
+
+
+@router.get("/exercises/{exercise_id}/figure/source.png")
+def exercise_figure_source(exercise_id: str, db: Session = Depends(get_db)):
+    """Page PDF élève originale, au DPI de travail, pour le recadrage visuel.
+
+    Elle est volontairement distincte de ``figure.png`` : même après un crop
+    Mistral trop agressif, l'éditeur dispose encore de tous les pixels source.
+    """
+    ex = db.get(IndigoExercise, exercise_id)
+    if ex is None:
+        raise HTTPException(404, "Exercice introuvable")
+    box = ex.figure_box_json or ex.crop_box_json or {}
+    page_index = int(box.get("page_index", ex.source_page))
+    doc = indigo_manual.open_doc(ex.grade_level, "eleve")
+    if doc is None:
+        raise HTTPException(404, "Manuel élève introuvable")
+    if not (0 <= page_index < doc.page_count):
+        raise HTTPException(404, "Page source hors limites")
+    png = indigo_manual.encode_png(indigo_manual.raster_page(doc, page_index))
+    return StreamingResponse(io.BytesIO(png), media_type="image/png",
+                             headers={"Cache-Control": "private, max-age=3600"})

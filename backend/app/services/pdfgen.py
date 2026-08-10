@@ -2,11 +2,9 @@
 dropout, overlay.
 
 Design des sujets :
-- en-tête en deux colonnes : à gauche la case Note (agrandie, sans mention
-  d'échelle) et la bande Appréciation (agrandie) en POINTILLÉS, remplies par
-  l'overlay de correction ; à droite l'identité de l'élève (nom/prénom/classe,
-  gros) puis le méta du sujet (date, type, titre du lot, petit) — un filet
-  sépare clairement l'en-tête des exercices ;
+- en-tête compact de la hauteur du QR : Note, Appréciation et identité sont
+  alignées sur sa géométrie ; la classe forme un grand filigrane derrière le
+  nom, le titre et la date ;
 - chaque exercice dans une carte à coins arrondis avec ombre portée, badge
   numéroté coloré par difficulté (1 bleu -> 5 rouge), l'énoncé démarrant sur
   la même ligne que le badge ;
@@ -46,8 +44,8 @@ from .runtime_settings import DEFAULT_TEMPLATES
 
 PAGE_W, PAGE_H = A4  # 595.27 x 841.89 pt
 MARGIN = 9 * mm
-HEADER_H = 36 * mm
 QR_MAIN = 24 * mm
+HEADER_H = QR_MAIN
 QR_MINI = 11 * mm
 COL_GAP = 5 * mm
 
@@ -144,6 +142,27 @@ STRIP_PAD_TOP = 0.8 * mm
 STRIP_PAD_BOT = 2.2 * mm
 STRIP_NOTE_W = 17 * mm  # réserve droite pour la note de barème (imprimée en gros/gras)
 CORR_FS_DELTA = 1.0     # le corrigé s'imprime un cran plus petit que l'énoncé
+
+# --- modes de guide (§ assistant « Créer mon sujet ») ------------------------
+# Le « guide » est le court rappel d'auto-correction attaché à chaque exercice
+# (GeneratedExercise.correction, alias correction_guide côté Indigo). Trois
+# modes, portés par item["guides"] et figés dans la géométrie de la copie :
+#   GUIDES_OVERLAY : comportement historique — la bande est dimensionnée sur le
+#     texte du guide, laissée VIDE sur le sujet, et l'overlay de correction
+#     l'imprime (seulement si l'élève s'est trompé).
+#   GUIDES_PRINT   : le guide est imprimé DANS la bande dès le sujet (élèves
+#     de niveau 1 à 4). La géométrie est rigoureusement la même qu'en overlay —
+#     seule l'encre change — donc deux élèves d'une même variante gardent une
+#     mise en page identique, condition du placement manuel page/colonne.
+#   GUIDES_NONE    : aucun guide, ni au sujet ni à l'overlay. La bande retombe à
+#     son plancher (STRIP_MIN_H) : elle ne porte plus que la note de barème, que
+#     l'overlay doit bien imprimer quelque part — c'est l'espace du TEXTE du
+#     guide qui est récupéré (souvent 10 à 20 mm par carte).
+GUIDES_OVERLAY = "overlay"
+GUIDES_PRINT = "print"
+GUIDES_NONE = "none"
+GUIDE_BG = HexColor("#F3F6FA")          # fond discret du guide imprimé
+GUIDE_TEXT = HexColor("#3A4A5C")
 RADIUS = 2.2 * mm
 GAP = 3.5 * mm          # espace vertical entre deux cartes/rappels
 COL_W = (PAGE_W - 2 * MARGIN - COL_GAP) / 2
@@ -157,11 +176,11 @@ COL_W = (PAGE_W - 2 * MARGIN - COL_GAP) / 2
 # correction rejoue header_geometry() sans connaître le nom de l'élève, et
 # doit retomber sur exactement les mêmes rects. C'est donc la taille du nom
 # qui s'adapte à la zone (_fit_size), pas l'inverse.
-NOTE_W = 23 * mm
-META_W = 62 * mm
+NOTE_W = 20 * mm
+META_W = 52 * mm
 HEADER_GAP = 3 * mm       # gouttière entre deux zones voisines
-HEADER_PAD_V = 1.5 * mm   # inset vertical commun : cadres et bloc méta alignés
-HEADER_LABEL_DY = 4.5 * mm  # ligne de base des libellés NOTE/APPRÉCIATION sous le haut de bande
+HEADER_PAD_V = 0 * mm     # toutes les zones suivent exactement le carré QR
+HEADER_LABEL_DY = 3.8 * mm  # ligne de base des libellés NOTE/APPRÉCIATION
 QR_ZONE_W = QR_MAIN
 # clearance du fiduciel TL (haut-gauche) : aucune zone ne doit le recouvrir
 HEADER_LEFT = MARGIN + QR_MINI + 4 * mm
@@ -328,46 +347,11 @@ def _fit_size(text: str, font: str, max_w: float, start: float,
     return size
 
 
-def _meta_rows(student_name: str, class_name: str, title: str, label: str,
-               the_date: str, width: float, tpl: dict,
-               accent: Color) -> list[tuple]:
-    """Lignes (texte, police, corps, couleur) du bloc identité/méta, ajustées
-    pour tenir dans `width`. L'identité passe sur une seule ligne
-    « Nom / Classe » tant que la réduire reste raisonnable ; au-delà (noms
-    longs) elle se scinde en deux lignes plutôt que de déborder sur la zone
-    Appréciation."""
-    name_fs = float(tpl.get("name_size", 14))
-    title_fs = float(tpl.get("title_size", 8))
-    ident = _pdf_safe(f"{student_name}  /  {class_name}")
-    ident_fs = _fit_size(ident, "Helvetica-Bold", width, name_fs, 9.0)
-    if stringWidth(ident, "Helvetica-Bold", ident_fs) <= width:
-        rows = [(ident, "Helvetica-Bold", ident_fs, black)]
-    else:
-        name = _pdf_safe(student_name)
-        rows = [
-            (name, "Helvetica-Bold",
-             _fit_size(name, "Helvetica-Bold", width, name_fs, 7.0), black),
-            (_pdf_safe(class_name), "Helvetica-Bold",
-             _fit_size(_pdf_safe(class_name), "Helvetica-Bold", width,
-                       title_fs + 1, 6.5), accent),
-        ]
-    if title:
-        t = _pdf_safe(title)
-        rows.append((t, "Helvetica-Bold",
-                     _fit_size(t, "Helvetica-Bold", width, title_fs, 6.0), accent))
-    if tpl.get("show_date", True):
-        meta_fs = max(6.0, title_fs - 1)
-        rows.append((_pdf_safe(f"{label}  ·  {the_date}"), "Helvetica", meta_fs,
-                     HexColor("#6A737C")))
-    return rows
-
-
 def _draw_header(c: canvas.Canvas, student_name: str, class_name: str, title: str,
                  assessment_type: str, the_date: str, tpl: dict | None = None):
-    """En-tête en 4 zones, gauche -> droite : Note (contrôle seul) |
-    Appréciation | Identité+méta | QR. Les trois premières partagent la même
-    bande verticale (HEADER_PAD_V) : cadres alignés haut et bas, bloc méta
-    centré dessus, gouttière entre chaque zone."""
+    """Bande compacte, réglée par le carré QR : Note | Appréciation |
+    identité | QR. La classe est un filigrane pleine hauteur dans la zone
+    d'identité ; les informations utiles restent au premier plan."""
     tpl = tpl or DEFAULT_TEMPLATES["header"]
     accent = HexColor(tpl.get("accent", "#37474F"))
     y_top = PAGE_H - MARGIN
@@ -399,24 +383,47 @@ def _draw_header(c: canvas.Canvas, student_name: str, class_name: str, title: st
                  "APPRÉCIATION — remplie à la correction")
     c.setFillColor(black)
 
-    # --- zone Identité + méta : justifiée à droite, bloc centré sur la bande ---
-    meta_right = geo["meta"]["x"] + geo["meta"]["w"]
-    rows = _meta_rows(student_name, class_name, title, label, the_date,
-                      geo["meta"]["w"], tpl, accent)
-    row_gap = 1.6 * mm
-    block_h = sum(fs * 0.72 for _t, _f, fs, _c in rows) + row_gap * (len(rows) - 1)
-    y = band_bottom + (band_h + block_h) / 2
-    for text, font, fs, color in rows:
-        y -= fs * 0.72
-        c.setFont(font, fs)
-        c.setFillColor(color)
-        c.drawRightString(meta_right, y, text)
-        y -= row_gap
+    # --- zone Identité + méta : classe en filigrane, contenu au premier plan ---
+    mx, my, mw, mh = (geo["meta"][k] for k in ("x", "y", "w", "h"))
+    c.saveState()
+    clip = c.beginPath()
+    clip.rect(mx, my, mw, mh)
+    c.clipPath(clip, stroke=0, fill=0)
 
-    # filet séparateur en-tête / exercices (pas de séparateur vertical entre zones)
-    c.setStrokeColor(accent)
-    c.setLineWidth(1.1)
-    c.line(MARGIN, header_bottom, PAGE_W - MARGIN, header_bottom)
+    class_text = _pdf_safe(class_name)
+    class_fs = _fit_size(class_text, "Helvetica-Bold", mw - 1.5 * mm, 90, 34)
+    # Helvetica-Bold a une hauteur de capitale proche de 0,72 em : cette base
+    # centre visuellement le filigrane et lui donne presque les 24 mm du QR.
+    class_base = my + (mh - class_fs * 0.718) / 2
+    c.setFillColor(HexColor("#ECEFF1"))
+    c.setFont("Helvetica-Bold", class_fs)
+    c.drawCentredString(mx + mw / 2, class_base, class_text)
+
+    name = _pdf_safe(student_name)
+    name_fs = _fit_size(name, "Helvetica-Bold", mw - 4 * mm,
+                        float(tpl.get("name_size", 14)), 8.0)
+    c.setFillColor(black)
+    c.setFont("Helvetica-Bold", name_fs)
+    c.drawCentredString(mx + mw / 2, my + mh - 6.0 * mm, name)
+
+    if title:
+        title_text = _pdf_safe(title)
+        title_fs = _fit_size(title_text, "Helvetica-Bold", mw - 4 * mm,
+                             float(tpl.get("title_size", 8)), 5.5)
+        c.setFillColor(accent)
+        c.setFont("Helvetica-Bold", title_fs)
+        c.drawCentredString(mx + mw / 2, my + 7.0 * mm, title_text)
+    if tpl.get("show_date", True):
+        meta_fs = max(5.5, float(tpl.get("title_size", 8)) - 1.5)
+        meta_text = _pdf_safe(f"{label}  ·  {the_date}")
+        meta_fs = _fit_size(meta_text, "Helvetica", mw - 4 * mm, meta_fs, 5.0)
+        c.setFillColor(HexColor("#6A737C"))
+        c.setFont("Helvetica", meta_fs)
+        c.drawCentredString(mx + mw / 2, my + 2.0 * mm, meta_text)
+    c.restoreState()
+
+    # Aucun filet inférieur : la bande compacte et ses gouttières suffisent à
+    # séparer l'identité des cartes d'exercices.
     c.setFillColor(black)
 
 
@@ -912,34 +919,21 @@ CELL_MARK_SIZE = 1.9 * mm
 QCM_MARK_SIZE = CELL_MARK_SIZE + 2.0 * mm
 
 
-# Longueur (en caractères, formules dépouillées) au-delà de laquelle une
-# proposition de QCM est jugée « longue » : on bascule alors en liste (1 col).
-# Seuils choisis pour que « $12$ », « isocèle » restent en colonnes et qu'une
-# phrase (« la somme des angles vaut 180° ») passe en liste (cf. demande
-# utilisateur : colonnes pour les réponses courtes/nombreuses uniquement).
-QCM_COL_MAX_CHARS = 16          # au-delà : 1 colonne (liste)
-QCM_COL_MINI_CHARS = 6          # en deçà (et beaucoup de choix) : jusqu'à 3 colonnes
-
-
 def _qcm_ncols_cap(choices: list[str]) -> int:
-    """Plafond de colonnes SELON LE CONTENU (indépendant de la géométrie) :
-    liste (1 col) pour des propositions longues, 2 à 3 colonnes réservées aux
-    réponses courtes et nombreuses. Frontend (Exercices.ResponseZone) applique
-    la MÊME règle pour un aperçu fidèle à l'impression."""
-    from . import mathrender
-    n = len(choices)
-    maxchars = max((len(mathrender.strip_math(str(c))) for c in choices), default=0)
-    if maxchars > QCM_COL_MAX_CHARS or n < 4:
-        return 1
-    if maxchars <= QCM_COL_MINI_CHARS and n >= 6:
-        return 3
-    return 2
+    """Plafond absolu ; le nombre effectif est choisi par mesure typographique.
+
+    Aucun seuil en nombre de caractères : il serait faux pour les formules et
+    dépendrait de la police. `_qcm_layout` mesure les glyphes réellement rendus
+    et ne conserve que le nombre de colonnes qui tient sans tronquer les choix.
+    """
+    return min(3, len(choices))
 
 
 def _qcm_layout(choices: list[str], width: float,
                 font_size: int) -> tuple[list[dict], float, int]:
-    """Disposition en colonnes (remplies colonne par colonne). Les labels sont
-    mis en page en riche (formules rendues). Retourne (items, hauteur, ncols) ;
+    """Disposition compacte en 1 à 3 colonnes, remplies de gauche à droite.
+    Les labels sont mis en page en riche (formules rendues). Retourne
+    (items, hauteur, ncols) ;
     item = {index, dx, dy, lay, lw, box} en relatif (origine haut-gauche).
 
     Deux passes : la 1re mesure la largeur NATURELLE des labels pour choisir le
@@ -950,35 +944,43 @@ def _qcm_layout(choices: list[str], width: float,
     case de correction overlay), pour que le label ne déborde pas non plus."""
     box = QCM_BOX
     gutter = box + QCM_CORR_RESERVE               # case correction + marge + case élève
-    gap_x, gap_y, pad = 6.0 * mm, 1.6 * mm, 1.6 * mm
+    gap_x, gap_y, pad = 3.0 * mm, 1.6 * mm, 1.6 * mm
     n = len(choices)
     solo_w = max(10 * mm, width - gutter - pad)     # label sur une seule colonne
     nat = [max((ln["w"] for ln in _rich_layout(ch, solo_w, font_size)["lines"]),
                default=0.0) for ch in choices]
     item_w = gutter + pad + (max(nat) if nat else 0.0) + gap_x
-    # Colonnes RÉSERVÉES aux réponses COURTES et NOMBREUSES (type chiffres, cf.
-    # demande utilisateur) : dès qu'une proposition est longue (phrase), on
-    # reste en UNE colonne (liste) — deux colonnes de phrases longues sont
-    # illisibles et débordent. Plafond de colonnes déduit de la longueur du plus
-    # long libellé, en plus du plafond géométrique (combien d'item_w tiennent).
+    # Le plafond géométrique vient de la largeur du plus grand libellé rendu :
+    # une phrase longue reste donc en liste, tandis que Oui/Non, des nombres ou
+    # de petites formules utilisent tout l'espace horizontal disponible.
     ncols = max(1, min(_qcm_ncols_cap(choices), n,
                        int(width // item_w) if item_w > 0 else 1))
     nrows = -(-n // ncols)  # ceil
 
     col_total = width / ncols
     lab_w = max(10 * mm, col_total - gutter - pad - (gap_x if ncols > 1 else 0.0))
-    items, max_h = [], 6.0 * mm
+    items = []
     lays = []
     for choice in choices:
         lay = _rich_layout(choice, lab_w, font_size)
         lays.append(lay)
-        max_h = max(max_h, lay["height"] + gap_y)
+    # Une hauteur par rangée : une formule haute dans une rangée ne doit pas
+    # agrandir toutes les autres. Le calcul est partagé avec le dessin, donc
+    # l'estimation des cards et le PDF ne peuvent pas diverger.
+    row_heights = [6.0 * mm for _ in range(nrows)]
     for i, lay in enumerate(lays):
-        col, row = divmod(i, nrows)
+        row = i // ncols
+        row_heights[row] = max(row_heights[row], lay["height"] + gap_y)
+    row_offsets, offset = [], 0.0
+    for height in row_heights:
+        row_offsets.append(offset)
+        offset += height
+    for i, lay in enumerate(lays):
+        row, col = divmod(i, ncols)
         lw = max((ln["w"] for ln in lay["lines"]), default=0.0)
-        items.append({"index": i, "dx": col * col_total, "dy": row * max_h,
+        items.append({"index": i, "dx": col * col_total, "dy": row_offsets[row],
                       "lay": lay, "lw": lw, "box": box})
-    return items, nrows * max_h, ncols
+    return items, offset, ncols
 
 
 # Interligne des zones de rédaction (multiline_text) : les élèves écrivent plus
@@ -1493,8 +1495,8 @@ def _draw_answer_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float,
     return meta
 
 
-def _correction_strip_layout(correction: str, w: float,
-                             statement_fs: float) -> dict:
+def _correction_strip_layout(correction: str, w: float, statement_fs: float,
+                             guides: str = GUIDES_OVERLAY) -> dict:
     """Cadre corrigé sous une carte, dimensionné pour contenir le TEXTE du
     corrigé de la banque — ANTICIPÉ à la composition du sujet pour que l'overlay
     de correction puisse l'imprimer en entier (jamais coupé). Le corrigé est mis
@@ -1502,13 +1504,27 @@ def _correction_strip_layout(correction: str, w: float,
     ligne durs de services.statement), à un corps un cran plus petit que
     l'énoncé (CORR_FS_DELTA). Une réserve droite (STRIP_NOTE_W) laisse la place à
     la note de barème, imprimée en gros et gras. Retourne
-    {height, fs, text_w, lay} — `lay` sert au SUJET (mesure) ; l'overlay le
-    recompose à l'identique depuis le texte et `fs` stockés dans la méta."""
+    {height, fs, text_w, lay, guides} — `lay` sert au SUJET (mesure) ; l'overlay
+    le recompose à l'identique depuis le texte et `fs` stockés dans la méta.
+
+    `guides` (cf. GUIDES_*) : GUIDES_NONE ramène la bande à son plancher (note
+    de barème seule, aucun texte composé) ; GUIDES_PRINT garde exactement la
+    même hauteur que GUIDES_OVERLAY et ne change que le dessin."""
     fs = max(6.0, statement_fs - CORR_FS_DELTA)
     text_w = max(10 * mm, w - 2 * CARD_PAD - STRIP_NOTE_W)
+    if guides == GUIDES_NONE:
+        return {"height": STRIP_MIN_H, "fs": fs, "text_w": text_w,
+                "lay": _rich_layout("", text_w, fs), "guides": GUIDES_NONE}
     lay = _rich_layout(statement_mod.normalize(correction or ""), text_w, fs)
     height = max(STRIP_MIN_H, lay["height"] + STRIP_PAD_TOP + STRIP_PAD_BOT)
-    return {"height": height, "fs": fs, "text_w": text_w, "lay": lay}
+    return {"height": height, "fs": fs, "text_w": text_w, "lay": lay,
+            "guides": guides}
+
+
+def item_guides_mode(item: dict) -> str:
+    """Mode de guide d'une carte, normalisé (défaut = comportement historique)."""
+    g = item.get("guides") or GUIDES_OVERLAY
+    return g if g in (GUIDES_OVERLAY, GUIDES_PRINT, GUIDES_NONE) else GUIDES_OVERLAY
 
 
 def _exercise_card_h(layout: dict, zone_h: float, strip_h: float,
@@ -1655,13 +1671,28 @@ def _draw_exercise_card(c: canvas.Canvas, x: float, y_top: float, w: float,
     # bande de correction : HORS carte, collée (espace blanc visible, jamais
     # coupée par saut de colonne/page), cadre invisible sur le sujet imprimé —
     # la géométrie reste réservée pour l'overlay de correction.
+    meta["correction_strip"] = _strip_meta(c, x, y, w, strip)
     c.setFillColor(black)
-
-    meta["correction_strip"] = {
-        "x_pt": x + CARD_PAD, "y_pt": y + STRIP_PAD_BOT,
-        "w_pt": w - 2 * CARD_PAD, "h_pt": strip_h - STRIP_PAD_TOP - STRIP_PAD_BOT,
-        "fs": strip["fs"]}
     return card_h, zone_geo, meta
+
+
+def _strip_meta(c: canvas.Canvas, x: float, y: float, w: float,
+                strip: dict) -> dict:
+    """Géométrie de la bande corrigé stockée dans la méta de zone (relue par
+    l'overlay, cf. services.pipeline), et — en mode GUIDES_PRINT — dessin du
+    guide directement sur le sujet. `y` est le BAS de l'unité carte+bande."""
+    strip_h = strip["height"]
+    geo = {"x_pt": x + CARD_PAD, "y_pt": y + STRIP_PAD_BOT,
+           "w_pt": w - 2 * CARD_PAD, "h_pt": strip_h - STRIP_PAD_TOP - STRIP_PAD_BOT,
+           "fs": strip["fs"], "guides": strip.get("guides", GUIDES_OVERLAY)}
+    if strip.get("guides") == GUIDES_PRINT and strip["lay"]["height"] > 0:
+        c.setFillColor(GUIDE_BG)
+        c.roundRect(geo["x_pt"] - 1.0 * mm, geo["y_pt"] - 0.6 * mm,
+                    geo["w_pt"] + 2.0 * mm, geo["h_pt"] + 1.4 * mm,
+                    1.2 * mm, stroke=0, fill=1)
+        _draw_rich(c, geo["x_pt"], geo["y_pt"] + geo["h_pt"], strip["lay"],
+                   color=GUIDE_TEXT)
+    return geo
 
 
 _ADMONITION_KINDS = ("rappel", "conseil", "attention")
@@ -1863,6 +1894,19 @@ def pages_needed(heights: list[float]) -> int:
     return page_idx + 1
 
 
+def column_metrics(pages: int) -> dict:
+    """Géométrie des colonnes d'un sujet de `pages` pages, en points PDF —
+    servie telle quelle à l'assistant « Créer mon sujet », qui dessine ses
+    pages à l'échelle et doit connaître EXACTEMENT la place disponible (la 1re
+    page perd la hauteur de l'en-tête élève). Une seule définition, ici : une
+    capacité recalculée côté navigateur dériverait du rendu réel."""
+    return {
+        "page_w": PAGE_W, "page_h": PAGE_H, "col_w": COL_W, "col_gap": COL_GAP,
+        "margin": MARGIN, "gap": GAP, "cols_per_page": 2,
+        "column_h": [_top_of_page(p) - _BOTTOM_LIMIT for p in range(max(1, pages))],
+    }
+
+
 def pack_reading_order(heights: list[float]) -> list[int]:
     """Ordonne des cartes (hauteurs dans l'ordre d'origine) pour un remplissage
     en colonnes SANS bas de colonne perdu, et retourne leurs index d'origine
@@ -1926,7 +1970,8 @@ def _exercise_layout(item: dict, font_size: int,
     zone_h = _zone_height(rtype, item.get("choices", []), COL_W, zone_fs,
                           item.get("grading"), item.get("inline", False),
                           sub_color)
-    strip = _correction_strip_layout(item.get("correction", ""), COL_W, font_size)
+    strip = _correction_strip_layout(item.get("correction", ""), COL_W, font_size,
+                                     item_guides_mode(item))
     return layout, zone_fs, zone_h, strip
 
 
@@ -1973,7 +2018,8 @@ def _composite_layout(item: dict, font_size: int, math_fs: int) -> dict:
         zone_h = _zone_height(prt, p["choices"], COL_W, zone_fs, p["grading"], False, sub_color)
         laid.append({**p, "frag": frag, "zone_fs": zone_fs, "zone_h": zone_h})
         body_h += _COMPOSITE_PART_GAP + frag["height"] + _COMPOSITE_FRAG_GAP + zone_h
-    strip = _correction_strip_layout(item.get("correction", ""), COL_W, font_size)
+    strip = _correction_strip_layout(item.get("correction", ""), COL_W, font_size,
+                                     item_guides_mode(item))
     return {"stmt": stmt, "parts": laid, "body_h": body_h, "strip": strip,
             "badge_color": sub_color}
 
@@ -2037,6 +2083,12 @@ def _draw_composite_card(c: canvas.Canvas, x: float, y_top: float, w: float, seq
                            "zone_geo": {"x_pt": x, "y_pt": zone_y, "w_pt": w, "h_pt": p["zone_h"]},
                            "meta": meta})
         line_y = zone_y
+    # bande corrigé du composite : les parties n'en portent pas la géométrie
+    # (l'overlay imprime la note au-dessus de chaque zone, comportement
+    # d'origine), mais un guide À IMPRIMER doit l'être ici aussi, une seule fois
+    # pour la carte unifiée.
+    if cl["strip"].get("guides") == GUIDES_PRINT:
+        _strip_meta(c, x, y, w, cl["strip"])
     c.setFillColor(black)
     return card_h, part_zones
 
@@ -2063,11 +2115,26 @@ def estimate_item_height(item: dict, font_size: int, math_fs: int,
 def render_copy(pdf_canvas: canvas.Canvas, *, student_name: str, class_name: str,
                 title: str, assessment_type: str, items: list[dict],
                 pages_meta: list[dict], font_size: int = 9,
-                tpl: dict | None = None) -> list[dict]:
+                tpl: dict | None = None,
+                placement: list[tuple[int, int]] | None = None,
+                min_pages: int = 0) -> list[dict]:
     """Dessine une copie complète. `items` : dicts avec kind=exercise
     (item_id, statement, response_type, choices, level5) ou kind=lesson
     (title, content, example). `tpl` : templates éditables (runtime_settings).
-    Retourne les zones pour le manifeste."""
+    Retourne les zones pour le manifeste.
+
+    `placement` (assistant « Créer mon sujet ») : une paire (page, colonne) PAR
+    item, dans l'ordre de `items` — qui doit alors être trié par (page, colonne,
+    rang), le canvas reportlab étant strictement séquentiel (on ne revient
+    jamais sur une page déjà close). Sans lui, le placement reste glouton :
+    colonne gauche puis droite puis page suivante, comme `pages_needed` le
+    simule. Une carte qui ne tient pas dans la colonne demandée bascule dans la
+    suivante (le débordement est signalé par l'appelant via les page_index
+    retournés), jamais dessinée à cheval.
+
+    `min_pages` : nombre de pages à émettre même si les dernières sont vides —
+    une page laissée volontairement blanche par le professeur reste une page du
+    sujet (elle porte son QR signé et sera scannée comme les autres)."""
     tpl = tpl or DEFAULT_TEMPLATES
     ex_tpl, lesson_tpl = tpl["exercise"], tpl["lesson"]
     font_size = int(ex_tpl.get("font_size", font_size))
@@ -2106,12 +2173,26 @@ def render_copy(pdf_canvas: canvas.Canvas, *, student_name: str, class_name: str
             else:
                 new_page()
 
+    def goto(slot: tuple[int, int], height: float):
+        """Placement imposé : on avance jusqu'à (page, colonne) demandée, puis
+        on retombe sur `place` — qui gère le seul cas restant, une colonne trop
+        pleine pour la carte."""
+        nonlocal col, y_cursor
+        want_page, want_col = slot
+        while page_idx < want_page:
+            new_page()
+        if want_col > col:
+            col = want_col
+            y_cursor = top_of_page()
+        place(height)
+
     _draw_markers(pdf_canvas, pages_meta[0]["payload"])
     _draw_header(pdf_canvas, student_name, class_name, title, assessment_type, today,
                  tpl["header"])
 
     seq = 0
-    for item in items:
+    for idx, item in enumerate(items):
+        slot = placement[idx] if placement and idx < len(placement) else None
         x = MARGIN + col * (col_w + COL_GAP)
         if item.get("kind") == "lesson":
             fs = max(6, int(lesson_tpl.get("font_size", 8)))
@@ -2122,7 +2203,8 @@ def render_copy(pdf_canvas: canvas.Canvas, *, student_name: str, class_name: str
                             "resultat": ""} if item.get("example") else {},
             }
             lay = _lesson_layout(blocks, col_w, fs)
-            place(_lesson_card_h(lay, lesson_tpl) + gap)
+            h = _lesson_card_h(lay, lesson_tpl) + gap
+            goto(slot, h) if slot else place(h)
             x = MARGIN + col * (col_w + COL_GAP)
             used = _draw_lesson_card(pdf_canvas, x, y_cursor, col_w,
                                      item.get("title", "Rappel"), lay, lesson_tpl)
@@ -2132,7 +2214,8 @@ def render_copy(pdf_canvas: canvas.Canvas, *, student_name: str, class_name: str
         seq += 1
         if item["response_type"] == "composite":
             cl = _composite_layout(item, font_size, math_fs)
-            place(_composite_card_h(cl) + gap)
+            h = _composite_card_h(cl) + gap
+            goto(slot, h) if slot else place(h)
             x = MARGIN + col * (col_w + COL_GAP)
             card_h, part_zones = _draw_composite_card(
                 pdf_canvas, x, y_cursor, col_w, seq, cl, item, ex_tpl, font_size)
@@ -2148,7 +2231,7 @@ def render_copy(pdf_canvas: canvas.Canvas, *, student_name: str, class_name: str
         choices = item.get("choices", [])
         layout, zone_fs, zone_h, strip = _exercise_layout(item, font_size, math_fs)
         card_h = _exercise_card_h(layout, zone_h, strip["height"], ex_tpl)
-        place(card_h + gap)
+        goto(slot, card_h + gap) if slot else place(card_h + gap)
         x = MARGIN + col * (col_w + COL_GAP)
 
         _, zone_geo, meta = _draw_exercise_card(
@@ -2163,6 +2246,10 @@ def render_copy(pdf_canvas: canvas.Canvas, *, student_name: str, class_name: str
         })
         y_cursor -= card_h + gap
 
+    # pages volontairement laissées vides à la fin (placement manuel) : elles
+    # doivent exister dans le PDF, avec leurs fiduciels et leur QR signé.
+    while page_idx < min_pages - 1:
+        new_page()
     pdf_canvas.showPage()
     return zones
 
@@ -2300,7 +2387,11 @@ def _draw_correction_strip(c: canvas.Canvas, z: dict, col):
     c.setFillColor(col)
     c.setFont("Helvetica-Bold", 11)
     c.drawRightString(sx + sw, sy + sh / 2 - 11 * 0.34, score_txt)
-    if z.get("text"):
+    # GUIDES_NONE : la bande n'a que la hauteur de la note (le texte n'a jamais
+    # été composé, l'imprimer déborderait sur la carte suivante).
+    # GUIDES_PRINT : le guide est DÉJÀ imprimé sur le sujet — le repasser en
+    # rouge par-dessus ne ferait qu'un pâté.
+    if z.get("text") and strip.get("guides", GUIDES_OVERLAY) == GUIDES_OVERLAY:
         text_w = max(10 * mm, sw - STRIP_NOTE_W)
         lay = _rich_layout(statement_mod.normalize(z["text"]), text_w, fs)
         _draw_rich(c, sx, sy + sh, lay, color=col)
@@ -2314,32 +2405,47 @@ PROGRESS_TRACK = HexColor("#DCE7DC")
 def _draw_appreciation_content(c: canvas.Canvas, geo: dict, progress: list[dict],
                                synthesis: str):
     """Barres de progrès (vert uniquement, jamais de rouge) + synthèse Haiku,
-    dessinées dans le rect Appréciation de header_geometry()."""
+    dessinées dans le rect Appréciation de header_geometry(). Les progrès sont
+    répartis horizontalement : trois compétences ne rallongent donc jamais la
+    bande réglée sur les 24 mm du QR."""
     ax, ay, aw, ah = geo["appreciation"]["x"], geo["appreciation"]["y"], \
         geo["appreciation"]["w"], geo["appreciation"]["h"]
     inner_x = ax + 3.5 * mm
     inner_w = aw - 7 * mm
-    # sous le libellé « APPRÉCIATION » imprimé sur le sujet, jamais dessus
-    y = ay + ah - HEADER_PAD_V - HEADER_LABEL_DY - 3.5 * mm
-    bar_h = 2.2 * mm
-    for p in progress:
-        label = f"{p['competency_name']}  {round(p['pct_acquired'] * 100)}%"
-        c.setFont("Helvetica", 6.5)
-        c.setFillColor(black)
-        c.drawString(inner_x, y, _pdf_safe(label)[:48])
-        y -= 3 * mm
-        c.setFillColor(PROGRESS_TRACK)
-        c.roundRect(inner_x, y - bar_h, inner_w, bar_h, bar_h / 2, stroke=0, fill=1)
-        c.setFillColor(PROGRESS_GREEN)
-        fill_w = max(bar_h, inner_w * min(1.0, p["pct_acquired"]))
-        c.roundRect(inner_x, y - bar_h, fill_w, bar_h, bar_h / 2, stroke=0, fill=1)
-        y -= bar_h + 2.5 * mm
+    visible = progress[:3]
+    if visible:
+        col_gap = 2 * mm
+        col_w = (inner_w - col_gap * (len(visible) - 1)) / len(visible)
+        label_y = ay + ah - HEADER_LABEL_DY - 4.0 * mm
+        bar_y = label_y - 3.0 * mm
+        bar_h = 1.7 * mm
+        for i, p in enumerate(visible):
+            x = inner_x + i * (col_w + col_gap)
+            pct = round(p["pct_acquired"] * 100)
+            name = _pdf_safe(p["competency_name"])
+            suffix = f"  {pct}%"
+            # Coupe déterministe, mesurée dans la vraie police PDF : jamais de
+            # collision entre deux colonnes, quel que soit le libellé H2/H3.
+            while name and stringWidth(name + suffix, "Helvetica", 5.3) > col_w:
+                name = name[:-1]
+            label = (name.rstrip(" ·-") + ("…" if name != _pdf_safe(p["competency_name"]) else "")
+                     + suffix)
+            c.setFont("Helvetica", 5.3)
+            c.setFillColor(black)
+            c.drawString(x, label_y, label)
+            c.setFillColor(PROGRESS_TRACK)
+            c.roundRect(x, bar_y - bar_h, col_w, bar_h, bar_h / 2, stroke=0, fill=1)
+            c.setFillColor(PROGRESS_GREEN)
+            fill_w = max(bar_h, col_w * min(1.0, p["pct_acquired"]))
+            c.roundRect(x, bar_y - bar_h, fill_w, bar_h, bar_h / 2, stroke=0, fill=1)
     if synthesis:
         c.setFillColor(HexColor("#37474F"))
-        c.setFont("Helvetica-Oblique", 6.5)
-        for line in _wrap(synthesis, inner_w, 6.5)[:3]:
+        c.setFont("Helvetica-Oblique", 5.8)
+        y = ay + (5.8 * mm if visible else 13.0 * mm)
+        max_lines = 2 if visible else 3
+        for line in _wrap(synthesis, inner_w, 5.8)[:max_lines]:
             c.drawString(inner_x, y, line)
-            y -= 3 * mm
+            y -= 2.7 * mm
     c.setFillColor(black)
 
 

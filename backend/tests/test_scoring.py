@@ -213,7 +213,7 @@ def _seed_domain(db, domain_code="A") -> Competency:
 @needs_manual
 def test_prompt_asks_for_a_reflection_bareme_not_a_difficulty(db_session):
     """Le cœur de la demande côté prompt : le modèle doit noter la RÉFLEXION et
-    la complexité, surtout pas le niveau de l'élève — un élève fragile fournit
+    la complexité, surtout pas le niveau de l'élève — un élève de niveau 1 à 4 fournit
     plus d'effort sur un exercice facile qu'un bon élève sur un exercice moyen."""
     comp = _seed_domain(db_session)
     prompt = gemini_gen._system_prompt(db_session, comp, "5e", 5, "(title) 1 Calcule.")
@@ -224,7 +224,7 @@ def test_prompt_asks_for_a_reflection_bareme_not_a_difficulty(db_session):
     # la consigne « ne dépend pas du niveau de l'élève » est explicite, et
     # l'exemple qui la motive présent
     assert "ne dépend JAMAIS du niveau de l'élève" in prompt
-    assert "élève fragile" in prompt
+    assert "élève de niveau 1 à 4" in prompt
     # la COMPLEXITÉ est l'autre moitié de l'échelle, et le problème rapporte plus
     assert "COMPLEXITÉ" in prompt and "PROBLÈME" in prompt
     # la difficulté reste, elle, non demandée : les deux grandeurs ne doivent
@@ -317,6 +317,16 @@ def test_points_of_an_exercise_are_never_rounded(db_session):
     assert scoring.earned_points(3, 8, 2.125) == pytest.approx(0.796875)
     # ... et la note, elle, reste arrondie au 0,5 supérieur
     assert scoring.note_from_points(0.625, 1.0, 20)[1] == 12.5
+
+
+def test_matching_divides_the_bareme_equally_without_zeroing_partial_credit():
+    # 1 point / 3 liaisons : chaque bonne liaison vaut exactement 1/3 point.
+    # Deux bonnes liaisons survivent donc à la troisième, erronée.
+    one_link = scoring.earned_points(1, 3, 1.0)
+    two_links = scoring.earned_points(2, 3, 1.0)
+    assert one_link == pytest.approx(1 / 3)
+    assert two_links == pytest.approx(2 / 3)
+    assert two_links == pytest.approx(2 * one_link)
 
 
 # ================================================================ chaîne complète

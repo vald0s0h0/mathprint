@@ -19,6 +19,13 @@ from sympy.parsing.sympy_parser import (
 
 TRANSFORMS = standard_transformations + (implicit_multiplication_application,)
 
+# Une lecture Mathpix/CV ne peut produire une note automatique qu'à partir de
+# 90 % de confiance. Cette constante est volontairement partagée par TOUTES les
+# branches de `grade` : auparavant, seuls les champs texte la contrôlaient et
+# les tableaux/QCM/grilles/matching forçaient ensuite 100 %, même quand le
+# moteur de lecture avait signalé un doute.
+AUTO_CONFIDENCE_MIN = 0.90
+
 
 def normalize(raw: str) -> str:
     """Normalisation FR -> canonique : virgule décimale, ×, −, espaces, LaTeX simple."""
@@ -343,6 +350,12 @@ def grade(expected: dict, grading: dict, ocr_text: str, ocr_confidence: float,
           cell_texts: list[str] | None = None,
           selected_pairs: list[list[int]] | None = None) -> dict:
     """Décision déterministe. Ne choisit jamais en cas d'ambiguïté (RM-005)."""
+    try:
+        ocr_confidence = float(ocr_confidence)
+    except (TypeError, ValueError):
+        ocr_confidence = 0.0
+    if not 0.0 <= ocr_confidence <= 1.0:
+        ocr_confidence = 0.0
     max_score = float(grading.get("max_score", 1))
     comparator = grading.get("comparator", "numeric")
     result = {"max_score": max_score, "score": 0.0, "tier": "D",
@@ -355,9 +368,26 @@ def grade(expected: dict, grading: dict, ocr_text: str, ocr_confidence: float,
         result.update(tier="D", reason_code="no_structured_answer")
         return result
 
+    # Garde-fou commun Mathpix ET CV, placé avant tous les comparateurs. Une
+    # branche structurée ne doit jamais pouvoir remplacer une faible confiance
+    # par 1.0 et attribuer/retirer des points automatiquement. La réponse lue
+    # reste conservée et visible dans la modale professeur.
+    if ocr_confidence < AUTO_CONFIDENCE_MIN:
+        result.update(tier="D", reason_code="ocr_low_confidence")
+        return result
+
     # --- points à relier : détection CV du trait, jamais de choix deviné ---
     if comparator == "matching":
         expected_pairs = {tuple(p) for p in expected.get("pairs", [])}
+        # Une unité INTERNE par liaison, y compris pour les anciennes entrées
+        # dont grading.max_score valait parfois 1 pour tout l'exercice. Le
+        # barème professeur est appliqué ensuite par ratio : chaque liaison
+        # vaut donc exactement bareme_points / nombre_de_liaisons, sans arrondi
+        # et sans qu'une seule erreur puisse annuler les autres bonnes liaisons.
+        result["max_score"] = float(len(expected_pairs))
+        if not expected_pairs:
+            result.update(tier="D", reason_code="matching_invalid")
+            return result
         if selected_pairs is None:
             result.update(tier="D", reason_code="matching_unreadable")
             return result
@@ -368,7 +398,7 @@ def grade(expected: dict, grading: dict, ocr_text: str, ocr_confidence: float,
         got_set = set(got_pairs)
         score = float(len(got_set & expected_pairs))
         ok = got_set == expected_pairs
-        result.update(tier="B", score=score, confidence=1.0,
+        result.update(tier="B", score=score,
                       reason_code="matching_match" if ok else "matching_partial")
         return result
 
@@ -377,6 +407,13 @@ def grade(expected: dict, grading: dict, ocr_text: str, ocr_confidence: float,
     # exclues de la notation) ---
     if comparator == "table_cells":
         flat_expected = fillable_cells(grading)
+        # Échelle interne canonique : une unité par cellule réellement notée.
+        # Le `max_score` de vieux contrats peut être périmé ; le laisser piloter
+        # le ratio score/barème récompensait ou pénalisait l'élève à tort.
+        result["max_score"] = float(len(flat_expected))
+        if not flat_expected:
+            result.update(tier="D", reason_code="table_invalid")
+            return result
         if cell_texts is None or len(cell_texts) != len(flat_expected):
             result.update(tier="D", reason_code="table_unreadable")
             return result
@@ -398,7 +435,7 @@ def grade(expected: dict, grading: dict, ocr_text: str, ocr_confidence: float,
             result.update(tier="D", score=score, reason_code="table_cell_unreadable")
             return result
         full = score == len(flat_expected)
-        result.update(tier="A" if full else "B", score=score, confidence=1.0,
+        result.update(tier="A" if full else "B", score=score,
                       reason_code="table_match" if full
                       else "table_partial" if partial else "table_mismatch")
         return result
@@ -419,7 +456,7 @@ def grade(expected: dict, grading: dict, ocr_text: str, ocr_confidence: float,
         if len(chosen) == 0:
             # copie BLANCHE sur ce QCM : zéro, et surtout pas le crédit des
             # cases « bien laissées vides » — ne rien faire n'est pas répondre.
-            result.update(tier="A", score=0.0, confidence=1.0, reason_code="qcm_blank")
+            result.update(tier="A", score=0.0, reason_code="qcm_blank")
         elif expected.get("type") == "choice" and len(chosen) > 1 and exclusive:
             # double coche sur un choix EXCLUSIF -> exception, jamais un choix
             # arbitraire (§4.3). Sur un QCM multiple, cocher deux cases est une
@@ -434,7 +471,7 @@ def grade(expected: dict, grading: dict, ocr_text: str, ocr_confidence: float,
             credit = qcm_credit(correct, chosen,
                                 len(grading.get("choices") or []),
                                 exclusive=bool(exclusive))
-            result.update(tier="A", score=max_score * credit, confidence=1.0,
+            result.update(tier="A", score=max_score * credit,
                           reason_code="qcm_match" if credit == 1.0
                           else "qcm_partial" if credit else "qcm_wrong")
         return result
@@ -445,6 +482,10 @@ def grade(expected: dict, grading: dict, ocr_text: str, ocr_confidence: float,
     # dont la colonne cochée est la bonne. Une lecture ambiguë (None) part en revue. ---
     if comparator == "grid":
         rows = grading.get("rows") or []
+        result["max_score"] = float(len(rows))
+        if not rows:
+            result.update(tier="D", reason_code="grid_invalid")
+            return result
         if selected_choices is None:
             result.update(tier="D", reason_code="grid_unreadable")
             return result
@@ -453,17 +494,13 @@ def grade(expected: dict, grading: dict, ocr_text: str, ocr_confidence: float,
             sel = selected_choices[i] if i < len(selected_choices) else -1
             if sel == r.get("correct"):
                 score += 1.0
-        full = score >= max_score
-        result.update(tier="A", score=score, confidence=1.0,
+        full = score >= len(rows)
+        result.update(tier="A", score=score,
                       reason_code="grid_match" if full else "grid_mismatch")
         return result
 
     if not ocr_text.strip():
-        result.update(tier="A", score=0.0, confidence=1.0, reason_code="blank")
-        return result
-
-    if ocr_confidence < 0.55:
-        result.update(tier="D", reason_code="ocr_low_confidence")
+        result.update(tier="A", score=0.0, reason_code="blank")
         return result
 
     norm = normalize(ocr_text)
@@ -503,8 +540,7 @@ def grade(expected: dict, grading: dict, ocr_text: str, ocr_confidence: float,
             # le tier reste piloté par la CONFIANCE OCR, pas par la justesse :
             # A et B sont tous deux automatiques, un crédit partiel n'a pas à
             # déclencher de revue (décision utilisateur : demi-point auto).
-            tier = "A" if ocr_confidence >= 0.85 else "B"
-            result.update(tier=tier, score=max_score * credit,
+            result.update(tier="A", score=max_score * credit,
                           reason_code="numeric_match" if credit == 1.0
                           else "numeric_rounded" if credit else "numeric_mismatch")
             return result

@@ -51,9 +51,63 @@ def test_low_confidence_goes_to_review():
     assert r["tier"] == "D"  # faible confiance -> revue, jamais un choix silencieux (RM-005)
 
 
-def test_blank_is_zero_not_review():
-    r = grade({"type": "integer", "value": 10}, {"max_score": 1, "comparator": "numeric"}, "", 0.0)
-    assert r["tier"] == "A" and r["score"] == 0
+def test_blank_is_zero_only_when_cv_is_confident():
+    exp = {"type": "integer", "value": 10}
+    pol = {"max_score": 1, "comparator": "numeric"}
+    # Le blanc est une décision CV comme une autre : sûr -> zéro automatique ;
+    # incertain -> professeur, sans pénaliser l'élève silencieusement.
+    sure = grade(exp, pol, "", 0.95)
+    assert sure["tier"] == "A" and sure["score"] == 0
+    unsure = grade(exp, pol, "", 0.89)
+    assert unsure["tier"] == "D" and unsure["reason_code"] == "ocr_low_confidence"
+
+
+@pytest.mark.parametrize("confidence", [0.0, 0.4, 0.8999, None, "invalide"])
+def test_every_comparator_rejects_confidence_below_90_percent(confidence):
+    cases = [
+        ({"type": "choice", "correct": [0]},
+         {"comparator": "qcm", "max_score": 2, "choices": ["oui", "non"]},
+         {"selected_choices": [0]}),
+        ({"type": "grid"},
+         {"comparator": "grid", "max_score": 1,
+          "cols": ["V", "F"], "rows": [{"correct": 0}]},
+         {"selected_choices": [0]}),
+        ({"type": "matching", "pairs": [[0, 0]]},
+         {"comparator": "matching", "max_score": 1},
+         {"selected_pairs": [[0, 0]]}),
+        ({"type": "table"},
+         {"comparator": "table_cells", "max_score": 1,
+          "cells": [[{"type": "integer", "value": 5}]]},
+         {"cell_texts": ["5"]}),
+    ]
+    for expected, policy, kwargs in cases:
+        r = grade(expected, policy, "", confidence, **kwargs)
+        assert r["tier"] == "D"
+        assert r["reason_code"] == "ocr_low_confidence"
+        assert r["score"] == 0
+
+
+def test_exactly_90_percent_is_eligible_for_automatic_grading():
+    r = grade({"type": "integer", "value": 10},
+              {"max_score": 1, "comparator": "numeric"}, "10", 0.90)
+    assert r["tier"] == "A" and r["score"] == 1
+
+
+def test_table_and_grid_repair_stale_internal_max_score_from_structure():
+    table = grade(
+        {"type": "table"},
+        {"comparator": "table_cells", "max_score": 99,
+         "cells": [[{"type": "integer", "value": 2},
+                    {"type": "integer", "value": 3}]]},
+        "", 0.95, cell_texts=["2", "4"])
+    assert table["score"] == 1 and table["max_score"] == 2
+
+    grid = grade(
+        {"type": "grid"},
+        {"comparator": "grid", "max_score": 99, "cols": ["V", "F"],
+         "rows": [{"correct": 0}, {"correct": 1}]},
+        "", 0.95, selected_choices=[0, 0])
+    assert grid["score"] == 1 and grid["max_score"] == 2
 
 
 def test_qcm_double_check_is_exception():
@@ -192,6 +246,25 @@ def test_matching_full_match():
     assert r["score"] == 2 and r["tier"] == "B"
 
 
+def test_matching_one_wrong_link_keeps_credit_for_every_correct_link():
+    r = grade({"type": "matching", "pairs": [[0, 2], [1, 0], [2, 1]]},
+              {"max_score": 3, "comparator": "matching"}, "", 1.0,
+              selected_pairs=[[0, 2], [1, 0], [2, 3]])
+    assert r["score"] == 2
+    assert r["max_score"] == 3
+    assert r["tier"] == "B" and r["reason_code"] == "matching_partial"
+
+
+def test_matching_repairs_legacy_max_score_to_one_unit_per_link():
+    """Un ancien exercice enregistré avec max_score=1 ne doit ni plafonner
+    trop tôt, ni transformer une réponse partielle en tout-ou-rien."""
+    r = grade({"type": "matching", "pairs": [[0, 0], [1, 1], [2, 2]]},
+              {"max_score": 1, "comparator": "matching"}, "", 1.0,
+              selected_pairs=[[0, 0], [1, 1]])
+    assert r["score"] == 2
+    assert r["max_score"] == 3
+
+
 def test_matching_unreadable_goes_to_review():
     r = grade({"type": "matching", "pairs": [[0, 1]]},
               {"max_score": 1, "comparator": "matching"}, "", 1.0, selected_pairs=None)
@@ -208,8 +281,33 @@ def test_matching_duplicate_pair_is_ambiguous():
 def test_hmac_roundtrip_and_tamper():
     payload = sign_page("page-123")
     assert verify_page_payload(payload) == "page-123"
-    assert verify_page_payload(payload.replace("page-123", "page-999")) is None
+    assert payload.startswith("M2:")
+    assert verify_page_payload(payload[:-1] + ("A" if payload[-1] != "A" else "B")) is None
     assert verify_page_payload("garbage") is None
+
+
+def test_compact_uuid_qr_keeps_hmac_strength_and_legacy_compatibility():
+    page_id = "12345678-1234-5678-1234-567812345678"
+    payload = sign_page(page_id)
+    # MP1 faisait 57 caractères pour un UUID. Le nouveau format Base32 reste
+    # alphanumérique QR et conserve les mêmes 64 bits de signature HMAC.
+    assert len(payload) == 43
+    assert verify_page_payload(payload) == page_id
+
+    import hashlib
+    import hmac
+    from app.config import settings
+    legacy_sig = hmac.new(settings.hmac_key.encode(), page_id.encode(), hashlib.sha256).hexdigest()[:16]
+    assert verify_page_payload(f"MP1|{page_id}|{legacy_sig}") == page_id
+
+
+def test_compact_uuid_token_starting_with_text_marker_is_not_misdecoded():
+    """Régression aléatoire (~1 UUID/32) : un UUID dont le Base32 commence par
+    T reste un UUID, pas un ancien identifiant texte préfixé par T."""
+    page_id = "98000000-0000-4000-8000-000000000000"
+    payload = sign_page(page_id)
+    assert payload.startswith("M2:T")
+    assert verify_page_payload(payload) == page_id
 
 
 # ------------------------------------------------------- tolérance d'écriture

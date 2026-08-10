@@ -234,6 +234,10 @@ class Copy(Base):
     seed: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[str] = mapped_column(String, default="generated")  # generated|printed|scanned|graded|finalized|absent
     total_pages: Mapped[int] = mapped_column(Integer, default=1)
+    # variante servie à cet élève sur un sujet composé à la main (assistant
+    # « Créer mon sujet ») : "A"/"B"/… en anti-triche, "facile"/"moyen"/
+    # "difficile" en variantes par niveau. Vide sur un sujet automatique.
+    variant_key: Mapped[str] = mapped_column(String, default="")
     generated_at: Mapped[datetime] = mapped_column(DateTime, default=now)
     # cache {progress, synthesis} de la zone Appréciation (§ appréciation) —
     # calculé une fois à la finalisation, réutilisé pour une réimpression sans
@@ -397,6 +401,9 @@ class IndigoExercise(Base):
     crop_box_json: Mapped[dict] = mapped_column(JSON, default=dict)    # {page_index,x0,y0,x1,y1,raster_dpi,img_w,img_h}
     crop_path: Mapped[str] = mapped_column(String, default="")         # relatif à data_dir
     has_figure: Mapped[bool] = mapped_column(Boolean, default=False)
+    # {page_index,x0,y0,x1,y1,raster_dpi,img_w,img_h,masks:[{x0,y0,x1,y1}]}
+    # Les caches sont en coordonnées de la page originale afin de survivre à
+    # un futur dé-recadrage de la figure.
     figure_box_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     figure_path: Mapped[str] = mapped_column(String, default="")
     # l'exercice a-t-il BESOIN d'un schéma/image pour être compréhensible, que

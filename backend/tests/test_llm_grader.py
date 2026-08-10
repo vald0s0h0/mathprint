@@ -80,19 +80,16 @@ def test_cv_answers_never_reach_the_llm():
         assert llm_grader.plan(item, _verdict(1, 4, "qcm_partial")) is None
 
 
-def test_reasoning_always_goes_to_the_llm_even_on_a_weak_scan():
-    """multiline_text : envoi SYSTÉMATIQUE dès que l'élève a écrit quelque chose
-    — y compris quand l'OCR doute (une confiance basse n'est pas un verdict), le
-    correcteur signalera lui-même l'illisible."""
+def test_weak_mathpix_reading_goes_directly_to_the_teacher():
+    """Même sur un raisonnement, un texte transcrit sous 90 % ne peut pas être
+    donné au correcteur LLM comme s'il s'agissait des mots certains de l'élève.
+    Le professeur relit directement le crop et la transcription Mathpix."""
     item = _item("multiline_text", {"type": "rubric"},
                  {"comparator": "rubric", "max_score": 2, "bareme_points": 2,
                   "rubric": [{"description": "prix total", "expected_text": "$4 \\times 7$",
                               "points": 1}]})
-    task = llm_grader.plan(item, _verdict(0, 2, "ocr_low_confidence"),
-                           ocr_text="4x7=28 donc il reste 22")
-    assert task is not None and len(task.fields) == 1
-    assert task.fields[0].bareme == 2 and task.fields[0].weight == 2
-    assert task.steps                       # la rubrique accompagne l'appel
+    assert llm_grader.plan(item, _verdict(0, 2, "ocr_low_confidence"),
+                           ocr_text="4x7=28 donc il reste 22") is None
 
 
 def test_blank_reasoning_costs_nothing():

@@ -182,6 +182,11 @@ def plan(item, verdict: dict, *, ocr_text: str = "",
     comparator = grading.get("comparator")
     if comparator in _NO_LLM_COMPARATORS:
         return None
+    # Une lecture Mathpix sous 90 % va directement au professeur. Le correcteur
+    # LLM ne doit pas transformer une transcription incertaine en note certaine,
+    # notamment cellule par cellule dans un tableau.
+    if verdict.get("reason_code") in _NO_LLM_REASONS:
+        return None
     max_score = float(verdict.get("max_score") or grading.get("max_score") or 1)
     if max_score <= 0:
         return None               # question annulée par le professeur
@@ -247,8 +252,6 @@ def plan(item, verdict: dict, *, ocr_text: str = "",
         return task if task.fields else None
 
     # --- réponse courte en un bloc
-    if verdict.get("reason_code") in _NO_LLM_REASONS:
-        return None
     if float(verdict.get("score") or 0) > 0:
         return None               # juste, ou arrondi déjà crédité à demi
     if answer_shape(ocr_text) != LONG:

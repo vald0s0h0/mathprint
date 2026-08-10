@@ -10,6 +10,7 @@ Deux chemins :
   elles avaient été recadrées, pour exercer tout le chemin décisionnel (tiers A-E).
 """
 import hashlib
+import math
 from datetime import datetime, timezone
 from fractions import Fraction
 from pathlib import Path
@@ -31,6 +32,135 @@ from .security import verify_page_payload
 
 PHASES = ["uploaded", "split", "identified", "registered", "cropped",
           "ocr_complete", "graded", "review_pending", "finalized", "overlay_ready"]
+
+
+_STRUCTURED_COMPARATORS = {
+    "qcm_single": "qcm", "qcm_multiple": "qcm",
+    "checkbox_grid": "grid", "matching": "matching",
+    "table_fill": "table_cells", "multi_blank": "table_cells",
+    "manual_drawing": "manual",
+}
+
+
+def _grading_contract_issue(db: Session, item: CopyItem, zone: ResponseZone) -> str | None:
+    """Vérifie que le crop, la réponse attendue et l'échelle de notation parlent
+    bien du MÊME exercice. Toute divergence est envoyée au professeur : tenter
+    de la « réparer » pendant la correction pourrait noter la bonne lecture avec
+    le barème d'une autre question.
+
+    Les contrôles portent sur les invariants figés dans la copie, pas sur la
+    banque courante (qui peut avoir été éditée depuis l'impression).
+    """
+    page = db.get(DocumentPage, zone.page_id)
+    # `ResponseZone.type` a porté des alias historiques ("text", "table",
+    # "drawing") : l'identité fiable est la FK item_id, puis la copie de la
+    # page. Le rendre strict casserait les sujets déjà imprimés sans améliorer
+    # le câblage effectif, piloté par CopyItem.response_type.
+    if zone.item_id != item.id or page is None or page.copy_id != item.copy_id:
+        return "zone_item_mismatch"
+    expected, policy, meta = item.expected_json or {}, item.grading_json or {}, zone.meta_json or {}
+    comparator = policy.get("comparator")
+    required = _STRUCTURED_COMPARATORS.get(item.response_type)
+    if required and comparator != required:
+        return "comparator_mismatch"
+    try:
+        internal_max = float(policy.get("max_score", 1))
+    except (TypeError, ValueError):
+        return "grading_scale_invalid"
+    if not math.isfinite(internal_max) or internal_max <= 0:
+        return "grading_scale_invalid"
+    try:
+        bareme = scoring.item_bareme(policy, item.response_type)
+    except Exception:  # contrat JSON mal formé
+        return "bareme_invalid"
+    if not math.isfinite(bareme) or bareme <= 0:
+        return "bareme_invalid"
+
+    if comparator == "qcm":
+        choices = policy.get("choices") or []
+        correct = expected.get("correct") or []
+        if not choices or not correct or any(not isinstance(i, int) or i < 0 or i >= len(choices)
+                                             for i in correct):
+            return "qcm_contract_mismatch"
+        boxes = meta.get("boxes")
+        if boxes is not None:
+            indices = [b.get("index") for b in boxes if isinstance(b, dict)]
+            if (len(indices) != len(boxes) or any(not isinstance(i, int) for i in indices)
+                    or sorted(indices) != list(range(len(choices)))):
+                return "qcm_zone_mismatch"
+
+    elif comparator == "table_cells":
+        policy_cells = policy.get("cells") or []
+        expected_cells = expected.get("cells") or []
+        if not policy_cells or policy_cells != expected_cells or not grader.fillable_cells(policy):
+            return "table_contract_mismatch"
+        zone_cells = meta.get("cells")
+        if zone_cells is not None:
+            if [len(r) for r in zone_cells] != [len(r) for r in expected_cells]:
+                return "table_zone_mismatch"
+
+    elif comparator == "grid":
+        rows, cols = policy.get("rows") or [], policy.get("cols") or []
+        if not rows or not cols or any(not isinstance(r.get("correct"), int)
+                                       or not 0 <= r["correct"] < len(cols) for r in rows):
+            return "grid_contract_mismatch"
+        boxes = meta.get("boxes")
+        if boxes is not None:
+            positions = {(b.get("row"), b.get("col")) for b in boxes if isinstance(b, dict)}
+            expected_positions = {(ri, ci) for ri in range(len(rows)) for ci in range(len(cols))}
+            if len(positions) != len(boxes) or positions != expected_positions:
+                return "grid_zone_mismatch"
+
+    elif comparator == "matching":
+        pairs = expected.get("pairs") or []
+        if (not pairs or any(not isinstance(p, (list, tuple)) or len(p) != 2 for p in pairs)
+                or len({tuple(p) for p in pairs}) != len(pairs)):
+            return "matching_contract_mismatch"
+        left, right = meta.get("left_points"), meta.get("right_points")
+        if left is not None and right is not None:
+            left_ids = {p.get("index") for p in left}
+            right_ids = {p.get("index") for p in right}
+            if any(p[0] not in left_ids or p[1] not in right_ids for p in pairs):
+                return "matching_zone_mismatch"
+    return None
+
+
+def _recognized_answer_issue(item: CopyItem, *, selected: list[int] | None,
+                             cell_texts: list[str] | None,
+                             selected_pairs: list[list[int]] | None) -> str | None:
+    """Valide la sortie du lecteur avant de la brancher au barème.
+
+    Une valeur structurellement impossible indique un défaut CV/OCR ou un
+    décalage de métadonnées, jamais une faute mathématique de l'élève.
+    """
+    policy, expected = item.grading_json or {}, item.expected_json or {}
+    comparator = policy.get("comparator")
+    if comparator == "qcm" and selected is not None:
+        n = len(policy.get("choices") or [])
+        if (len(set(selected)) != len(selected)
+                or any(not isinstance(i, int) or i < 0 or i >= n for i in selected)):
+            return "qcm_reading_mismatch"
+    elif comparator == "grid" and selected is not None:
+        rows, cols = policy.get("rows") or [], policy.get("cols") or []
+        if (len(selected) != len(rows)
+                or any(not isinstance(i, int) or i < -1 or i >= len(cols) for i in selected)):
+            return "grid_reading_mismatch"
+    elif comparator == "table_cells" and cell_texts is not None:
+        if len(cell_texts) != len(grader.fillable_cells(policy)):
+            return "table_reading_mismatch"
+    elif comparator == "matching" and selected_pairs is not None:
+        pairs = expected.get("pairs") or []
+        left_ids = {p[0] for p in pairs}
+        right_ids = {p[1] for p in pairs}
+        valid = all(isinstance(p, (list, tuple)) and len(p) == 2 for p in selected_pairs)
+        if not valid:
+            return "matching_reading_mismatch"
+        left_seen = [p[0] for p in selected_pairs]
+        right_seen = [p[1] for p in selected_pairs]
+        if (len(set(left_seen)) != len(left_seen) or len(set(right_seen)) != len(right_seen)
+                or any(p[0] not in left_ids or p[1] not in right_ids for p in selected_pairs)):
+            return "matching_reading_mismatch"
+    return None
 
 
 def _set_status(db: Session, batch: ScanBatch, status: str, **progress):
@@ -62,8 +192,24 @@ def _decide_and_store(db: Session, *, item: CopyItem, zone: ResponseZone,
     db.add(resp)
     db.flush()
 
-    verdict = grader.grade(expected, gpolicy, ocr_text, conf, selected,
-                           cell_texts=cell_texts, selected_pairs=selected_pairs)
+    contract_issue = (_grading_contract_issue(db, item, zone)
+                      or _recognized_answer_issue(
+                          item, selected=selected, cell_texts=cell_texts,
+                          selected_pairs=selected_pairs))
+    if contract_issue:
+        # Aucun score automatique n'est fiable si la réponse reconnue n'est pas
+        # câblée sans ambiguïté à son contrat et à son barème.
+        try:
+            safe_max = float((gpolicy or {}).get("max_score", 1))
+        except (TypeError, ValueError):
+            safe_max = 1.0
+        if not math.isfinite(safe_max) or safe_max <= 0:
+            safe_max = 1.0
+        verdict = {"max_score": safe_max, "score": 0.0, "tier": "D",
+                   "confidence": 0.0, "reason_code": contract_issue}
+    else:
+        verdict = grader.grade(expected, gpolicy, ocr_text, conf, selected,
+                               cell_texts=cell_texts, selected_pairs=selected_pairs)
 
     task = None
     if queue is not None:
@@ -80,6 +226,7 @@ def _decide_and_store(db: Session, *, item: CopyItem, zone: ResponseZone,
         confidence=verdict["confidence"], reason_code=verdict["reason_code"],
         tier=verdict["tier"],
         status="auto" if verdict["tier"] in ("A", "B", "C") else "review_pending",
+        evidence_json={"contract_issue": contract_issue} if contract_issue else {},
     )
     db.add(decision)
     db.flush()
@@ -230,26 +377,28 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
                     densities = worker_cv.qcm_densities(res.warped, boxes)
                 selected, densities, default_sel = worker_cv.select_qcm(
                     boxes, densities, qcm_thr)
+                cv_conf = worker_cv.qcm_decision_confidence(densities, qcm_thr)
                 db.add(OcrAttempt(zone_id=zone.id, provider="cv_local",
                                   raw_json={"densities": densities, "selected": selected,
                                             "threshold": round(qcm_thr.value, 4),
                                             "adapted": qcm_thr.adapted,
                                             "default_selected": default_sel},
-                                  confidence=1.0))
+                                  confidence=cv_conf))
                 n_review += _decide_and_store(
                     db, item=item, zone=zone, student=student,
-                    ocr_text="", conf=1.0, selected=selected, corr_id=corr_id,
+                    ocr_text="", conf=cv_conf, selected=selected, corr_id=corr_id,
                     queue=queue)
             elif item.response_type == "checkbox_grid":
                 boxes = (zone.meta_json or {}).get("boxes", [])
                 selected, _dens = worker_cv.detect_grid(res.warped, boxes, qcm_thr)
+                cv_conf = worker_cv.qcm_decision_confidence(_dens, qcm_thr)
                 db.add(OcrAttempt(zone_id=zone.id, provider="cv_local",
                                   raw_json={"grid_selected": selected,
                                             "threshold": round(qcm_thr.value, 4),
-                                            "adapted": qcm_thr.adapted}, confidence=1.0))
+                                            "adapted": qcm_thr.adapted}, confidence=cv_conf))
                 n_review += _decide_and_store(
                     db, item=item, zone=zone, student=student,
-                    ocr_text="", conf=1.0, selected=selected, corr_id=corr_id,
+                    ocr_text="", conf=cv_conf, selected=selected, corr_id=corr_id,
                     queue=queue)
             elif item.response_type == "manual_drawing":
                 # tracé/dessin : jamais de correction automatique — aucun appel
@@ -300,9 +449,14 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
                             (derived_dir / f"{zone.id}-c{k}.png").write_bytes(
                                 worker_cv.encode_png(worker_cv.dropout_filter(disp)))
                         k += 1
-                        if worker_cv.ink_ratio(cfiltered) < 0.01:
+                        cell_ink = worker_cv.ink_ratio(cfiltered)
+                        if cell_ink < 0.01:
                             cell_texts.append("")
-                            confs.append(1.0)
+                            # Une case « vide » est elle aussi une décision CV.
+                            # Une trace pâle proche du seuil ne devient jamais
+                            # automatiquement une absence de réponse.
+                            confs.append(worker_cv.blank_decision_confidence(
+                                cell_ink, threshold=0.01))
                             continue
                         hint = None
                         if ocr_offline and ri < len(expected_cells) and ci < len(expected_cells[ri]):
@@ -320,12 +474,13 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
                     cell_texts=cell_texts, queue=queue)
             else:
                 ink = worker_cv.ink_ratio(filtered)
-                if ink < 0.003:  # zone vide : aucun appel Mathpix (§8.3)
+                if ink < worker_cv.BLANK_INK_THRESHOLD:  # zone vide : aucun appel Mathpix (§8.3)
+                    cv_conf = worker_cv.blank_decision_confidence(ink)
                     db.add(OcrAttempt(zone_id=zone.id, provider="cv_local",
-                                      raw_json={"empty_score": ink}, confidence=1.0))
+                                      raw_json={"empty_score": ink}, confidence=cv_conf))
                     n_review += _decide_and_store(
                         db, item=item, zone=zone, student=student,
-                        ocr_text="", conf=1.0, selected=None, corr_id=corr_id,
+                        ocr_text="", conf=cv_conf, selected=None, corr_id=corr_id,
                     queue=queue)
                 else:
                     hint = _expected_as_text(item.expected_json) if ocr_offline else None
@@ -483,6 +638,76 @@ def open_reviews(db: Session, assessment_id: str) -> int:
                     ManualReview.resolved_at.is_(None)).count())
 
 
+def audit_automatic_decisions(db: Session, assessment_id: str) -> int:
+    """Rattrape les décisions créées avant les garde-fous actuels.
+
+    La pipeline saute volontairement une réponse déjà traitée (idempotence).
+    Sans cet audit, relancer un ancien lot conserverait donc une confiance CV/
+    Mathpix < 90 % ou une échelle table/grille/matching périmée. On ne recalcule
+    pas silencieusement la note : on conserve le score proposé et on demande au
+    professeur de le valider. Ses décisions (`source=teacher`) sont immuables.
+    """
+    copies = db.query(Copy).filter_by(assessment_id=assessment_id).all()
+    copy_ids = [c.id for c in copies]
+    if not copy_ids:
+        return 0
+    items = db.query(CopyItem).filter(CopyItem.copy_id.in_(copy_ids)).all()
+    opened = 0
+    for item in items:
+        resp = db.query(StudentResponse).filter_by(copy_item_id=item.id).first()
+        if resp is None:
+            continue
+        decision = (db.query(GradingDecision).filter_by(response_id=resp.id)
+                    .order_by(GradingDecision.created_at.desc()).first())
+        if decision is None or decision.source == "teacher" or decision.status != "auto":
+            continue
+        zone = db.get(ResponseZone, resp.zone_id) if resp.zone_id else None
+        issue = (_grading_contract_issue(db, item, zone) if zone else "zone_item_mismatch")
+
+        # Lecture source seulement : un essai DeepSeek postérieur ne doit pas
+        # masquer la confiance du texte/cases que Mathpix ou le CV lui a fourni.
+        source_ocr = None
+        if resp.zone_id:
+            attempts = (db.query(OcrAttempt).filter_by(zone_id=resp.zone_id)
+                        .order_by(OcrAttempt.created_at.desc()).all())
+            source_ocr = next((o for o in attempts if o.provider in ("mathpix", "cv_local")), None)
+        if issue is None and source_ocr is not None:
+            try:
+                source_conf = float(source_ocr.confidence)
+            except (TypeError, ValueError):
+                source_conf = 0.0
+            if not math.isfinite(source_conf) or source_conf < grader.AUTO_CONFIDENCE_MIN:
+                issue = "ocr_low_confidence"
+
+        # Les comparateurs à plusieurs unités doivent être notés sur leur
+        # cardinalité réelle, jamais sur un ancien max_score arbitraire.
+        comparator = (item.grading_json or {}).get("comparator")
+        canonical_max = None
+        if comparator == "table_cells":
+            canonical_max = len(grader.fillable_cells(item.grading_json or {}))
+        elif comparator == "grid":
+            canonical_max = len((item.grading_json or {}).get("rows") or [])
+        elif comparator == "matching":
+            canonical_max = len((item.expected_json or {}).get("pairs") or [])
+        if (issue is None and canonical_max is not None
+                and abs(float(decision.max_score or 0) - canonical_max) > 1e-9):
+            issue = "grading_scale_mismatch"
+
+        if issue is None:
+            continue
+        decision.evidence_json = {**(decision.evidence_json or {}),
+                                  "audit_previous_reason": decision.reason_code,
+                                  "audit_issue": issue}
+        decision.reason_code = issue
+        decision.tier = "D"
+        decision.status = "review_pending"
+        if not db.query(ManualReview).filter_by(decision_id=decision.id).first():
+            category = "ocr_ambigu" if issue == "ocr_low_confidence" else "bareme"
+            db.add(ManualReview(decision_id=decision.id, category=category))
+        opened += 1
+    return opened
+
+
 def process_batch(db: Session, batch: ScanBatch):
     """Exécute le pipeline jusqu'à graded/review_pending. Idempotent et reprenable."""
     assessment = db.get(Assessment, batch.assessment_id)
@@ -511,6 +736,7 @@ def process_batch(db: Session, batch: ScanBatch):
     # Le compte des revues est RELU en base, jamais accumulé au fil des
     # décisions : le correcteur LLM en retire (il tranche ce qui l'attendait) et
     # une reprise ne repasse pas sur les réponses déjà notées.
+    audit_automatic_decisions(db, assessment.id)
     n_review = open_reviews(db, assessment.id)
     _set_status(db, batch, "graded")
     if n_review:
@@ -523,6 +749,12 @@ def finalize_batch(db: Session, batch: ScanBatch) -> dict:
     note sur la base choisie — services.scoring), crée les preuves de
     compétence et met à jour la courbe d'oubli (§7.5). Refuse s'il reste des
     revues ouvertes."""
+    # Un ancien lot peut contenir des décisions automatiques produites avant le
+    # seuil à 90 % ou avant la réparation des échelles. L'audit est persisté
+    # AVANT de refuser la finalisation, afin que la file manuelle soit visible
+    # dès le retour 409 de l'API.
+    if audit_automatic_decisions(db, batch.assessment_id):
+        db.commit()
     pending = (db.query(ManualReview).join(GradingDecision)
                .join(StudentResponse, GradingDecision.response_id == StudentResponse.id)
                .join(CopyItem, StudentResponse.copy_item_id == CopyItem.id)

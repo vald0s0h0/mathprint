@@ -163,9 +163,10 @@ async def calibration_measure(file: UploadFile, printer_name: str = "",
                                  "vérifier l'impression à 100 % et le scan complet")
 
     # estimation simple : comparer distances entre marqueurs détectés et canoniques
+    from ..services.security import verify_page_payload
     detections = {}
     for text, quad in worker_cv._detect_qrcodes(img):
-        if text.startswith("MP1|"):
+        if verify_page_payload(text):
             detections["MAIN"] = quad.mean(axis=0)
     for role, center in worker_cv.detect_fiducials(img).items():
         detections.setdefault(role, center)

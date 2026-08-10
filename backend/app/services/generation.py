@@ -24,7 +24,7 @@ compétences ciblées viennent de services.distribution.lesson_review_targets
 — en priorité le plan post-correction personnalisé (lacunes identifiées par
 le LLM à la correction précédente, cf. services.appreciation), à défaut un
 repli déterministe sur la courbe de l'oubli (maîtrise faible), à défaut
-l'ancien filet de sécurité "élève fragile" (niveau ≤ 4). Jamais deux fois la
+le filet de sécurité des élèves de niveau 1 à 4. Jamais deux fois la
 même compétence dans une même copie ; un rappel peut en revanche réapparaître
 d'un sujet à l'autre pour le même élève tant que la lacune persiste — c'est
 voulu (accompagnement personnalisé, pas de nouveauté à tout prix). Chaque
@@ -72,10 +72,110 @@ def _set_progress(db: Session, job: Job | None, progress: int, message: str) -> 
     db.commit()
 
 
+def indigo_display(row) -> tuple[str, str, bool]:
+    """(énoncé affiché, statut calculette, est-un-problème) d'une ligne de
+    banque. Les exercices Indigo (manuel) portent un label « Problème/Énigme +
+    titre » affiché À CÔTÉ du numéro (préfixe de 1re ligne d'énoncé) et un
+    statut calculette dessiné en icône par pdfgen. Les tags du manuel ne sont
+    JAMAIS affichés."""
+    meta = (row.raw_extract_json or {}).get("indigo") if row.source == "indigo" else None
+    if not meta:
+        return row.statement, "autorisee", False
+    calc = meta.get("calculator") or "autorisee"
+    if meta.get("badge_type") not in ("probleme", "enigme"):
+        return row.statement, calc, False
+    lbl = "Problème" if meta.get("badge_type") == "probleme" else "Énigme"
+    title = (meta.get("title") or "").strip()
+    head = f"{lbl} — {title}" if title else lbl
+    return f"{head}\n{row.statement}", calc, True
+
+
+def render_shape(row, guides: str = pdfgen.GUIDES_OVERLAY) -> dict:
+    """Carte pdfgen d'une ligne de banque, SANS aucune écriture en base : tout
+    ce dont dépendent la mise en page et la mesure de hauteur. `item_id` (et
+    `part_item_ids` d'un composite) sont ajoutés par `build_render_item` quand
+    les CopyItem existent ; l'assistant « Créer mon sujet », lui, s'en sert tel
+    quel pour mesurer la hauteur des cartes proposées au professeur.
+
+    Les parties d'un composite sont dans grading["parts"] : la carte reste
+    unique à l'impression, les CopyItem sont créés une par partie."""
+    # barème RÉSOLU (repli compris) : l'instantané d'un CopyItem (RM-014) doit
+    # porter le barème avec lequel le sujet a été composé, pas dépendre d'un
+    # repli recalculé à la correction.
+    grading_json = scoring.with_bareme(row.grading_json, row.response_type)
+    disp_statement, calc, is_probleme = indigo_display(row)
+    common = {"kind": "exercise", "statement": disp_statement,
+              "correction": row.correction, "level5": row.difficulty_level,
+              "calc": calc, "is_probleme": is_probleme, "figure": row.figure_json,
+              "guides": guides}
+    if row.response_type == "composite":
+        parts = (row.expected_json or {}).get("parts") \
+            or (grading_json or {}).get("parts") or []
+        return {**common, "response_type": "composite",
+                "grading": {"parts": [
+                    {"response_type": p.get("response_type", "short_text"),
+                     "grading": scoring.with_bareme(
+                         p.get("grading") or {}, p.get("response_type", "short_text")),
+                     "statement": p.get("statement", ""),
+                     "expected": p.get("expected") or {}} for p in parts]}}
+    return {**common, "response_type": row.response_type,
+            "choices": row.grading_json.get("choices", []),
+            "grading": grading_json,
+            "inline": bool((row.expected_json or {}).get("inline"))}
+
+
+def build_render_item(db: Session, *, row, copy_id: str, catalog_id: str, seq: int,
+                      lesson_snippet_id: str | None = None,
+                      guides: str = pdfgen.GUIDES_OVERLAY) -> dict | None:
+    """Crée la (ou les) CopyItem d'une ligne de banque et retourne la carte à
+    rendre par pdfgen. UNE seule définition, partagée par la génération
+    automatique (distribution par compétences) et par l'assistant « Créer mon
+    sujet » (placement manuel) : deux constructions parallèles finiraient par
+    diverger sur le barème figé, les composites ou l'étiquette Indigo.
+
+    Retourne None si la ligne est inexploitable (composite sans partie)."""
+    render = render_shape(row, guides)
+    if row.response_type == "composite":
+        # une CopyItem PAR PARTIE (chacune un type feuille normal, corrigée par
+        # la pipeline existante) mais UNE seule carte unifiée à l'impression.
+        part_ids = []
+        for pi, part in enumerate(render["grading"]["parts"]):
+            p_item = CopyItem(
+                copy_id=copy_id, catalog_id=catalog_id, sequence=seq,
+                difficulty=row.difficulty_level * 2,
+                response_type=part["response_type"],
+                statement=part["statement"], correction=row.correction,
+                expected_json=part["expected"], grading_json=part["grading"],
+                lesson_snippet_id=(lesson_snippet_id if pi == 0 else None))
+            db.add(p_item)
+            db.flush()
+            part_ids.append(p_item.id)
+        if not part_ids:
+            return None
+        return {**render, "item_id": part_ids[0], "part_item_ids": part_ids}
+
+    item = CopyItem(
+        copy_id=copy_id, catalog_id=catalog_id, sequence=seq,
+        difficulty=row.difficulty_level * 2, response_type=row.response_type,
+        statement=row.statement, correction=row.correction,
+        expected_json=row.expected_json, grading_json=render["grading"],
+        lesson_snippet_id=lesson_snippet_id)
+    db.add(item)
+    db.flush()
+    return {**render, "item_id": item.id}
+
+
 def generate_assessment_job(db: Session, assessment: Assessment,
                             job: Job | None = None, font_size: int = 9) -> dict:
     """Génère toutes les copies à partir des compétences cochées. Retourne le
     rapport de génération. Appelé par le worker de fond (job_worker)."""
+    # assistant « Créer mon sujet » : le professeur a composé lui-même ses
+    # pages (exercices choisis, placés colonne par colonne, variantes). Rien à
+    # distribuer ni à remplir — pipeline dédiée, cf. services.manual_subject.
+    if (assessment.blueprint_json or {}).get("mode") == "manual":
+        from . import manual_subject
+        return manual_subject.generate_manual_job(db, assessment, job, font_size)
+
     school_class = db.get(SchoolClass, assessment.class_id)
     students = [s for s in school_class.students if s.active]
     # source des exercices choisie dans l'assistant (§ Sésamaths) : "auto"
@@ -199,88 +299,16 @@ def generate_assessment_job(db: Session, assessment: Assessment,
 
             identity = distribution.exercise_identity(row)
             picked_keys.add(identity)
-            choices = row.grading_json.get("choices", [])
-            # barème RÉSOLU (repli compris) figé sur la copie : l'instantané
-            # d'un CopyItem (RM-014) doit porter le barème avec lequel le sujet
-            # a été composé, pas dépendre d'un repli recalculé à la correction —
-            # le jour où la règle de repli change, les copies déjà imprimées ne
-            # doivent pas se mettre à valoir autre chose (§ barème).
-            grading_json = scoring.with_bareme(row.grading_json, row.response_type)
-            # exercices Indigo (manuel) : label « Problème/Énigme + titre » affiché
-            # À CÔTÉ du numéro (préfixe de 1re ligne d'énoncé), et statut calculette
-            # dessiné en icône par pdfgen. Communs à l'exercice (et à chaque partie
-            # d'un composite). Les tags du manuel ne sont JAMAIS affichés.
-            indigo_meta = ((row.raw_extract_json or {}).get("indigo")
-                           if row.source == "indigo" else None)
-            disp_statement, calc, is_probleme = row.statement, "autorisee", False
-            if indigo_meta:
-                calc = indigo_meta.get("calculator") or "autorisee"
-                bt = indigo_meta.get("badge_type")
-                if bt in ("probleme", "enigme"):
-                    is_probleme = True          # seuls les problèmes portent une difficulté (3 niveaux)
-                    lbl = "Problème" if bt == "probleme" else "Énigme"
-                    title = (indigo_meta.get("title") or "").strip()
-                    disp_statement = f"{lbl} — {title}\n{row.statement}" if title \
-                        else f"{lbl}\n{row.statement}"
             # les cartes de remplissage ne passent pas par le tirage équilibré
             # (kind_counts), donc pas de bucket à décrémenter si retirées.
             bucket = None if filler else distribution.exercise_bucket(row)
 
-            # EXERCICE COMPOSITE (types mixtes par sous-question) : une CopyItem
-            # PAR PARTIE (chacune un type feuille normal, corrigée par la pipeline
-            # existante) mais UNE seule carte unifiée à l'impression (cf.
-            # pdfgen._draw_composite_card). Le contexte commun et le corrigé restent
-            # portés par la carte ; chaque partie porte sa sous-question et sa zone.
-            if row.response_type == "composite":
-                parts = (row.expected_json or {}).get("parts") \
-                    or (grading_json or {}).get("parts") or []
-                part_ids, part_render = [], []
-                for pi, part in enumerate(parts):
-                    p_rt = part.get("response_type", "short_text")
-                    p_grad = scoring.with_bareme(part.get("grading") or {}, p_rt)
-                    p_item = CopyItem(
-                        copy_id=copy.id, catalog_id=catalog_refs[comp_id].id, sequence=seq,
-                        difficulty=row.difficulty_level * 2, response_type=p_rt,
-                        statement=part.get("statement", ""), correction=row.correction,
-                        expected_json=part.get("expected") or {}, grading_json=p_grad,
-                        lesson_snippet_id=(lesson_snippet_id if pi == 0 else None))
-                    db.add(p_item)
-                    db.flush()
-                    part_ids.append(p_item.id)
-                    part_render.append({"response_type": p_rt, "grading": p_grad,
-                                        "statement": part.get("statement", ""),
-                                        "expected": part.get("expected") or {}})
-                if not part_ids:
-                    return False
-                render_items.append({"kind": "exercise", "response_type": "composite",
-                                     "item_id": part_ids[0], "part_item_ids": part_ids,
-                                     "statement": disp_statement, "correction": row.correction,
-                                     "grading": {"parts": part_render},
-                                     "level5": row.difficulty_level, "calc": calc,
-                                     "is_probleme": is_probleme, "figure": row.figure_json,
-                                     "_identity": identity, "_bucket": bucket})
-                total_non_qcm += 1
-                return True
-
-            item = CopyItem(
-                copy_id=copy.id, catalog_id=catalog_refs[comp_id].id, sequence=seq,
-                difficulty=row.difficulty_level * 2, response_type=row.response_type,
-                statement=row.statement, correction=row.correction,
-                expected_json=row.expected_json, grading_json=grading_json,
-                lesson_snippet_id=lesson_snippet_id)
-            db.add(item)
-            db.flush()
-            render_items.append({"kind": "exercise", "item_id": item.id,
-                                 "statement": disp_statement,
-                                 "correction": row.correction,
-                                 "response_type": row.response_type,
-                                 "choices": choices, "level5": row.difficulty_level,
-                                 "calc": calc, "is_probleme": is_probleme,
-                                 "figure": row.figure_json,
-                                 "grading": grading_json,
-                                 "inline": bool((row.expected_json or {}).get("inline")),
-                                 "_identity": identity,
-                                 "_bucket": bucket})
+            render = build_render_item(
+                db, row=row, copy_id=copy.id, catalog_id=catalog_refs[comp_id].id,
+                seq=seq, lesson_snippet_id=lesson_snippet_id)
+            if render is None:
+                return False
+            render_items.append({**render, "_identity": identity, "_bucket": bucket})
             if not row.response_type.startswith("qcm"):
                 total_non_qcm += 1
             return True
@@ -413,6 +441,7 @@ def generate_assessment_job(db: Session, assessment: Assessment,
             db.add(page)
             db.flush()
             page.qr_payload = sign_page(page.id)
+            page.hmac_version = "2"
             pages_meta.append({"page_id": page.id, "payload": page.qr_payload})
             page_rows.append(page)
 

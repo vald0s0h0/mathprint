@@ -114,7 +114,7 @@ def due_competencies(db: Session, student_id: str) -> list[dict]:
         due_at = _utc(s.due_at)
         if p < settings.forgetting_threshold or (due_at and due_at <= now):
             if s.mastery < 0.4:
-                reason = "échec récent ou maîtrise fragile"
+                reason = "échec récent ou maîtrise à consolider"
             elif s.last_seen_at is None:
                 reason = "absence de preuve"
             else:

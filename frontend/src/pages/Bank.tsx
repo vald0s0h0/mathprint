@@ -620,7 +620,7 @@ export default function Bank() {
                       ))}
                       {lessons.length === 0 && (
                         <Text c="dimmed" size="sm">
-                          Aucun rappel — généré automatiquement pour les élèves fragiles, ou à la demande ci-dessus.
+                          Aucun rappel — généré automatiquement pour les élèves de niveau 1 à 4, ou à la demande ci-dessus.
                         </Text>
                       )}
                     </Stack>

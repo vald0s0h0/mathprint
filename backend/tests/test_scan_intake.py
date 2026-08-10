@@ -1,6 +1,9 @@
 """Tests : entrée des scans dans la pipeline — RÈGLE « un sujet = une
 correction = un seul ScanBatch ». Couvre le bug du bac à sable (plusieurs
 fichiers/images d'un même sujet créaient autant de corrections)."""
+import hashlib
+import hmac
+import io
 import sys
 from pathlib import Path
 
@@ -13,8 +16,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import models as _models  # noqa: F401 (enregistre les tables sur Base)
 from app.db import Base
-from app.models import Assessment, Copy, DocumentPage, ScanBatch, SchoolClass, Student
-from app.services import sandbox, scan_intake
+from app.config import settings
+from app.models import (Assessment, Copy, DocumentPage, FileObject, ScanBatch,
+                        SchoolClass, Student)
+from app.services import pdfgen, sandbox, scan_intake, worker_cv
+from app.services.security import sign_page
 
 
 @pytest.fixture
@@ -65,6 +71,64 @@ def _patch_classify(monkeypatch, db, pages):
         return (pid, scan_intake.page_assessment(_db, pid), img) if pid else (None, None, None)
 
     monkeypatch.setattr(scan_intake, "classify_page", fake_classify)
+
+
+def _marked_pdf(payload: str) -> bytes:
+    """Une vraie page MathPrint, telle qu'elle arrive dans « Déposer en vrac ».
+    Le test passe ensuite par raster_pdf + OpenCV, sans simuler le QR."""
+    from reportlab.pdfgen import canvas
+
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=(pdfgen.PAGE_W, pdfgen.PAGE_H))
+    pdfgen._draw_markers(c, payload)
+    pdfgen._draw_header(c, "MARTIN Alex", "5A", "Contrôle 1", "control", "10/08/2026")
+    c.showPage()
+    c.save()
+    return buf.getvalue()
+
+
+@pytest.mark.parametrize("qr_version", ["compact_m2", "legacy_mp1"])
+def test_bulk_upload_recognizes_signed_pages_end_to_end(
+        mock_db, tmp_path, monkeypatch, qr_version):
+    """Génération -> PDF -> raster -> QR OpenCV -> HMAC -> DocumentPage ->
+    regroupement du dépôt en vrac. Couvre M2 et les copies MP1 déjà imprimées."""
+    db = mock_db
+    assessment, pages = _seed(db)
+    page_id = pages[1]
+    if qr_version == "compact_m2":
+        payload = sign_page(page_id)
+    else:
+        sig = hmac.new(settings.hmac_key.encode(), page_id.encode(), hashlib.sha256).hexdigest()[:16]
+        payload = f"MP1|{page_id}|{sig}"
+    page = db.get(DocumentPage, page_id)
+    page.qr_payload = payload
+    page.hmac_version = "2" if qr_version == "compact_m2" else "1"
+    db.commit()
+
+    monkeypatch.setattr(scan_intake.settings, "data_dir", tmp_path)
+    pdf_bytes = _marked_pdf(payload)
+    source = tmp_path / f"{qr_version}.pdf"
+    source.write_bytes(pdf_bytes)
+    image = worker_cv.raster_pdf(str(source))[0]
+
+    # Dépôt ciblé/non ciblé : le pré-contrôle retrouve bien le sujet.
+    assert scan_intake.detect_assessment(db, [image]) == assessment.id
+    identified, aid, warped = scan_intake.classify_page(db, image)
+    assert identified == page_id and aid == assessment.id and warped is not None
+
+    # Parcours exact du bouton « Déposer en vrac ».
+    out = sandbox.ingest_files(
+        db, [(f"{qr_version}.pdf", ".pdf", pdf_bytes)], "teacher")
+    assert len(out["batch_ids"]) == 1
+    assert out["results"][0]["pages_added"] == 1
+    assert out["results"][0]["blocked_pages"] == 0
+
+    # Le PDF canonique réencodé pour la pipeline doit encore être reconnaissable
+    # au second passage CV, pas seulement au dépôt initial.
+    batch = db.get(ScanBatch, out["batch_ids"][0])
+    stored = db.get(FileObject, batch.source_file_id)
+    reloaded = worker_cv.raster_pdf(stored.storage_path)[0]
+    assert worker_cv.analyze_page(reloaded).page_id == page_id
 
 
 def test_two_uploads_same_assessment_reuse_single_batch(mock_db, tmp_path, monkeypatch):

@@ -259,6 +259,111 @@ def test_scan_config_flags_missing_keys(mock_db):
                                             "correction_llm_configured": False}
 
 
+def _seed_structured_item(db, *, response_type, expected, grading_json, meta_json):
+    """Petit contrat de copie réel pour tester le câblage zone -> item -> barème."""
+    cls = SchoolClass(name="4C", grade_level="4e"); db.add(cls); db.flush()
+    assessment = Assessment(class_id=cls.id, title="Audit", type="control", note_base=20)
+    db.add(assessment); db.flush()
+    student = Student(class_id=cls.id, first_name="A", last_name="B", llm_pseudonym="audit")
+    db.add(student); db.flush()
+    copy = Copy(assessment_id=assessment.id, student_id=student.id, status="printed")
+    db.add(copy); db.flush()
+    page = DocumentPage(copy_id=copy.id, page_no=1); db.add(page); db.flush()
+    item = CopyItem(copy_id=copy.id, catalog_id="cat-1", sequence=1, difficulty=3,
+                    response_type=response_type, statement="Réponds.", correction="Corr.",
+                    expected_json=expected, grading_json=grading_json)
+    db.add(item); db.flush()
+    zone = ResponseZone(page_id=page.id, item_id=item.id, type=response_type,
+                        x_pt=50, y_pt=50, w_pt=100, h_pt=30, meta_json=meta_json)
+    db.add(zone); db.flush()
+    return assessment, student, item, zone
+
+
+def test_low_mathpix_confidence_never_grades_a_table_automatically(mock_db):
+    """Régression centrale : les tableaux forçaient confiance=1 après lecture,
+    même quand Mathpix annonçait 40 %. La réponse lue reste visible mais la note
+    attend obligatoirement le professeur."""
+    from app.models import GradingDecision, ManualReview, StudentResponse
+
+    cells = [[{"type": "integer", "value": 5}, {"type": "integer", "value": 8}]]
+    _a, student, item, zone = _seed_structured_item(
+        mock_db, response_type="table_fill",
+        expected={"type": "table", "cells": cells},
+        grading_json={"comparator": "table_cells", "max_score": 2,
+                      "bareme_points": 1.5, "cells": cells},
+        meta_json={"cells": [[{}, {}]]})
+
+    created = pipeline._decide_and_store(
+        mock_db, item=item, zone=zone, student=student, ocr_text="", conf=0.89,
+        selected=None, corr_id="audit", cell_texts=["5", "8"])
+    mock_db.flush()
+
+    assert created is True
+    response = mock_db.query(StudentResponse).one()
+    decision = mock_db.query(GradingDecision).filter_by(response_id=response.id).one()
+    assert decision.status == "review_pending"
+    assert decision.reason_code == "ocr_low_confidence"
+    assert decision.confidence == pytest.approx(0.89)
+    assert mock_db.query(ManualReview).count() == 1
+
+
+def test_mismatched_zone_contract_blocks_score_even_with_confident_cv(mock_db):
+    """Une case reconnue avec certitude ne peut pas être notée si ses index ne
+    correspondent pas aux choix/barème figés de l'exercice."""
+    from app.models import GradingDecision
+
+    _a, student, item, zone = _seed_structured_item(
+        mock_db, response_type="qcm_single",
+        expected={"type": "choice", "correct": [0]},
+        grading_json={"comparator": "qcm", "max_score": 2, "bareme_points": 1,
+                      "choices": ["Oui", "Non"]},
+        # index 2 n'existe pas : le crop n'est pas câblé sur ce QCM
+        meta_json={"boxes": [{"index": 0}, {"index": 2}]})
+
+    created = pipeline._decide_and_store(
+        mock_db, item=item, zone=zone, student=student, ocr_text="", conf=0.99,
+        selected=[0], corr_id="audit")
+    mock_db.flush()
+    decision = mock_db.query(GradingDecision).one()
+    assert created is True
+    assert decision.status == "review_pending"
+    assert decision.score == 0
+    assert decision.reason_code == "qcm_zone_mismatch"
+    assert decision.evidence_json["contract_issue"] == "qcm_zone_mismatch"
+
+
+def test_finalize_reopens_legacy_low_confidence_auto_decision(mock_db):
+    """Un lot traité avant le seuil à 90 % ne peut pas contourner le correctif
+    grâce à l'idempotence : la finalisation audite et rouvre la réponse."""
+    from app.models import GradingDecision, ManualReview, OcrAttempt, StudentResponse
+
+    cells = [[{"type": "integer", "value": 5}]]
+    assessment, _student, item, zone = _seed_structured_item(
+        mock_db, response_type="table_fill",
+        expected={"type": "table", "cells": cells},
+        grading_json={"comparator": "table_cells", "max_score": 1,
+                      "bareme_points": 1, "cells": cells},
+        meta_json={"cells": [[{}]]})
+    response = StudentResponse(copy_item_id=item.id, zone_id=zone.id, final_text="")
+    mock_db.add(response); mock_db.flush()
+    mock_db.add(OcrAttempt(zone_id=zone.id, provider="mathpix",
+                           raw_json={"cells": ["5"]}, confidence=0.89))
+    decision = GradingDecision(response_id=response.id, source="deterministic",
+                               score=1, max_score=1, confidence=1,
+                               reason_code="table_match", tier="A", status="auto")
+    mock_db.add(decision)
+    batch = ScanBatch(assessment_id=assessment.id, status="graded")
+    mock_db.add(batch); mock_db.commit()
+
+    with pytest.raises(ValueError, match="validation"):
+        pipeline.finalize_batch(mock_db, batch)
+
+    mock_db.refresh(decision)
+    assert decision.status == "review_pending"
+    assert decision.reason_code == "ocr_low_confidence"
+    assert mock_db.query(ManualReview).filter_by(decision_id=decision.id).count() == 1
+
+
 def test_batch_summary_previews_notes(mock_db, tmp_path, monkeypatch):
     """La modale « Valider » a de quoi tout vérifier : avant correction, les
     réponses sont signalées et non notées ; après, chaque copie a ses points et

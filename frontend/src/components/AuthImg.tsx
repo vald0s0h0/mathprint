@@ -7,12 +7,7 @@ import { Box } from '@mantine/core'
 import { useEffect, useState } from 'react'
 import { getToken } from '../api'
 
-export default function AuthImg({ src, alt, style, reloadKey }: {
-  src: string | null | undefined
-  alt?: string
-  style?: React.CSSProperties
-  reloadKey?: number | string      // force un re-fetch (ex. après recadrage figure)
-}) {
+export function useAuthenticatedImageUrl(src: string | null | undefined, reloadKey?: number | string) {
   const [url, setUrl] = useState<string | null>(null)
   const [err, setErr] = useState(false)
 
@@ -22,7 +17,7 @@ export default function AuthImg({ src, alt, style, reloadKey }: {
     let obj: string | null = null
     setErr(false); setUrl(null)
     const token = getToken()
-    // cache-buster quand reloadKey change (ex. après recadrage +/-) : force des
+    // cache-buster quand reloadKey change (ex. après édition d'une figure) : force des
     // octets frais même si le fichier a le même chemin (sinon 304 = image figée).
     const fetchUrl = reloadKey != null
       ? src + (src.includes('?') ? '&' : '?') + '_r=' + encodeURIComponent(String(reloadKey))
@@ -33,6 +28,16 @@ export default function AuthImg({ src, alt, style, reloadKey }: {
       .catch(() => { if (!cancelled) setErr(true) })
     return () => { cancelled = true; if (obj) URL.revokeObjectURL(obj) }
   }, [src, reloadKey])
+  return { url, err }
+}
+
+export default function AuthImg({ src, alt, style, reloadKey }: {
+  src: string | null | undefined
+  alt?: string
+  style?: React.CSSProperties
+  reloadKey?: number | string      // force un re-fetch (ex. après recadrage figure)
+}) {
+  const { url, err } = useAuthenticatedImageUrl(src, reloadKey)
 
   if (err)
     return <Box style={{ ...style, fontSize: 10, color: 'var(--mantine-color-red-6)' }}>image indisponible</Box>

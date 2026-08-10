@@ -1,5 +1,6 @@
 """Assistant sujets (§3.1) : création, tableau de compétences, adaptation,
 génération en file de fond, fichiers."""
+import copy as copylib
 from pathlib import Path
 from typing import Literal
 
@@ -13,9 +14,10 @@ from ..db import get_db
 from ..deps import current_user
 from ..models import (
     Assessment, Competency, CompetencyFramework, Copy, ExerciseCatalog,
-    ExerciseCompetency, SchoolClass, Student, StudentCompetencyState,
+    ExerciseCompetency, GeneratedExercise, SchoolClass, Student,
+    StudentCompetencyState,
 )
-from ..services import job_worker, scoring
+from ..services import job_worker, manual_subject, scoring
 from ..services.forgetting import due_competencies
 from .misc import build_competency_tree
 
@@ -50,6 +52,30 @@ class GenerateIn(BaseModel):
     font_size: int = 10
 
 
+# ------------------------------------------------- assistant « Créer mon sujet »
+
+class PlacedItem(BaseModel):
+    exercise_id: str
+    page: int = 0            # index de page, 0 = 1re page
+    col: int = 0             # 0 = colonne gauche, 1 = colonne droite
+    rank: int = 0            # rang dans la colonne, de haut en bas
+
+
+class VariantIn(BaseModel):
+    key: str                 # "A"/"B"/… (anti-triche) ou facile|moyen|difficile
+    label: str = ""
+    items: list[PlacedItem] = []
+
+
+class ManualPlanIn(BaseModel):
+    """Plan complet composé à la main : ce que le professeur a posé sur ses
+    pages, variante par variante. Remplace intégralement le plan précédent."""
+    competency_ids: list[str] = []
+    guides: Literal["overlay", "print_fragile", "none"] = "overlay"
+    variant_kind: Literal["none", "anticheat", "level"] = "none"
+    variants: list[VariantIn] = []
+
+
 @router.get("")
 def list_assessments(db: Session = Depends(get_db)):
     out = []
@@ -62,6 +88,11 @@ def list_assessments(db: Session = Depends(get_db)):
                     "class_id": a.class_id,
                     "grade_level": cls.grade_level if cls else "",
                     "personalization_mode": a.personalization_mode,
+                    # sujet composé à la main (assistant « Créer mon sujet »)
+                    "manual": (a.blueprint_json or {}).get("mode") == "manual",
+                    "variant_kind": (a.blueprint_json or {}).get("variant_kind") or "",
+                    "duplicate_version": int((a.blueprint_json or {}).get(
+                        "duplicate_version") or 1),
                     # None (et pas 0) pour un entraînement : l'UI affiche « /20 »
                     # sur un sujet noté, rien sur les autres
                     "note_base": scoring.assessment_note_base(a) or None,
@@ -229,6 +260,108 @@ def sync_mathalea(db: Session = Depends(get_db)):
             "total": len(entries)}
 
 
+@router.get("/manual/pool")
+def manual_pool(competency_ids: str = "", pages: int = 1,
+                db: Session = Depends(get_db)):
+    """Exercices ET problèmes proposés à l'assistant « Créer mon sujet », avec
+    la hauteur réelle (points PDF) de chaque carte et la géométrie des colonnes
+    — l'assistant dessine ses pages à l'échelle du rendu final."""
+    ids = [c for c in competency_ids.split(",") if c]
+    if not ids:
+        raise HTTPException(422, "Aucune compétence sélectionnée")
+    return manual_subject.pool(db, ids, pages=max(1, min(6, pages)))
+
+
+@router.post("/{assessment_id}/manual-plan")
+def save_manual_plan(assessment_id: str, body: ManualPlanIn,
+                     db: Session = Depends(get_db)):
+    """Enregistre le plan composé à la main (§ assistant « Créer mon sujet »).
+    Le sujet passe en mode "manual" : la génération ne choisit plus aucun
+    exercice, elle pose ceux du plan là où ils ont été placés."""
+    a = db.get(Assessment, assessment_id)
+    if not a:
+        raise HTTPException(404)
+    if a.status != "draft":
+        raise HTTPException(409, "Sujet déjà mis en file de génération")
+    variants = [v for v in body.variants if v.items]
+    if not variants:
+        raise HTTPException(422, "Aucun exercice placé")
+    if body.variant_kind == "level" and {v.key for v in variants} - set(manual_subject.LEVEL_KEYS):
+        raise HTTPException(422, "Variantes par niveau : facile, moyen ou difficile")
+    if len(variants) > manual_subject.MAX_VARIANTS:
+        raise HTTPException(422, f"{manual_subject.MAX_VARIANTS} variantes au maximum")
+    if any(it.page >= (a.pages_target or 1) for v in variants for it in v.items):
+        raise HTTPException(422, "Un exercice est placé au-delà de la dernière page")
+
+    # les compétences restent enregistrées telles quelles (bilan de compétences,
+    # courbe d'oubli) ; à défaut, on les déduit des exercices placés.
+    competency_ids = list(body.competency_ids)
+    if not competency_ids:
+        placed = {it.exercise_id for v in variants for it in v.items}
+        competency_ids = list(dict.fromkeys(
+            r.competency_id for r in db.query(GeneratedExercise)
+            .filter(GeneratedExercise.id.in_(placed)).all()))
+
+    a.blueprint_json = {**(a.blueprint_json or {}), "mode": "manual",
+                        "competency_ids": competency_ids,
+                        "guides": body.guides, "variant_kind": body.variant_kind,
+                        "variants": [v.model_dump() for v in variants]}
+    # pas de sujet individuel dans cet assistant : commun, avec ou sans variantes
+    a.personalization_mode = "common" if len(variants) == 1 else "common_variants"
+    db.commit()
+    return {"ok": True, "variants": len(variants),
+            "items": sum(len(v.items) for v in variants)}
+
+
+@router.post("/{assessment_id}/duplicate", status_code=202)
+def duplicate_assessment(assessment_id: str, db: Session = Depends(get_db)):
+    """Recrée un sujet manuel à l'identique pour une nouvelle passation.
+
+    Le plan contient les exercices concrets, pas des critères de tirage. On
+    fige en plus l'affectation élève → variante de la première passation :
+    l'ordre de la classe peut donc changer sans modifier les feuilles reçues.
+    """
+    source = db.get(Assessment, assessment_id)
+    if not source:
+        raise HTTPException(404, "Sujet introuvable")
+    blueprint = source.blueprint_json or {}
+    if blueprint.get("mode") != "manual":
+        raise HTTPException(
+            409, "La duplication à l'identique est disponible pour les sujets sur mesure")
+    if source.status not in ("ready", "printed", "scanning", "finalized"):
+        raise HTTPException(409, "Le sujet doit être généré avant d'être dupliqué")
+
+    source_copies = db.query(Copy).filter_by(assessment_id=source.id).all()
+    if not source_copies:
+        raise HTTPException(409, "Aucune affectation de variante à dupliquer")
+
+    version = int(blueprint.get("duplicate_version") or 1) + 1
+    root_id = blueprint.get("duplicate_source_id") or source.id
+    cloned_blueprint = copylib.deepcopy(blueprint)
+    cloned_blueprint.update({
+        "duplicate_version": version,
+        "duplicate_source_id": root_id,
+        "duplicate_student_variants": {
+            c.student_id: c.variant_key for c in source_copies
+        },
+    })
+    base_title = source.title
+    previous_suffix = f" v{version - 1}"
+    if version > 2 and base_title.endswith(previous_suffix):
+        base_title = base_title[:-len(previous_suffix)]
+    duplicate = Assessment(
+        class_id=source.class_id, type=source.type,
+        title=f"{base_title} v{version}", pages_target=source.pages_target,
+        duplex=source.duplex, personalization_mode=source.personalization_mode,
+        blueprint_json=cloned_blueprint, note_base=source.note_base,
+    )
+    db.add(duplicate)
+    db.flush()
+    job = job_worker.enqueue_generation(db, duplicate, 10)
+    return {"id": duplicate.id, "job_id": job.id, "status": "queued",
+            "title": duplicate.title, "version": version}
+
+
 @router.get("/{assessment_id}/suggested-competencies")
 def suggested_competencies(assessment_id: str, db: Session = Depends(get_db)):
     """Proposition automatique de compétences à cocher : privilégie celles
@@ -339,7 +472,11 @@ def generate(assessment_id: str, body: GenerateIn, db: Session = Depends(get_db)
         raise HTTPException(404)
     if a.status not in ("draft", "error"):
         raise HTTPException(409, "Sujet déjà en file ou généré (manifeste immuable, §5.5)")
-    if not (a.blueprint_json or {}).get("competency_ids"):
+    blueprint = a.blueprint_json or {}
+    if blueprint.get("mode") == "manual":
+        if not any(v.get("items") for v in blueprint.get("variants") or []):
+            raise HTTPException(422, "Aucun exercice placé")
+    elif not blueprint.get("competency_ids"):
         raise HTTPException(422, "Aucune compétence sélectionnée")
     a.status = "draft"  # autorise un nouvel essai depuis un état d'erreur
     job = job_worker.enqueue_generation(db, a, body.font_size)

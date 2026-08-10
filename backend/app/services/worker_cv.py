@@ -146,13 +146,16 @@ def analyze_page(img: np.ndarray) -> PageAnalysis:
     detections = _detect_qrcodes(img)
     centers_px: dict[str, np.ndarray] = {}
     for text, quad in detections:
-        if text.startswith("MP1|"):
-            page_id = verify_page_payload(text)
-            if page_id is None:
+        # Le vérificateur HMAC est l'unique autorité de format (MP1 historique,
+        # M2 compact et futures versions). Un filtre de préfixe local avait
+        # précisément laissé la vision bloquée sur MP1 après l'arrivée de M2.
+        page_id = verify_page_payload(text)
+        if page_id is None:
+            if text.startswith(("MP", "M2:")):
                 res.warnings.append("qr_hmac_invalid")
-                continue
-            res.page_id = page_id
-            centers_px["MAIN"] = quad.mean(axis=0)
+            continue
+        res.page_id = page_id
+        centers_px["MAIN"] = quad.mean(axis=0)
 
     # seconde lecture du QR principal sur ROI haut-droit sur-échantillonnée
     if res.page_id is None:
@@ -160,12 +163,11 @@ def analyze_page(img: np.ndarray) -> PageAnalysis:
         roi = img[0:int(h * 0.20), int(w * 0.65):w]
         big = cv2.resize(roi, None, fx=2.5, fy=2.5, interpolation=cv2.INTER_CUBIC)
         text, quad, _ = cv2.QRCodeDetector().detectAndDecode(big)
-        if text.startswith("MP1|"):
-            page_id = verify_page_payload(text)
-            if page_id:
-                res.page_id = page_id
-                center = quad.reshape(-1, 2).mean(axis=0) / 2.5
-                centers_px["MAIN"] = center + np.array([w * 0.65, 0], dtype=np.float32)
+        page_id = verify_page_payload(text)
+        if page_id:
+            res.page_id = page_id
+            center = quad.reshape(-1, 2).mean(axis=0) / 2.5
+            centers_px["MAIN"] = center + np.array([w * 0.65, 0], dtype=np.float32)
 
     # fiduciels de coin : purement géométriques (§5.4)
     for role, center in detect_fiducials(img).items():
@@ -293,6 +295,7 @@ def _detect_window(b: dict) -> dict:
 
 
 QCM_THRESHOLD = 0.035
+BLANK_INK_THRESHOLD = 0.003
 # Seuil ADAPTATIF par page : les élèves cochent de façons très différentes (trait
 # fin / gros trait / aplat noir), ce qui déplace la frontière vide↔coché d'une
 # copie à l'autre. On l'ajuste À LA PAGE, mais SEULEMENT si les densités de toutes
@@ -381,6 +384,35 @@ def select_qcm(boxes: list[dict], densities: list[float], thr: QcmThreshold
         return None, densities, default_sel
     selected = [b["index"] for b, d in zip(boxes, densities) if d >= thr.value]
     return selected, densities, default_sel
+
+
+def qcm_decision_confidence(densities: list[float], thr: QcmThreshold) -> float:
+    """Confiance conservative d'une décision QCM/grille.
+
+    Elle n'est élevée que si toutes les cases sont hors de la bande ambiguë et
+    si la géométrie existe. Le seuil adaptatif issu de deux groupes nettement
+    séparés vaut 0,99 ; le seuil fixe, plus conservateur, 0,95. Ces valeurs ne
+    prétendent pas recalibrer OpenCV en probabilité : elles rendent explicite le
+    contrat de la pipeline (>= 0,90 ou professeur) au lieu du 1,0 artificiel.
+    """
+    if not densities:
+        return 0.0
+    lo, hi = thr.band
+    if any(lo <= d < hi for d in densities):
+        return 0.0
+    return 0.99 if thr.adapted else 0.95
+
+
+def blank_decision_confidence(density: float,
+                              threshold: float = BLANK_INK_THRESHOLD) -> float:
+    """Confiance CV qu'une zone est réellement blanche.
+
+    La moitié basse du seuil historique est nettement blanche. Entre cette
+    limite et le seuil, une trace pâle peut être une réponse : revue manuelle.
+    """
+    if density < 0 or threshold <= 0 or density >= threshold:
+        return 0.0
+    return 0.99 if density < threshold * 0.5 else 0.0
 
 
 def detect_qcm(warped: np.ndarray, boxes: list[dict],

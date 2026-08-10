@@ -207,6 +207,22 @@ def test_adapt_qcm_threshold_splits_two_clear_groups():
     assert 0.002 < thr.value < 0.15
 
 
+def test_cv_confidence_is_high_only_outside_ambiguity_band():
+    from app.services.worker_cv import (adapt_qcm_threshold,
+                                        blank_decision_confidence,
+                                        qcm_decision_confidence)
+    clear = [0.001, 0.002, 0.15, 0.16]
+    thr = adapt_qcm_threshold(clear)
+    assert qcm_decision_confidence(clear, thr) >= 0.90
+
+    ambiguous = [0.02, 0.03, 0.04]
+    thr2 = adapt_qcm_threshold(ambiguous)
+    assert qcm_decision_confidence(ambiguous, thr2) < 0.90
+
+    assert blank_decision_confidence(0.0005) >= 0.90
+    assert blank_decision_confidence(0.0025) < 0.90
+
+
 def test_adapt_qcm_threshold_adapts_to_faint_checks():
     """Coches fines (~0,024) sous le seuil par défaut mais nettement au-dessus des
     cases vides (~0,002) : le seuil de page DESCEND pour les capter."""

@@ -1062,7 +1062,11 @@ def exercise_out(db, ex: IndigoExercise) -> dict:
         # extrait du manuel = image de RÉFÉRENCE (non éditable) ; la FIGURE
         # (schéma/dessin de l'énoncé) est le crop éditable, cf. nudge_figure
         "crop_url": f"/api/indigo/exercises/{ex.id}/crop.png" if ex.crop_path else None,
-        "figure_url": f"/api/indigo/exercises/{ex.id}/figure.png" if ex.figure_path else None,
+        # Version dans l'URL : après édition le chemin physique reste identique,
+        # mais toutes les cartes React doivent re-fetcher les nouveaux octets.
+        "figure_url": (f"/api/indigo/exercises/{ex.id}/figure.png"
+                       f"?v={int(ex.updated_at.timestamp() * 1_000_000)}")
+                      if ex.figure_path else None,
         "figure_box": ex.figure_box_json,
     }
 
@@ -1148,9 +1152,75 @@ def nudge_figure(db, ex: IndigoExercise, deltas: dict) -> IndigoExercise:
     y1 = max(0, min(rh, int(box["y1"]) + int(deltas.get("bottom", 0))))
     if x1 - x0 < 20 or y1 - y0 < 20:
         return ex
-    _save_crop(raster, (x0, y0, x1, y1), ex.figure_path)
+    _save_edited_figure(raster, (x0, y0, x1, y1),
+                        box.get("masks") or [], ex.figure_path)
     box.update({"x0": x0, "y0": y0, "x1": x1, "y1": y1})
     ex.figure_box_json = box
+    ex.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    return ex
+
+
+def _normalized_box(raw: dict, width: int, height: int,
+                    *, min_size: int = 2) -> tuple[int, int, int, int]:
+    """Trie et borne un rectangle fourni par l'UI dans le raster source."""
+    try:
+        ax, bx = sorted((int(raw["x0"]), int(raw["x1"])))
+        ay, by = sorted((int(raw["y0"]), int(raw["y1"])))
+    except (KeyError, TypeError, ValueError):
+        raise RuntimeError("Rectangle d'image invalide")
+    x0, x1 = max(0, min(width, ax)), max(0, min(width, bx))
+    y0, y1 = max(0, min(height, ay)), max(0, min(height, by))
+    if x1 - x0 < min_size or y1 - y0 < min_size:
+        raise RuntimeError("Le rectangle sélectionné est trop petit")
+    return x0, y0, x1, y1
+
+
+def _save_edited_figure(raster: np.ndarray, crop_box, masks: list[dict],
+                        dest_rel: str) -> None:
+    """Produit le PNG publié à partir de la page originale.
+
+    Les caches vivent en coordonnées page, puis sont peints sur une copie du
+    crop. La page PDF n'est jamais altérée et le crop de référence reste intact.
+    """
+    x0, y0, x1, y1 = crop_box
+    crop = raster[y0:y1, x0:x1].copy()
+    for mask in masks:
+        mx0, my0, mx1, my1 = _normalized_box(mask, raster.shape[1], raster.shape[0])
+        # Intersection avec le crop, convertie dans son repère local.
+        ix0, iy0, ix1, iy1 = max(x0, mx0), max(y0, my0), min(x1, mx1), min(y1, my1)
+        if ix1 > ix0 and iy1 > iy0:
+            crop[iy0 - y0:iy1 - y0, ix0 - x0:ix1 - x0] = 255
+    dest = crop_abs_path(dest_rel)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(indigo_manual.encode_png(crop))
+
+
+def edit_figure(db, ex: IndigoExercise, crop: dict, masks_input: list[dict]) -> IndigoExercise:
+    """Enregistre le cadrage libre et la liste complète des caches blancs."""
+    box = dict(ex.figure_box_json or ex.crop_box_json or {})
+    page_index = int(box.get("page_index", ex.source_page))
+    doc = indigo_manual.open_doc(ex.grade_level, "eleve")
+    if doc is None:
+        raise RuntimeError("Manuel élève introuvable")
+    if not (0 <= page_index < doc.page_count):
+        raise RuntimeError("Page source hors limites")
+    raster = indigo_manual.raster_page(doc, page_index)
+    rh, rw = raster.shape[:2]
+    crop_box = _normalized_box(crop, rw, rh, min_size=20)
+    if len(masks_input) > 30:
+        raise RuntimeError("Trop de caches sur une même image (maximum 30)")
+    masks = [dict(zip(("x0", "y0", "x1", "y1"),
+                      _normalized_box(m, rw, rh))) for m in masks_input]
+    figure_path = ex.figure_path or f"indigo/drafts/{ex.id}_fig.png"
+    _save_edited_figure(raster, crop_box, masks, figure_path)
+    x0, y0, x1, y1 = crop_box
+    ex.has_figure = True
+    ex.figure_path = figure_path
+    ex.figure_box_json = {"page_index": page_index, "x0": x0, "y0": y0,
+                          "x1": x1, "y1": y1, "raster_dpi": indigo_manual.RASTER_DPI,
+                          "img_w": rw, "img_h": rh, "masks": masks}
+    ex.statement = statement_mod.place_figure_marker(ex.statement, True)
     ex.updated_at = datetime.now(timezone.utc)
     db.commit()
     return ex
@@ -1173,15 +1243,35 @@ def remove_figure(db, ex: IndigoExercise) -> IndigoExercise:
 
 
 def add_figure(db, ex: IndigoExercise) -> IndigoExercise:
-    """Ajoute une image (figure) à l'énoncé quand le LLM n'en a rattaché aucune :
-    on AMORCE la figure depuis l'extrait du manuel de l'exercice (l'admin affine
-    ensuite le cadrage via nudge_figure). Requiert un extrait (`crop_path`). Le
-    marqueur {{figure}} est (re)placé au bon endroit (début / avant les questions)."""
+    """Ajoute une image depuis la page PDF, même sans détection OCR de figure.
+
+    Le crop complet de l'exercice sert de cadrage initial quand sa géométrie est
+    disponible. Le fichier crop lui-même n'est pas requis : l'éditeur repart de
+    la page originale, qui permet ensuite d'agrandir librement la sélection.
+    """
     if ex.has_figure:
         return ex
-    if not ex.crop_path or not crop_abs_path(ex.crop_path).exists():
-        raise RuntimeError("Aucun extrait de manuel pour amorcer une image sur cet exercice.")
-    _fallback_figure_from_crop(ex)      # copie l'extrait comme figure + box éditable
+    source = dict(ex.crop_box_json or {})
+    page_index = int(source.get("page_index", ex.source_page))
+    doc = indigo_manual.open_doc(ex.grade_level, "eleve")
+    if doc is None:
+        raise RuntimeError("Manuel élève introuvable")
+    if not (0 <= page_index < doc.page_count):
+        raise RuntimeError("Page source hors limites")
+    raster = indigo_manual.raster_page(doc, page_index)
+    rh, rw = raster.shape[:2]
+    try:
+        initial = _normalized_box(source, rw, rh, min_size=20)
+    except RuntimeError:
+        initial = (0, 0, rw, rh)
+    figure_path = f"indigo/drafts/{ex.id}_fig.png"
+    _save_edited_figure(raster, initial, [], figure_path)
+    x0, y0, x1, y1 = initial
+    ex.has_figure = True
+    ex.figure_path = figure_path
+    ex.figure_box_json = {"page_index": page_index, "x0": x0, "y0": y0,
+                          "x1": x1, "y1": y1, "raster_dpi": indigo_manual.RASTER_DPI,
+                          "img_w": rw, "img_h": rh, "masks": []}
     ex.statement = statement_mod.place_figure_marker(ex.statement, True)
     ex.updated_at = datetime.now(timezone.utc)
     db.commit()

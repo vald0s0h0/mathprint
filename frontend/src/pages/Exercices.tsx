@@ -5,19 +5,20 @@
 // demi-colonne A4) : extrait manuel → tags/badges → énoncé → guide → corrigé →
 // actions. « Modifier » ouvre une modale d'édition complète.
 import {
-  ActionIcon, Alert, Badge, Box, Button, Card, Checkbox, Group,
+  Accordion, ActionIcon, Alert, Badge, Box, Button, Card, Checkbox, Group,
   Loader, Modal, NumberInput, Paper, Progress, ScrollArea, SegmentedControl, Select,
   Stack, Table, TagsInput, Text, Textarea, TextInput, Title, Tooltip,
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
 import {
-  AlertTriangle, BookOpen, Calculator, Check, CheckCircle2, CheckSquare, ChevronLeft,
+  AlertTriangle, BookOpen, Calculator, Check, CheckSquare, ChevronLeft,
   ImageOff, ImagePlus, Minus, Pencil, Plus, RefreshCw, RotateCcw, Slash, Sparkles,
   Trash2, UploadCloud, Wand2,
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../api'
 import AuthImg from '../components/AuthImg'
+import FigureEditor, { type FigureBox, type ImageRect } from '../components/FigureEditor'
 import MathText from '../components/MathText'
 import { useAppState } from '../state/AppState'
 
@@ -35,6 +36,7 @@ type SummaryRow = {
   competency_id: string; short_id: string; label: string
   domain_code: string; domain_name: string; chapter_code: string; chapter_name: string
   draft: number; validated: number; published: number; done: boolean
+  problem_draft: number; problem_validated: number; problem_published: number
 }
 type Extraction = {
   id: string; status: string; progress: number; progress_message: string
@@ -50,6 +52,7 @@ type Exercise = {
   row_labels: string[] | null; col_labels: string[] | null; lines: number | null
   bareme_points: number; correction_solution: string; correction_guide: string
   status: string; crop_url: string | null; figure_url: string | null
+  figure_box: FigureBox | null
   // provenance brute : raw_ocr.pipeline vaut "cli-exos" pour la pipeline CLI
   // (agents/cli-exos, abonnement Claude) — sinon c'est l'extraction Indigo (API).
   raw_ocr: Record<string, any> | null
@@ -119,18 +122,18 @@ function ResponseZone({ ex }: { ex: Exercise }) {
   const rt = ex.response_type
   const inlineBlank = (ex.statement || '').includes('{{blank}}')
   if (rt === 'qcm_single' || rt === 'qcm_multiple') {
-    // 1 à 3 colonnes selon le nombre de propositions et leur longueur (comme à
-    // l'impression, pdgen._qcm_layout) — évite de laisser trop de blanc.
+    // Aperçu compact en 1 à 3 colonnes. Le PDF fait autorité et mesure les
+    // glyphes avec ReportLab ; ici, la longueur ne sert qu'à approcher ce choix.
     const n = ex.choices.length
     const maxLen = Math.max(0, ...ex.choices.map((c) => c.replace(/\$/g, '').length))
-    // MÊME règle qu'à l'impression (backend pdfgen._qcm_ncols_cap) : colonnes
-    // RÉSERVÉES aux réponses courtes (type chiffres) et nombreuses ; dès qu'une
-    // proposition est longue (phrase), on reste en liste (1 colonne).
-    const ncols = (maxLen > 16 || n < 4) ? 1 : (maxLen <= 6 && n >= 6 ? 3 : 2)
+    const ncols = Math.max(1, Math.min(n, maxLen > 16 ? 1 : maxLen > 8 ? 2 : 3))
     return (
-      <Box mt={6} style={{ columnCount: ncols, columnGap: 14 }}>
+      <Box mt={6} style={{
+        display: 'grid', gridTemplateColumns: `repeat(${ncols}, minmax(0, 1fr))`,
+        columnGap: 14, rowGap: 4,
+      }}>
         {ex.choices.map((c, i) => (
-          <Group key={i} gap={8} wrap="nowrap" align="center" mb={4} style={{ breakInside: 'avoid' }}>
+          <Group key={i} gap={8} wrap="nowrap" align="center">
             <Box style={{ width: 14, height: 14, border: '1.5px solid #888', borderRadius: 3, flex: '0 0 auto' }} />
             <MathText text={c} size="sm" />
           </Group>
@@ -511,12 +514,6 @@ function EditModal({ ex, onClose, onSaved, onChange }: {
   const isProb = form.badge_type === 'probleme' || form.badge_type === 'enigme'
   const correct: number[] = form.expected?.correct ?? []
 
-  const nudge = async (edge: 'left' | 'top' | 'right' | 'bottom', dir: 1 | -1) => {
-    const body = { left: 0, top: 0, right: 0, bottom: 0, [edge]: 14 * dir }
-    const updated = await api.post<Exercise>(`/api/indigo/exercises/${form.id}/figure`, body)
-    setForm(updated); setFigV((v) => v + 1)      // reloadKey => AuthImg re-fetch instantané
-  }
-
   const removeFigure = async () => {
     const updated = await api.del<Exercise>(`/api/indigo/exercises/${form.id}/figure`)
     setForm(updated)
@@ -528,8 +525,20 @@ function EditModal({ ex, onClose, onSaved, onChange }: {
     try {
       const updated = await api.post<Exercise>(`/api/indigo/exercises/${form.id}/figure/add`)
       setForm(updated); setFigV((v) => v + 1); onChange(updated)
-      notifications.show({ color: 'green', message: 'Image ajoutée depuis l\'extrait du manuel — ajuste le cadrage' })
+      notifications.show({ color: 'green', message: 'Image ajoutée depuis le PDF — sélectionne maintenant la zone utile' })
     } catch (e: any) { notifications.show({ color: 'red', message: e.message }) }
+  }
+
+  const editFigure = async (crop: ImageRect, masks: ImageRect[]) => {
+    setBusy(true)
+    try {
+      const updated = await api.post<Exercise>(`/api/indigo/exercises/${form.id}/figure/edit`, { crop, masks })
+      setForm(updated); setFigV((v) => v + 1); onChange(updated)
+      notifications.show({ color: 'green', message: masks.length
+        ? 'Cadrage et caches blancs appliqués à l’image'
+        : 'Nouveau cadrage appliqué à l’image' })
+    } catch (e: any) { notifications.show({ color: 'red', message: e.message }) }
+    finally { setBusy(false) }
   }
 
   const buildPatch = () => {
@@ -570,7 +579,7 @@ function EditModal({ ex, onClose, onSaved, onChange }: {
   }
 
   return (
-    <Modal opened={!!ex} onClose={onClose} size="lg" title={<Text fw={700}>Modifier {form.ref}</Text>}>
+    <Modal opened={!!ex} onClose={onClose} size="xl" title={<Text fw={700}>Modifier {form.ref}</Text>}>
       <Stack gap="sm">
         <Group grow>
           <Select label="Type de réponse" data={RESPONSE_TYPES} value={form.response_type}
@@ -686,23 +695,24 @@ function EditModal({ ex, onClose, onSaved, onChange }: {
           )
         })()}
 
-        {/* ajouter une image quand le LLM n'en a rattaché aucune : amorcée depuis
-            l'extrait du manuel, puis affinée avec les boutons de cadrage ci-dessous */}
+        {/* L'ajout reste disponible même si l'analyse estime qu'aucune figure
+            n'est nécessaire : l'utilisateur est l'autorité sur l'énoncé PDF. */}
         {!form.has_figure && (
           <Button size="xs" variant="light" leftSection={<ImagePlus size={14} />}
             onClick={addFigure} style={{ alignSelf: 'flex-start' }}>
-            Ajouter une image (depuis l'extrait du manuel)
+            Ajouter une image depuis l’énoncé du PDF
           </Button>
         )}
 
-        {/* figure (schéma) : SEUL crop éditable — ajuste les bords si Mistral l'a mal cadrée.
-            Le bouton « Supprimer l'image » est TOUJOURS proposé dès qu'une figure est
-            attachée (même si son image est indisponible/mal détectée) : supprimer, c'est
-            dire « pas d'image pour cet énoncé » (retire l'insertion fausse). */}
+        {/* Éditeur dédié : le crop est redéfini sur la page PDF originale, ce qui
+            permet aussi de dé-rogner une détection Mistral trop serrée. */}
         {form.has_figure && (
-          <Box>
+          <Paper withBorder p="sm" radius="md">
             <Group justify="space-between" mb={4}>
-              <Text size="xs" fw={600}>Figure de l'énoncé — ajuste le cadrage</Text>
+              <Box>
+                <Text size="sm" fw={650}>Image insérée dans l’énoncé</Text>
+                <Text size="xs" c="dimmed">Aperçu actuel</Text>
+              </Box>
               <Button size="compact-xs" variant="subtle" color="red"
                 leftSection={<ImageOff size={12} />} onClick={removeFigure}>Supprimer l'image</Button>
             </Group>
@@ -710,25 +720,13 @@ function EditModal({ ex, onClose, onSaved, onChange }: {
               <Text size="xs" c="dimmed">Image absente ou indisponible — « Supprimer l'image » retire la référence à une figure pour cet énoncé.</Text>
             )}
             {form.figure_url && (
-            <Box style={{ position: 'relative', display: 'inline-block', border: '1px solid var(--mantine-color-gray-3)' }}>
-              <AuthImg src={form.figure_url} reloadKey={figV} alt="figure" style={{ maxWidth: 260, display: 'block' }} />
-              {(['top', 'bottom', 'left', 'right'] as const).map((edge) => {
-                const pos: any = {
-                  top: { top: 2, left: '50%', transform: 'translateX(-50%)' },
-                  bottom: { bottom: 2, left: '50%', transform: 'translateX(-50%)' },
-                  left: { left: 2, top: '50%', transform: 'translateY(-50%)', flexDirection: 'column' },
-                  right: { right: 2, top: '50%', transform: 'translateY(-50%)', flexDirection: 'column' },
-                }[edge]
-                return (
-                  <Group key={edge} gap={2} style={{ position: 'absolute', ...pos }}>
-                    <ActionIcon size="xs" variant="filled" color="dark" onClick={() => nudge(edge, 1)}><Plus size={11} /></ActionIcon>
-                    <ActionIcon size="xs" variant="filled" color="gray" onClick={() => nudge(edge, -1)}><Minus size={11} /></ActionIcon>
-                  </Group>
-                )
-              })}
-            </Box>
+              <AuthImg src={form.figure_url} reloadKey={figV} alt="figure"
+                style={{ maxWidth: 360, maxHeight: 180, display: 'block', marginBottom: 12,
+                  border: '1px solid var(--mantine-color-gray-3)' }} />
             )}
-          </Box>
+            {form.figure_box && <FigureEditor exerciseId={form.id} figureBox={form.figure_box}
+              busy={busy} onApply={editFigure} />}
+          </Paper>
         )}
 
         <Textarea label="Guide d'auto-correction (élève)" autosize minRows={1}
@@ -895,46 +893,105 @@ function ExtractionAssistant({ opened, onClose, comps, manuals, grade, onLaunche
 
 // ----------------------------------------------------- tableau des compétences
 function CompetencyTable({ rows, onSelect }: { rows: SummaryRow[]; onSelect: (r: SummaryRow) => void }) {
-  const byDomain = useMemo(() => {
-    const m = new Map<string, SummaryRow[]>()
+  const domains = useMemo(() => {
+    const domainMap = new Map<string, {
+      code: string; name: string
+      chapters: Map<string, { code: string; name: string; rows: SummaryRow[] }>
+    }>()
     rows.forEach((r) => {
-      const k = `${r.domain_code} — ${r.domain_name}`
-      if (!m.has(k)) m.set(k, [])
-      m.get(k)!.push(r)
+      if (!domainMap.has(r.domain_code)) domainMap.set(r.domain_code, {
+        code: r.domain_code, name: r.domain_name, chapters: new Map(),
+      })
+      const domain = domainMap.get(r.domain_code)!
+      if (!domain.chapters.has(r.chapter_code)) domain.chapters.set(r.chapter_code, {
+        code: r.chapter_code, name: r.chapter_name, rows: [],
+      })
+      domain.chapters.get(r.chapter_code)!.rows.push(r)
     })
-    return Array.from(m.entries())
+    return Array.from(domainMap.values()).map((d) => ({ ...d, chapters: Array.from(d.chapters.values()) }))
   }, [rows])
 
+  const count = (value: number, color: string) => value
+    ? <Badge color={color} variant="light">{value}</Badge>
+    : <Text c="dimmed" size="sm">—</Text>
+
   return (
-    <Stack>
-      {byDomain.map(([domain, list]) => (
-        <Paper key={domain} withBorder p="sm" radius="md">
-          <Text fw={700} size="sm" mb={6}>{domain}</Text>
-          <Table highlightOnHover verticalSpacing={4}>
-            <Table.Thead>
-              <Table.Tr>
-                <Table.Th>Compétence</Table.Th>
-                <Table.Th w={90} ta="center">Brouillon</Table.Th>
-                <Table.Th w={80} ta="center">Validé</Table.Th>
-                <Table.Th w={80} ta="center">Publié</Table.Th>
-                <Table.Th w={70} ta="center">Terminé</Table.Th>
-              </Table.Tr>
-            </Table.Thead>
-            <Table.Tbody>
-              {list.map((r) => (
-                <Table.Tr key={r.competency_id} style={{ cursor: 'pointer' }} onClick={() => onSelect(r)}>
-                  <Table.Td><Text size="sm"><b>{r.short_id}</b> {r.label}</Text></Table.Td>
-                  <Table.Td ta="center">{r.draft ? <Badge color="orange" variant="light">{r.draft}</Badge> : <Text c="dimmed" size="sm">—</Text>}</Table.Td>
-                  <Table.Td ta="center">{r.validated ? <Badge color="blue" variant="light">{r.validated}</Badge> : <Text c="dimmed" size="sm">—</Text>}</Table.Td>
-                  <Table.Td ta="center">{r.published ? <Badge color="teal" variant="light">{r.published}</Badge> : <Text c="dimmed" size="sm">—</Text>}</Table.Td>
-                  <Table.Td ta="center">{r.done ? <CheckCircle2 size={18} color="var(--mantine-color-green-6)" /> : null}</Table.Td>
-                </Table.Tr>
-              ))}
-            </Table.Tbody>
-          </Table>
-        </Paper>
-      ))}
-    </Stack>
+    <Accordion multiple variant="separated" radius="md" defaultValue={domains.map((d) => d.code)}>
+      {domains.map((domain) => {
+        const objectiveCount = domain.chapters.reduce((n, ch) => n + ch.rows.length, 0)
+        return (
+          <Accordion.Item key={domain.code} value={domain.code}>
+            <Accordion.Control>
+              <Group gap="xs">
+                <Text fw={650} size="sm">{domain.name}</Text>
+                <Text size="xs" c="dimmed">{objectiveCount} objectifs</Text>
+              </Group>
+            </Accordion.Control>
+            <Accordion.Panel>
+              <Table highlightOnHover verticalSpacing={4} fz="sm">
+                <Table.Thead>
+                  <Table.Tr>
+                    <Table.Th rowSpan={2}>Chapitre</Table.Th>
+                    <Table.Th rowSpan={2}>Compétence</Table.Th>
+                    <Table.Th colSpan={3} ta="center"
+                      style={{ borderLeft: '1px solid var(--mantine-color-default-border)' }}>Exercices</Table.Th>
+                    <Table.Th colSpan={3} ta="center"
+                      style={{ borderLeft: '1px solid var(--mantine-color-default-border)' }}>Problèmes</Table.Th>
+                  </Table.Tr>
+                  <Table.Tr>
+                    <Table.Th w={82} ta="center" style={{ borderLeft: '1px solid var(--mantine-color-default-border)' }}>Brouillon</Table.Th>
+                    <Table.Th w={76} ta="center">Validé</Table.Th>
+                    <Table.Th w={76} ta="center">Publié</Table.Th>
+                    <Table.Th w={82} ta="center" style={{ borderLeft: '1px solid var(--mantine-color-default-border)' }}>Brouillon</Table.Th>
+                    <Table.Th w={76} ta="center">Validé</Table.Th>
+                    <Table.Th w={76} ta="center">Publié</Table.Th>
+                  </Table.Tr>
+                </Table.Thead>
+                <Table.Tbody>
+                  {domain.chapters.map((chapter) => (
+                    <Fragment key={chapter.code}>
+                      {chapter.rows.map((r, index) => (
+                        <Table.Tr key={r.competency_id} style={{ cursor: 'pointer' }} onClick={() => onSelect(r)}>
+                          {index === 0 && (
+                            <Table.Td rowSpan={chapter.rows.length} style={{ verticalAlign: 'top', minWidth: 180 }}>
+                              <Text size="xs" fw={700} c="dimmed" tt="uppercase">
+                                {chapter.code} {chapter.name}
+                              </Text>
+                              <Text size="10px" c="dimmed">{chapter.rows.length} compétence{chapter.rows.length > 1 ? 's' : ''}</Text>
+                            </Table.Td>
+                          )}
+                          <Table.Td>
+                            <Text size="sm" py={1} pl="sm"
+                              style={{ borderLeft: '2px solid var(--mantine-color-default-border)' }}>
+                              <Text span c="dimmed" size="xs" mr={6}>{r.short_id}</Text>{r.label}
+                            </Text>
+                          </Table.Td>
+                          <Table.Td ta="center" style={{ borderLeft: '1px solid var(--mantine-color-default-border)' }}>{count(r.draft, 'orange')}</Table.Td>
+                          <Table.Td ta="center">{count(r.validated, 'blue')}</Table.Td>
+                          <Table.Td ta="center">{count(r.published, 'teal')}</Table.Td>
+                          {index === 0 && <>
+                            <Table.Td rowSpan={chapter.rows.length} ta="center"
+                              style={{ verticalAlign: 'middle', borderLeft: '1px solid var(--mantine-color-default-border)' }}>
+                              {count(r.problem_draft, 'orange')}
+                            </Table.Td>
+                            <Table.Td rowSpan={chapter.rows.length} ta="center" style={{ verticalAlign: 'middle' }}>
+                              {count(r.problem_validated, 'blue')}
+                            </Table.Td>
+                            <Table.Td rowSpan={chapter.rows.length} ta="center" style={{ verticalAlign: 'middle' }}>
+                              {count(r.problem_published, 'teal')}
+                            </Table.Td>
+                          </>}
+                        </Table.Tr>
+                      ))}
+                    </Fragment>
+                  ))}
+                </Table.Tbody>
+              </Table>
+            </Accordion.Panel>
+          </Accordion.Item>
+        )
+      })}
+    </Accordion>
   )
 }
 
@@ -1059,7 +1116,18 @@ export default function Exercices() {
       })
     } catch (e: any) { setProvider(prev); notifications.show({ color: 'red', message: e.message }) }
   }
-  const validatedCount = (summary ?? []).reduce((n, s) => n + s.validated, 0)
+  const validatedCount = useMemo(() => {
+    const rows = summary ?? []
+    const exerciseCount = rows.reduce((n, s) => n + s.validated, 0)
+    const seen = new Set<string>()
+    const problemCount = rows.reduce((n, s) => {
+      const key = `${s.domain_code}/${s.chapter_code}`
+      if (seen.has(key)) return n
+      seen.add(key)
+      return n + s.problem_validated
+    }, 0)
+    return exerciseCount + problemCount
+  }, [summary])
   const publish = async () => {
     setPublishing(true)
     try {

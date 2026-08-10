@@ -294,19 +294,25 @@ def test_render_blank_right_stretches_to_column_edge():
 
 # ------------------------------------------------------------- colonnes QCM (liste vs colonnes)
 
-def test_qcm_ncols_cap_list_for_long_columns_for_short():
-    """Colonnes RÉSERVÉES aux réponses courtes et nombreuses (type chiffres) ;
-    propositions longues -> liste (1 colonne). Aligne pdfgen sur l'aperçu web."""
+def test_qcm_layout_uses_up_to_three_columns_without_truncating_labels():
+    """La géométrie, pas le LLM ni un seuil de caractères, choisit les colonnes."""
     long_choices = [
         "La somme des angles d'un triangle vaut 180 degrés",
         "Un carré possède quatre angles droits égaux",
         "Le périmètre est la somme des longueurs des côtés",
         "Deux droites parallèles ne se coupent jamais",
     ]
-    assert pdfgen._qcm_ncols_cap(long_choices) == 1          # phrases -> liste
-    assert pdfgen._qcm_ncols_cap(["$2$", "$3$", "$4$", "$6$", "$8$", "$12$"]) == 3  # chiffres nombreux
-    assert pdfgen._qcm_ncols_cap(["Vrai", "Faux"]) == 1      # peu nombreux -> liste
-    assert pdfgen._qcm_ncols_cap(["isocèle", "équilatéral", "scalène", "rectangle"]) == 2
+    width = 80 * mm
+    _long_items, _long_h, long_cols = pdfgen._qcm_layout(long_choices, width, 9)
+    yes_no, yes_no_h, yes_no_cols = pdfgen._qcm_layout(["Oui", "Non"], width, 9)
+    short, short_h, short_cols = pdfgen._qcm_layout(
+        ["$2$", "$3$", "$4$", "$6$", "$8$", "$12$"], width, 9)
+    assert long_cols == 1
+    assert yes_no_cols == 2
+    assert short_cols == 3
+    assert yes_no[0]["dy"] == yes_no[1]["dy"]       # Oui / Non sur la même ligne
+    assert yes_no[0]["dx"] < yes_no[1]["dx"]
+    assert yes_no_h < short_h                         # 1 rangée contre 2
 
 
 # ------------------------------------------------------------- placement de l'image (marqueur)

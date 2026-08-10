@@ -220,8 +220,18 @@ def mathpix_ocr(db: Session, image_bytes: bytes, correlation_id: str,
     data = r.json()
     _record(db, "mathpix", cfg.model or "v3/text", "ocr_text", units=1,
             cost=0.004, correlation_id=correlation_id)
+    # Mathpix documente une confiance normalisée, mais on durcit la frontière :
+    # valeur absente, chaîne invalide, NaN ou hors [0,1] = aucune confiance.
+    # On ne convertit surtout pas implicitement un éventuel « 90 » en 0,90 :
+    # un changement de contrat fournisseur doit partir en revue, pas être deviné.
+    try:
+        confidence = float(data.get("confidence", 0.0))
+    except (TypeError, ValueError):
+        confidence = 0.0
+    if not __import__("math").isfinite(confidence) or not 0.0 <= confidence <= 1.0:
+        confidence = 0.0
     return {"latex": data.get("latex_styled", ""), "text": data.get("text", ""),
-            "confidence": data.get("confidence", 0.0), "raw": data}
+            "confidence": confidence, "raw": data}
 
 
 # ------------------------------------------------------------------- DeepSeek

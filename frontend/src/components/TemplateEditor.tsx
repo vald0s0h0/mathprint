@@ -184,50 +184,56 @@ export default function TemplateEditor() {
             border: '1px solid var(--mantine-color-default-border)', maxWidth: 560,
           }}>
             {/* en-tête */}
-            <div style={{ borderBottom: `2px solid ${h.accent}`, paddingBottom: 10 }}>
-              <Group justify="space-between" align="flex-start" wrap="nowrap">
-                <div>
-                  <div style={{
-                    border: '1.5px dashed #9AA3AC', borderRadius: 6, width: 84, height: 44,
-                    fontSize: 9, color: '#9AA3AC', textAlign: 'center', paddingTop: 30,
-                    boxSizing: 'border-box',
-                  }}>NOTE</div>
-                  <div style={{
-                    border: '1.5px dashed #9AA3AC', borderRadius: 6, width: 190, height: 30,
-                    fontSize: 8, color: '#9AA3AC', paddingLeft: 6, paddingTop: 2, marginTop: 6,
-                  }}>APPRÉCIATION</div>
-                </div>
-                <div style={{ textAlign: 'right' }}>
-                  <Group gap={8} justify="flex-end" wrap="nowrap">
-                    <Resizable sel={sel} me={{ part: 'header', field: 'name_size' }}
-                      onSelect={setSel} size={h.name_size}
-                      onResize={(v) => set('header', { name_size: v })}>
-                      <span style={{ fontWeight: 700, fontSize: h.name_size * S }}>
-                        Durand Camille  /  5eA
-                      </span>
-                    </Resizable>
-                    <div style={{
-                      width: 52, height: 52, background:
-                        'repeating-conic-gradient(#111 0% 25%, #fff 0% 50%) 0 0 / 10px 10px',
-                      borderRadius: 2, flexShrink: 0,
-                    }} title="QR d'identité (figé)" />
-                  </Group>
-                  <div style={{ marginTop: 8 }}>
-                    <Resizable sel={sel} me={{ part: 'header', field: 'title_size' }}
-                      onSelect={setSel} size={h.title_size}
-                      onResize={(v) => set('header', { title_size: v })}>
-                      <span style={{ fontWeight: 700, fontSize: h.title_size * S, color: h.accent }}>
-                        Fractions — semaine 12
-                      </span>
-                    </Resizable>
-                    {h.show_date && (
-                      <div style={{ fontSize: (h.title_size - 1) * S, color: '#6A737C' }}>
-                        Entraînement · 12/07/2026
-                      </div>
-                    )}
+            <div style={{
+              display: 'grid', gridTemplateColumns: '44px minmax(135px, 1fr) 135px 52px',
+              gap: 7, height: 52, alignItems: 'stretch',
+            }}>
+              <div style={{
+                border: '1.5px dashed #9AA3AC', borderRadius: 5,
+                fontSize: 8, color: '#9AA3AC', textAlign: 'center', paddingTop: 4,
+                boxSizing: 'border-box',
+              }}>NOTE</div>
+              <div style={{
+                border: '1.5px dashed #9AA3AC', borderRadius: 5,
+                fontSize: 8, color: '#9AA3AC', padding: '4px 6px', boxSizing: 'border-box',
+              }}>APPRÉCIATION</div>
+              <div style={{
+                position: 'relative', overflow: 'hidden', textAlign: 'center',
+                display: 'flex', flexDirection: 'column', justifyContent: 'space-between',
+                alignItems: 'center', padding: '3px 2px 1px', boxSizing: 'border-box',
+              }}>
+                <span style={{
+                  position: 'absolute', inset: -9, display: 'flex', alignItems: 'center',
+                  justifyContent: 'center', fontSize: 58, lineHeight: 1, fontWeight: 900,
+                  color: '#ECEFF1', whiteSpace: 'nowrap', zIndex: 0,
+                }}>5eA</span>
+                <Resizable sel={sel} me={{ part: 'header', field: 'name_size' }}
+                  onSelect={setSel} size={h.name_size}
+                  onResize={(v) => set('header', { name_size: v })}
+                  style={{ zIndex: 1, lineHeight: 1 }}>
+                  <span style={{ fontWeight: 700, fontSize: h.name_size * S * 0.72 }}>
+                    Durand Camille
+                  </span>
+                </Resizable>
+                <Resizable sel={sel} me={{ part: 'header', field: 'title_size' }}
+                  onSelect={setSel} size={h.title_size}
+                  onResize={(v) => set('header', { title_size: v })}
+                  style={{ zIndex: 1, lineHeight: 1 }}>
+                  <span style={{ fontWeight: 700, fontSize: h.title_size * S * 0.72, color: h.accent }}>
+                    Fractions — semaine 12
+                  </span>
+                </Resizable>
+                {h.show_date && (
+                  <div style={{ zIndex: 1, lineHeight: 1, fontSize: Math.max(7, (h.title_size - 1) * S * 0.62), color: '#6A737C' }}>
+                    Entraînement · 12/07/2026
                   </div>
-                </div>
-              </Group>
+                )}
+              </div>
+              <div style={{
+                width: 52, height: 52, background:
+                  'repeating-conic-gradient(#111 0% 25%, #fff 0% 50%) 0 0 / 10px 10px',
+                borderRadius: 2, flexShrink: 0,
+              }} title="QR d'identité (figé)" />
             </div>
 
             {/* carte exercice */}
