@@ -525,7 +525,7 @@ def test_generate_subject_end_to_end_fills_one_page_without_duplicates(db_sessio
     db_session.add(cls)
     db_session.flush()
     for i in range(3):
-        db_session.add(Student(class_id=cls.id, first_name=f"Eleve{i}", last_name="Test",
+        db_session.add(Student(class_id=cls.id, name=f"Eleve{i} Test", order_index=i,
                                llm_pseudonym=f"E{i}", active=True))
     a = Assessment(class_id=cls.id, type="training", title="Sujet Gemini",
                    pages_target=1, personalization_mode="common")
@@ -562,7 +562,7 @@ def test_generated_copies_split_correction_load_between_cv_and_mathpix(db_sessio
     db_session.add(cls)
     db_session.flush()
     for i in range(4):
-        db_session.add(Student(class_id=cls.id, first_name=f"E{i}", last_name="T",
+        db_session.add(Student(class_id=cls.id, name=f"E{i} T", order_index=i,
                                llm_pseudonym=f"E{i}", active=True))
     a = Assessment(class_id=cls.id, type="training", title="Mix", pages_target=2,
                    personalization_mode="common")

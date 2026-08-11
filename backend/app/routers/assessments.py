@@ -14,7 +14,7 @@ from ..db import get_db
 from ..deps import current_user
 from ..models import (
     Assessment, Competency, CompetencyFramework, Copy, ExerciseCatalog,
-    ExerciseCompetency, GeneratedExercise, SchoolClass, Student,
+    ExerciseCompetency, GeneratedExercise, ScanBatch, SchoolClass, Student,
     StudentCompetencyState,
 )
 from ..services import job_worker, manual_subject, scoring
@@ -30,8 +30,7 @@ class AssessmentIn(BaseModel):
     type: str = "training"          # control | training
     title: str
     pages: int = 1                  # 1 = recto, 2 = recto/verso, etc.
-    # base de notation d'un contrôle (§ barème) : 5, 10 ou 20 points pour le
-    # sujet entier. Ignorée pour un entraînement (non noté).
+    # base de scoring de tout sujet ; un entraînement ne l'imprime pas.
     note_base: int = scoring.DEFAULT_NOTE_BASE
 
 
@@ -83,19 +82,23 @@ def list_assessments(db: Session = Depends(get_db)):
         cls = db.get(SchoolClass, a.class_id)
         if cls and cls.archived_at is not None:
             continue  # classes archivées : aucune trace
+        scan_batch = db.query(ScanBatch).filter_by(assessment_id=a.id).first()
         out.append({"id": a.id, "title": a.title, "type": a.type, "status": a.status,
                     "class_name": cls.name if cls else "?",
                     "class_id": a.class_id,
                     "grade_level": cls.grade_level if cls else "",
+                    "duplex": bool(a.duplex),
                     "personalization_mode": a.personalization_mode,
                     # sujet composé à la main (assistant « Créer mon sujet »)
                     "manual": (a.blueprint_json or {}).get("mode") == "manual",
                     "variant_kind": (a.blueprint_json or {}).get("variant_kind") or "",
                     "duplicate_version": int((a.blueprint_json or {}).get(
                         "duplicate_version") or 1),
-                    # None (et pas 0) pour un entraînement : l'UI affiche « /20 »
-                    # sur un sujet noté, rien sur les autres
-                    "note_base": scoring.assessment_note_base(a) or None,
+                    "note_base": scoring.assessment_note_base(a),
+                    # Une distribution clôt visuellement la même carte dans
+                    # Sujets et Corrections.
+                    "overlay_distributed": bool(
+                        scan_batch and scan_batch.overlay_distributed),
                     "error_message": a.error_message,
                     "created_at": str(a.created_at)})
     return out
@@ -370,7 +373,8 @@ def suggested_competencies(assessment_id: str, db: Session = Depends(get_db)):
     a = db.get(Assessment, assessment_id)
     if not a:
         raise HTTPException(404)
-    students = db.query(Student).filter_by(class_id=a.class_id, active=True).all()
+    students = (db.query(Student).filter_by(class_id=a.class_id, active=True)
+                .order_by(Student.order_index, Student.id).all())
 
     due_comp_ids: list[str] = []
     seen: set[str] = set()
@@ -488,8 +492,9 @@ def list_copies(assessment_id: str, db: Session = Depends(get_db)):
     out = []
     for c in db.query(Copy).filter_by(assessment_id=assessment_id).all():
         s = db.get(Student, c.student_id)
-        out.append({"id": c.id, "student": f"{s.last_name} {s.first_name}",
+        out.append({"id": c.id, "student": s.name, "student_order": s.order_index,
                     "status": c.status, "pages": c.total_pages, "seed": c.seed})
+    out.sort(key=lambda copy: copy["student_order"])
     return out
 
 
@@ -527,7 +532,7 @@ def preview_info(assessment_id: str, db: Session = Depends(get_db)):
                    .order_by(StudentLevel.valid_from.desc()).first())
         entries.append({
             "copy_id": copy.id,
-            "student": f"{student.last_name} {student.first_name}",
+            "student": student.name,
             "level": lvl_row.level if lvl_row else 5,
             "pages": len(m["pages"]), "page_offset": page_offset,
         })

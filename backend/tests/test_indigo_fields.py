@@ -9,6 +9,7 @@ comme prévu (mini fixe, pleine largeur étirée au bord de colonne).
 import sys
 from pathlib import Path
 
+import pytest
 from reportlab.lib.units import mm
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -377,6 +378,26 @@ def test_table_answer_box_fills_its_cell():
             assert abs(box["w_pt"] - (geo["col_ws"][j] - 2 * pad)) < 0.01
             assert abs(box["h_pt"] - (geo["row_hs"][i] - 2 * pad)) < 0.01
             assert box["w_pt"] > pdfgen.BLANK_W      # nettement plus large qu'avant
+
+
+def test_fraction_table_row_gains_exactly_3mm():
+    integer = pdfgen._table_geometry(pdfgen.COL_W, None, ["Réponse"], [[_int(2)]], 9)
+    fraction = pdfgen._table_geometry(
+        pdfgen.COL_W, None, ["Réponse"],
+        [[{"type": "rational", "value": [1, 2]}]], 9)
+    assert fraction["row_hs"][0] - integer["row_hs"][0] == pytest.approx(3 * mm)
+
+
+def test_fraction_in_multiline_reasoning_gains_exactly_3mm():
+    grading = {"lines": 5, "max_score": 2, "comparator": "rubric"}
+    plain = {"type": "rubric", "steps": [{"expected_text": "Le résultat vaut 2."}]}
+    fractional = {"type": "rubric", "steps": [
+        {"expected_text": "Le résultat vaut $\\dfrac{1}{2}$."}]}
+    h_plain = pdfgen._zone_height("multiline_text", [], pdfgen.COL_W, 9,
+                                  grading, expected=plain)
+    h_fraction = pdfgen._zone_height("multiline_text", [], pdfgen.COL_W, 9,
+                                     grading, expected=fractional)
+    assert h_fraction - h_plain == pytest.approx(3 * mm)
 
 
 def test_full_copy_renders_with_mini_and_blank_right():

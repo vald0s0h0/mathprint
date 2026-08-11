@@ -8,11 +8,11 @@ images/fichiers d'un même sujet créait autant de « corrections » que de fich
 par le professeur, en une seule ligne.
 
 Chaque page est identifiée individuellement (QR + fiduciels, RM-001 : jamais
-devinée) ; les doublons (page déjà scannée, identifiée par son `page_id` — chaque
-page imprimée porte un QR unique par copie) sont rejetés silencieusement. Les
-pages retenues sont fusionnées dans le PDF accumulé du batch (une image par page),
-que le pipeline existant (`process_batch`) reprend sans modification — idempotent,
-il ne re-corrige pas une copie déjà notée et note les nouvelles."""
+devinée). Un redépôt déjà enregistré est rejeté ; en revanche, un doublon ou une
+page illisible présent dans la pile courante garde impérativement sa position.
+Les pages retenues sont fusionnées dans le PDF accumulé du batch (une image par
+page), que le pipeline existant (`process_batch`) reprend sans modification —
+idempotent, il ne re-corrige pas une copie déjà notée et note les nouvelles."""
 import hashlib
 import io
 
@@ -147,7 +147,10 @@ def append_pages(db: Session, batch: ScanBatch, assessment_id: str,
 def attach_scan(db: Session, assessment_id: str, images: list[np.ndarray],
                 uploaded_by: str | None) -> dict:
     """Attache des pages scannées (un seul fichier, un sujet connu) à l'unique
-    batch du sujet, en dédupliquant. Retourne un résumé
+    batch du sujet. Une page illisible reste dans le PDF à sa position : elle
+    deviendra un overlay « Non identifié », car la retirer décalerait toutes les
+    copies physiques suivantes. Seules les pages déjà enregistrées lors d'un
+    dépôt ANTÉRIEUR restent rejetées comme redépôts. Retourne un résumé
     {batch_id, pages_added, duplicates_rejected, blocked_pages}."""
     batch = get_or_create_batch(db, assessment_id, uploaded_by)
     kept: list[np.ndarray] = []
@@ -156,11 +159,19 @@ def attach_scan(db: Session, assessment_id: str, images: list[np.ndarray],
     for img in images:
         page_id, aid, warped = classify_page(db, img)
         if not page_id or aid != assessment_id:
-            # non identifiée, ou page d'un autre sujet : jamais attribuée ici
+            # Le sujet est connu par le dépôt ciblé / les autres pages du PDF :
+            # on conserve physiquement cette place sans lui attribuer d'élève.
             n_blocked += 1
+            kept.append(img)
             continue
-        if page_id in seen or page_already_registered(db, page_id):
+        if page_already_registered(db, page_id):
             n_dup += 1
+            continue
+        if page_id in seen:
+            # Doublon DANS le lot physique courant : il doit occuper une place
+            # dans le PDF de sortie, sinon toutes les feuilles après lui glissent.
+            n_dup += 1
+            kept.append(warped if warped is not None else img)
             continue
         seen.add(page_id)
         # on stocke l'image RECALÉE (canonique), pas la photo brute : le pipeline

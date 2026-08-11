@@ -117,9 +117,10 @@ def list_students(class_id: str | None = None, db: Session = Depends(get_db)):
     if class_id:
         q = q.filter(Student.class_id == class_id)
     out = []
-    for s in q.order_by(Student.last_name, Student.first_name).all():
+    for s in q.order_by(Student.class_id, Student.order_index, Student.id).all():
         out.append({
-            "id": s.id, "first_name": s.first_name, "last_name": s.last_name,
+            "id": s.id, "name": s.name, "order_index": s.order_index,
+            "dyslexic": s.dyslexic,
             "class_id": s.class_id, "class_name": classes.get(s.class_id, "—"),
             "active": s.active,
             "copy_count": db.query(Copy).filter_by(student_id=s.id).count(),

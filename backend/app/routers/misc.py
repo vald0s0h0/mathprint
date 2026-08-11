@@ -114,6 +114,9 @@ def get_system_settings(db: Session = Depends(get_db)):
     rows.setdefault("forgetting_threshold", {"value": settings.forgetting_threshold})
     rows.setdefault("correction_color", {"value": settings.correction_color})
     rows.setdefault("dropout_color", {"value": settings.dropout_color})
+    rows.setdefault("ocr_confidence_threshold", {"value": 0.90})
+    rows.setdefault("llm_confidence_threshold",
+                    {"value": settings.correction_confidence_min})
     return rows
 
 
@@ -132,6 +135,12 @@ def set_system_setting(body: SettingIn, db: Session = Depends(get_db),
     row.value_json = body.value
     row.version = (row.version or 0) + 1  # None tant que la ligne n'est pas flushée
     row.updated_by = user.id
+    if body.key == "llm_confidence_threshold":
+        # Applique aussi le nouveau seuil aux lots déjà corrigés, sans rappeler
+        # DeepSeek ; les points proposés sont appliqués ou retirés avec la revue.
+        db.flush()
+        from ..services.llm_grader import sync_confidence_reviews
+        sync_confidence_reviews(db)
     db.commit()
     return {"ok": True}
 

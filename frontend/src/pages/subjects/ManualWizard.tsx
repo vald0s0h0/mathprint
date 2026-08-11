@@ -305,14 +305,14 @@ export default function ManualWizard({ opened, classes, onClose, onCreated }: {
                   description="1 = recto seul, 2 = recto/verso"
                   onChange={(v) => setPages(Math.max(1, Math.min(6, Number(v) || 1)))} />
               </Group>
-              {type === 'control' && (
-                <Radio.Group label="Base de notation" value={noteBase} onChange={setNoteBase}
-                  description="Le barème de chaque exercice est ramené à cette base à la correction.">
-                  <Group mt="xs">
-                    {NOTE_BASES.map((b) => <Radio key={b} value={b} label={`/${b}`} />)}
-                  </Group>
-                </Radio.Group>
-              )}
+              <Radio.Group label="Base de scoring" value={noteBase} onChange={setNoteBase}
+                description={type === 'control'
+                  ? "Le résultat est ramené à cette base à la correction."
+                  : "Le score sert au suivi mais n'est pas imprimé sur la copie."}>
+                <Group mt="xs">
+                  {NOTE_BASES.map((b) => <Radio key={b} value={b} label={`/${b}`} />)}
+                </Group>
+              </Radio.Group>
               <Divider my="xs" />
               <div>
                 <Text size="sm" fw={600}>Guides</Text>
@@ -455,7 +455,7 @@ export default function ManualWizard({ opened, classes, onClose, onCreated }: {
                 <Stack gap={6}>
                   <Row k="Classe" v={classes.find((c) => c.id === classId)?.name ?? '—'} />
                   <Row k="Sujet" v={`${title || 'Sans titre'} — ${type === 'control'
-                    ? `contrôle noté /${noteBase}` : 'entraînement'}`} />
+                    ? `contrôle noté /${noteBase}` : `entraînement scoré /${noteBase}`}`} />
                   <Row k="Pages" v={`${pages} page(s)`} />
                   <Row k="Guides" v={guideSummary} />
                   <Row k="Variantes" v={variantKind === 'none' ? 'sujet unique'

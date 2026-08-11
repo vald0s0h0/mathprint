@@ -11,26 +11,44 @@ import katex from 'katex'
 import 'katex/dist/katex.min.css'
 import React, { useMemo } from 'react'
 
-/** Split text on $...$ délimiteurs. Returns [(content, isMath), ...] */
+/** Découpe les syntaxes usuelles de notre banque et de Mathpix : `$...$`,
+ * `$$...$$`, `\(...\)` et `\[...\]`. */
 function splitMathSpans(text: string): Array<[string, boolean]> {
   const spans: Array<[string, boolean]> = []
+  const delimiters = [
+    { open: '$$', close: '$$' }, { open: '\\(', close: '\\)' },
+    { open: '\\[', close: '\\]' }, { open: '$', close: '$' },
+  ]
+  const findToken = (token: string, from: number): number => {
+    let at = text.indexOf(token, from)
+    while (at >= 0) {
+      let slashes = 0
+      for (let i = at - 1; i >= 0 && text[i] === '\\'; i--) slashes++
+      if (slashes % 2 === 0) return at
+      at = text.indexOf(token, at + token.length)
+    }
+    return -1
+  }
   let pos = 0
-  while (true) {
-    const start = text.indexOf('$', pos)
-    if (start === -1) {
+  while (pos < text.length) {
+    const found = delimiters
+      .map((d) => ({ ...d, at: findToken(d.open, pos) }))
+      .filter((d) => d.at >= 0)
+      .sort((a, b) => a.at - b.at || b.open.length - a.open.length)[0]
+    if (!found) {
       if (pos < text.length) spans.push([text.slice(pos), false])
       break
     }
-    if (start > pos) spans.push([text.slice(pos, start), false])
-
-    const end = text.indexOf('$', start + 1)
-    if (end === -1) {
-      spans.push([text.slice(start), false])
+    if (found.at > pos) spans.push([text.slice(pos, found.at), false])
+    const contentStart = found.at + found.open.length
+    const end = findToken(found.close, contentStart)
+    if (end < 0) {
+      spans.push([text.slice(found.at), false])
       break
     }
-    const mathContent = text.slice(start + 1, end)
+    const mathContent = text.slice(contentStart, end)
     if (mathContent) spans.push([mathContent, true])
-    pos = end + 1
+    pos = end + found.close.length
   }
   return spans
 }
@@ -113,6 +131,57 @@ function MathSpan({ latex }: { latex: string }) {
     // Fallback : afficher le LaTeX brut ou texte sûr
     return <span>{latex}</span>
   }
+}
+
+/** Réponse mathématique isolée (attendu ou OCR Mathpix).
+ *
+ * Contrairement à un énoncé, une réponse peut arriver sous plusieurs formes :
+ * `$...$` depuis notre contrat, `\(...\)` / `\[...\]` depuis Mathpix, ou un
+ * fragment LaTeX nu (`\dfrac{1}{2}`). On retire uniquement les délimiteurs qui
+ * entourent toute la valeur, puis KaTeX rend la formule. Un texte réellement
+ * mixte reste confié à MathText afin de préserver les mots ordinaires. */
+function unwrapMath(value: string): string | null {
+  const s = value.trim()
+  const wrappers: Array<[string, string]> = [
+    ['$$', '$$'], ['\\[', '\\]'], ['\\(', '\\)'], ['$', '$'],
+  ]
+  for (const [open, close] of wrappers) {
+    if (s.startsWith(open) && s.endsWith(close)
+        && s.length > open.length + close.length) {
+      const inner = s.slice(open.length, -close.length).trim()
+      // `$a$ · $b$` contient plusieurs spans : ce n'est pas une unique
+      // formule entourée de délimiteurs, MathText doit le découper.
+      if (!inner.includes(close)) return inner
+    }
+  }
+  return null
+}
+
+function looksLikeBareLatex(value: string): boolean {
+  const s = value.trim()
+  return /\\[a-zA-Z]+|[_^{}]/.test(s)
+    || /^[\d\s.,()+\-*/=<>×÷]+$/.test(s)
+    || /^[a-zA-Z]\s*=/.test(s)
+}
+
+export function MathAnswer({ text, fallback = '—', size }: {
+  text?: string | null; fallback?: string; size?: string | number
+}) {
+  const value = (text || '').trim()
+  if (!value) return <Box component="span" fz={size}>{fallback}</Box>
+  const unwrapped = unwrapMath(value)
+  if (unwrapped != null) {
+    return (
+      <Box component="span" fz={size} style={{ whiteSpace: 'pre-wrap' }}>
+        <MathSpan latex={unwrapped} />
+      </Box>
+    )
+  }
+  if (/\$|\\\(|\\\[/.test(value)) return <MathText text={value} size={size} />
+  if (looksLikeBareLatex(value)) {
+    return <Box component="span" fz={size}><MathSpan latex={value} /></Box>
+  }
+  return <MathText text={value} size={size} />
 }
 
 /** Énoncé : texte + formules KaTeX intercalés. La taille de police est

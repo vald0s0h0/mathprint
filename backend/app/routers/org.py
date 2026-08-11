@@ -38,30 +38,26 @@ class ClassPatch(BaseModel):
 
 
 class StudentIn(BaseModel):
-    first_name: str
-    last_name: str
+    name: str
+    dyslexic: bool = False
+
+
+class StudentPatch(BaseModel):
+    name: str | None = None
+    dyslexic: bool | None = None
+
+
+class StudentOrderIn(BaseModel):
+    student_ids: list[str]
 
 
 class BatchStudentsIn(BaseModel):
-    # texte collé : une ligne par élève, "Nom Prénom" ou "Nom;Prénom"
+    # texte collé : une ligne = le nom complet, sans tentative de découpage
     text: str
 
 
-def _parse_students(text: str) -> list[tuple[str, str]]:
-    out = []
-    for line in text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        for sep in (";", "\t", ","):
-            if sep in line:
-                last, first = [p.strip() for p in line.split(sep, 1)]
-                break
-        else:
-            parts = line.split()
-            last, first = parts[0], " ".join(parts[1:]) or "?"
-        out.append((last, first))
-    return out
+def _parse_students(text: str) -> list[str]:
+    return [line.strip() for line in text.splitlines() if line.strip()]
 
 
 @router.get("/years")
@@ -99,8 +95,8 @@ def create_class(body: ClassIn, db: Session = Depends(get_db),
     db.add(c)
     db.flush()
     created = 0
-    for last, first in _parse_students(body.students_text):
-        db.add(Student(class_id=c.id, first_name=first, last_name=last,
+    for order_index, student_name in enumerate(_parse_students(body.students_text)):
+        db.add(Student(class_id=c.id, name=student_name, order_index=order_index,
                        llm_pseudonym=new_pseudonym()))
         created += 1
     db.commit()
@@ -128,7 +124,8 @@ def update_class(class_id: str, body: ClassPatch, db: Session = Depends(get_db))
 def list_students(class_id: str, db: Session = Depends(get_db)):
     """Liste enrichie : niveau 1-10, maîtrise moyenne, compétences dues,
     nombre de preuves — plutôt que des identifiants techniques."""
-    rows = db.query(Student).filter_by(class_id=class_id, active=True).all()
+    rows = (db.query(Student).filter_by(class_id=class_id, active=True)
+            .order_by(Student.order_index, Student.id).all())
     ids = [s.id for s in rows]
     states: dict[str, list[StudentCompetencyState]] = {i: [] for i in ids}
     if ids:
@@ -148,13 +145,13 @@ def list_students(class_id: str, db: Session = Depends(get_db)):
             evidence[ev.student_id] = evidence.get(ev.student_id, 0) + 1
 
     out = []
-    for s in sorted(rows, key=lambda r: (r.last_name.lower(), r.first_name.lower())):
+    for s in rows:
         sts = states.get(s.id, [])
         avg = sum(st.mastery for st in sts) / len(sts) if sts else None
         due = sum(1 for st in sts
                   if recall_probability(st) < settings.forgetting_threshold)
-        out.append({"id": s.id, "first_name": s.first_name, "last_name": s.last_name,
-                    "pseudonym": s.llm_pseudonym,
+        out.append({"id": s.id, "name": s.name, "order_index": s.order_index,
+                    "dyslexic": s.dyslexic, "pseudonym": s.llm_pseudonym,
                     "level": levels.get(s.id), "level_locked": s.level_locked,
                     "avg_mastery": round(avg, 2) if avg is not None else None,
                     "due_count": due, "evidence_count": evidence.get(s.id, 0)})
@@ -163,8 +160,14 @@ def list_students(class_id: str, db: Session = Depends(get_db)):
 
 @router.post("/classes/{class_id}/students")
 def add_student(class_id: str, body: StudentIn, db: Session = Depends(get_db)):
-    s = Student(class_id=class_id, first_name=body.first_name.strip(),
-                last_name=body.last_name.strip(), llm_pseudonym=new_pseudonym())
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(422, "Nom de l'élève requis")
+    last_position = (db.query(Student.order_index).filter_by(class_id=class_id)
+                     .order_by(Student.order_index.desc()).first())
+    s = Student(class_id=class_id, name=name, dyslexic=body.dyslexic,
+                order_index=(last_position[0] + 1 if last_position else 0),
+                llm_pseudonym=new_pseudonym())
     db.add(s)
     db.commit()
     return {"id": s.id}
@@ -174,13 +177,45 @@ def add_student(class_id: str, body: StudentIn, db: Session = Depends(get_db)):
 def add_students_batch(class_id: str, body: BatchStudentsIn, db: Session = Depends(get_db)):
     if not db.get(SchoolClass, class_id):
         raise HTTPException(404, "Classe inconnue")
+    last_position = (db.query(Student.order_index).filter_by(class_id=class_id)
+                     .order_by(Student.order_index.desc()).first())
+    start = last_position[0] + 1 if last_position else 0
     created = 0
-    for last, first in _parse_students(body.text):
-        db.add(Student(class_id=class_id, first_name=first, last_name=last,
-                       llm_pseudonym=new_pseudonym()))
+    for offset, student_name in enumerate(_parse_students(body.text)):
+        db.add(Student(class_id=class_id, name=student_name,
+                       order_index=start + offset, llm_pseudonym=new_pseudonym()))
         created += 1
     db.commit()
     return {"created": created}
+
+
+@router.patch("/students/{student_id}")
+def update_student(student_id: str, body: StudentPatch, db: Session = Depends(get_db)):
+    s = db.get(Student, student_id)
+    if not s:
+        raise HTTPException(404, "Élève inconnu")
+    if body.name is not None:
+        name = body.name.strip()
+        if not name:
+            raise HTTPException(422, "Nom de l'élève requis")
+        s.name = name
+    if body.dyslexic is not None:
+        s.dyslexic = body.dyslexic
+    db.commit()
+    return {"ok": True}
+
+
+@router.put("/classes/{class_id}/students/order")
+def reorder_students(class_id: str, body: StudentOrderIn,
+                     db: Session = Depends(get_db)):
+    rows = db.query(Student).filter_by(class_id=class_id, active=True).all()
+    by_id = {s.id: s for s in rows}
+    if len(body.student_ids) != len(set(body.student_ids)) or set(body.student_ids) != set(by_id):
+        raise HTTPException(422, "La liste ordonnée doit contenir tous les élèves actifs")
+    for order_index, student_id in enumerate(body.student_ids):
+        by_id[student_id].order_index = order_index
+    db.commit()
+    return {"ok": True}
 
 
 @router.delete("/students/{student_id}")

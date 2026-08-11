@@ -1,11 +1,12 @@
 """Lots de scans, machine d'états, file de validation professeur (§6, §9.5)."""
 import hashlib
+import math
 import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -20,7 +21,11 @@ from ..services import grading
 from ..services import providers
 from ..services import sandbox as sandbox_service
 from ..services import scan_intake, scoring
-from ..services.pipeline import build_overlays, finalize_batch, process_batch
+from ..services.pipeline import (
+    build_overlays, effective_reading, finalize_batch, grade_stored_responses,
+    pending_ocr_responses, process_batch,
+)
+from ..services.runtime_settings import llm_confidence_threshold, ocr_confidence_threshold
 
 router = APIRouter(prefix="/api/scans", tags=["scans"], dependencies=[Depends(current_user)])
 
@@ -75,6 +80,25 @@ def _run_pipeline(batch_id: str):
         batch = db.get(ScanBatch, batch_id)
         batch.error = str(e)
         db.commit()
+    finally:
+        db.close()
+
+
+def _run_grading(batch_id: str):
+    """Partie correction seule, déclenchée après l'assistant OCRiser."""
+    db = SessionLocal()
+    try:
+        batch = db.get(ScanBatch, batch_id)
+        if batch:
+            grade_stored_responses(db, batch)
+            batch.error = None
+            db.commit()
+    except Exception as e:
+        db.rollback()
+        batch = db.get(ScanBatch, batch_id)
+        if batch:
+            batch.error = f"Correction non terminée : {e}"
+            db.commit()
     finally:
         db.close()
 
@@ -180,7 +204,8 @@ async def sandbox_upload(tasks: BackgroundTasks, files: list[UploadFile],
         content = await f.read()
         sniffed = _sniff_file(content)
         if sniffed is None:
-            results.append({"filename": f.filename, "status": "unrecognized", "pages_added": 0,
+            results.append({"filename": f.filename, "file_kind": "unknown",
+                            "status": "unrecognized", "pages_added": 0,
                             "duplicates_rejected": 0, "blocked_pages": 0, "batches_created": []})
             continue
         ext, _mime = sniffed
@@ -230,7 +255,9 @@ def _awaiting_scan_rows(db: Session) -> list[dict]:
             "note_base": scoring.assessment_note_base(a) or None,
             "class_name": cls.name if cls else "?", "class_id": cls.id if cls else None,
             "grade_level": cls.grade_level if cls else "", "page_count": 0,
-            "error": None, "pending_reviews": 0, "segments": [],
+            "error": None, "pending_reviews": 0, "pending_ocr": 0,
+            "pending_llm": 0,
+            "ocr_threshold": ocr_confidence_threshold(db), "segments": [],
             "overlay_printed": False, "overlay_distributed": False,
             "created_at": str(a.created_at),
         })
@@ -246,7 +273,9 @@ def get_batch(batch_id: str, db: Session = Depends(get_db)):
 
 
 def _business_steps(status: str, progress: dict | None, pending: int,
-                    error: str | None) -> list[dict]:
+                    pending_ocr: int,
+                    error: str | None,
+                    overlay_printed: bool = False) -> list[dict]:
     """Étapes MÉTIER de la correction, pour un visualiseur lisible par le
     professeur — pas les 10 phases techniques internes. La règle de couleur est
     simple et cohérente avec les actions proposées :
@@ -264,6 +293,7 @@ def _business_steps(status: str, progress: dict | None, pending: int,
     scanned = "split" in done or "uploaded" in done
     read = "ocr_complete" in done
     graded = "graded" in done
+    ocr_confirmed = "ocr_confirmed" in done or graded
     finalized = "finalized" in done
     overlay = "overlay_ready" in done
 
@@ -271,7 +301,7 @@ def _business_steps(status: str, progress: dict | None, pending: int,
         correct = "green"
     elif pending:
         correct = "orange"
-    elif read and not graded:
+    elif ocr_confirmed and not graded:
         correct = "blue"      # notation automatique en cours
     else:
         correct = "gray"
@@ -281,11 +311,17 @@ def _business_steps(status: str, progress: dict | None, pending: int,
          "state": "green" if scanned else "blue"},
         {"phase": "read", "label": "Lecture des copies",
          "state": "green" if read else ("blue" if scanned else "gray")},
+        {"phase": "ocrize", "label": "OCRisation",
+         "state": "orange" if pending_ocr else ("green" if ocr_confirmed
+                  else "blue" if read else "gray")},
         {"phase": "correct", "label": "Correction", "state": correct},
         {"phase": "validate", "label": "Validation",
          "state": "green" if finalized else ("blue" if (graded and not pending) else "gray")},
         {"phase": "done", "label": "Copies corrigées",
          "state": "green" if overlay else ("blue" if finalized else "gray")},
+        {"phase": "overlay_print",
+         "label": "Overlay imprimé" if overlay_printed else "Overlay à imprimer",
+         "state": "green" if overlay_printed else ("blue" if overlay else "gray")},
     ]
     if error:
         for s in steps:
@@ -297,20 +333,27 @@ def _business_steps(status: str, progress: dict | None, pending: int,
 
 def _batch_view(db: Session, b: ScanBatch) -> dict:
     pending = _pending_reviews_query(db, b.assessment_id).count()
-    segments = _business_steps(b.status, b.progress_json, pending, b.error)
+    pending_llm = (_pending_reviews_query(db, b.assessment_id)
+                   .filter(GradingDecision.reason_code == "llm_unavailable").count())
+    pending_ocr = len(pending_ocr_responses(db, b.assessment_id)) if (
+        b.status == "ocr_review_pending") else 0
+    segments = _business_steps(b.status, b.progress_json, pending, pending_ocr,
+                               b.error, b.overlay_printed)
     assessment = db.get(Assessment, b.assessment_id)
     cls = db.get(SchoolClass, assessment.class_id) if assessment else None
     return {"id": b.id, "assessment_id": b.assessment_id, "status": b.status,
             "assessment_title": assessment.title if assessment else "?",
             "assessment_type": assessment.type if assessment else "training",
-            # base de notation du contrôle (§ barème) — None si non noté
+            # base de scoring du sujet (contrôle ou entraînement)
             "note_base": (scoring.assessment_note_base(assessment) or None)
                          if assessment else None,
             "class_name": cls.name if cls else "?",
             "class_id": cls.id if cls else None,
             "grade_level": cls.grade_level if cls else "",
             "page_count": b.page_count, "error": b.error,
-            "pending_reviews": pending, "segments": segments,
+            "pending_reviews": pending, "pending_ocr": pending_ocr,
+            "pending_llm": pending_llm,
+            "ocr_threshold": ocr_confidence_threshold(db), "segments": segments,
             "overlay_printed": b.overlay_printed, "overlay_distributed": b.overlay_distributed,
             "created_at": str(b.created_at)}
 
@@ -397,7 +440,8 @@ def _expected_display(item: CopyItem) -> str:
 
 
 def _cell_units(item: CopyItem, ocr: OcrAttempt | None,
-                decision: GradingDecision | None) -> list[dict]:
+                decision: GradingDecision | None,
+                reading_ocr: OcrAttempt | None = None) -> list[dict]:
     """Une entrée PAR CASE à corriger d'un tableau / de cases à trous (cellules
     « given » exclues, déjà imprimées et non notées). Chaque case porte sa
     réponse attendue lisible, ce que l'OCR a cru lire, le CRÉDIT automatique du
@@ -405,7 +449,14 @@ def _cell_units(item: CopyItem, ocr: OcrAttempt | None,
     et, s'il existe, celui déjà posé par le professeur (`teacher_credit`). La
     modale ne met en validation QUE les cases non tranchées."""
     exp_cells = (item.expected_json or {}).get("cells") or []
-    ocr_cells = ((ocr.raw_json or {}).get("cells") if ocr else None) or []
+    # Le dernier essai peut être une décision teacher/deepseek ajoutée pour la
+    # note. L'affichage « Lecture OCR » doit rester la lecture du moteur OCR,
+    # jamais la valeur canonique réécrite ensuite pour l'overlay.
+    display_ocr = reading_ocr or ocr
+    ocr_cells = ((display_ocr.raw_json or {}).get("cells")
+                 if display_ocr else None) or []
+    ocr_latex = ((display_ocr.raw_json or {}).get("cell_latex")
+                 if display_ocr else None) or []
     g = item.grading_json or {}
     row_labels = g.get("row_labels") or []
     col_labels = g.get("col_labels") or []
@@ -448,6 +499,9 @@ def _cell_units(item: CopyItem, ocr: OcrAttempt | None,
                 "expected_display": (all_expected if unordered
                                      else _fmt_value_latex(cell["type"], cell["value"])),
                 "ocr_text": raw or "",
+                # transcription LaTeX Mathpix, séparée du texte normalisé qui
+                # reste la donnée d'entrée du moteur de notation.
+                "ocr_latex": (ocr_latex[k] if k < len(ocr_latex) else "") or "",
                 # crédit automatique : 1 (juste), 0,5 (arrondi correct), 0
                 # (faux), null (illisible) — la modale pré-sélectionne le bouton
                 # correspondant, demi-point compris.
@@ -515,6 +569,7 @@ def _review_unit(db: Session, resp: StudentResponse, item: CopyItem, copy: Copy,
         decision = _latest_decision_for_response(db, resp.id)
     ocr = (db.query(OcrAttempt).filter_by(zone_id=resp.zone_id)
            .order_by(OcrAttempt.created_at.desc()).first()) if resp.zone_id else None
+    reading_ocr = effective_reading(db, resp.zone_id)
     sig = hashlib.sha1(item.statement.encode()).hexdigest()[:8]
     bareme = scoring.item_bareme(item.grading_json, item.response_type)
     earned = (scoring.earned_points(decision.score, decision.max_score, bareme)
@@ -522,23 +577,51 @@ def _review_unit(db: Session, resp: StudentResponse, item: CopyItem, copy: Copy,
     full = bool(decision and decision.max_score and decision.score >= decision.max_score)
     src = decision.source if decision else "auto"  # deterministic|deepseek|teacher
     cancelled = bool(decision and src == "teacher" and not decision.max_score)
+    llm_threshold = llm_confidence_threshold(db)
+    llm_notes = []
+    llm_confidences = []
+    for raw_note in ((decision.evidence_json or {}).get("llm") or [] if decision else []):
+        note = dict(raw_note)
+        try:
+            confidence = float(note.get("confidence"))
+            valid_confidence = math.isfinite(confidence)
+        except (TypeError, ValueError):
+            confidence, valid_confidence = 0.0, False
+        verdict = str(note.get("verdict") or "").lower()
+        note["requires_review"] = (
+            verdict not in ("juste", "partiel", "faux")
+            or not valid_confidence or confidence < llm_threshold)
+        if valid_confidence:
+            llm_confidences.append(confidence)
+        llm_notes.append(note)
+
     return {
         "response_id": resp.id,
         "review_id": review.id if review else None,
         "flagged": review is not None,
         "category": review.category if review else None,
-        "student": f"{student.last_name} {student.first_name}",
+        "student": student.name,
+        "student_order": student.order_index,
         "statement": item.statement, "expected": item.expected_json,
         "correction": item.correction,
-        "ocr_text": resp.final_text, "selected_choices": resp.selected_choices,
+        "ocr_text": (reading_ocr.text if reading_ocr and reading_ocr.text is not None
+                     else resp.final_text),
+        # Le professeur doit voir la lecture Mathpix rendue comme une formule,
+        # pas ses délimiteurs LaTeX. Les anciens essais n'en ont pas : l'UI se
+        # replie alors sur ocr_text.
+        "ocr_latex": (reading_ocr.latex if reading_ocr and reading_ocr.latex else ""),
+        "selected_choices": resp.selected_choices,
         "selected_pairs": resp.selected_pairs,
-        "ocr_confidence": ocr.confidence if ocr else None,
+        "ocr_confidence": reading_ocr.confidence if reading_ocr else (
+            ocr.confidence if ocr else None),
         "reason_code": decision.reason_code if decision else "",
         # source de la note actuelle, pour distinguer auto vs correction prof
         "decision_source": src,
         # ce que le correcteur LLM a décidé champ par champ, et pourquoi — le
         # professeur relit sa note avant de valider (cf. services.llm_grader)
-        "llm_notes": (decision.evidence_json or {}).get("llm") or [] if decision else [],
+        "llm_notes": llm_notes,
+        "llm_threshold": llm_threshold,
+        "llm_min_confidence": min(llm_confidences) if llm_confidences else None,
         "proposed_score": decision.score if decision else 0.0,
         "max_score": decision.max_score if decision else 0.0,
         # points de barème actuellement attribués (ratio × barème)
@@ -562,7 +645,7 @@ def _review_unit(db: Session, resp: StudentResponse, item: CopyItem, copy: Copy,
         "expected_display": _expected_display(item),
         "cells": (_grid_units(item, ocr, decision, resp.selected_choices)
                   if item.response_type == "checkbox_grid"
-                  else _cell_units(item, ocr, decision)
+                  else _cell_units(item, ocr, decision, reading_ocr)
                   if item.response_type in ("table_fill", "multi_blank") else []),
     }
 
@@ -587,7 +670,7 @@ def list_reviews(batch_id: str, category: str | None = None, db: Session = Depen
         out.append(_review_unit(db, resp, item, copy, student, review=r, decision=decision))
     # exercices identiques consécutifs (group_key), puis par élève : le prof
     # enchaîne tout un lot d'exercices identiques avant de passer au suivant
-    out.sort(key=lambda x: (x["sequence"], x["group_key"], x["student"]))
+    out.sort(key=lambda x: (x["sequence"], x["group_key"], x["student_order"]))
     return out
 
 
@@ -628,8 +711,175 @@ def list_items(batch_id: str, scope: str = "flagged", db: Session = Depends(get_
                                     review=open_by_resp.get(resp.id)))
     # signalés d'abord, puis exercice par exercice, puis par élève
     out.sort(key=lambda x: (0 if x["flagged"] else 1, x["sequence"],
-                            x["group_key"], x["student"]))
+                            x["group_key"], x["student_order"]))
     return out
+
+
+def _normalized_ocr_controls(zone: ResponseZone, item: CopyItem) -> dict:
+    """Géométrie 0..1 des contrôles bleus placés directement sur le crop."""
+    meta = zone.meta_json or {}
+    padding = float(zone.padding_pt or 0)
+    span_w = max(1e-6, float(zone.w_pt) + 2 * padding)
+    span_h = max(1e-6, float(zone.h_pt) + 2 * padding)
+    ztop = float(zone.y_pt) + float(zone.h_pt) + padding
+
+    def rect(g: dict) -> dict | None:
+        if not all(k in g for k in ("x_pt", "y_pt", "w_pt", "h_pt")):
+            return None
+        return {
+            "x": (float(g["x_pt"]) - float(zone.x_pt) + padding) / span_w,
+            "y": (ztop - float(g["y_pt"]) - float(g["h_pt"])) / span_h,
+            "w": float(g["w_pt"]) / span_w,
+            "h": float(g["h_pt"]) / span_h,
+        }
+
+    if item.response_type.startswith("qcm") or item.response_type == "checkbox_grid":
+        boxes = []
+        for i, box in enumerate(meta.get("boxes") or []):
+            # Les sujets récents réservent une case à gauche de la coche élève ;
+            # anciens sujets : contrôle superposé à la case détectée.
+            r = rect(box.get("correction_box") or box)
+            if r:
+                boxes.append({**r, "index": box.get("index", i),
+                              "row": box.get("row"), "col": box.get("col")})
+        return {"kind": "boxes", "boxes": boxes}
+    if item.response_type == "matching":
+        def points(key: str) -> list[dict]:
+            out = []
+            for p in meta.get(key) or []:
+                r = rect(p)
+                if r:
+                    out.append({"index": p.get("index", len(out)),
+                                "x": r["x"] + r["w"] / 2,
+                                "y": r["y"] + r["h"] / 2})
+            return out
+        return {"kind": "matching", "left": points("left_points"),
+                "right": points("right_points")}
+    return {"kind": "text"}
+
+
+@router.get("/batches/{batch_id}/ocr-items")
+def list_ocr_items(batch_id: str, db: Session = Depends(get_db)):
+    """File OCR/CV faible confiance, avant toute partie correction."""
+    batch = db.get(ScanBatch, batch_id)
+    if not batch:
+        raise HTTPException(404)
+    pending = {r.id for r in pending_ocr_responses(db, batch.assessment_id)}
+    out = []
+    copies = db.query(Copy).filter_by(assessment_id=batch.assessment_id).all()
+    for copy in copies:
+        student = db.get(Student, copy.student_id)
+        for item in db.query(CopyItem).filter_by(copy_id=copy.id).all():
+            resp = db.query(StudentResponse).filter_by(copy_item_id=item.id).first()
+            if not resp or resp.id not in pending:
+                continue
+            zone = db.get(ResponseZone, resp.zone_id) if resp.zone_id else None
+            row = _review_unit(db, resp, item, copy, student)
+            row["ocr_controls"] = _normalized_ocr_controls(zone, item) if zone else {"kind": "text"}
+            reading = effective_reading(db, resp.zone_id)
+            row["cell_confidences"] = ((reading.raw_json or {}).get("cell_confidences")
+                                           if reading else None) or []
+            out.append(row)
+
+    def rank(row: dict) -> tuple:
+        rt = row["response_type"]
+        family = 0 if (rt.startswith("qcm") or rt in ("checkbox_grid", "matching")) \
+            else 2 if rt in ("multiline_text", "composite") else 1
+        # Même case de réponse à travers les élèves, puis élève suivant.
+        return family, row["group_key"], row["student_order"]
+    out.sort(key=rank)
+    return out
+
+
+class OcrReadingIn(BaseModel):
+    text: str | None = None
+    latex: str | None = None
+    cell_index: int | None = None
+    selected_choices: list[int] | None = None
+    selected_pairs: list[list[int]] | None = None
+
+
+@router.post("/responses/{response_id}/ocr")
+def update_ocr_reading(response_id: str, body: OcrReadingIn,
+                       db: Session = Depends(get_db),
+                       user: User = Depends(current_user)):
+    """Réécrit la réponse élève, sans créer ni modifier aucune note."""
+    resp = db.get(StudentResponse, response_id)
+    if not resp or not resp.zone_id:
+        raise HTTPException(404, "Réponse scannée introuvable")
+    item = db.get(CopyItem, resp.copy_item_id)
+    copy = db.get(Copy, item.copy_id) if item else None
+    previous = effective_reading(db, resp.zone_id)
+    raw = dict((previous.raw_json or {}) if previous else {})
+    text = body.text if body.text is not None else (previous.text if previous else resp.final_text)
+    latex = body.latex if body.latex is not None else (previous.latex if previous else text)
+
+    if item.response_type in ("table_fill", "multi_blank"):
+        if body.cell_index is None:
+            raise HTTPException(422, "cell_index requis")
+        cells = list(raw.get("cells") or [])
+        cell_latex = list(raw.get("cell_latex") or [""] * len(cells))
+        confidences = list(raw.get("cell_confidences") or
+                           [float(previous.confidence if previous else 0)] * len(cells))
+        if not 0 <= body.cell_index < len(cells):
+            raise HTTPException(422, "case OCR inconnue")
+        cells[body.cell_index] = text or ""
+        while len(cell_latex) < len(cells):
+            cell_latex.append("")
+        while len(confidences) < len(cells):
+            confidences.append(float(previous.confidence if previous else 0))
+        cell_latex[body.cell_index] = latex or text or ""
+        confidences[body.cell_index] = 1.0
+        raw.update(cells=cells, cell_latex=cell_latex, cell_confidences=confidences)
+        confidence = min(confidences) if confidences else 1.0
+        text = ""
+        latex = ""
+    elif item.response_type.startswith("qcm"):
+        if body.selected_choices is None:
+            raise HTTPException(422, "selected_choices requis")
+        resp.selected_choices = sorted(set(body.selected_choices))
+        raw["selected"] = resp.selected_choices
+        confidence = 1.0
+    elif item.response_type == "checkbox_grid":
+        if body.selected_choices is None:
+            raise HTTPException(422, "selected_choices requis")
+        resp.selected_choices = body.selected_choices
+        raw["grid_selected"] = resp.selected_choices
+        confidence = 1.0
+    elif item.response_type == "matching":
+        if body.selected_pairs is None:
+            raise HTTPException(422, "selected_pairs requis")
+        resp.selected_pairs = body.selected_pairs
+        raw["pairs"] = body.selected_pairs
+        confidence = 1.0
+    else:
+        resp.final_text = text or ""
+        confidence = 1.0
+
+    db.add(OcrAttempt(zone_id=resp.zone_id, provider="teacher_ocr",
+                      raw_json=raw, text=text or "", latex=latex or "",
+                      confidence=confidence))
+    db.commit()
+    remaining = len(pending_ocr_responses(db, copy.assessment_id)) if copy else 0
+    return {"ok": True, "remaining": remaining}
+
+
+@router.post("/batches/{batch_id}/ocr/complete")
+def complete_ocr(batch_id: str, tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    """Ferme OCRiser puis démarre seulement maintenant la correction."""
+    batch = db.get(ScanBatch, batch_id)
+    if not batch:
+        raise HTTPException(404)
+    remaining = len(pending_ocr_responses(db, batch.assessment_id))
+    if remaining:
+        raise HTTPException(409, f"{remaining} lecture(s) OCR/CV restante(s)")
+    batch.status = "ocr_confirmed"
+    progress = dict(batch.progress_json or {})
+    progress["ocr_confirmed"] = {"done": True}
+    batch.progress_json = progress
+    db.commit()
+    tasks.add_task(_run_grading, batch.id)
+    return {"ok": True, "status": batch.status}
 
 
 @router.get("/batches/{batch_id}/summary")
@@ -682,11 +932,12 @@ def batch_summary(batch_id: str, db: Session = Depends(get_db)):
         if base and total:
             _, note = scoring.note_from_points(earned, total, base)
         copies_out.append({
-            "student": f"{student.last_name} {student.first_name}",
+            "student": student.name,
+            "student_order": student.order_index,
             "points_earned": round(earned, 2), "points_total": round(total, 2),
             "note": note, "graded_items": graded, "flagged": flagged,
         })
-    copies_out.sort(key=lambda c: c["student"])
+    copies_out.sort(key=lambda c: c["student_order"])
     return {"assessment_title": assessment.title if assessment else "?",
             "note_base": base or None, "pending_reviews": total_pending,
             "scanned_copies": len(copies_out), "copies": copies_out}
@@ -726,12 +977,15 @@ def review_scan(review_id: str, db: Session = Depends(get_db)):
 
 @router.get("/responses/{response_id}/scan")
 def response_scan(response_id: str, cell: int | None = None,
+                  expected_overlay: bool = False,
                   db: Session = Depends(get_db)):
     """Crop scanné de la zone de réponse — même image que `review_scan`, mais
     adressé par réponse (utilisé par la relecture « toutes les réponses », où il
     n'y a pas forcément de revue ouverte). `cell` (index plat d'une case non
     « given ») ne montre QUE cette case ; repli sur le tableau entier si le crop
-    par case n'existe pas (scans corrigés avant la découpe par case)."""
+    par case n'existe pas (scans corrigés avant la découpe par case).
+    `expected_overlay` superpose en rouge l'attendu des QCM/matching sans écrire
+    dans le fichier dérivé."""
     resp = db.get(StudentResponse, response_id)
     if not resp or not resp.zone_id:
         raise HTTPException(404, "Aucune zone scannée")
@@ -744,6 +998,28 @@ def response_scan(response_id: str, cell: int | None = None,
         path = _zone_crop_path(copy.assessment_id, resp.zone_id)
     if not path.exists():
         raise HTTPException(404, "Crop indisponible")
+    if expected_overlay and (item.response_type.startswith("qcm")
+                             or item.response_type == "matching"):
+        # Aperçu compact de correction : le scan filtré reste intact sur disque,
+        # la réponse attendue rouge est dessinée uniquement dans la réponse HTTP.
+        import cv2
+        from ..services import worker_cv
+
+        image = cv2.imread(str(path), cv2.IMREAD_COLOR)
+        zone = db.get(ResponseZone, resp.zone_id)
+        if image is not None and zone is not None:
+            rendered = worker_cv.draw_expected_answer(
+                image,
+                zone_geo={"x_pt": zone.x_pt, "y_pt": zone.y_pt,
+                          "w_pt": zone.w_pt, "h_pt": zone.h_pt,
+                          "padding_pt": zone.padding_pt},
+                meta=zone.meta_json or {}, expected=item.expected_json or {},
+                response_type=item.response_type,
+                color="#C62828",
+            )
+            ok, encoded = cv2.imencode(".png", rendered)
+            if ok:
+                return Response(content=encoded.tobytes(), media_type="image/png")
     return FileResponse(path, media_type="image/png")
 
 
@@ -895,6 +1171,12 @@ def retry_batch(batch_id: str, tasks: BackgroundTasks, db: Session = Depends(get
     progress = b.progress_json or {}
     if "finalized" in progress and b.status != "overlay_ready":
         tasks.add_task(_run_build_overlays, b.id)
+    elif (_pending_reviews_query(db, b.assessment_id)
+          .filter(GradingDecision.reason_code == "llm_unavailable").count()):
+        # Reprise ciblée : les lectures OCR et les décisions déterministes sont
+        # déjà acquises. `grade_stored_responses` ne remet en file que les tâches
+        # LLM indisponibles, sans re-rastériser ni relire les scans.
+        tasks.add_task(_run_grading, b.id)
     else:
         tasks.add_task(_run_pipeline, b.id)
     return {"ok": True, "status": b.status}
@@ -955,18 +1237,16 @@ def overlays(batch_id: str, db: Session = Depends(get_db)):
 
 
 class BatchFlagsIn(BaseModel):
-    overlay_printed: bool | None = None
     overlay_distributed: bool | None = None
 
 
 @router.patch("/batches/{batch_id}")
 def update_batch_flags(batch_id: str, body: BatchFlagsIn, db: Session = Depends(get_db)):
-    """Cases à cocher Imprimé / Distribué (§9.5) : suivi manuel post-overlay."""
+    """Suivi manuel de la seule distribution post-overlay. L'impression est
+    exclusivement posée par routers.printing après un envoi CUPS réussi."""
     b = db.get(ScanBatch, batch_id)
     if not b:
         raise HTTPException(404)
-    if body.overlay_printed is not None:
-        b.overlay_printed = body.overlay_printed
     if body.overlay_distributed is not None:
         b.overlay_distributed = body.overlay_distributed
     db.commit()

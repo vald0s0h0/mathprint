@@ -2,7 +2,7 @@
 // Documents (éditeur de templates), Système, Données.
 import {
   Accordion, ActionIcon, Alert, Badge, Button, Card, ColorInput, FileButton,
-  Group, Loader, Modal, PasswordInput, SimpleGrid, Stack, Table, Tabs, Text,
+  Group, Loader, Modal, NumberInput, PasswordInput, SimpleGrid, Stack, Table, Tabs, Text,
   TextInput, Title,
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
@@ -12,17 +12,14 @@ import {
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { api, getToken } from '../api'
+import PrinterSettings, { type PrintersInfo } from '../components/PrinterSettings'
 import TemplateEditor from '../components/TemplateEditor'
 
 type Me = { id: string; email: string; display_name: string; role: string }
 type Provider = { provider: string; secret_preview: string; active: boolean }
-type PrintersInfo = {
-  local: { name: string; default?: boolean; status: string }[]
-  network: { name: string; uri: string; status: string }[]
-}
 type Build = { sha: string; time: string }
 type StudentRow = {
-  id: string; first_name: string; last_name: string; class_name: string
+  id: string; name: string; class_name: string
   active: boolean; copy_count: number
 }
 type AssessmentRow = {
@@ -61,13 +58,15 @@ export default function SettingsPage() {
   const [pwdLoading, setPwdLoading] = useState(false)
   const [providers, setProviders] = useState<Provider[]>([])
   const [system, setSystem] = useState<Record<string, any>>({})
+  const [ocrThresholdPct, setOcrThresholdPct] = useState<number | string>(90)
+  const [savingOcrThreshold, setSavingOcrThreshold] = useState(false)
+  const [llmThresholdPct, setLlmThresholdPct] = useState<number | string>(90)
+  const [savingLlmThreshold, setSavingLlmThreshold] = useState(false)
   const [status, setStatus] = useState<SystemStatus | null>(null)
   const [printers, setPrinters] = useState<PrintersInfo | null>(null)
   const [backups, setBackups] = useState<{ name: string; size: number }[]>([])
   const [calibrations, setCalibrations] = useState<any[]>([])
   const [edit, setEdit] = useState<Record<string, string>>({})
-  const [netName, setNetName] = useState('')
-  const [netUri, setNetUri] = useState('')
   const [webBuild, setWebBuild] = useState<Build | null>(null)
   const [overview, setOverview] = useState<Overview | null>(null)
   const [classDetail, setClassDetail] = useState<Record<string, ClassDetail>>({})
@@ -84,7 +83,11 @@ export default function SettingsPage() {
   function refresh() {
     api.get<Me>('/api/auth/me').then(setMe)
     api.get<Provider[]>('/api/settings/providers').then(setProviders)
-    api.get<Record<string, any>>('/api/settings/system').then(setSystem)
+    api.get<Record<string, any>>('/api/settings/system').then((values) => {
+      setSystem(values)
+      setOcrThresholdPct(Math.round(Number(values.ocr_confidence_threshold?.value ?? 0.9) * 100))
+      setLlmThresholdPct(Math.round(Number(values.llm_confidence_threshold?.value ?? 0.9) * 100))
+    })
     api.get<SystemStatus>('/api/system/status').then(setStatus)
     api.get<PrintersInfo>('/api/printers').then(setPrinters)
     api.get<{ name: string; size: number }[]>('/api/system/backups').then(setBackups)
@@ -208,6 +211,44 @@ export default function SettingsPage() {
     refresh()
   }
 
+  async function saveOcrThreshold() {
+    const pct = Math.max(1, Math.min(100, Number(ocrThresholdPct) || 90))
+    setSavingOcrThreshold(true)
+    try {
+      await api.post('/api/settings/system', {
+        key: 'ocr_confidence_threshold', value: { value: pct / 100 },
+      })
+      // Relire l'autorité serveur immédiatement : le champ affiche ainsi la
+      // valeur réellement persistée, pas un état local optimiste.
+      const values = await api.get<Record<string, any>>('/api/settings/system')
+      const savedPct = Math.round(Number(values.ocr_confidence_threshold?.value ?? 0.9) * 100)
+      setSystem(values); setOcrThresholdPct(savedPct)
+      notifications.show({ color: 'green', message: `Seuil OCR/CV enregistré à ${savedPct} %` })
+    } catch (e) {
+      notifications.show({ color: 'red', message: (e as Error).message })
+    } finally {
+      setSavingOcrThreshold(false)
+    }
+  }
+
+  async function saveLlmThreshold() {
+    const pct = Math.max(1, Math.min(100, Number(llmThresholdPct) || 90))
+    setSavingLlmThreshold(true)
+    try {
+      await api.post('/api/settings/system', {
+        key: 'llm_confidence_threshold', value: { value: pct / 100 },
+      })
+      const values = await api.get<Record<string, any>>('/api/settings/system')
+      const savedPct = Math.round(Number(values.llm_confidence_threshold?.value ?? 0.9) * 100)
+      setSystem(values); setLlmThresholdPct(savedPct)
+      notifications.show({ color: 'green', message: `Seuil DeepSeek enregistré à ${savedPct} %` })
+    } catch (e) {
+      notifications.show({ color: 'red', message: (e as Error).message })
+    } finally {
+      setSavingLlmThreshold(false)
+    }
+  }
+
   async function syncMathalea() {
     try {
       const r = await api.post<{ created: number; updated: number; competency_mapped: number }>(
@@ -243,12 +284,6 @@ export default function SettingsPage() {
     await api.post('/api/system/logs/clear')
     setLogs([])
     notifications.show({ color: 'green', message: 'Journal vidé' })
-  }
-
-  async function registerNetwork() {
-    await api.post('/api/printers/network', { name: netName, uri: netUri })
-    setNetName(''); setNetUri('')
-    refresh()
   }
 
   async function downloadCalibrationPage() {
@@ -359,42 +394,7 @@ export default function SettingsPage() {
         </Tabs.Panel>
 
         <Tabs.Panel value="imprimantes" pt="md">
-          <Stack>
-            <Card withBorder>
-              <Text fw={600} mb="xs">Imprimantes locales (CUPS du poste / NAS)</Text>
-              {printers?.local.length
-                ? printers.local.map((p) => (
-                  <Group key={p.name} gap="xs" py={2}>
-                    <Printer size={14} />
-                    <Text size="sm">{p.name}</Text>
-                    {p.default && <Badge size="xs" variant="light" color="blue">par défaut</Badge>}
-                    <Badge size="xs" color="gray" variant="light">{p.status}</Badge>
-                  </Group>
-                ))
-                : <Text size="sm" c="dimmed">Aucune file CUPS détectée sur cette machine.</Text>}
-            </Card>
-            <Card withBorder>
-              <Text fw={600} mb="xs">Imprimantes réseau (IPP, pilotées depuis le NAS)</Text>
-              {printers?.network.map((p) => (
-                <Group key={p.name} gap="xs" py={2}>
-                  <Text size="sm">{p.name}</Text>
-                  <Text size="xs" c="dimmed">{p.uri}</Text>
-                </Group>
-              ))}
-              <Group mt="sm" gap="xs">
-                <TextInput size="xs" placeholder="Nom" value={netName}
-                  onChange={(e) => setNetName(e.target.value)} />
-                <TextInput size="xs" placeholder="ipp://192.168.1.50/ipp/print" value={netUri}
-                  onChange={(e) => setNetUri(e.target.value)} style={{ flex: 1 }} />
-                <Button size="xs" onClick={registerNetwork} disabled={!netName || !netUri}>
-                  Ajouter
-                </Button>
-              </Group>
-              <Text size="xs" c="dimmed" mt="xs">
-                Impression toujours à taille réelle 100 % (print-scaling=none) ; chaque job est journalisé.
-              </Text>
-            </Card>
-          </Stack>
+          <PrinterSettings printers={printers} refresh={refresh} />
         </Tabs.Panel>
 
         <Tabs.Panel value="calibration" pt="md">
@@ -436,6 +436,37 @@ export default function SettingsPage() {
 
         <Tabs.Panel value="pedagogie" pt="md">
           <Stack maw={640}>
+            <Card withBorder>
+              <Text fw={600} mb={4}>Lecture OCR et vision</Text>
+              <Text size="xs" c="dimmed" mb="sm">
+                Après la lecture des scans, « OCRiser » ne présente que les réponses
+                dont la confiance OCR/CV est sous ce seuil, avant toute correction.
+              </Text>
+              <Group align="flex-end">
+                <NumberInput label="Seuil de confiance" suffix=" %" min={1} max={100}
+                  step={1} w={190} value={ocrThresholdPct}
+                  onChange={setOcrThresholdPct}
+                  onKeyDown={(e) => { if (e.key === 'Enter') saveOcrThreshold() }} />
+                <Button leftSection={<Save size={14} />} loading={savingOcrThreshold}
+                  onClick={saveOcrThreshold}>Enregistrer</Button>
+              </Group>
+            </Card>
+            <Card withBorder>
+              <Text fw={600} mb={4}>Correction DeepSeek</Text>
+              <Text size="xs" c="dimmed" mb="sm">
+                Une réponse corrigée par le LLM n'est envoyée dans l'assistant de
+                correction manuelle que si sa confiance est strictement inférieure
+                à ce seuil. La valeur par défaut est 90 %.
+              </Text>
+              <Group align="flex-end">
+                <NumberInput label="Seuil de confiance LLM" suffix=" %" min={1} max={100}
+                  step={1} w={210} value={llmThresholdPct}
+                  onChange={setLlmThresholdPct}
+                  onKeyDown={(e) => { if (e.key === 'Enter') saveLlmThreshold() }} />
+                <Button leftSection={<Save size={14} />} loading={savingLlmThreshold}
+                  onClick={saveLlmThreshold}>Enregistrer</Button>
+              </Group>
+            </Card>
             <Card withBorder>
               <Text fw={600} mb={4}>Raccourcis de correction manuelle</Text>
               <Text size="xs" c="dimmed" mb="sm">
@@ -711,7 +742,7 @@ export default function SettingsPage() {
                               <Table.Tbody>
                                 {d.students.map((s) => (
                                   <Table.Tr key={s.id}>
-                                    <Table.Td>{s.last_name} {s.first_name}</Table.Td>
+                                    <Table.Td>{s.name}</Table.Td>
                                     <Table.Td w={70}>{s.copy_count} copie(s)</Table.Td>
                                     <Table.Td w={80}>{s.active
                                       ? <Badge size="xs" color="green" variant="light">actif</Badge>
@@ -719,7 +750,7 @@ export default function SettingsPage() {
                                     <Table.Td w={36}>
                                       <ActionIcon color="red" variant="subtle" onClick={() => setConfirmTarget({
                                         kind: 'students', id: s.id,
-                                        label: `l'élève « ${s.last_name} ${s.first_name} » (${s.copy_count} copie(s))`,
+                                        label: `l'élève « ${s.name} » (${s.copy_count} copie(s))`,
                                       })}><Trash2 size={14} /></ActionIcon>
                                     </Table.Td>
                                   </Table.Tr>

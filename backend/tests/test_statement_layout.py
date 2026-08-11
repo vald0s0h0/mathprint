@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from reportlab.lib.units import mm
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -235,6 +236,25 @@ def test_blank_box_is_8mm_high():
         assert kind == "normal"
         assert w == pytest.approx(20 * mm)
         assert asc + desc == pytest.approx(8 * mm)
+
+
+def test_only_a_blank_expecting_a_fraction_gains_3mm():
+    """Dans un multi_blank mixte, la fraction gagne 3 mm sans agrandir la
+    case voisine qui attend un entier."""
+    item = {
+        "statement": "Fraction : {{blank}} puis entier : {{blank}}",
+        "response_type": "multi_blank", "choices": [], "level5": 3,
+        "grading": {"max_score": 2, "comparator": "table_cells"},
+        "expected": {"type": "table", "cells": [[
+            {"type": "rational", "value": [3, 4]},
+            {"type": "integer", "value": 7},
+        ]]},
+        "inline": True,
+    }
+    layout, _zone_fs, _zone_h, _strip = pdfgen._exercise_layout(item, 9, 12)
+    blanks = [seg for line in layout["intro"]["lines"] for seg in line["segs"]
+              if seg[0] == "blank"]
+    assert [seg[2] + seg[3] for seg in blanks] == pytest.approx([11 * mm, 8 * mm])
 
 
 def test_subquestion_gets_a_badge_coloured_by_the_exercise_level():

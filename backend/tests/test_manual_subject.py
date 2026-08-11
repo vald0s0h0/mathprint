@@ -256,7 +256,7 @@ def _seed(db, n_students=4):
             rows.append(row)
     students = []
     for i in range(n_students):
-        s = Student(class_id=cls.id, first_name=f"E{i}", last_name="Test",
+        s = Student(class_id=cls.id, name=f"E{i} Test", order_index=i,
                     llm_pseudonym=f"eleve-{i}")
         db.add(s)
         db.flush()

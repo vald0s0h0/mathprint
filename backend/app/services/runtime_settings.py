@@ -6,12 +6,43 @@ plus de « mode mock » global ni de classe fictive.
 """
 from sqlalchemy.orm import Session
 
+from ..config import settings
 from ..models import SystemSetting
 
 
 def get_setting(db: Session, key: str) -> dict | None:
     row = db.get(SystemSetting, key)
     return row.value_json if row else None
+
+
+def ocr_confidence_threshold(db: Session) -> float:
+    """Seuil commun lecture CV/Mathpix -> reprise professeur.
+
+    Il vit dans les réglages usuels afin que la file « OCRiser », le badge de
+    lot et le démarrage de la correction appliquent toujours la même valeur.
+    Les valeurs hors plage sont ignorées plutôt que de bloquer un ancien réglage.
+    """
+    saved = get_setting(db, "ocr_confidence_threshold") or {}
+    try:
+        value = float(saved.get("value", 0.90))
+    except (TypeError, ValueError):
+        value = 0.90
+    return value if 0.0 < value <= 1.0 else 0.90
+
+
+def llm_confidence_threshold(db: Session) -> float:
+    """Seuil DeepSeek -> correction manuelle, réglable en Pédagogie.
+
+    Une confiance exactement égale au seuil est acceptée : seule une valeur
+    strictement inférieure doit ouvrir l'assistant professeur.
+    """
+    fallback = float(settings.correction_confidence_min)
+    saved = get_setting(db, "llm_confidence_threshold") or {}
+    try:
+        value = float(saved.get("value", fallback))
+    except (TypeError, ValueError):
+        value = fallback
+    return value if 0.0 < value <= 1.0 else fallback
 
 
 # ---------------------------------------------------------------- templates

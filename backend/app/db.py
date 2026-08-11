@@ -55,6 +55,7 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, ...]]] = {
     ],
     "assessments": [
         ("error_message", "TEXT"),
+        ("pronote_entered", "BOOLEAN", "0" if engine.dialect.name == "sqlite" else "FALSE"),
         # sujets antérieurs au barème : la note était calculée sur 20 en dur
         # (cf. services.pipeline.build_overlays), ils gardent donc /20
         ("note_base", "INTEGER", "20"),
@@ -62,6 +63,9 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, ...]]] = {
     "students": [
         ("next_plan_json", "JSON"),
         ("next_plan_updated_at", "TIMESTAMP"),
+    ],
+    "student_levels": [
+        ("assessment_id", "TEXT"),
     ],
     "copy_items": [
         ("lesson_snippet_id", "TEXT"),
@@ -78,6 +82,13 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, ...]]] = {
     ],
     "indigo_exercises": [
         ("figure_required", "BOOLEAN"),
+    ],
+    "printers": [
+        ("duplex", "BOOLEAN"),
+        ("reverse_order", "BOOLEAN"),
+        ("pickup_reverse_order", "BOOLEAN"),
+        ("app_default", "BOOLEAN"),
+        ("adf_reverse_order", "BOOLEAN"),
     ],
 }
 
@@ -100,6 +111,7 @@ _RENAMED_COLUMNS: dict[str, list[tuple[str, str]]] = {
 # celui-ci, la colonne ne servait qu'à l'affichage et pouvait diverger.
 _DROPPED_COLUMNS: dict[str, list[str]] = {
     "indigo_exercises": ["effort_points"],
+    "students": ["first_name", "last_name"],
 }
 
 
@@ -122,6 +134,36 @@ def run_migrations():
     insp = inspect(engine)
     tables = set(insp.get_table_names())
     with engine.begin() as conn:
+        # Migration d'identité des élèves. Elle doit précéder la suppression
+        # des deux anciennes colonnes afin de conserver les noms existants.
+        if "students" in tables:
+            student_cols = {c["name"] for c in insp.get_columns("students")}
+            additions = (
+                ("name", "TEXT", "''"),
+                ("order_index", "INTEGER", "0"),
+                ("dyslexic", "BOOLEAN", _default_sql("BOOLEAN")),
+            )
+            for name, col_type, default in additions:
+                if name not in student_cols:
+                    conn.execute(text(
+                        f"ALTER TABLE students ADD COLUMN {name} {col_type} "
+                        f"DEFAULT {default}"))
+                    student_cols.add(name)
+            if {"first_name", "last_name"}.issubset(student_cols):
+                conn.execute(text(
+                    "UPDATE students SET name = TRIM(COALESCE(last_name, '') || ' ' || "
+                    "COALESCE(first_name, '')) WHERE name IS NULL OR name = ''"))
+                rows = conn.execute(text(
+                    "SELECT id, class_id FROM students "
+                    "ORDER BY class_id, LOWER(last_name), LOWER(first_name), id"
+                )).fetchall()
+                positions: dict[str | None, int] = {}
+                for student_id, class_id in rows:
+                    position = positions.get(class_id, 0)
+                    conn.execute(text(
+                        "UPDATE students SET order_index=:position WHERE id=:student_id"),
+                        {"position": position, "student_id": student_id})
+                    positions[class_id] = position + 1
         for table, renames in _RENAMED_COLUMNS.items():
             if table not in tables:
                 continue

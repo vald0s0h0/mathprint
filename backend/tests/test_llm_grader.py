@@ -5,6 +5,7 @@ coûte, donc tout ce que le moteur déterministe sait trancher ne doit jamais
 partir — et tout ce qu'il ne sait pas noter (un raisonnement, une réponse fausse
 qui porte une méthode) doit partir.
 """
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,10 +22,10 @@ from app.db import Base
 from app.models import (
     Assessment, Competency, Copy, CopyItem, DocumentPage, GradingDecision,
     ManualReview, OcrAttempt, ProviderConfig, ResponseZone, SchoolClass,
-    Student, StudentResponse,
+    Student, StudentResponse, SystemSetting,
 )
 from app.routers import scans as scans_router
-from app.services import exercise_gen, grading, llm_grader, pipeline, scan_intake
+from app.services import exercise_gen, grading, llm_grader, pipeline, providers, scan_intake
 
 
 @pytest.fixture
@@ -178,6 +179,113 @@ def test_batches_group_by_exercise_and_quote_the_statement_once():
     assert payload["exercices"][0]["enonce"].count("Combien") == 1
 
 
+def test_grading_json_accepts_points_only_and_key_variants():
+    task = llm_grader.Task(exercise_key="ex", statement="Calcule.", correction="",
+                           max_score=1, base_score=0, fields=[])
+    field = llm_grader.Field(label="", expected="18", student="50-32=19",
+                             bareme=1, weight=1, key="r1")
+    task.fields.append(field)
+    normalized = llm_grader._normalize_grading_response(
+        {"results": [{"response_id": "r1", "score": "0,5",
+                       "confidence": 95, "reason": "méthode juste"}]},
+        [(task, field)])
+    assert normalized == {"corrections": [{
+        "id": "r1", "verdict": "partiel", "points": 0.5,
+        "confiance": 0.95, "motif": "méthode juste",
+    }]}
+
+
+def test_grading_json_rejects_missing_ids_and_inconsistent_points():
+    task = llm_grader.Task(exercise_key="ex", statement="Calcule.", correction="",
+                           max_score=1, base_score=0, fields=[])
+    field = llm_grader.Field(label="", expected="18", student="19",
+                             bareme=1, weight=1, key="r1")
+    with pytest.raises(ValueError, match="incohérent"):
+        llm_grader._normalize_grading_response(
+            {"corrections": [{"id": "r1", "verdict": "juste", "points": 0}]},
+            [(task, field)])
+    with pytest.raises(ValueError, match="manquants"):
+        llm_grader._normalize_grading_response({"corrections": []}, [(task, field)])
+
+
+def test_deepseek_schema_retry_receives_and_repairs_the_bad_output(db, monkeypatch):
+    db.add(ProviderConfig(provider="deepseek-flash", model="deepseek-v4-flash",
+                          encrypted_secret="test", active=True))
+    db.commit()
+    contents = ['{"wrong_key": []}',
+                '```json\n{"corrections":[{"id":"r1"}]}\n```']
+    sent = []
+
+    class FakeResponse:
+        def __init__(self, content): self.content = content
+        def raise_for_status(self): return None
+        def json(self):
+            return {"choices": [{"message": {"content": self.content},
+                                  "finish_reason": "stop"}], "usage": {}}
+
+    def fake_post(_url, **kwargs):
+        sent.append([dict(message) for message in kwargs["json_body"]["messages"]])
+        return FakeResponse(contents[len(sent) - 1])
+
+    def validator(raw):
+        if not isinstance(raw, dict) or "corrections" not in raw:
+            raise ValueError("clé corrections absente")
+        return raw
+
+    monkeypatch.setattr(providers, "_post_with_deadline", fake_post)
+    out = providers.deepseek_json(
+        db, "answer_grading", "system", {"reponses": [{"id": "r1"}]},
+        validator=validator, repair_instruction="Répare le contrat demandé.")
+    assert out["corrections"][0]["id"] == "r1"
+    assert len(sent) == 2
+    assert sent[1][-2]["role"] == "assistant"      # sortie fautive fournie au retry
+    assert "clé corrections absente" in sent[1][-1]["content"]
+
+
+def test_deepseek_empty_json_retries_as_text_without_thinking(db, monkeypatch):
+    """Le mode JSON DeepSeek peut rendre content vide. Le retry change de
+    transport, mais le validateur local garde le même contrat strict."""
+    db.add(ProviderConfig(provider="deepseek-flash", model="deepseek-v4-flash",
+                          encrypted_secret="test", active=True))
+    db.commit()
+    sent = []
+
+    class FakeResponse:
+        def __init__(self, index): self.index = index
+        def raise_for_status(self): return None
+        def json(self):
+            if self.index == 0:
+                return {"choices": [{"message": {"content": "",
+                                                   "reasoning_content": "analyse"},
+                                     "finish_reason": "stop"}],
+                        "usage": {"completion_tokens": 41}}
+            return {"choices": [{"message": {
+                        "content": '{"corrections":[{"id":"r1"}]}'},
+                                     "finish_reason": "stop"}], "usage": {}}
+
+    def fake_post(_url, **kwargs):
+        sent.append(json.loads(json.dumps(kwargs["json_body"])))
+        return FakeResponse(len(sent) - 1)
+
+    monkeypatch.setattr(providers, "_post_with_deadline", fake_post)
+
+    def validator(raw):
+        if "corrections" not in raw:
+            raise ValueError("schéma")
+        return raw
+
+    out = providers.deepseek_json(
+        db, "answer_grading", "Réponds en json.", {"reponses": [{"id": "r1"}]},
+        thinking=False, validator=validator)
+
+    assert out["corrections"][0]["id"] == "r1"
+    assert sent[0]["thinking"] == {"type": "disabled"}
+    assert sent[1]["thinking"] == {"type": "disabled"}
+    assert sent[0]["response_format"] == {"type": "json_object"}
+    assert sent[1]["response_format"] == {"type": "text"}
+    assert "contenu DeepSeek vide" in sent[1]["messages"][-1]["content"]
+
+
 # ------------------------------------------------------- tableaux à ordre libre
 
 def test_unordered_table_credits_a_shuffled_list():
@@ -229,16 +337,94 @@ def test_a_cell_graded_by_the_llm_lands_in_the_note_and_on_the_copy(db):
     db.flush()
     task.decision_id, task.zone_id = decision.id, "zone-x"
     task.fields[0].result = {"verdict": "partiel", "points": 0.25,
-                             "motif": "addition ratée"}
+                             "confiance": 0.95, "motif": "addition ratée"}
 
     assert llm_grader._apply(db, task) is False       # plus rien pour le professeur
     assert decision.status == "auto" and decision.source == "deepseek"
     # 1 case juste + une demi-case créditée = 1,5 unité sur 2 -> 0,75 pt de barème
     assert decision.score == pytest.approx(1.5)
+    # L'UI corrige une cellule à la fois : l'identifiant atomique empêche
+    # d'afficher à côté d'elle les avis LLM des autres cellules.
+    assert decision.evidence_json["llm"][0]["cell_index"] == 1
 
     ocr = db.query(OcrAttempt).filter_by(zone_id="zone-x").first()
     assert grading.cell_marks(g, ocr.raw_json["cells"],
                               ocr.raw_json["cell_credits"]) == [1.0, 0.5]
+
+
+def test_only_a_low_confidence_llm_verdict_goes_to_manual_review(db):
+    item = _item("multiline_text", {"type": "rubric"},
+                 {"comparator": "rubric", "max_score": 1, "bareme_points": 1})
+    task = llm_grader.plan(item, _verdict(0, 1, "llm_pending"),
+                           ocr_text="50-32=19 donc il reste 19")
+    decision = GradingDecision(response_id="resp-low", source="deterministic",
+                               score=0, max_score=1, tier="D",
+                               reason_code="llm_pending", status="review_pending")
+    db.add(decision); db.flush()
+    task.decision_id = decision.id
+    task.fields[0].result = {"verdict": "partiel", "points": 0.5,
+                             "confiance": 0.62, "motif": "réponse ambiguë"}
+
+    assert llm_grader._apply(db, task) is True
+    assert decision.reason_code == "llm_low_confidence"
+    assert decision.score == 0  # le score peu fiable n'est jamais appliqué
+
+    # Le seuil est persisté, pas figé dans la configuration du processus.
+    db.add(SystemSetting(key="llm_confidence_threshold", value_json={"value": 0.95}))
+    db.flush()
+    task.fields[0].result["confiance"] = 0.94
+    assert llm_grader._apply(db, task) is True
+    assert decision.reason_code == "llm_low_confidence"
+
+    # Égal au seuil = automatique (seules les valeurs EN DESSOUS partent en
+    # manuel). Une ancienne ambiguïté OCR ne peut plus annuler ce verdict.
+    task.unreadable = 1
+    task.fields[0].result["confiance"] = 0.95
+    assert llm_grader._apply(db, task) is False
+    assert decision.status == "auto" and decision.score == pytest.approx(0.5)
+
+    # Modifier le réglage réconcilie aussi les décisions déjà enregistrées,
+    # sans recalculer leurs points ni rappeler DeepSeek.
+    setting = db.get(SystemSetting, "llm_confidence_threshold")
+    setting.value_json = {"value": 0.96}
+    db.flush()
+    assert llm_grader.sync_confidence_reviews(db) == 1
+    assert decision.status == "review_pending"
+    assert decision.score == 0
+    setting.value_json = {"value": 0.90}
+    db.flush()
+    assert llm_grader.sync_confidence_reviews(db) == 1
+    assert decision.status == "auto"
+    assert decision.score == pytest.approx(0.5)
+
+
+def test_multi_cell_review_is_triggered_only_by_the_low_confidence_cell(db):
+    """Une réponse peut contenir une case à 97 % et une autre à 85 %. La revue
+    appartient à la seconde ; la première conserve son crédit automatique."""
+    db.add(SystemSetting(key="llm_confidence_threshold", value_json={"value": 0.89}))
+    decision = GradingDecision(response_id="resp-cells", source="deterministic",
+                               score=0, max_score=2, tier="D",
+                               reason_code="llm_pending", status="review_pending")
+    db.add(decision); db.flush()
+    task = llm_grader.Task(
+        exercise_key="table", statement="Complète.", correction="",
+        max_score=2, base_score=0,
+        fields=[
+            llm_grader.Field(label="Case 1", expected="5", student="5",
+                             bareme=1, weight=1, cell_index=0,
+                             result={"verdict": "juste", "points": 1,
+                                     "confiance": 0.97, "motif": "exact"}),
+            llm_grader.Field(label="Case 2", expected="8", student="3+4",
+                             bareme=1, weight=1, cell_index=1,
+                             result={"verdict": "partiel", "points": 0.5,
+                                     "confiance": 0.85, "motif": "ambigu"}),
+        ], cell_credits=[None, None], decision_id=decision.id)
+
+    assert llm_grader._apply(db, task) is True
+    assert decision.reason_code == "llm_low_confidence"
+    assert decision.score == pytest.approx(1.0)  # seule la case à 97 % est appliquée
+    assert task.cell_credits == [1.0, 0.0]
+    assert [n["confidence"] for n in decision.evidence_json["llm"]] == [0.97, 0.85]
 
 
 # ------------------------------------------------- ce que le prompt promet
@@ -314,7 +500,7 @@ def _stub_llm(db, monkeypatch, state=None):
             raise state["fail"]
         return {"corrections": [
             {"id": r["id"], "verdict": "partiel", "points": r["bareme"] / 2,
-             "motif": "mock"} for r in payload["reponses"]]}
+             "confiance": 0.95, "motif": "mock"} for r in payload["reponses"]]}
 
     monkeypatch.setattr(llm_grader.providers, "deepseek_json", _call)
     return sent
@@ -332,7 +518,7 @@ def _seed_reasoning(db):
     steps = [{"description": "prix total", "expected_text": "$4 \\times 7 = 28$", "points": 1},
              {"description": "monnaie rendue", "expected_text": "$50 - 28 = 22$", "points": 1}]
     for i in range(2):
-        stu = Student(class_id=cls.id, first_name=f"E{i}", last_name="X", llm_pseudonym=f"p{i}")
+        stu = Student(class_id=cls.id, name=f"E{i} X", order_index=i, llm_pseudonym=f"p{i}")
         db.add(stu)
         db.flush()
         copy = Copy(assessment_id=a.id, student_id=stu.id, status="printed")
@@ -411,6 +597,7 @@ def test_llm_failure_leaves_the_answer_to_the_teacher(db, tmp_path, monkeypatch)
     # en silence : incident du 02/08 sur la pipeline Indigo)
     note = scans_router.list_items(batch.id, "flagged", db)[0]["llm_notes"][0]
     assert note["verdict"] == "indisponible" and "budget" in note["motif"]
+    assert note["confidence"] is None
 
 
 def test_without_a_deepseek_key_no_note_is_invented(db, tmp_path, monkeypatch):
@@ -467,7 +654,7 @@ def test_qcm_copy_never_calls_the_correcteur(db, tmp_path, monkeypatch):
     a = Assessment(class_id=cls.id, title="Ctrl", type="control", note_base=20)
     db.add(a)
     db.flush()
-    stu = Student(class_id=cls.id, first_name="E", last_name="X", llm_pseudonym="p")
+    stu = Student(class_id=cls.id, name="E X", llm_pseudonym="p")
     db.add(stu)
     db.flush()
     copy = Copy(assessment_id=a.id, student_id=stu.id, status="printed")

@@ -25,13 +25,14 @@ from ..models import (
 )
 from . import grading as grader
 from . import llm_grader, providers, scoring
+from .runtime_settings import ocr_confidence_threshold
 from .appreciation import build_appreciation
-from .forgetting import apply_evidence
+from .forgetting import apply_evidence, update_level_after_assessment
 from .pdfgen import render_copy_review, render_overlay
-from .security import verify_page_payload
 
 PHASES = ["uploaded", "split", "identified", "registered", "cropped",
-          "ocr_complete", "graded", "review_pending", "finalized", "overlay_ready"]
+          "ocr_complete", "ocr_review_pending", "ocr_confirmed", "graded",
+          "review_pending", "finalized", "overlay_ready"]
 
 
 _STRUCTURED_COMPARATORS = {
@@ -176,7 +177,7 @@ def _decide_and_store(db: Session, *, item: CopyItem, zone: ResponseZone,
                       selected: list[int] | None, corr_id: str,
                       cell_texts: list[str] | None = None,
                       selected_pairs: list[list[int]] | None = None,
-                      queue: list | None = None) -> bool:
+                      queue: list | None = None, defer_grading: bool = False) -> bool:
     """Décision de correction pour une zone. Retourne True si revue créée.
 
     `queue` : file du correcteur LLM (services.llm_grader). Ce qui lui revient
@@ -191,6 +192,29 @@ def _decide_and_store(db: Session, *, item: CopyItem, zone: ResponseZone,
                            selected_pairs=selected_pairs or [])
     db.add(resp)
     db.flush()
+
+    # Nouveaux lots : la lecture de TOUTES les copies est persistée avant la
+    # moindre comparaison au corrigé. Une confiance faible interrompt ainsi la
+    # pipeline avant le déterministe et, surtout, avant tout envoi au LLM.
+    # L'option reste explicite pour préserver l'API interne utilisée par les
+    # tests et la reprise des anciens lots.
+    if defer_grading:
+        return not math.isfinite(float(conf)) or float(conf) < ocr_confidence_threshold(db)
+
+    return _decide_existing(
+        db, resp=resp, item=item, zone=zone, ocr_text=ocr_text, conf=conf,
+        selected=selected, cell_texts=cell_texts,
+        selected_pairs=selected_pairs, queue=queue)
+
+
+def _decide_existing(db: Session, *, resp: StudentResponse, item: CopyItem,
+                     zone: ResponseZone, ocr_text: str, conf: float,
+                     selected: list[int] | None,
+                     cell_texts: list[str] | None = None,
+                     selected_pairs: list[list[int]] | None = None,
+                     queue: list | None = None) -> bool:
+    """Note une lecture déjà validée, sans recréer la réponse élève."""
+    expected, gpolicy = item.expected_json, item.grading_json
 
     contract_issue = (_grading_contract_issue(db, item, zone)
                       or _recognized_answer_issue(
@@ -246,6 +270,82 @@ def _decide_and_store(db: Session, *, item: CopyItem, zone: ResponseZone,
     return False
 
 
+_READING_PROVIDERS = ("teacher_ocr", "mathpix", "mock", "cv_local")
+
+
+def effective_reading(db: Session, zone_id: str | None) -> OcrAttempt | None:
+    if not zone_id:
+        return None
+    return (db.query(OcrAttempt)
+            .filter(OcrAttempt.zone_id == zone_id,
+                    OcrAttempt.provider.in_(_READING_PROVIDERS))
+            .order_by(OcrAttempt.created_at.desc()).first())
+
+
+def pending_ocr_responses(db: Session, assessment_id: str) -> list[StudentResponse]:
+    """Réponses dont la dernière lecture CV/OCR reste sous le seuil réglé."""
+    threshold = ocr_confidence_threshold(db)
+    copies = db.query(Copy).filter_by(assessment_id=assessment_id).all()
+    copy_ids = [c.id for c in copies]
+    if not copy_ids:
+        return []
+    items = db.query(CopyItem).filter(CopyItem.copy_id.in_(copy_ids)).all()
+    out = []
+    for item in items:
+        resp = db.query(StudentResponse).filter_by(copy_item_id=item.id).first()
+        if not resp:
+            continue
+        reading = effective_reading(db, resp.zone_id)
+        try:
+            confidence = float(reading.confidence) if reading else 0.0
+        except (TypeError, ValueError):
+            confidence = 0.0
+        if not math.isfinite(confidence) or confidence < threshold:
+            out.append(resp)
+    return out
+
+
+def grade_stored_responses(db: Session, batch: ScanBatch) -> int:
+    """Lance correction déterministe puis LLM après validation de la lecture."""
+    assessment = db.get(Assessment, batch.assessment_id)
+    queue: list[llm_grader.Task] = []
+    copies = db.query(Copy).filter_by(assessment_id=assessment.id).all()
+    for copy in copies:
+        items = db.query(CopyItem).filter_by(copy_id=copy.id).all()
+        for item in items:
+            resp = db.query(StudentResponse).filter_by(copy_item_id=item.id).first()
+            if not resp or db.query(GradingDecision).filter_by(response_id=resp.id).first():
+                continue
+            zone = db.get(ResponseZone, resp.zone_id) if resp.zone_id else None
+            if not zone:
+                continue
+            reading = effective_reading(db, resp.zone_id)
+            raw = (reading.raw_json or {}) if reading else {}
+            cells = raw.get("cells") if item.response_type in ("table_fill", "multi_blank") else None
+            selected = resp.selected_choices if (item.response_type.startswith("qcm")
+                                                   or item.response_type == "checkbox_grid") else None
+            pairs = resp.selected_pairs if item.response_type == "matching" else None
+            _decide_existing(
+                db, resp=resp, item=item, zone=zone,
+                # Arriver ici signifie que la lecture satisfait le seuil réglé.
+                # Le moteur historique possède encore son garde-fou fixe à 90 % :
+                # on lui passe donc une confiance validée pour ne pas réouvrir la
+                # même erreur OCR dans l'assistant de correction.
+                ocr_text=resp.final_text or (reading.text if reading else ""), conf=1.0,
+                selected=selected, cell_texts=cells, selected_pairs=pairs, queue=queue)
+    # Toutes les décisions déterministes existent avant le premier appel LLM ;
+    # celui-ci conserve ensuite son regroupement par exercice à travers élèves.
+    queue.extend(llm_grader.requeue_unavailable(db, assessment.id))
+    _grade_with_llm(db, queue, batch)
+    audit_automatic_decisions(db, assessment.id)
+    n_review = open_reviews(db, assessment.id)
+    _set_status(db, batch, "graded")
+    if n_review:
+        _set_status(db, batch, "review_pending", pending=n_review)
+    db.commit()
+    return n_review
+
+
 def _expected_as_text(expected: dict) -> str:
     t = expected.get("type")
     if t == "rational":
@@ -297,11 +397,17 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
 
     analyses: list[tuple[int, "worker_cv.PageAnalysis"]] = []
     identified = 0
+    seen_page_ids: set[str] = set()
     for i, img in enumerate(images):
         sp = (db.query(ScannedPage).filter_by(batch_id=batch.id, source_index=i).first()
               or ScannedPage(batch_id=batch.id, source_index=i))
         db.add(sp)
         res = worker_cv.analyze_page(img)
+        # Fond indexé par POSITION, y compris si QR/repères illisibles. Il sert
+        # à l'aperçu de la page de sécurité sans jamais tenter de lui inventer
+        # une identité.
+        preview_img = res.warped if res.warped is not None else img
+        (derived_dir / f"source-{i}.png").write_bytes(worker_cv.encode_png(preview_img))
         sp.quality_json = {"blur": round(res.blur, 1), "marker_count": res.marker_count,
                            "reprojection_error_px": round(res.reprojection_error_px, 2),
                            "warnings": res.warnings}
@@ -309,8 +415,17 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
             sp.page_id = res.page_id
             sp.status = res.status
             if res.status == "registered":
-                identified += 1
-                analyses.append((i, res))
+                if res.page_id in seen_page_ids:
+                    # La feuille existe physiquement deux fois : on garde sa
+                    # position mais une seule lecture/correction. L'autre place
+                    # recevra l'overlay de sécurité « Non identifié ».
+                    sp.status = "duplicate"
+                    sp.quality_json = {**sp.quality_json, "warnings":
+                                       sp.quality_json["warnings"] + ["duplicate_in_batch"]}
+                else:
+                    seen_page_ids.add(res.page_id)
+                    identified += 1
+                    analyses.append((i, res))
         else:
             # page inconnue ou d'un autre lot : bloquée, jamais attribuée (RM-001)
             sp.status = "blocked"
@@ -387,7 +502,7 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
                 n_review += _decide_and_store(
                     db, item=item, zone=zone, student=student,
                     ocr_text="", conf=cv_conf, selected=selected, corr_id=corr_id,
-                    queue=queue)
+                    queue=queue, defer_grading=True)
             elif item.response_type == "checkbox_grid":
                 boxes = (zone.meta_json or {}).get("boxes", [])
                 selected, _dens = worker_cv.detect_grid(res.warped, boxes, qcm_thr)
@@ -399,7 +514,7 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
                 n_review += _decide_and_store(
                     db, item=item, zone=zone, student=student,
                     ocr_text="", conf=cv_conf, selected=selected, corr_id=corr_id,
-                    queue=queue)
+                    queue=queue, defer_grading=True)
             elif item.response_type == "manual_drawing":
                 # tracé/dessin : jamais de correction automatique — aucun appel
                 # Mathpix inutile, décision « revue » immédiate (§ tracés géométriques)
@@ -408,7 +523,7 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
                 n_review += _decide_and_store(
                     db, item=item, zone=zone, student=student,
                     ocr_text="", conf=1.0, selected=None, corr_id=corr_id,
-                    queue=queue)
+                    queue=queue, defer_grading=True)
             elif item.response_type == "matching":
                 left_pts = (zone.meta_json or {}).get("left_points", [])
                 right_pts = (zone.meta_json or {}).get("right_points", [])
@@ -418,14 +533,14 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
                 n_review += _decide_and_store(
                     db, item=item, zone=zone, student=student,
                     ocr_text="", conf=conf_m, selected=None, corr_id=corr_id,
-                    selected_pairs=pairs, queue=queue)
+                    selected_pairs=pairs, queue=queue, defer_grading=True)
             elif item.response_type in ("table_fill", "multi_blank"):
                 # multi_blank : mêmes cellules qu'un table_fill à 1 ligne
                 # (meta["cells"] rempli en une seule "ligne" dans pdfgen), donc
                 # exactement la même logique de découpe/OCR par cellule.
                 cells_meta = (zone.meta_json or {}).get("cells", [])
                 expected_cells = item.expected_json.get("cells", [])
-                cell_texts, confs = [], []
+                cell_texts, cell_latex, confs = [], [], []
                 k = 0  # index PLAT des cases non-"given" (row-major) : aligne
                        # cell_texts, le crop `-c{k}.png` et scans._cell_units.
                 for ri, row in enumerate(cells_meta):
@@ -452,6 +567,7 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
                         cell_ink = worker_cv.ink_ratio(cfiltered)
                         if cell_ink < 0.01:
                             cell_texts.append("")
+                            cell_latex.append("")
                             # Une case « vide » est elle aussi une décision CV.
                             # Une trace pâle proche du seuil ne devient jamais
                             # automatiquement une absence de réponse.
@@ -464,14 +580,18 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
                         ocr_c = providers.mathpix_ocr(db, worker_cv.encode_png(cfiltered),
                                                       f"{corr_id}-c{ri}-{ci}", expected_hint=hint)
                         cell_texts.append(ocr_c["text"])
+                        cell_latex.append(ocr_c.get("latex") or "")
                         confs.append(ocr_c["confidence"])
                 min_conf = min(confs) if confs else 1.0
                 db.add(OcrAttempt(zone_id=zone.id, provider="mathpix",
-                                  raw_json={"cells": cell_texts}, confidence=min_conf))
+                                  raw_json={"cells": cell_texts,
+                                            "cell_latex": cell_latex,
+                                            "cell_confidences": confs},
+                                  confidence=min_conf))
                 n_review += _decide_and_store(
                     db, item=item, zone=zone, student=student,
                     ocr_text="", conf=min_conf, selected=None, corr_id=corr_id,
-                    cell_texts=cell_texts, queue=queue)
+                    cell_texts=cell_texts, queue=queue, defer_grading=True)
             else:
                 ink = worker_cv.ink_ratio(filtered)
                 if ink < worker_cv.BLANK_INK_THRESHOLD:  # zone vide : aucun appel Mathpix (§8.3)
@@ -481,7 +601,7 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
                     n_review += _decide_and_store(
                         db, item=item, zone=zone, student=student,
                         ocr_text="", conf=cv_conf, selected=None, corr_id=corr_id,
-                    queue=queue)
+                    queue=queue, defer_grading=True)
                 else:
                     hint = _expected_as_text(item.expected_json) if ocr_offline else None
                     ocr = providers.mathpix_ocr(db, crop_path.read_bytes(), corr_id,
@@ -492,10 +612,9 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
                     n_review += _decide_and_store(
                         db, item=item, zone=zone, student=student,
                         ocr_text=ocr["text"], conf=ocr["confidence"],
-                        selected=None, corr_id=corr_id, queue=queue)
-        copy.status = "graded"
+                        selected=None, corr_id=corr_id, queue=queue, defer_grading=True)
+        copy.status = "read"
     _set_status(db, batch, "cropped")
-    _grade_with_llm(db, queue, batch)
     _set_status(db, batch, "ocr_complete")
     return n_review
 
@@ -514,7 +633,9 @@ def _grade_with_llm(db: Session, queue: list, batch: ScanBatch) -> None:
 # ----------------------------------------------- chemin sans scan (tests)
 
 def _process_mock(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
-    copies = db.query(Copy).filter_by(assessment_id=assessment.id).all()
+    copies = (db.query(Copy).join(Student, Copy.student_id == Student.id)
+              .filter(Copy.assessment_id == assessment.id)
+              .order_by(Student.order_index, Student.id).all())
     pages = (db.query(DocumentPage).join(Copy, DocumentPage.copy_id == Copy.id)
              .filter(Copy.assessment_id == assessment.id).all())
     batch.page_count = len(pages)
@@ -525,13 +646,15 @@ def _process_mock(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
         sp = (db.query(ScannedPage).filter_by(batch_id=batch.id, source_index=i).first()
               or ScannedPage(batch_id=batch.id, source_index=i))
         db.add(sp)
-        if verify_page_payload(page.qr_payload) == page.id:
-            sp.page_id = page.id
-            sp.status = "registered"
-            sp.quality_json = {"reprojection_error_px": 1.1, "marker_count": 4, "blur": 250}
-            identified += 1
-        else:
-            sp.status = "blocked"
+        # Ce chemin ne lit aucun fichier physique : les pages du sujet servent
+        # directement de flux ADF synthétique. Elles doivent donc conserver le
+        # même lien page_id/position que les réponses que ce mock va corriger.
+        # Simuler ici un QR illisible produirait simultanément une page bloquée
+        # et une correction identifiée, situation impossible dans le vrai flux.
+        sp.page_id = page.id
+        sp.status = "registered"
+        sp.quality_json = {"reprojection_error_px": 1.1, "marker_count": 4, "blur": 250}
+        identified += 1
     _set_status(db, batch, "identified", identified=identified, total=len(pages))
     _set_status(db, batch, "registered")
 
@@ -647,12 +770,15 @@ def audit_automatic_decisions(db: Session, assessment_id: str) -> int:
     pas silencieusement la note : on conserve le score proposé et on demande au
     professeur de le valider. Ses décisions (`source=teacher`) sont immuables.
     """
+    # Commence par aligner les décisions LLM, y compris celles déjà marquées
+    # review_pending par une ancienne version de la pipeline.
+    changed = llm_grader.sync_confidence_reviews(db, assessment_id)
     copies = db.query(Copy).filter_by(assessment_id=assessment_id).all()
     copy_ids = [c.id for c in copies]
     if not copy_ids:
-        return 0
+        return changed
     items = db.query(CopyItem).filter(CopyItem.copy_id.in_(copy_ids)).all()
-    opened = 0
+    opened = changed
     for item in items:
         resp = db.query(StudentResponse).filter_by(copy_item_id=item.id).first()
         if resp is None:
@@ -666,17 +792,16 @@ def audit_automatic_decisions(db: Session, assessment_id: str) -> int:
 
         # Lecture source seulement : un essai DeepSeek postérieur ne doit pas
         # masquer la confiance du texte/cases que Mathpix ou le CV lui a fourni.
-        source_ocr = None
-        if resp.zone_id:
-            attempts = (db.query(OcrAttempt).filter_by(zone_id=resp.zone_id)
-                        .order_by(OcrAttempt.created_at.desc()).all())
-            source_ocr = next((o for o in attempts if o.provider in ("mathpix", "cv_local")), None)
-        if issue is None and source_ocr is not None:
+        source_ocr = effective_reading(db, resp.zone_id)
+        # OCRiser est une étape distincte et antérieure. Une décision DeepSeek
+        # validée selon son propre seuil ne doit jamais être rouverte ensuite à
+        # cause de l'ancienne confiance du scan source.
+        if issue is None and source_ocr is not None and decision.source != "deepseek":
             try:
                 source_conf = float(source_ocr.confidence)
             except (TypeError, ValueError):
                 source_conf = 0.0
-            if not math.isfinite(source_conf) or source_conf < grader.AUTO_CONFIDENCE_MIN:
+            if not math.isfinite(source_conf) or source_conf < ocr_confidence_threshold(db):
                 issue = "ocr_low_confidence"
 
         # Les comparateurs à plusieurs unités doivent être notés sur leur
@@ -717,13 +842,6 @@ def process_batch(db: Session, batch: ScanBatch):
         db.commit()
         return
 
-    # RELANCE : les réponses laissées au professeur faute de correcteur
-    # disponible (budget quotidien, délai) repassent au correcteur AVANT la
-    # lecture. C'est ce qui donne un sens au bouton de déblocage sur un lot déjà
-    # lu — sans ça, une panne passagère condamnait ces copies à la correction
-    # manuelle. Sans échec en attente, la requête ne trouve rien et ne coûte rien.
-    _grade_with_llm(db, llm_grader.requeue_unavailable(db, assessment.id), batch)
-
     if batch.source_file_id:
         _process_real(db, batch, assessment)
         # scan illisible (aucune page reconnue) : _process_real a posé un message
@@ -732,16 +850,29 @@ def process_batch(db: Session, batch: ScanBatch):
             return
     else:
         _process_mock(db, batch, assessment)
+        # Chemin synthétique historique des tests : aucune copie physique à
+        # reprendre dans OCRiser, on conserve sa correction bout en bout.
+        _grade_with_llm(db, llm_grader.requeue_unavailable(db, assessment.id), batch)
+        audit_automatic_decisions(db, assessment.id)
+        n_review = open_reviews(db, assessment.id)
+        _set_status(db, batch, "ocr_confirmed")
+        _set_status(db, batch, "graded")
+        if n_review:
+            _set_status(db, batch, "review_pending", pending=n_review)
+        db.commit()
+        return
 
-    # Le compte des revues est RELU en base, jamais accumulé au fil des
-    # décisions : le correcteur LLM en retire (il tranche ce qui l'attendait) et
-    # une reprise ne repasse pas sur les réponses déjà notées.
-    audit_automatic_decisions(db, assessment.id)
-    n_review = open_reviews(db, assessment.id)
-    _set_status(db, batch, "graded")
-    if n_review:
-        _set_status(db, batch, "review_pending", pending=n_review)
-    db.commit()
+    # Halte explicite entre LECTURE et CORRECTION. Le professeur réécrit ici la
+    # réponse de l'élève ; aucun corrigé, comparateur Python ou LLM n'a encore été
+    # consulté. Une relance recompte les lectures effectives (teacher_ocr inclus),
+    # elle ne perd donc pas les reprises déjà validées.
+    pending_ocr = len(pending_ocr_responses(db, assessment.id))
+    if pending_ocr:
+        _set_status(db, batch, "ocr_review_pending", pending=pending_ocr,
+                    threshold=ocr_confidence_threshold(db))
+        return
+    _set_status(db, batch, "ocr_confirmed")
+    grade_stored_responses(db, batch)
 
 
 def finalize_batch(db: Session, batch: ScanBatch) -> dict:
@@ -769,7 +900,12 @@ def finalize_batch(db: Session, batch: ScanBatch) -> dict:
     n_evidence = 0
     n_results = 0
     for copy in copies:
-        if copy.status in ("absent", "generated"):
+        if copy.status in ("generated", "printed"):
+            # La correction est finalisée sans que cette copie soit revenue :
+            # elle devient explicitement absente dans le carnet de notes.
+            copy.status = "absent"
+            continue
+        if copy.status == "absent":
             continue  # absents et copies non scannées : jamais pénalisés
         # Résultats consolidés de l'élève à ce sujet (points de barème par
         # exercice + note sur la base choisie) : le suivi personnalisé est
@@ -797,6 +933,12 @@ def finalize_batch(db: Session, batch: ScanBatch) -> dict:
                 db.flush()
                 apply_evidence(db, ev)
                 n_evidence += 1
+        # Les états de maîtrise ajoutés ci-dessus doivent être visibles du
+        # calcul malgré l'autoflush désactivé de la session applicative.
+        db.flush()
+        student = db.get(Student, copy.student_id)
+        if student is not None:
+            update_level_after_assessment(db, student, assessment.id)
         copy.status = "finalized"
     assessment.status = "finalized"
     _set_status(db, batch, "finalized", evidence=n_evidence, results=n_results)
@@ -853,9 +995,8 @@ def _zone_marks(db: Session, item: CopyItem, zone: ResponseZone,
     - short_text : une coche/croix en haut à droite de la case ;
     - table_fill / multi_blank : une coche/croix en haut à droite de CHAQUE
       cellule (toutes marquées) ;
-    - qcm : une marque PAR CASE (coche si cochée à raison, croix si cochée à
-      tort, case correction cochée à gauche pour une bonne réponse oubliée) +
-      un récap coche/croix en bas à droite de la carte ;
+    - qcm : une colonne de correction attendue (case pleine/vide à gauche de
+      chaque case élève) + un récap coche/croix en bas à droite de la carte ;
     - matching : si erreur, les traits de correction entre les bons points ;
     - multiline_text : une coche/croix en bas à droite de la zone.
 
@@ -973,6 +1114,39 @@ def _zone_marks(db: Session, item: CopyItem, zone: ResponseZone,
     return {"kind": "single_tr", "ok": full, "credit": credit}  # short_text et repli
 
 
+def _copies_in_scan_order(db: Session, batch: ScanBatch,
+                          assessment_id: str) -> list[Copy]:
+    """Copies scannées dans l'ordre ADF, avec repli ordre de classe uniquement
+    pour les anciens lots simulés ou incomplets qui n'ont pas de ScannedPage."""
+    copies = (db.query(Copy).join(Student, Copy.student_id == Student.id)
+              .filter(Copy.assessment_id == assessment_id)
+              .order_by(Student.order_index, Student.id).all())
+    scan_positions: dict[str, int] = {}
+    scanned = (db.query(ScannedPage, DocumentPage)
+               .join(DocumentPage, ScannedPage.page_id == DocumentPage.id)
+               .filter(ScannedPage.batch_id == batch.id,
+                       ScannedPage.status == "registered")
+               .order_by(ScannedPage.source_index).all())
+    for scanned_page, document_page in scanned:
+        scan_positions.setdefault(document_page.copy_id, scanned_page.source_index)
+    class_fallback = {copy.id: i for i, copy in enumerate(copies)}
+    copies.sort(key=lambda copy: (
+        0 if copy.id in scan_positions else 1,
+        scan_positions.get(copy.id, class_fallback[copy.id]),
+        class_fallback[copy.id],
+    ))
+    return copies
+
+
+def _scan_page_positions(db: Session, batch: ScanBatch) -> dict[str, int]:
+    """page_id -> position absolue dans le flux numérique de l'ADF."""
+    return {page_id: source_index for page_id, source_index in
+            db.query(ScannedPage.page_id, ScannedPage.source_index)
+              .filter(ScannedPage.batch_id == batch.id,
+                      ScannedPage.status == "registered",
+                      ScannedPage.page_id.is_not(None)).all()}
+
+
 def build_overlays(db: Session, batch: ScanBatch) -> str:
     """Génère, après finalisation (§5.6) :
     - correction_overlay.pdf : pages blanches, marques seules (à imprimer et
@@ -987,7 +1161,11 @@ def build_overlays(db: Session, batch: ScanBatch) -> str:
     review_path = out_dir / "correction_review.pdf"
     derived_dir = settings.data_dir / "assessments" / assessment.id / "scans" / "derived"
 
-    copies = db.query(Copy).filter_by(assessment_id=assessment.id).all()
+    copies = _copies_in_scan_order(db, batch, assessment.id)
+    scan_page_positions = _scan_page_positions(db, batch)
+    # Autorité d'ordre : la séquence des pages réellement produite par l'ADF.
+    # Elle peut être totalement différente de l'ordre de classe. Le QR fait le
+    # lien avec l'élève ; il ne doit jamais servir de prétexte à retrier la pile.
     pages_annotations = []
     review_pages = []
     for copy in copies:
@@ -1064,21 +1242,76 @@ def build_overlays(db: Session, batch: ScanBatch) -> str:
                        f"{scoring.format_points(result.points_total)} points")
         header = {"note": note, "progress": appreciation.get("progress"),
                   "synthesis": appreciation.get("synthesis"), "comment": comment}
-        student_name = f"{student.first_name} {student.last_name}"
-        pages_annotations.append({
-            "student": student_name, "assessment_type": assessment.type,
-            "page_zones": zones, **header,
-        })
-        # une page d'aperçu par page scannée de la copie ; l'en-tête (note,
-        # appréciation) n'est porté que par la première page
-        for k, page_id in enumerate(sorted(zones_by_page, key=lambda p: page_no.get(p, 0))):
+        student_name = student.name
+        # Une page d'overlay PAR page scannée — indispensable en recto-verso et
+        # sur les sujets longs. L'ordre interne suit lui aussi l'ADF ; page_no
+        # n'est qu'un repli pour les anciens lots sans positions persistées.
+        ordered_page_ids = sorted(zones_by_page, key=lambda p: (
+            0 if p in scan_page_positions else 1,
+            scan_page_positions.get(p, page_no.get(p, 0)),
+            page_no.get(p, 0),
+        ))
+        for k, page_id in enumerate(ordered_page_ids):
+            order_meta = {
+                "_scan_index": scan_page_positions.get(page_id),
+                "_copy_index": len(pages_annotations),
+                "_page_no": page_no.get(page_id, 0),
+            }
+            pages_annotations.append({
+                "student": student_name, "assessment_type": assessment.type,
+                "page_zones": zones_by_page[page_id],
+                **(header if k == 0 else {}), **order_meta,
+            })
             bg = derived_dir / f"page-{page_id}.png"
             review_pages.append({
                 "student": student_name, "assessment_type": assessment.type,
                 "page_zones": zones_by_page[page_id],
                 "background": str(bg) if bg.exists() else None,
-                **(header if k == 0 else {}),
+                **(header if k == 0 else {}), **order_meta,
             })
+
+    # INVARIANT PHYSIQUE : une page entrée ADF = une page overlay, à la même
+    # position. Tout scan bloqué, doublon dans le lot, QR illisible ou page
+    # reconnue mais non corrigée reçoit une page blanche « Non identifié ».
+    # Il est interdit de la supprimer : les corrections suivantes seraient alors
+    # posées sur les mauvais élèves.
+    scan_rows = (db.query(ScannedPage).filter_by(batch_id=batch.id)
+                 .order_by(ScannedPage.source_index).all())
+    represented = {p.get("_scan_index") for p in pages_annotations
+                   if p.get("_scan_index") is not None}
+    for scanned_page in scan_rows:
+        if scanned_page.source_index in represented:
+            continue
+        order_meta = {"_scan_index": scanned_page.source_index,
+                      "_copy_index": scanned_page.source_index,
+                      "_page_no": 0}
+        placeholder = {
+            "student": "Non identifié", "unidentified": True,
+            "assessment_type": assessment.type, "page_zones": [], **order_meta,
+        }
+        pages_annotations.append(placeholder)
+        bg = derived_dir / f"source-{scanned_page.source_index}.png"
+        review_pages.append({**placeholder,
+                             "background": str(bg) if bg.exists() else None})
+
+    # Même si un ADF produit un flux inhabituel (rectos de plusieurs copies puis
+    # versos), le PDF de correction reproduit exactement sa séquence globale.
+    def physical_key(page: dict) -> tuple:
+        pos = page.get("_scan_index")
+        return (0, pos) if pos is not None else (
+            1, page.get("_copy_index", 0), page.get("_page_no", 0))
+
+    pages_annotations.sort(key=physical_key)
+    review_pages.sort(key=physical_key)
+    if scan_rows and (len(pages_annotations) != len(scan_rows)
+                      or len(review_pages) != len(scan_rows)):
+        raise ValueError(
+            "Invariant d'ordre rompu : le nombre de pages de correction ne "
+            "correspond pas au nombre de pages sorties de l'ADF")
+    for page in [*pages_annotations, *review_pages]:
+        page.pop("_scan_index", None)
+        page.pop("_copy_index", None)
+        page.pop("_page_no", None)
 
     from .runtime_settings import get_setting
     color = (get_setting(db, "correction_color") or {}).get("value")

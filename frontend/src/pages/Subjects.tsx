@@ -23,12 +23,14 @@ type Cls = { id: string; name: string; grade_level: string }
 type Assessment = {
   id: string; title: string; type: string; status: string
   class_name: string; class_id: string; grade_level: string
+  duplex: boolean
   personalization_mode: string; error_message: string | null
-  // base de notation d'un contrôle (§ barème) : null pour un entraînement
-  note_base: number | null
+  // base de scoring du sujet ; un entraînement ne l'imprime pas
+  note_base: number
   // sujet composé à la main (assistant « Créer mon sujet ») et nature de ses
   // variantes : '' | 'none' | 'anticheat' | 'level'
   manual: boolean; variant_kind: string; duplicate_version: number
+  overlay_distributed: boolean
 }
 
 const VARIANT_LABEL: Record<string, string> = {
@@ -36,7 +38,7 @@ const VARIANT_LABEL: Record<string, string> = {
   level: 'variantes par niveau',
 }
 
-// bases proposées pour un contrôle noté — le barème d'effort des exercices est
+// bases proposées pour tous les sujets — le barème d'effort des exercices est
 // ramené à cette base par règle de trois à la correction (cf. services/scoring.py)
 const NOTE_BASES = ['5', '10', '20']
 
@@ -259,19 +261,22 @@ export default function Subjects() {
           </Group>
           <Stack gap="xs">
             {g.rows.map((a) => {
-              const st = STATUS_LABEL[a.status] ?? { label: a.status, color: 'gray' }
+              const done = a.overlay_distributed
+              const st = done ? { label: 'terminé', color: 'gray' }
+                : STATUS_LABEL[a.status] ?? { label: a.status, color: 'gray' }
               return (
-                <Card key={a.id} withBorder padding="sm">
+                <Card key={a.id} withBorder padding="sm" style={done ? {
+                  opacity: 0.55, background: 'var(--mantine-color-gray-1)',
+                } : undefined}>
                   <Group justify="space-between" wrap="nowrap">
                     <Group gap="sm" wrap="nowrap" style={{ minWidth: 0 }}>
                       <Badge variant="light" color={a.type === 'control' ? 'red' : 'blue'} w={104}>
                         {a.type === 'control' ? 'Contrôle' : 'Entraînement'}
                       </Badge>
-                      {a.note_base && (
-                        <Tooltip label={`Noté sur ${a.note_base} points`}>
-                          <Badge size="sm" variant="outline" color="red">/{a.note_base}</Badge>
-                        </Tooltip>
-                      )}
+                      <Tooltip label={`${a.type === 'control' ? 'Noté' : 'Scoré'} sur ${a.note_base} points`}>
+                        <Badge size="sm" variant="outline"
+                          color={a.type === 'control' ? 'red' : 'gray'}>/{a.note_base}</Badge>
+                      </Tooltip>
                       <Text fw={600} lineClamp={1}>{a.title}</Text>
                       {a.duplicate_version > 1 && (
                         <Badge size="sm" variant="filled" color="indigo">
@@ -318,8 +323,10 @@ export default function Subjects() {
                             onClick={() => setPreviewId(a.id)}>
                             Aperçu
                           </Button>
-                          <PrintButton assessmentId={a.id} file="subject_batch.pdf"
-                            label="Imprimer les sujets" />
+                          {a.status !== 'finalized' && (
+                            <PrintButton assessmentId={a.id} file="subject_batch.pdf"
+                              label="Imprimer les sujets" assessmentDuplex={a.duplex} />
+                          )}
                           {a.status === 'finalized' && (
                             <PrintButton assessmentId={a.id} file="correction_overlay.pdf"
                               label="Imprimer l'overlay" />
@@ -364,19 +371,16 @@ export default function Subjects() {
                   <Radio value="control" label="Contrôle noté" />
                 </Group>
               </Radio.Group>
-              {/* base de notation : un entraînement n'est pas noté */}
-              {type === 'control' && (
-                <Radio.Group label="Base de notation" value={noteBase} onChange={setNoteBase}
-                  description="Chaque exercice porte un barème d'effort (temps de réflexion
-                    demandé). La note de l'élève est ramenée à cette base par règle de trois
-                    à la correction.">
-                  <Group mt="xs">
-                    {NOTE_BASES.map((b) => (
-                      <Radio key={b} value={b} label={`/${b}`} />
-                    ))}
-                  </Group>
-                </Radio.Group>
-              )}
+              <Radio.Group label="Base de scoring" value={noteBase} onChange={setNoteBase}
+                description={type === 'control'
+                  ? "Le résultat est ramené à cette base par règle de trois."
+                  : "Le résultat est ramené à cette base pour le suivi, sans être imprimé sur la copie."}>
+                <Group mt="xs">
+                  {NOTE_BASES.map((b) => (
+                    <Radio key={b} value={b} label={`/${b}`} />
+                  ))}
+                </Group>
+              </Radio.Group>
               <TextInput label="Titre" placeholder="ex. Fractions — semaine 12"
                 value={title} onChange={(e) => setTitle(e.target.value)} />
               <NumberInput label="Nombre de pages" value={pages} min={1} max={6}

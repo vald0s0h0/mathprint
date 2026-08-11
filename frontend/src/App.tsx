@@ -3,8 +3,8 @@ import {
   SegmentedControl, Text, Title, Tooltip, useComputedColorScheme, useMantineColorScheme,
 } from '@mantine/core'
 import {
-  BookOpenCheck, GraduationCap, LayoutDashboard, Library, LogOut, Moon,
-  ScanLine, Settings as SettingsIcon, Sun, Target, Users, FileText,
+  BookOpenCheck, ClipboardList, GraduationCap, LayoutDashboard, Library, LogOut,
+  Moon, ScanLine, Settings as SettingsIcon, Sun, Target, Users, FileText,
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
@@ -20,6 +20,7 @@ import Students from './pages/Students'
 import Bank from './pages/Bank'
 import Exercices from './pages/Exercices'
 import Subjects from './pages/Subjects'
+import Grades from './pages/Grades'
 import { CYCLES, useAppState, type Cycle } from './state/AppState'
 
 // `admin: true` => réservé au rôle admin (absent des builds utilisateur/correcteur).
@@ -30,6 +31,7 @@ const NAV = [
   { to: '/exercices', label: 'Exercices', icon: BookOpenCheck, admin: true },
   { to: '/corrections', label: 'Corrections', icon: ScanLine },
   { to: '/eleves', label: 'Élèves', icon: Users },
+  { to: '/notes', label: 'Notes', icon: ClipboardList },
   { to: '/competences', label: 'Compétences', icon: Target },
   { to: '/parametres', label: 'Paramètres', icon: SettingsIcon },
 ]
@@ -139,6 +141,7 @@ export default function App() {
           {isAdmin && <Route path="/exercices" element={<Exercices />} />}
           <Route path="/corrections" element={<Corrections />} />
           <Route path="/eleves" element={<Students />} />
+          <Route path="/notes" element={<Grades />} />
           <Route path="/competences" element={<Competencies />} />
           <Route path="/parametres" element={<SettingsPage />} />
         </Routes>

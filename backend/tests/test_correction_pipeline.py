@@ -18,7 +18,7 @@ from app.config import settings as cfg
 from app.db import Base
 from app.models import (
     Assessment, Copy, CopyItem, CopyItemResult, DocumentPage, ResponseZone,
-    ScanBatch, SchoolClass, Student, User,
+    ScanBatch, ScannedPage, SchoolClass, Student, User,
 )
 from app.routers import scans as scans_router
 from app.services import pipeline, scan_intake
@@ -41,7 +41,7 @@ def _seed_manual(db):
     db.add(a)
     db.flush()
     for i in range(2):
-        stu = Student(class_id=cls.id, first_name=f"E{i}", last_name="X", llm_pseudonym=f"p{i}")
+        stu = Student(class_id=cls.id, name=f"E{i} X", order_index=i, llm_pseudonym=f"p{i}")
         db.add(stu)
         db.flush()
         copy = Copy(assessment_id=a.id, student_id=stu.id, status="printed")
@@ -106,6 +106,41 @@ def test_manual_correction_end_to_end(mock_db, tmp_path, monkeypatch):
     assert (overlays / "correction_overlay.pdf").exists()
     assert (overlays / "correction_review.pdf").exists()
     assert db.get(ScanBatch, batch.id).status == "overlay_ready"
+
+
+def test_unidentified_physical_page_never_shifts_following_correction(
+        mock_db, tmp_path, monkeypatch):
+    """Une feuille QR illisible entre deux copies reste exactement au rang 2."""
+    from pypdf import PdfReader
+
+    db = mock_db
+    monkeypatch.setattr(cfg, "data_dir", tmp_path)
+    assessment = _seed_manual(db)
+    batch = scan_intake.get_or_create_batch(db, assessment.id, None)
+    db.commit()
+    pipeline.process_batch(db, batch)
+
+    # Le mock a produit deux feuilles reconnues. On reproduit la sortie réelle
+    # ADF : élève 1, feuille illisible, élève 2.
+    recognized = (db.query(ScannedPage).filter_by(batch_id=batch.id)
+                  .order_by(ScannedPage.source_index).all())
+    recognized[1].source_index = 2
+    db.add(ScannedPage(batch_id=batch.id, source_index=1, status="blocked"))
+    for review in scans_router.list_reviews(batch.id, None, db):
+        scans_router.resolve_review(
+            review["review_id"],
+            scans_router.ResolveIn(action="set_ratio", ratio=1.0), db, None)
+
+    pipeline.finalize_batch(db, batch)
+    db.commit()
+
+    overlay = (tmp_path / "assessments" / assessment.id / "overlays"
+               / "correction_overlay.pdf")
+    texts = [page.extract_text() or "" for page in PdfReader(overlay).pages]
+    assert len(texts) == 3
+    assert "Correction — E0 X" in texts[0]
+    assert "Non identifié" in texts[1]
+    assert "Correction — E1 X" in texts[2]
 
 
 def test_review_all_and_response_resolve(mock_db, tmp_path, monkeypatch):
@@ -264,7 +299,7 @@ def _seed_structured_item(db, *, response_type, expected, grading_json, meta_jso
     cls = SchoolClass(name="4C", grade_level="4e"); db.add(cls); db.flush()
     assessment = Assessment(class_id=cls.id, title="Audit", type="control", note_base=20)
     db.add(assessment); db.flush()
-    student = Student(class_id=cls.id, first_name="A", last_name="B", llm_pseudonym="audit")
+    student = Student(class_id=cls.id, name="A B", llm_pseudonym="audit")
     db.add(student); db.flush()
     copy = Copy(assessment_id=assessment.id, student_id=student.id, status="printed")
     db.add(copy); db.flush()
@@ -305,6 +340,67 @@ def test_low_mathpix_confidence_never_grades_a_table_automatically(mock_db):
     assert decision.reason_code == "ocr_low_confidence"
     assert decision.confidence == pytest.approx(0.89)
     assert mock_db.query(ManualReview).count() == 1
+
+
+def test_ocriser_rewrites_student_answer_before_any_grading(mock_db):
+    """Le nouveau palier ne consulte pas le corrigé avant la reprise OCR ; une
+    fois la transcription élève validée, la correction peut démarrer sans
+    rouvrir la même alerte de confiance."""
+    from app.models import GradingDecision, ManualReview, OcrAttempt
+
+    cells = [[{"type": "integer", "value": 5}]]
+    assessment, student, item, zone = _seed_structured_item(
+        mock_db, response_type="table_fill",
+        expected={"type": "table", "cells": cells},
+        grading_json={"comparator": "table_cells", "max_score": 1,
+                      "bareme_points": 1, "cells": cells},
+        meta_json={"cells": [[{}]]})
+    mock_db.add(OcrAttempt(zone_id=zone.id, provider="mathpix",
+                           raw_json={"cells": ["S"], "cell_latex": ["S"],
+                                     "cell_confidences": [0.42]}, confidence=0.42))
+    deferred = pipeline._decide_and_store(
+        mock_db, item=item, zone=zone, student=student, ocr_text="", conf=0.42,
+        selected=None, corr_id="ocriser", cell_texts=["S"], defer_grading=True)
+    batch = ScanBatch(assessment_id=assessment.id, status="ocr_review_pending")
+    mock_db.add(batch); mock_db.commit()
+
+    assert deferred is True
+    assert mock_db.query(GradingDecision).count() == 0
+    queue = scans_router.list_ocr_items(batch.id, mock_db)
+    assert len(queue) == 1
+    assert queue[0]["cells"][0]["ocr_text"] == "S"
+
+    body = scans_router.OcrReadingIn(text="5", latex="5", cell_index=0)
+    result = scans_router.update_ocr_reading(queue[0]["response_id"], body, mock_db, None)
+    assert result["remaining"] == 0
+    assert pipeline.pending_ocr_responses(mock_db, assessment.id) == []
+
+    pipeline.grade_stored_responses(mock_db, batch)
+    decision = mock_db.query(GradingDecision).one()
+    assert decision.status == "auto"
+    assert decision.score == 1
+    assert mock_db.query(ManualReview).count() == 0
+
+
+def test_ocr_confidence_threshold_is_persisted(mock_db):
+    from app.routers.misc import SettingIn, get_system_settings, set_system_setting
+    from app.services.runtime_settings import (
+        llm_confidence_threshold, ocr_confidence_threshold,
+    )
+
+    user = User(email="threshold@x.fr", password_hash="x", role="teacher")
+    mock_db.add(user); mock_db.flush()
+    set_system_setting(
+        SettingIn(key="ocr_confidence_threshold", value={"value": 0.95}),
+        mock_db, user)
+    set_system_setting(
+        SettingIn(key="llm_confidence_threshold", value={"value": 0.93}),
+        mock_db, user)
+
+    assert get_system_settings(mock_db)["ocr_confidence_threshold"] == {"value": 0.95}
+    assert ocr_confidence_threshold(mock_db) == pytest.approx(0.95)
+    assert get_system_settings(mock_db)["llm_confidence_threshold"] == {"value": 0.93}
+    assert llm_confidence_threshold(mock_db) == pytest.approx(0.93)
 
 
 def test_mismatched_zone_contract_blocks_score_even_with_confident_cv(mock_db):
@@ -362,6 +458,36 @@ def test_finalize_reopens_legacy_low_confidence_auto_decision(mock_db):
     assert decision.status == "review_pending"
     assert decision.reason_code == "ocr_low_confidence"
     assert mock_db.query(ManualReview).filter_by(decision_id=decision.id).count() == 1
+
+
+def test_ocr_audit_does_not_reopen_a_confident_deepseek_decision(mock_db):
+    """Une fois la réponse corrigée par DeepSeek, seule sa confiance LLM pilote
+    la revue ; l'ancien score Mathpix appartient à l'étape OCRiser."""
+    from app.models import GradingDecision, ManualReview, OcrAttempt, StudentResponse
+
+    assessment, _student, item, zone = _seed_structured_item(
+        mock_db, response_type="short_text",
+        expected={"type": "integer", "value": 5},
+        grading_json={"comparator": "numeric", "max_score": 1,
+                      "bareme_points": 1}, meta_json={})
+    response = StudentResponse(copy_item_id=item.id, zone_id=zone.id,
+                               final_text="5 après simplification")
+    mock_db.add(response); mock_db.flush()
+    mock_db.add(OcrAttempt(zone_id=zone.id, provider="mathpix",
+                           text=response.final_text, confidence=0.75))
+    decision = GradingDecision(
+        response_id=response.id, source="deepseek", score=1, max_score=1,
+        confidence=0.5, reason_code="ocr_low_confidence", tier="D",
+        status="review_pending",
+        evidence_json={"audit_previous_reason": "llm_full",
+                       "llm": [{"verdict": "juste", "confidence": 1.0}]})
+    mock_db.add(decision); mock_db.flush()
+    mock_db.add(ManualReview(decision_id=decision.id, category="ocr_ambigu"))
+    mock_db.commit()
+
+    assert pipeline.audit_automatic_decisions(mock_db, assessment.id) == 1
+    assert decision.status == "auto"
+    assert mock_db.query(ManualReview).filter_by(decision_id=decision.id).count() == 0
 
 
 def test_batch_summary_previews_notes(mock_db, tmp_path, monkeypatch):
@@ -441,7 +567,7 @@ def _seed_table_fill(db):
     cls = SchoolClass(name="5B", grade_level="5e"); db.add(cls); db.flush()
     a = Assessment(class_id=cls.id, title="Ctrl", type="control", note_base=20)
     db.add(a); db.flush()
-    stu = Student(class_id=cls.id, first_name="E", last_name="X", llm_pseudonym="p")
+    stu = Student(class_id=cls.id, name="E X", llm_pseudonym="p")
     db.add(stu); db.flush()
     copy = Copy(assessment_id=a.id, student_id=stu.id, status="printed"); db.add(copy); db.flush()
     page = DocumentPage(copy_id=copy.id, page_no=1); db.add(page); db.flush()
@@ -460,7 +586,9 @@ def _seed_table_fill(db):
     resp = StudentResponse(copy_item_id=item.id, zone_id=zone.id, final_text="")
     db.add(resp); db.flush()
     db.add(OcrAttempt(zone_id=zone.id, provider="mathpix",
-                      raw_json={"cells": ["5", "9", "?"]}, confidence=0.4))
+                      raw_json={"cells": ["5", "9", "?"],
+                                "cell_latex": ["5", "9", r"\text{?}"]},
+                      confidence=0.4))
     dec = GradingDecision(response_id=resp.id, source="deterministic", score=1, max_score=3,
                           tier="D", reason_code="table_cell_unreadable", status="review_pending")
     db.add(dec); db.flush()
@@ -488,6 +616,7 @@ def test_cell_by_cell_correction(mock_db, tmp_path, monkeypatch):
     assert it["grade_mode"] == "cells"
     assert [c["expected_display"] for c in it["cells"]] == ["$5$", "$8$", r"$\dfrac{1}{2}$"]
     assert [c["ocr_text"] for c in it["cells"]] == ["5", "9", "?"]
+    assert [c["ocr_latex"] for c in it["cells"]] == ["5", "9", r"\text{?}"]
     # crédits automatiques : juste, faux, illisible (OCR « ? »)
     assert [c["auto_credit"] for c in it["cells"]] == [1.0, 0.0, None]
     assert [c["label"] for c in it["cells"]] == ["L1 · A", "L1 · B", "L2 · A"]
@@ -512,6 +641,10 @@ def test_cell_by_cell_correction(mock_db, tmp_path, monkeypatch):
     assert it2["decision_source"] == "teacher"
     assert abs(it2["current_points"] - 1.25) < 1e-6      # 2,5/3 × 1,5 pt
     assert [c["teacher_credit"] for c in it2["cells"]] == [1.0, 1.0, 0.5]
+    # La décision professeur réécrit un essai technique pour l'overlay, mais la
+    # colonne « Lecture OCR » continue de montrer ce que Mathpix avait compris.
+    assert [c["ocr_text"] for c in it2["cells"]] == ["5", "9", "?"]
+    assert [c["ocr_latex"] for c in it2["cells"]] == ["5", "9", r"\text{?}"]
     assert scans_router.list_items(batch.id, "flagged", db) == []
 
 

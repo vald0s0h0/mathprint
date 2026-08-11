@@ -225,6 +225,72 @@ def crop_zone(warped: np.ndarray, x_pt: float, y_pt: float, w_pt: float, h_pt: f
     return warped[y0:y1, x0:x1]
 
 
+def draw_expected_answer(crop: np.ndarray, *, zone_geo: dict, meta: dict,
+                         expected: dict, response_type: str,
+                         color: str = "#C62828") -> np.ndarray:
+    """Superpose la réponse attendue sur un crop de correction manuelle.
+
+    Le crop a été produit par :func:`crop_zone` depuis la même géométrie PDF :
+    on peut donc convertir les points en pixels sans recalage supplémentaire.
+    L'image source reste intacte. QCM : une case rouge pleine/vide à gauche de
+    chaque case élève. Matching : les liaisons attendues sont tracées en rouge
+    par-dessus les traits noirs/bleus de l'élève."""
+    out = crop.copy()
+    if out.size == 0:
+        return out
+    h_px, w_px = out.shape[:2]
+    padding = float(zone_geo.get("padding_pt") or 0.0)
+    span_w = max(1e-6, float(zone_geo.get("w_pt") or 0.0) + 2 * padding)
+    span_h = max(1e-6, float(zone_geo.get("h_pt") or 0.0) + 2 * padding)
+    sx, sy = w_px / span_w, h_px / span_h
+    zx = float(zone_geo.get("x_pt") or 0.0)
+    ztop = (float(zone_geo.get("y_pt") or 0.0)
+            + float(zone_geo.get("h_pt") or 0.0) + padding)
+
+    value = color.lstrip("#")
+    if len(value) != 6:
+        value = "C62828"
+    rgb = tuple(int(value[i:i + 2], 16) for i in (0, 2, 4))
+    bgr = (rgb[2], rgb[1], rgb[0])
+
+    def point(x_pt: float, y_pt: float) -> tuple[int, int]:
+        return (int(round((x_pt - zx + padding) * sx)),
+                int(round((ztop - y_pt) * sy)))
+
+    if response_type.startswith("qcm"):
+        correct = set(expected.get("correct") or [])
+        for box in meta.get("boxes") or []:
+            corr = box.get("correction_box") or {}
+            if not all(k in corr for k in ("x_pt", "y_pt", "w_pt", "h_pt")):
+                continue
+            x0, y1 = point(float(corr["x_pt"]), float(corr["y_pt"]))
+            x1, y0 = point(float(corr["x_pt"]) + float(corr["w_pt"]),
+                           float(corr["y_pt"]) + float(corr["h_pt"]))
+            thickness = max(2, int(round(min(sx, sy) * 0.8)))
+            cv2.rectangle(out, (x0, y0), (x1, y1), bgr,
+                          -1 if box.get("index") in correct else thickness,
+                          lineType=cv2.LINE_AA)
+    elif response_type == "matching":
+        left = {p.get("index"): p for p in meta.get("left_points") or []}
+        right = {p.get("index"): p for p in meta.get("right_points") or []}
+        thickness = max(2, int(round(min(sx, sy) * 0.75)))
+        radius = max(2, thickness + 1)
+        for pair in expected.get("pairs") or []:
+            if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+                continue
+            lp, rp = left.get(pair[0]), right.get(pair[1])
+            if not lp or not rp:
+                continue
+            p1 = point(float(lp["x_pt"]) + float(lp["w_pt"]) / 2,
+                       float(lp["y_pt"]) + float(lp["h_pt"]) / 2)
+            p2 = point(float(rp["x_pt"]) + float(rp["w_pt"]) / 2,
+                       float(rp["y_pt"]) + float(rp["h_pt"]) / 2)
+            cv2.line(out, p1, p2, bgr, thickness, lineType=cv2.LINE_AA)
+            cv2.circle(out, p1, radius, bgr, -1, lineType=cv2.LINE_AA)
+            cv2.circle(out, p2, radius, bgr, -1, lineType=cv2.LINE_AA)
+    return out
+
+
 def dropout_filter(crop: np.ndarray) -> np.ndarray:
     """Supprime les teintes rouge/orangé claires (cadres, lignes guides) ;
     conserve l'encre noire et bleue de l'élève (§5.3)."""

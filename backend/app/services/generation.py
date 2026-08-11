@@ -121,6 +121,9 @@ def render_shape(row, guides: str = pdfgen.GUIDES_OVERLAY) -> dict:
     return {**common, "response_type": row.response_type,
             "choices": row.grading_json.get("choices", []),
             "grading": grading_json,
+            # Le rendu dimensionne les champs sur la nature physique de la
+            # réponse (une fraction manuscrite demande 3 mm de plus).
+            "expected": row.expected_json or {},
             "inline": bool((row.expected_json or {}).get("inline"))}
 
 
@@ -177,7 +180,8 @@ def generate_assessment_job(db: Session, assessment: Assessment,
         return manual_subject.generate_manual_job(db, assessment, job, font_size)
 
     school_class = db.get(SchoolClass, assessment.class_id)
-    students = [s for s in school_class.students if s.active]
+    students = sorted((s for s in school_class.students if s.active),
+                      key=lambda s: (s.order_index, s.id))
     # source des exercices choisie dans l'assistant (§ Sésamaths) : "auto"
     # préserve le comportement historique (MathALÉA + DeepSeek), inchangé
     # par défaut pour tout sujet existant sans ce champ
@@ -446,10 +450,11 @@ def generate_assessment_job(db: Session, assessment: Assessment,
             page_rows.append(page)
 
         zones = pdfgen.render_copy(
-            c, student_name=f"{student.last_name} {student.first_name}",
+            c, student_name=student.name,
             class_name=school_class.name, title=assessment.title,
             assessment_type=assessment.type, items=render_items,
-            pages_meta=pages_meta, font_size=font_size, tpl=tpl)
+            pages_meta=pages_meta, font_size=font_size, tpl=tpl,
+            dyslexic=student.dyslexic)
 
         used_pages = max((z["page_index"] for z in zones), default=0) + 1
         if used_pages > max_pages + PAGE_RESERVE:

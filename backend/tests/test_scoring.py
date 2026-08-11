@@ -166,12 +166,21 @@ def test_fallback_bareme_grows_with_the_work_demanded():
     assert qcm < table <= rubric
 
 
-def test_note_base_ignored_on_a_training_subject():
-    # Un sujet créé en contrôle puis repassé en entraînement garde une base en
-    # base de données : elle ne doit pas ressusciter une note.
+def test_qcm_fallback_bareme_distinguishes_unique_from_multiple_choices():
+    """Sans barème explicite, un choix unique vaut UNE décision tandis qu'un
+    choix multiple vaut une décision par case — même avec les mêmes choix."""
+    choices = ["A", "B", "C", "D"]
+    policy = {"max_score": 4, "comparator": "qcm", "choices": choices}
+    single = scoring.item_bareme(policy, "qcm_single")
+    multiple = scoring.item_bareme(policy, "qcm_multiple")
+    assert single == 0.25
+    assert multiple == 1.0
+
+
+def test_note_base_applies_to_training_and_control_subjects():
     training = Assessment(class_id="c", type="training", title="T", note_base=20)
     control = Assessment(class_id="c", type="control", title="C", note_base=10)
-    assert scoring.assessment_note_base(training) == scoring.NOTE_BASE_UNGRADED
+    assert scoring.assessment_note_base(training) == 20
     assert scoring.assessment_note_base(control) == 10
 
 
@@ -344,7 +353,7 @@ def _seed_control(db, note_base: int = 20, n_students: int = 2) -> Assessment:
     for i in range(n_students):
         # llm_pseudonym est unique en base : un test qui sème plusieurs classes
         # dans la même session doit varier le pseudonyme
-        db.add(Student(class_id=cls.id, first_name=f"Eleve{i}", last_name="Test",
+        db.add(Student(class_id=cls.id, name=f"Eleve{i} Test", order_index=i,
                        llm_pseudonym=f"E{cls.id[:8]}-{i}", active=True))
     a = Assessment(class_id=cls.id, type="control", title="Contrôle barème",
                    pages_target=1, personalization_mode="common", note_base=note_base)
@@ -447,7 +456,7 @@ def test_the_note_follows_the_base_chosen_at_creation(db_session):
 
 
 @needs_manual
-def test_a_training_subject_is_tracked_but_never_graded(db_session):
+def test_a_training_subject_is_scored_but_note_is_only_for_tracking(db_session):
     a = _seed_control(db_session, n_students=1)
     a.type = "training"
     db_session.commit()
@@ -456,8 +465,8 @@ def test_a_training_subject_is_tracked_but_never_graded(db_session):
     result = db_session.query(CopyResult).filter_by(assessment_id=a.id).first()
     assert result is not None
     assert result.points_total > 0        # les points restent : c'est le suivi
-    assert result.note_base == scoring.NOTE_BASE_UNGRADED
-    assert result.note is None and result.note_raw is None
+    assert result.note_base == 20
+    assert result.note is not None and result.note_raw is not None
 
 
 @needs_manual

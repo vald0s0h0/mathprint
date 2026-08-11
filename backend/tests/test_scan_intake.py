@@ -18,7 +18,7 @@ from app import models as _models  # noqa: F401 (enregistre les tables sur Base)
 from app.db import Base
 from app.config import settings
 from app.models import (Assessment, Copy, DocumentPage, FileObject, ScanBatch,
-                        SchoolClass, Student)
+                        ScannedPage, SchoolClass, Student)
 from app.services import pdfgen, sandbox, scan_intake, worker_cv
 from app.services.security import sign_page
 
@@ -36,7 +36,7 @@ def _seed(db):
     cls = SchoolClass(name="5A", grade_level="5e")
     db.add(cls)
     db.flush()
-    stu = Student(class_id=cls.id, first_name="Alex", last_name="Martin", llm_pseudonym="p1")
+    stu = Student(class_id=cls.id, name="Alex Martin", llm_pseudonym="p1")
     db.add(stu)
     db.flush()
     a = Assessment(class_id=cls.id, title="Contrôle 1")
@@ -161,8 +161,9 @@ def test_sandbox_multiple_files_same_subject_one_batch(mock_db, tmp_path, monkey
     monkeypatch.setattr(scan_intake.settings, "data_dir", tmp_path)
     _patch_classify(monkeypatch, db, pages)
 
-    # deux fichiers déposés en une fois, mais la MÊME page dans les deux
-    # (doublon inter-fichiers) : une seule page retenue, une correction unique
+    # Deux fichiers déposés en une fois, mais la MÊME page dans les deux. Une
+    # seule correction est calculée, mais les DEUX positions physiques restent
+    # dans le flux pour ne jamais décaler les feuilles suivantes.
     queue = [[_img(1)], [_img(1)]]
     monkeypatch.setattr(sandbox.worker_cv, "raster_any", lambda _path: queue.pop(0))
 
@@ -171,9 +172,75 @@ def test_sandbox_multiple_files_same_subject_one_batch(mock_db, tmp_path, monkey
 
     assert len(out["batch_ids"]) == 1
     assert db.query(ScanBatch).filter_by(assessment_id=a.id).count() == 1
+    assert {r["file_kind"] for r in out["results"]} == {"image"}
     added = sum(r["pages_added"] for r in out["results"])
     dups = sum(r["duplicates_rejected"] for r in out["results"])
-    assert added == 1 and dups == 1
+    assert added == 2 and dups == 1
+
+
+def test_targeted_scan_keeps_unidentified_page_in_exact_position(
+        mock_db, tmp_path, monkeypatch):
+    db = mock_db
+    assessment, pages = _seed(db)
+    monkeypatch.setattr(scan_intake.settings, "data_dir", tmp_path)
+    _patch_classify(monkeypatch, db, pages)
+
+    result = scan_intake.attach_scan(
+        db, assessment.id, [_img(1), _img(0), _img(2)], "u")
+    db.commit()
+
+    batch = db.get(ScanBatch, result["batch_id"])
+    stored = db.get(FileObject, batch.source_file_id)
+    from pypdf import PdfReader
+    assert result["pages_added"] == 3
+    assert result["blocked_pages"] == 1
+    assert len(PdfReader(stored.storage_path).pages) == 3
+
+
+def test_sandbox_jpeg_sequence_keeps_unknown_file_between_known_copies(
+        mock_db, tmp_path, monkeypatch):
+    db = mock_db
+    assessment, pages = _seed(db)
+    monkeypatch.setattr(scan_intake.settings, "data_dir", tmp_path)
+    _patch_classify(monkeypatch, db, pages)
+    queue = [[_img(1)], [_img(0)], [_img(2)]]
+    monkeypatch.setattr(sandbox.worker_cv, "raster_any", lambda _path: queue.pop(0))
+
+    out = sandbox.ingest_files(db, [
+        ("scan-1.jpg", ".jpg", b"one"),
+        ("scan-2.jpg", ".jpg", b"unknown"),
+        ("scan-3.jpg", ".jpg", b"three"),
+    ], "u")
+
+    assert len(out["batch_ids"]) == 1
+    assert sum(r["pages_added"] for r in out["results"]) == 3
+    assert sum(r["blocked_pages"] for r in out["results"]) == 1
+    batch = db.get(ScanBatch, out["batch_ids"][0])
+    stored = db.get(FileObject, batch.source_file_id)
+    from pypdf import PdfReader
+    assert len(PdfReader(stored.storage_path).pages) == 3
+
+
+def test_overlay_keeps_blocked_positions_as_non_identified_pages(
+        mock_db, tmp_path, monkeypatch):
+    from app.services import pipeline
+    from pypdf import PdfReader
+
+    db = mock_db
+    assessment, _pages = _seed(db)
+    batch = ScanBatch(assessment_id=assessment.id, page_count=3)
+    db.add(batch); db.flush()
+    db.add_all([
+        ScannedPage(batch_id=batch.id, source_index=i, status="blocked")
+        for i in range(3)
+    ])
+    db.commit()
+    monkeypatch.setattr(pipeline.settings, "data_dir", tmp_path)
+
+    output = pipeline.build_overlays(db, batch)
+    pdf = PdfReader(output)
+    assert len(pdf.pages) == 3
+    assert all("Non identifié" in (page.extract_text() or "") for page in pdf.pages)
 
 
 def test_sandbox_same_file_reuploadable_after_correction_deleted(mock_db, tmp_path, monkeypatch):

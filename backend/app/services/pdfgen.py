@@ -24,6 +24,7 @@ rotation, échelle) — un type de tag par coin, identique sur toutes les pages.
 import io
 import json
 import re
+from contextvars import ContextVar
 from datetime import date
 from pathlib import Path
 
@@ -35,12 +36,44 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 from reportlab.pdfgen import canvas
 from reportlab.lib.utils import ImageReader
+from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.pdfmetrics import stringWidth
+from reportlab.pdfbase.ttfonts import TTFont
 
 from ..config import settings
 from . import scoring
 from . import statement as statement_mod
 from .runtime_settings import DEFAULT_TEMPLATES
+
+_FONT_DIR = Path(__file__).resolve().parent.parent / "assets" / "fonts"
+_DYSLEXIC_FONTS = {
+    "regular": "OpenDyslexic",
+    "bold": "OpenDyslexic-Bold",
+    "italic": "OpenDyslexic-Italic",
+}
+for _style, _filename in {
+    "regular": "OpenDyslexic-Regular.ttf",
+    "bold": "OpenDyslexic-Bold.ttf",
+    "italic": "OpenDyslexic-Italic.ttf",
+}.items():
+    pdfmetrics.registerFont(TTFont(_DYSLEXIC_FONTS[_style], str(_FONT_DIR / _filename)))
+
+_USE_DYSLEXIC: ContextVar[bool] = ContextVar("pdf_use_dyslexic", default=False)
+# Les métriques moyennes d'OpenDyslexic sont environ 15 % plus larges que
+# celles d'Helvetica. Ce facteur conserve les retours à la ligne et donc la
+# géométrie des cartes dans la très grande majorité des énoncés.
+DYSLEXIC_FONT_SCALE = 0.85
+
+
+def _font(style: str = "regular") -> str:
+    if _USE_DYSLEXIC.get():
+        return _DYSLEXIC_FONTS[style]
+    return {"regular": "Helvetica", "bold": "Helvetica-Bold",
+            "italic": "Helvetica-Oblique"}[style]
+
+
+def _subject_font_size(size: float) -> float:
+    return size * (DYSLEXIC_FONT_SCALE if _USE_DYSLEXIC.get() else 1.0)
 
 PAGE_W, PAGE_H = A4  # 595.27 x 841.89 pt
 MARGIN = 9 * mm
@@ -320,8 +353,9 @@ def _draw_badge(c: canvas.Canvas, x: float, y_base: float, font_size: float,
     c.setFillColor(color)
     c.roundRect(x, by, bw, bh, 1.0 * mm, stroke=0, fill=1)
     c.setFillColor(white)
-    c.setFont("Helvetica-Bold", bfs)
-    c.drawCentredString(x + bw / 2, by + (bh - bfs * 0.72) / 2, str(label))
+    draw_bfs = _subject_font_size(bfs)
+    c.setFont(_font("bold"), draw_bfs)
+    c.drawCentredString(x + bw / 2, by + (bh - draw_bfs * 0.72) / 2, str(label))
     c.setFillColor(black)
     return bw
 
@@ -368,7 +402,7 @@ def _draw_header(c: canvas.Canvas, student_name: str, class_name: str, title: st
         c.roundRect(nx, band_bottom, nw, band_h, 2 * mm)
         _solid(c)
         c.setFillColor(DOTTED_GRAY)
-        c.setFont("Helvetica", 6.5)
+        c.setFont(_font(), _subject_font_size(6.5))
         c.drawCentredString(nx + nw / 2, band_bottom + band_h - HEADER_LABEL_DY, "NOTE")
         c.setFillColor(black)
 
@@ -378,7 +412,7 @@ def _draw_header(c: canvas.Canvas, student_name: str, class_name: str, title: st
     c.roundRect(ax, band_bottom, aw, band_h, 2 * mm)
     _solid(c)
     c.setFillColor(DOTTED_GRAY)
-    c.setFont("Helvetica", 6.5)
+    c.setFont(_font(), _subject_font_size(6.5))
     c.drawString(ax + 2.5 * mm, band_bottom + band_h - HEADER_LABEL_DY,
                  "APPRÉCIATION — remplie à la correction")
     c.setFillColor(black)
@@ -391,34 +425,38 @@ def _draw_header(c: canvas.Canvas, student_name: str, class_name: str, title: st
     c.clipPath(clip, stroke=0, fill=0)
 
     class_text = _pdf_safe(class_name)
-    class_fs = _fit_size(class_text, "Helvetica-Bold", mw - 1.5 * mm, 90, 34)
+    class_fs = _fit_size(class_text, _font("bold"), mw - 1.5 * mm,
+                         _subject_font_size(90), _subject_font_size(34))
     # Helvetica-Bold a une hauteur de capitale proche de 0,72 em : cette base
     # centre visuellement le filigrane et lui donne presque les 24 mm du QR.
     class_base = my + (mh - class_fs * 0.718) / 2
     c.setFillColor(HexColor("#ECEFF1"))
-    c.setFont("Helvetica-Bold", class_fs)
+    c.setFont(_font("bold"), class_fs)
     c.drawCentredString(mx + mw / 2, class_base, class_text)
 
     name = _pdf_safe(student_name)
-    name_fs = _fit_size(name, "Helvetica-Bold", mw - 4 * mm,
-                        float(tpl.get("name_size", 14)), 8.0)
+    name_fs = _fit_size(name, _font("bold"), mw - 4 * mm,
+                        _subject_font_size(float(tpl.get("name_size", 14))),
+                        _subject_font_size(8.0))
     c.setFillColor(black)
-    c.setFont("Helvetica-Bold", name_fs)
+    c.setFont(_font("bold"), name_fs)
     c.drawCentredString(mx + mw / 2, my + mh - 6.0 * mm, name)
 
     if title:
         title_text = _pdf_safe(title)
-        title_fs = _fit_size(title_text, "Helvetica-Bold", mw - 4 * mm,
-                             float(tpl.get("title_size", 8)), 5.5)
+        title_fs = _fit_size(title_text, _font("bold"), mw - 4 * mm,
+                             _subject_font_size(float(tpl.get("title_size", 8))),
+                             _subject_font_size(5.5))
         c.setFillColor(accent)
-        c.setFont("Helvetica-Bold", title_fs)
+        c.setFont(_font("bold"), title_fs)
         c.drawCentredString(mx + mw / 2, my + 7.0 * mm, title_text)
     if tpl.get("show_date", True):
-        meta_fs = max(5.5, float(tpl.get("title_size", 8)) - 1.5)
+        meta_fs = _subject_font_size(max(5.5, float(tpl.get("title_size", 8)) - 1.5))
         meta_text = _pdf_safe(f"{label}  ·  {the_date}")
-        meta_fs = _fit_size(meta_text, "Helvetica", mw - 4 * mm, meta_fs, 5.0)
+        meta_fs = _fit_size(meta_text, _font(), mw - 4 * mm, meta_fs,
+                            _subject_font_size(5.0))
         c.setFillColor(HexColor("#6A737C"))
-        c.setFont("Helvetica", meta_fs)
+        c.setFont(_font(), meta_fs)
         c.drawCentredString(mx + mw / 2, my + 2.0 * mm, meta_text)
     c.restoreState()
 
@@ -507,6 +545,9 @@ BLANK_TOKEN = statement_mod.BLANK_TOKEN
 # grandissent avec elle.
 BLANK_W = 20 * mm
 BLANK_H = 8 * mm
+# Une fraction manuscrite occupe deux étages (numérateur/dénominateur) : toutes
+# les zones qui en attendent une gagnent exactement 3 mm en hauteur.
+FRACTION_EXTRA_H = 3 * mm
 BLANK_FONT_BOOST = 2.0
 # Deux variantes de case, choisies par services.indigo_fields selon la réponse
 # attendue (cf. statement.MINI_TOKEN / WIDE_TOKEN) :
@@ -536,7 +577,7 @@ def _zone_font_size(response_type: str, font_size: float) -> float:
 
 def _seg_w(seg: tuple, fs: float) -> float:
     if seg[0] == "word":
-        return stringWidth(seg[1], "Helvetica", fs)
+        return stringWidth(seg[1], _font(), _subject_font_size(fs))
     if seg[0] == "blank":
         return seg[1]
     return seg[2]
@@ -546,21 +587,67 @@ def _seg_glue(seg: tuple) -> bool:
     return bool(seg[-1])
 
 
-def _blank_seg(kind: str, fs: float, glue: bool) -> tuple:
+def _blank_seg(kind: str, fs: float, glue: bool, extra_h: float = 0.0) -> tuple:
     """Segment de case selon sa variante (cf. statement tokens). Format :
     ("blank", w, asc, desc, kind, glue). Pour "right", `w` est un MINIMUM que la
     mise en page étirera ensuite jusqu'au bord de colonne."""
     desc = fs * 0.24
     if kind == "mini":
-        return ("blank", MINI_BLANK_W, MINI_BLANK_H - desc, desc, "mini", glue)
+        return ("blank", MINI_BLANK_W, MINI_BLANK_H + extra_h - desc,
+                desc, "mini", glue)
     if kind == "right":
-        return ("blank", MIN_RIGHT_BLANK_W, BLANK_H - desc, desc, "right", glue)
-    return ("blank", BLANK_W, BLANK_H - desc, desc, "normal", glue)
+        return ("blank", MIN_RIGHT_BLANK_W, BLANK_H + extra_h - desc,
+                desc, "right", glue)
+    return ("blank", BLANK_W, BLANK_H + extra_h - desc, desc, "normal", glue)
 
 
-# Découpe un texte sur les trois marques de case en gardant leur nature.
-_ANSWER_SPLIT = re.compile(r"(\{\{blank_right\}\}|\{\{blank\}\}|\{\{mini\}\})")
-_TOKEN_KIND = {WIDE_TOKEN: "right", BLANK_TOKEN: "normal", MINI_TOKEN: "mini"}
+# Marques privées de rendu : elles préservent la variante de largeur tout en
+# transportant l'information « réponse fractionnaire ». Elles ne sont jamais
+# stockées en banque et sont ajoutées après la normalisation de l'énoncé.
+_TALL_NORMAL_TOKEN = "{{blank_tall}}"
+_TALL_RIGHT_TOKEN = "{{blank_right_tall}}"
+_TALL_MINI_TOKEN = "{{mini_tall}}"
+_TALL_TOKEN_BY_PUBLIC = {
+    BLANK_TOKEN: _TALL_NORMAL_TOKEN,
+    WIDE_TOKEN: _TALL_RIGHT_TOKEN,
+    MINI_TOKEN: _TALL_MINI_TOKEN,
+}
+_ANSWER_SPLIT = re.compile(
+    r"(\{\{blank_right_tall\}\}|\{\{blank_tall\}\}|\{\{mini_tall\}\}|"
+    r"\{\{blank_right\}\}|\{\{blank\}\}|\{\{mini\}\})")
+_PUBLIC_ANSWER_RE = re.compile(
+    r"(\{\{blank_right\}\}|\{\{blank\}\}|\{\{mini\}\})")
+_TOKEN_KIND = {
+    WIDE_TOKEN: ("right", 0.0), BLANK_TOKEN: ("normal", 0.0),
+    MINI_TOKEN: ("mini", 0.0),
+    _TALL_RIGHT_TOKEN: ("right", FRACTION_EXTRA_H),
+    _TALL_NORMAL_TOKEN: ("normal", FRACTION_EXTRA_H),
+    _TALL_MINI_TOKEN: ("mini", FRACTION_EXTRA_H),
+}
+
+
+def _mark_fraction_blanks(text: str, indices: set[int] | None) -> str:
+    """Marque uniquement les cases dont la réponse attendue est une fraction.
+
+    Le rang suit l'ordre de lecture des marqueurs dans l'énoncé, comme
+    l'appariement OCR des multi_blank.
+    """
+    if not indices:
+        return text
+    rank = -1
+
+    def repl(match: re.Match) -> str:
+        nonlocal rank
+        rank += 1
+        token = match.group(0)
+        return _TALL_TOKEN_BY_PUBLIC[token] if rank in indices else token
+
+    return _PUBLIC_ANSWER_RE.sub(repl, text)
+
+
+def _has_render_answer_field(text: str) -> bool:
+    return statement_mod.has_answer_field(text) or any(
+        token in (text or "") for token in _TOKEN_KIND if token not in statement_mod.ANSWER_TOKENS)
 
 
 def _paragraph_segs(text: str, fs: float, math_fs: float) -> list[tuple]:
@@ -593,12 +680,13 @@ def _paragraph_segs(text: str, fs: float, math_fs: float) -> list[tuple]:
                 for j, w in enumerate(_pdf_safe(mathrender.strip_math(f"${content}$")).split()):
                     segs.append(("word", w, j == 0 and prev_no_space and bool(segs)))
             prev_no_space = True
-        elif statement_mod.has_answer_field(content):
+        elif _has_render_answer_field(content):
             # découpe en gardant chaque marque de case (blank / blank_right / mini)
             for piece in _ANSWER_SPLIT.split(content):
-                kind = _TOKEN_KIND.get(piece)
-                if kind is not None:
-                    segs.append(_blank_seg(kind, fs, False))
+                spec = _TOKEN_KIND.get(piece)
+                if spec is not None:
+                    kind, extra_h = spec
+                    segs.append(_blank_seg(kind, fs, False, extra_h))
                     prev_no_space = False
                 else:
                     _emit_words(piece)
@@ -644,7 +732,7 @@ def _rich_layout(text: str, width: float, fs: float, math_fs: float | None = Non
             badge, para = lab
         # le corps suit la case quand la ligne en porte une — décidé APRÈS
         # l'étiquette, qui ne change pas la nature de la phrase
-        p_fs = blank_fs if (blank_fs and statement_mod.has_answer_field(para)) else fs
+        p_fs = blank_fs if (blank_fs and _has_render_answer_field(para)) else fs
         p_math_fs = math_fs or p_fs
         badge_w = (_badge_metrics(p_fs)[0] + BADGE_GAP) if badge is not None else 0.0
         # retrait PENDANT sous une pastille : les lignes suivantes de la
@@ -653,7 +741,7 @@ def _rich_layout(text: str, width: float, fs: float, math_fs: float | None = Non
         cont_indent = head_indent if badge is not None else 0.0
 
         segs = _paragraph_segs(para, p_fs, p_math_fs)
-        space_w = stringWidth(" ", "Helvetica", p_fs)
+        space_w = stringWidth(" ", _font(), _subject_font_size(p_fs))
 
         raw_lines: list[list[tuple]] = []
         cur: list[tuple] = []
@@ -721,7 +809,7 @@ def _rich_layout(text: str, width: float, fs: float, math_fs: float | None = Non
 
 def _draw_rich(c: canvas.Canvas, x: float, y_top: float, layout: dict,
                color=black, centered: bool = False, width: float | None = None,
-               font: str = "Helvetica", blanks: list | None = None) -> float:
+               font: str | None = None, blanks: list | None = None) -> float:
     """Dessine un layout _rich_layout. Retourne le y sous la dernière ligne.
     `blanks`, si fourni, reçoit la géométrie PDF absolue (x_pt/y_pt/w_pt/h_pt)
     de chaque case de réponse courte insérée en ligne (BLANK_TOKEN), dans
@@ -733,10 +821,12 @@ def _draw_rich(c: canvas.Canvas, x: float, y_top: float, layout: dict,
     taille, c'était offrir de dessiner à un corps différent de celui qui a servi
     à mesurer — l'écart classique entre « ce qu'on croit faire tenir » et « ce
     qui tient » (cf. pages_needed)."""
+    font = font or _font()
     y = y_top
     for line in layout["lines"]:
         fs = line["fs"]
-        space_w = stringWidth(" ", font, fs)
+        draw_fs = _subject_font_size(fs)
+        space_w = stringWidth(" ", font, draw_fs)
         y_base = y - line["asc"]
         cx = x + line.get("indent", 0.0)
         if centered and width:
@@ -748,10 +838,10 @@ def _draw_rich(c: canvas.Canvas, x: float, y_top: float, layout: dict,
             if j > 0 and not seg[-1]:
                 cx += space_w
             if seg[0] == "word":
-                c.setFont(font, fs)
+                c.setFont(font, draw_fs)
                 c.setFillColor(color)
                 c.drawString(cx, y_base, seg[1])
-                cx += stringWidth(seg[1], font, fs)
+                cx += stringWidth(seg[1], font, draw_fs)
             elif seg[0] == "blank":
                 _, w, asc, desc, kind, _glue = seg
                 c.setStrokeColor(DROPOUT)
@@ -825,7 +915,8 @@ def _statement_layout(statement: str, width: float, font_size: float,
                       first_indent: float = 0.0,
                       first_min_asc: float = 0.0,
                       blank_fs: float | None = None,
-                      sub_badge_color: Color | None = None) -> dict:
+                      sub_badge_color: Color | None = None,
+                      fraction_blank_indices: set[int] | None = None) -> dict:
     """Met en page un énoncé : texte riche + éventuelle expression finale mise
     en valeur (motif « consigne : $expr$ » -> centrée, plus grande) + figure.
     `first_indent`/`first_min_asc` réservent la place du badge numéroté en tête
@@ -839,6 +930,7 @@ def _statement_layout(statement: str, width: float, font_size: float,
     # mise en lignes — et elle est idempotente, donc un énoncé déjà bien formé la
     # traverse inchangé.
     statement = statement_mod.normalize(statement)
+    statement = _mark_fraction_blanks(statement, fraction_blank_indices)
     figure = _figure_image(figure_json, min(width, 62 * mm), 42 * mm)
 
     # PLACEMENT DE L'IMAGE (§ demande utilisateur) : si l'énoncé porte le
@@ -1002,6 +1094,43 @@ _MATCHING_COL_GAP = 10.0 * mm
 _MANUAL_DRAWING_H = 60.0 * mm
 
 
+def _is_fraction_value(value) -> bool:
+    """Réponse structurée qui doit être écrite sous forme de fraction."""
+    return isinstance(value, dict) and (
+        value.get("type") in ("rational", "fraction") or "fraction" in value)
+
+
+_TEXT_FRACTION_RE = re.compile(r"\\d?frac\s*\{|(?<!\w)-?\d+\s*/\s*-?\d+(?!\w)")
+
+
+def _expected_has_fraction(value) -> bool:
+    """Détecte une fraction dans une réponse/rubrique structurée.
+
+    Les réponses courtes et cellules portent normalement type=rational. Les
+    raisonnements multiligne portent, eux, du texte attendu par étape : on y
+    reconnaît aussi les écritures LaTeX et a/b.
+    """
+    if _is_fraction_value(value):
+        return True
+    if isinstance(value, dict):
+        return any(_expected_has_fraction(v) for v in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_expected_has_fraction(v) for v in value)
+    return isinstance(value, str) and bool(_TEXT_FRACTION_RE.search(value))
+
+
+def _inline_fraction_indices(response_type: str, expected: dict | None) -> set[int]:
+    """Indices des blanks qui attendent une fraction, dans l'ordre de lecture."""
+    expected = expected or {}
+    if response_type == "short_text":
+        return {0} if _is_fraction_value(expected) else set()
+    if response_type == "multi_blank":
+        cells = expected.get("cells") or []
+        values = list(cells[0]) if cells else []
+        return {i for i, value in enumerate(values) if _is_fraction_value(value)}
+    return set()
+
+
 def _cell_is_mini(v: dict) -> bool:
     """Petit entier 0-99 : la case peut être étroite (même seuil que
     services.indigo_fields._is_short_numeric, pour un rendu cohérent avec les
@@ -1128,9 +1257,17 @@ def _table_geometry(w: float, col_labels: list | None, row_labels: list | None,
     # libellés de ligne (énoncé de la case) — centrés, SANS pastille a./b./c.
     row_lays = [_rich_layout(str(lbl), max(8 * mm, rowlab_w - 2 * _TABLE_CELL_PAD), lab_fs)
                 for lbl in (row_labels or [])]
-    row_hs = [max(_TABLE_ROW_MIN_H,
-                  (row_lays[i]["height"] + 2 * _TABLE_CELL_PAD) if i < len(row_lays) else 0.0)
-              for i in range(rows)]
+    row_hs = []
+    for i in range(rows):
+        label_h = ((row_lays[i]["height"] + 2 * _TABLE_CELL_PAD)
+                   if i < len(row_lays) else 0.0)
+        # Une ligne gagne 3 mm dès qu'une de ses cellules ÉDITABLES attend une
+        # fraction. Toutes les cellules de la ligne partagent nécessairement sa
+        # hauteur dans un tableau.
+        fraction_extra = FRACTION_EXTRA_H if any(
+            _is_fraction_value(cell) and not (cell or {}).get("given")
+            for cell in (cells[i] if i < len(cells) else [])) else 0.0
+        row_hs.append(max(_TABLE_ROW_MIN_H + fraction_extra, label_h))
 
     # répartition des lignes par bande (indices d'origine conservés — l'ordre
     # row-major de cells_meta doit rester aligné sur expected_json.cells).
@@ -1165,7 +1302,8 @@ def _matching_zone_height(left: list, right: list, font_size: int) -> float:
 def _zone_height(response_type: str, choices: list[str], width: float,
                  font_size: int, grading: dict | None = None,
                  inline: bool = False,
-                 sub_badge_color: Color | None = None) -> float:
+                 sub_badge_color: Color | None = None,
+                 expected: dict | None = None) -> float:
     grading = grading or {}
     if response_type in ("qcm_single", "qcm_multiple"):
         _items, total_h, _ncols = _qcm_layout(choices, width - 2 * CARD_PAD, font_size)
@@ -1173,12 +1311,14 @@ def _zone_height(response_type: str, choices: list[str], width: float,
     if response_type == "checkbox_grid":
         return _grid_zone_height(width, grading.get("cols"), grading.get("rows"), font_size)
     if response_type == "short_text":
-        return 0.0 if inline else 13 * mm
+        return 0.0 if inline else 13 * mm + (
+            FRACTION_EXTRA_H if _expected_has_fraction(expected) else 0.0)
     if response_type == "multi_blank":
         return 0.0  # cases dessinées en ligne dans l'énoncé, jamais de zone dédiée
     if response_type == "multiline_text":
         lines = max(3, min(12, int(grading.get("lines", 5))))
-        return lines * MULTILINE_ROW_H + 4 * mm
+        return lines * MULTILINE_ROW_H + 4 * mm + (
+            FRACTION_EXTRA_H if _expected_has_fraction(expected) else 0.0)
     if response_type == "table_fill":
         cells = grading.get("cells") or [[]]
         return _table_zone_height(width, grading.get("col_labels"),
@@ -1442,7 +1582,7 @@ def _draw_answer_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float,
         for it in items:
             # case ÉLÈVE décalée à droite de QCM_CORR_RESERVE : la place à sa
             # gauche est réservée à la case de correction que l'overlay imprime
-            # (vide/cochée) en cas d'erreur.
+            # systématiquement (vide si non attendue, pleine si attendue).
             bx = x + CARD_PAD + it["dx"] + QCM_CORR_RESERVE
             row_top = top - it["dy"]
             # La case se cale sur le TEXTE (centre de case sur la hauteur d'œil
@@ -1774,7 +1914,7 @@ def _draw_lesson_card(c: canvas.Canvas, x: float, y_top: float, w: float,
     en admonition (icône de marge), sous-titres Méthode/Exemple, méthode
     numérotée, exemple résolu encadré, encarts conseil/attention à icône et
     teinte dédiées, figure éventuelle."""
-    fs = max(6, int(tpl.get("font_size", 8)))
+    fs = max(6, float(tpl.get("font_size", 8)))
     bg = HexColor(tpl.get("bg", "#FFF6DF"))
     border = HexColor(tpl.get("border", "#E4C46A"))
     text_color = HexColor(tpl.get("text", "#6B5310"))
@@ -1790,7 +1930,7 @@ def _draw_lesson_card(c: canvas.Canvas, x: float, y_top: float, w: float,
     ty = y + card_h - head_h
     _icon_book(c, x + CARD_PAD + 1.6 * mm, ty + 0.6 * mm, color=text_color)
     c.setFillColor(text_color)
-    c.setFont("Helvetica-Bold", fs)
+    c.setFont(_font("bold"), _subject_font_size(fs))
     c.drawString(x + CARD_PAD + 4.4 * mm, ty + 0.8 * mm, _pdf_safe(title)[:80])
 
     inner = w - 2 * CARD_PAD
@@ -1800,7 +1940,8 @@ def _draw_lesson_card(c: canvas.Canvas, x: float, y_top: float, w: float,
     for kind, payload, indent, part_fs, part_gap in layout["parts"]:
         if kind == "subtitle":
             c.setFillColor(border)
-            c.setFont("Helvetica-Bold", max(6.5, part_fs - 0.5))
+            c.setFont(_font("bold"),
+                      _subject_font_size(max(6.5, part_fs - 0.5)))
             c.drawString(gutter_x, line_y - part_fs * 0.72, _pdf_safe(payload).upper())
             line_y -= part_fs * 0.9 + part_gap
             continue
@@ -1840,12 +1981,12 @@ def _draw_lesson_card(c: canvas.Canvas, x: float, y_top: float, w: float,
                 icon_fn = _icon_bulb if kind == "conseil" else _icon_warning
                 icon_fn(c, gutter_x + 1.7 * mm, icon_y, size=3.2 * mm, color=style["border"])
                 txt_color = style["text"]
-            font = "Helvetica-Oblique" if kind == "rappel" else "Helvetica"
+            font = _font("italic") if kind == "rappel" else _font()
             _draw_rich(c, text_x, line_y, payload, color=txt_color, font=font)
             line_y -= block_h + part_gap
             continue
         _draw_rich(c, gutter_x + indent, line_y, payload,
-                   color=text_color, font="Helvetica")
+                   color=text_color, font=_font())
         line_y -= payload["height"] + part_gap
     c.setFillColor(black)
     return card_h
@@ -1965,11 +2106,13 @@ def _exercise_layout(item: dict, font_size: int,
                                first_indent=badge_w + BADGE_GAP,
                                first_min_asc=_badge_min_asc(font_size),
                                blank_fs=font_size + BLANK_FONT_BOOST,
-                               sub_badge_color=sub_color)
+                               sub_badge_color=sub_color,
+                               fraction_blank_indices=_inline_fraction_indices(
+                                   rtype, item.get("expected")))
     zone_fs = _zone_font_size(rtype, font_size)
     zone_h = _zone_height(rtype, item.get("choices", []), COL_W, zone_fs,
                           item.get("grading"), item.get("inline", False),
-                          sub_color)
+                          sub_color, item.get("expected"))
     strip = _correction_strip_layout(item.get("correction", ""), COL_W, font_size,
                                      item_guides_mode(item))
     return layout, zone_fs, zone_h, strip
@@ -1997,6 +2140,7 @@ def _composite_parts(item: dict) -> list[dict]:
         out.append({"response_type": p.get("response_type", "short_text"),
                     "statement": p.get("statement", ""),
                     "choices": pg.get("choices") or [], "grading": pg,
+                    "expected": p.get("expected") or {},
                     "item_id": ids[k] if k < len(ids) else None})
     return out
 
@@ -2015,7 +2159,8 @@ def _composite_layout(item: dict, font_size: int, math_fs: int) -> dict:
         frag = _rich_layout(f"{chr(97 + k)}. " + statement_mod.normalize(p["statement"]),
                             COL_W - 2 * CARD_PAD, font_size, sub_badge_color=sub_color)
         zone_fs = _zone_font_size(prt, font_size)
-        zone_h = _zone_height(prt, p["choices"], COL_W, zone_fs, p["grading"], False, sub_color)
+        zone_h = _zone_height(prt, p["choices"], COL_W, zone_fs, p["grading"],
+                              False, sub_color, p["expected"])
         laid.append({**p, "frag": frag, "zone_fs": zone_fs, "zone_h": zone_h})
         body_h += _COMPOSITE_PART_GAP + frag["height"] + _COMPOSITE_FRAG_GAP + zone_h
     strip = _correction_strip_layout(item.get("correction", ""), COL_W, font_size,
@@ -2117,7 +2262,26 @@ def render_copy(pdf_canvas: canvas.Canvas, *, student_name: str, class_name: str
                 pages_meta: list[dict], font_size: int = 9,
                 tpl: dict | None = None,
                 placement: list[tuple[int, int]] | None = None,
-                min_pages: int = 0) -> list[dict]:
+                min_pages: int = 0, dyslexic: bool = False) -> list[dict]:
+    """Point d'entrée isolant la police par rendu, y compris si plusieurs
+    requêtes PDF sont traitées simultanément."""
+    token = _USE_DYSLEXIC.set(dyslexic)
+    try:
+        return _render_copy(
+            pdf_canvas, student_name=student_name, class_name=class_name,
+            title=title, assessment_type=assessment_type, items=items,
+            pages_meta=pages_meta, font_size=font_size, tpl=tpl,
+            placement=placement, min_pages=min_pages)
+    finally:
+        _USE_DYSLEXIC.reset(token)
+
+
+def _render_copy(pdf_canvas: canvas.Canvas, *, student_name: str, class_name: str,
+                 title: str, assessment_type: str, items: list[dict],
+                 pages_meta: list[dict], font_size: int = 9,
+                 tpl: dict | None = None,
+                 placement: list[tuple[int, int]] | None = None,
+                 min_pages: int = 0) -> list[dict]:
     """Dessine une copie complète. `items` : dicts avec kind=exercise
     (item_id, statement, response_type, choices, level5) ou kind=lesson
     (title, content, example). `tpl` : templates éditables (runtime_settings).
@@ -2137,7 +2301,7 @@ def render_copy(pdf_canvas: canvas.Canvas, *, student_name: str, class_name: str
     sujet (elle porte son QR signé et sera scannée comme les autres)."""
     tpl = tpl or DEFAULT_TEMPLATES
     ex_tpl, lesson_tpl = tpl["exercise"], tpl["lesson"]
-    font_size = int(ex_tpl.get("font_size", font_size))
+    font_size = float(ex_tpl.get("font_size", font_size))
     math_fs = int(ex_tpl.get("math_size", 12))
     zones = []
     col_w = COL_W
@@ -2195,7 +2359,7 @@ def render_copy(pdf_canvas: canvas.Canvas, *, student_name: str, class_name: str
         slot = placement[idx] if placement and idx < len(placement) else None
         x = MARGIN + col * (col_w + COL_GAP)
         if item.get("kind") == "lesson":
-            fs = max(6, int(lesson_tpl.get("font_size", 8)))
+            fs = max(6, float(lesson_tpl.get("font_size", 8)))
             blocks = item.get("blocks") or {
                 # compatibilité rappels v2 (deux paragraphes plats)
                 "essentiel": item.get("content", ""),
@@ -2285,8 +2449,8 @@ def _draw_corr_checkbox(c: canvas.Canvas, b: dict, col):
     """Case « correction » QCM imprimée par l'overlay à gauche de la case élève :
     REMPLIE (saturée) si le choix est une bonne réponse — elle affiche la réponse
     ET montre à l'élève comment saturer la case pour une meilleure lecture — sinon
-    simple contour vide. Ne s'imprime que si l'élève s'est trompé (décidé par
-    l'appelant)."""
+    simple contour vide. Elle est imprimée pour CHAQUE choix afin que la colonne
+    constitue toujours le corrigé complet, même lorsque l'élève a tout juste."""
     x, y, w, h = b["x_pt"], b["y_pt"], b["w_pt"], b["h_pt"]
     c.saveState()
     c.setStrokeColor(col)
@@ -2322,16 +2486,15 @@ def _draw_zone_marks(c: canvas.Canvas, z: dict, col):
     elif kind == "qcm":
         # AUCUNE marque par-dessus les cases de l'élève : sa copie reste intacte
         # (coches et cases vides visibles). À gauche, la colonne « correction »
-        # AFFICHE LA RÉPONSE quand la carte comporte une erreur : case REMPLIE
-        # (saturée) pour une bonne réponse, contour vide sinon. Le verdict
+        # AFFICHE LA RÉPONSE : case REMPLIE (saturée) pour une bonne réponse,
+        # contour vide sinon. Le verdict
         # juste/faux n'apparaît qu'UNE fois par carte (récap en bas à droite).
-        if marks.get("any_error"):
-            for b in marks.get("boxes", []):
-                cb = b.get("correction_box")
-                if not cb:
-                    continue
-                is_correct = b.get("state") in ("ok", "missed")
-                _draw_corr_checkbox(c, {**cb, "should_check": is_correct}, col)
+        for b in marks.get("boxes", []):
+            cb = b.get("correction_box")
+            if not cb:
+                continue
+            is_correct = b.get("state") in ("ok", "missed")
+            _draw_corr_checkbox(c, {**cb, "should_check": is_correct}, col)
         # récap de la CARTE en bas à droite : coche si zéro erreur, croix si tout
         # est faux, coche + part obtenue (« 2/3 ») si le QCM multiple est
         # partiellement juste.
@@ -2456,7 +2619,14 @@ def _draw_correction_marks(c: canvas.Canvas, page: dict, col):
     geo = header_geometry(page.get("assessment_type", "control"))
     c.setFillColor(col)
     c.setStrokeColor(col)
-    # nom de l'élève sous le QR : l'élève vérifie que la correction est la sienne
+    # nom de l'élève sous le QR : l'élève vérifie que la correction est la sienne.
+    # Une feuille restée dans le flux mais inexploitable porte une mention courte
+    # au MÊME endroit : jamais de suppression de page, donc jamais de décalage.
+    if page.get("unidentified"):
+        c.setFont("Helvetica-Bold", 7)
+        c.drawRightString(PAGE_W - MARGIN, PAGE_H - MARGIN - QR_MAIN - 4 * mm,
+                          "Non identifié")
+        return
     c.setFont("Helvetica-Bold", 8.5)
     c.drawRightString(PAGE_W - MARGIN, PAGE_H - MARGIN - QR_MAIN - 4 * mm,
                       f"Correction — {page.get('student', '')}")

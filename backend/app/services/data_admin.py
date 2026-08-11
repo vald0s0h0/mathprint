@@ -155,7 +155,7 @@ def delete_scan_batch(db: Session, batch: ScanBatch) -> dict:
     affected_copy_ids: set[str] = set()
     for dp in (db.query(DocumentPage).filter(DocumentPage.id.in_(page_ids)).all() if page_ids else []):
         copy = db.get(Copy, dp.copy_id)
-        if copy and copy.status in ("graded", "finalized"):
+        if copy and copy.status in ("read", "graded", "finalized"):
             copy.status = "generated"
             copy.appreciation_json = None
             affected_copy_ids.add(copy.id)

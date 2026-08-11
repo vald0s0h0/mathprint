@@ -37,7 +37,8 @@ def student_detail(student_id: str, db: Session = Depends(get_db)):
         d["chapter"] = comp.chapter_name if comp else ""
 
     return {
-        "id": s.id, "first_name": s.first_name, "last_name": s.last_name,
+        "id": s.id, "name": s.name, "order_index": s.order_index,
+        "dyslexic": s.dyslexic,
         "pseudonym": s.llm_pseudonym, "class_name": cls.name if cls else None,
         # niveau 1-10 : réservé au professeur, jamais sur la copie (RM-007)
         "level": level_row.level if level_row else None,

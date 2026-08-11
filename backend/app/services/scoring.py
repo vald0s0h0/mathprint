@@ -30,7 +30,7 @@ Le passage de l'une à l'autre est un simple ratio :
     points obtenus = (score / max_score) × bareme_points
 
 et la note finale une règle de trois sur la base choisie par le professeur à
-la création du sujet (/5, /10 ou /20, contrôle uniquement).
+la création du sujet (/5, /10 ou /20), contrôle ou entraînement.
 
 ARRONDIS — un seul dans toute la chaîne. Les points d'un exercice ne sont
 JAMAIS arrondis : un QCM de 8 cases à 1 point dont 5 sont justes vaut 0,625, et
@@ -50,11 +50,10 @@ from ..models import (
     GradingDecision, StudentResponse, now,
 )
 
-# Bases de notation proposées au professeur pour un contrôle (§ assistant sujet).
+# Bases de scoring proposées au professeur pour tous les sujets (§ assistant).
 NOTE_BASES = (5, 10, 20)
 DEFAULT_NOTE_BASE = 20
-# 0 = sujet non noté (entraînement) : les points sont quand même consolidés en
-# base pour le suivi, seule la note n'a pas de sens.
+# Valeur historique des entraînements créés avant leur scoring.
 NOTE_BASE_UNGRADED = 0
 
 # 0,125 = 1/8 de point : le pas le plus fin du barème. Il n'est pas cosmétique —
@@ -121,11 +120,19 @@ def fallback_bareme(response_type: str, grading: dict) -> float:
     comparator = (grading or {}).get("comparator")
     max_score = float((grading or {}).get("max_score") or 1)
 
-    if comparator in ("qcm", "grid"):
-        # nombre de CASES : `choices`/`rows` font foi (le max_score des QCM
-        # d'avant le comptage par case vaut 1, il sous-estimerait l'exercice).
-        units = float(len((grading or {}).get("choices")
-                          or (grading or {}).get("rows") or []) or max_score)
+    if comparator == "qcm":
+        # Un QCM UNIQUE représente une seule décision, quel que soit le nombre
+        # de distracteurs. Un QCM MULTIPLE représente au contraire une décision
+        # par case. Le repli doit respecter la même séparation que le moteur de
+        # notation, notamment pour les anciens exercices sans bareme_points.
+        if response_type == "qcm_single":
+            units = 1.0
+        else:
+            units = float(len((grading or {}).get("choices") or []) or max_score)
+    elif comparator == "grid":
+        # Une décision par ligne ; `rows` fait foi si un ancien max_score ne
+        # reflète pas encore la cardinalité réelle de la grille.
+        units = float(len((grading or {}).get("rows") or []) or max_score)
     else:
         units = max_score
     if comparator in _UNIT_PRICE:
@@ -177,11 +184,11 @@ def note_from_points(points_earned: float, points_total: float,
     return raw, min(float(base), round_half_up(raw))
 
 
-def normalize_note_base(value, *, graded: bool) -> int:
-    """Base de notation valide (5/10/20) pour un sujet noté, 0 sinon — un
-    entraînement n'a pas de note (§ pas de note en entraînement)."""
-    if not graded:
-        return NOTE_BASE_UNGRADED
+def normalize_note_base(value, *, graded: bool = True) -> int:
+    """Base de scoring valide (5/10/20).
+
+    `graded` reste accepté pour les appelants historiques, mais n'annule plus
+    les entraînements : leur score est suivi sans être imprimé."""
     try:
         v = int(value)
     except (TypeError, ValueError):
@@ -190,11 +197,8 @@ def normalize_note_base(value, *, graded: bool) -> int:
 
 
 def assessment_note_base(assessment: Assessment) -> int:
-    """Base réellement applicable à un sujet : 0 pour un entraînement, même si
-    une base traîne en base de données (un sujet peut avoir été créé en
-    contrôle puis repassé en entraînement)."""
-    return normalize_note_base(assessment.note_base,
-                               graded=assessment.type == "control")
+    """Base de scoring applicable à tout sujet."""
+    return normalize_note_base(assessment.note_base)
 
 
 # ------------------------------------------------------- consolidation d'une copie
@@ -261,9 +265,8 @@ def compute_copy_result(db: Session, copy: Copy,
     result.points_earned = points_earned
     result.points_total = points_total
     result.note_base = base
-    # entraînement : les points restent (suivi), la note n'existe pas
-    result.note_raw = note_raw if base else None
-    result.note = note if base else None
+    result.note_raw = note_raw
+    result.note = note
     result.finalized_at = now()
     db.flush()
 

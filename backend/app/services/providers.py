@@ -15,6 +15,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as _FutureTimeout
 from datetime import datetime, timedelta, timezone
+from typing import Any, Callable
 
 import httpx
 from sqlalchemy.orm import Session
@@ -77,6 +78,34 @@ def _post_with_deadline(url: str, *, headers: dict, json_body: dict,
 
 # premier objet {...} d'un texte (extraction tolérante de JSON)
 _JSON_OBJ_RE = re.compile(r"\{.*\}", re.DOTALL)
+
+
+def _decode_json_content(content: Any) -> Any:
+    """Décode une sortie JSON en tolérant les fences et un court préambule.
+
+    `response_format=json_object` réduit fortement ces écarts sans les éliminer
+    (proxy, modèle ou réponse tronquée). On n'utilise pas une regex gourmande :
+    `raw_decode` s'arrête exactement à la fin du premier objet JSON complet.
+    """
+    if isinstance(content, (dict, list)):
+        return content
+    if not isinstance(content, str) or not content.strip():
+        raise ValueError("contenu DeepSeek vide")
+    text = content.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s*```$", "", text).strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as first:
+        starts = [p for p in (text.find("{"), text.find("[")) if p >= 0]
+        if not starts:
+            raise ValueError("aucun objet JSON dans la réponse") from first
+        try:
+            value, _end = json.JSONDecoder().raw_decode(text[min(starts):])
+            return value
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"JSON incomplet ou invalide à la position {exc.pos}") from exc
 
 
 # --- diagnostic d'échec commun aux pipelines (Sésamaths, Gemini) : elles
@@ -239,7 +268,10 @@ def mathpix_ocr(db: Session, image_bytes: bytes, correlation_id: str,
 def deepseek_json(db: Session, operation: str, system: str, user_payload: dict,
                   max_tokens: int = 500, reasoning: bool = False,
                   correlation_id: str | None = None, model: str | None = None,
-                  total_timeout: float | None = None) -> dict:
+                  total_timeout: float | None = None,
+                  validator: Callable[[Any], dict] | None = None,
+                  repair_instruction: str | None = None,
+                  thinking: bool | None = None) -> dict:
     """Appel DeepSeek en sortie JSON stricte. Une seule tentative corrective (§8.5).
     `model` permet d'imposer un modèle (ex : deepseek-v4-pro pour la création
     d'exercices) ; sinon registre configurable (RM-011)."""
@@ -265,6 +297,13 @@ def deepseek_json(db: Session, operation: str, system: str, user_payload: dict,
         "response_format": {"type": "json_object"},
         "max_tokens": max_tokens,
     }
+    # DeepSeek V4 active désormais le raisonnement par défaut. Pour les appels
+    # courts et structurés (notamment la correction), on peut le désactiver :
+    # les tokens ne sont alors pas consommés par reasoning_content au détriment
+    # du contenu JSON final.
+    if thinking is not None:
+        body["thinking"] = {"type": "enabled" if thinking else "disabled"}
+    last_error = "sortie invalide"
     for attempt in range(2):  # un seul retry correctif
         r = _post_with_deadline("https://api.deepseek.com/chat/completions",
                                 headers={"Authorization": f"Bearer {cfg.encrypted_secret}"},
@@ -278,12 +317,53 @@ def deepseek_json(db: Session, operation: str, system: str, user_payload: dict,
                 output_tokens=usage.get("completion_tokens", 0),
                 cost=usage.get("prompt_tokens", 0) * 3e-7 + usage.get("completion_tokens", 0) * 1e-6,
                 correlation_id=correlation_id)
+        content = None
+        empty_content = False
         try:
-            return json.loads(data["choices"][0]["message"]["content"])
-        except (json.JSONDecodeError, KeyError):
+            choice = data["choices"][0]
+            message = choice["message"]
+            content = message.get("content")
+            empty_content = not isinstance(content, (dict, list)) and (
+                not isinstance(content, str) or not content.strip())
+            if empty_content:
+                details = []
+                if choice.get("finish_reason"):
+                    details.append(f"arrêt={choice['finish_reason']}")
+                if message.get("reasoning_content"):
+                    details.append("raisonnement présent")
+                if usage.get("completion_tokens") is not None:
+                    details.append(f"tokens_sortie={usage['completion_tokens']}")
+                suffix = f" ({', '.join(details)})" if details else ""
+                raise ValueError(f"contenu DeepSeek vide{suffix}")
+            parsed = _decode_json_content(content)
+            return validator(parsed) if validator else parsed
+        except (KeyError, TypeError, ValueError) as exc:
+            last_error = str(exc) or exc.__class__.__name__
             if attempt == 1:
-                raise ValueError("Sortie DeepSeek hors schéma après retry")
-            body["messages"].append({"role": "user", "content": "Réponds uniquement en JSON valide."})
+                raise ValueError(
+                    f"Sortie DeepSeek invalide après 2 tentatives : {last_error[:160]}") from exc
+            # Le vrai contenu fautif fait partie du dialogue de réparation. Sans
+            # lui, le second appel recommençait à l'identique sans savoir ce qui
+            # avait été rejeté.
+            if isinstance(content, str) and content.strip():
+                body["messages"].append({"role": "assistant",
+                                         "content": content[:6000]})
+            # DeepSeek documente qu'une sortie vide peut exceptionnellement se
+            # produire en JSON Output. Répéter le même mode ne change rien : au
+            # retry, on demande du texte JSON brut puis notre décodeur et le
+            # validateur métier imposent toujours le schéma exact.
+            if empty_content:
+                body["response_format"] = {"type": "text"}
+            body["messages"].append({
+                "role": "user",
+                "content": ("Ta réponse est invalide : " + last_error[:500] + ". "
+                            + (repair_instruction or
+                               "Recommence entièrement et réponds uniquement avec l'objet JSON demandé.")),
+            })
+            if (data.get("choices") or [{}])[0].get("finish_reason") == "length":
+                body["max_tokens"] = min(settings.deepseek_max_output_tokens,
+                                         max(body["max_tokens"] + 400,
+                                             body["max_tokens"] * 2))
     raise ValueError("unreachable")
 
 

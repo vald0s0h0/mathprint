@@ -61,8 +61,13 @@ class Student(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
     class_id: Mapped[str | None] = mapped_column(ForeignKey("classes.id"), nullable=True)
     external_ref: Mapped[str | None] = mapped_column(String, nullable=True)
-    first_name: Mapped[str] = mapped_column(String)
-    last_name: Mapped[str] = mapped_column(String)
+    # Identité telle qu'elle doit être affichée et imprimée. Elle est
+    # volontairement indivisible : « Camille », « Camille B. », « Durand »…
+    name: Mapped[str] = mapped_column(String)
+    # Ordre de la liste de classe (saisie initiale / export Pronote futur).
+    order_index: Mapped[int] = mapped_column(Integer, default=0)
+    # Adaptation d'impression individuelle.
+    dyslexic: Mapped[bool] = mapped_column(Boolean, default=False)
     # Pseudonyme technique : seule identité transmise aux API externes (RM-010)
     llm_pseudonym: Mapped[str] = mapped_column(String, unique=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -216,12 +221,13 @@ class Assessment(Base):
     # common | common_variants | individual
     blueprint_json: Mapped[dict] = mapped_column(JSON, default=dict)
     # {"competency_ids": [...]} choisi à l'étape Exercices de l'assistant
-    # Base de notation choisie à l'étape Contexte : 5, 10 ou 20 points pour le
-    # sujet entier (§ barème). Ne s'applique qu'à un contrôle — un entraînement
-    # n'est pas noté, la valeur est alors ignorée (cf. services.scoring.
-    # assessment_note_base, jamais `note_base` en direct : un sujet peut avoir
-    # été créé en contrôle puis repassé en entraînement).
+    # Base de scoring choisie à l'étape Contexte : 5, 10 ou 20 points pour le
+    # sujet entier (§ barème). Les entraînements sont scorés mais leur note
+    # n'est pas imprimée sur la copie.
     note_base: Mapped[int] = mapped_column(Integer, default=20)
+    # Mémo professeur : les notes de cette colonne ont été saisies dans
+    # Pronote. Purement organisationnel, sans effet sur le scoring.
+    pronote_entered: Mapped[bool] = mapped_column(Boolean, default=False)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
@@ -456,8 +462,9 @@ class ScanBatch(Base):
     uploaded_by: Mapped[str | None] = mapped_column(String, nullable=True)
     progress_json: Mapped[dict] = mapped_column(JSON, default=dict)  # paliers verts/orange pour l'UI
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # suivi manuel post-overlay (cases à cocher, §9.5) : le lot grise sa ligne
-    # une fois l'overlay imprimé ET distribué aux élèves.
+    # suivi post-overlay (§9.5) : `overlay_printed` est posé automatiquement par
+    # un envoi CUPS réussi ; la distribution reste cochée par le professeur et
+    # grise alors la carte dans Sujets comme dans Corrections.
     overlay_printed: Mapped[bool] = mapped_column(Boolean, default=False)
     overlay_distributed: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
@@ -571,8 +578,8 @@ class CopyResult(Base):
     `note_raw` (exacte, avec décimales) et `note` (multiple de 0,5, arrondi au
     supérieur) coexistent délibérément : la seconde est celle qu'on imprime sur
     la copie, la première celle qu'il faut moyenner — arrondir puis moyenner
-    accumule le biais d'arrondi. `note_base` = 0 : sujet non noté
-    (entraînement), les points restent renseignés pour le suivi."""
+    accumule le biais d'arrondi. `note_base` = 0 désigne uniquement un ancien
+    entraînement antérieur à leur scoring."""
     __tablename__ = "copy_results"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
     copy_id: Mapped[str] = mapped_column(ForeignKey("copies.id"), unique=True)
@@ -580,7 +587,7 @@ class CopyResult(Base):
     student_id: Mapped[str] = mapped_column(ForeignKey("students.id"))
     points_earned: Mapped[float] = mapped_column(Float, default=0.0)
     points_total: Mapped[float] = mapped_column(Float, default=0.0)
-    note_base: Mapped[int] = mapped_column(Integer, default=0)   # 5|10|20, 0 = non noté
+    note_base: Mapped[int] = mapped_column(Integer, default=0)   # 5|10|20 ; 0 = historique
     note_raw: Mapped[float | None] = mapped_column(Float, nullable=True)
     note: Mapped[float | None] = mapped_column(Float, nullable=True)
     # instantané de la zone Appréciation imprimée (cf. services.appreciation),
@@ -654,6 +661,9 @@ class StudentLevel(Base):
     __tablename__ = "student_levels"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
     student_id: Mapped[str] = mapped_column(ForeignKey("students.id"))
+    # Correction ayant provoqué ce palier. Null pour les réglages manuels et
+    # les niveaux historiques antérieurs au carnet de notes.
+    assessment_id: Mapped[str | None] = mapped_column(String, nullable=True)
     level: Mapped[int] = mapped_column(Integer)          # 1-10, privé professeur (RM-007)
     proposed_level: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source: Mapped[str] = mapped_column(String, default="deterministic")  # deterministic|deepseek|teacher
@@ -708,6 +718,17 @@ class Printer(Base):
     uri: Mapped[str] = mapped_column(String, default="")
     protocol: Mapped[str] = mapped_column(String, default="ipp")
     capabilities_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Profil matériel MathPrint. Une ligne peut représenter une file CUPS locale
+    # (protocol="cups", uri vide) ou une imprimante IPP enregistrée. Ces
+    # réglages sont volontairement explicites : ils pilotent le chemin physique
+    # des feuilles et ne doivent pas se perdre dans des options de pilote CUPS.
+    duplex: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Deux inversions IMPRIMANTE distinctes : choix de la première copie du lot,
+    # puis façon dont chaque feuille est déposée sur le bac de réception.
+    pickup_reverse_order: Mapped[bool] = mapped_column(Boolean, default=False)
+    output_reverse_order: Mapped[bool] = mapped_column("reverse_order", Boolean, default=False)
+    app_default: Mapped[bool] = mapped_column(Boolean, default=False)
+    adf_reverse_order: Mapped[bool] = mapped_column(Boolean, default=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 

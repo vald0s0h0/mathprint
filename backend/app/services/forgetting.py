@@ -13,7 +13,9 @@ from ..config import settings
 from ..models import (
     CompetencyEvidence,
     CompetencyStateHistory,
+    Student,
     StudentCompetencyState,
+    StudentLevel,
 )
 
 
@@ -134,3 +136,38 @@ def compute_student_level(db: Session, student_id: str, grade_level: str = "5e")
     mastery_avg = weighted / total
     level = max(1, min(10, round(1 + mastery_avg * 9)))
     return level, f"maîtrise moyenne pondérée {mastery_avg:.2f} sur {len(states)} compétences"
+
+
+def update_level_after_assessment(
+    db: Session, student: Student, assessment_id: str,
+) -> StudentLevel | None:
+    """Enregistre au plus un palier automatique causé par une correction.
+
+    Le niveau automatique ne varie que d'un palier par correction. Le premier
+    calcul initialise le niveau sans constituer une hausse ou une baisse ; le
+    carnet peut ainsi distinguer un vrai changement d'une valeur initiale.
+    """
+    existing = (db.query(StudentLevel)
+                .filter_by(student_id=student.id, assessment_id=assessment_id)
+                .first())
+    if existing or student.level_locked:
+        return existing
+
+    current = (db.query(StudentLevel).filter_by(student_id=student.id)
+               .order_by(StudentLevel.valid_from.desc(), StudentLevel.id.desc()).first())
+    level, reason = compute_student_level(db, student.id)
+    if current:
+        level = max(current.level - 1, min(current.level + 1, level))
+        if level == current.level:
+            return None
+
+    row = StudentLevel(
+        student_id=student.id,
+        assessment_id=assessment_id,
+        level=level,
+        source="deterministic",
+        reason=reason,
+    )
+    db.add(row)
+    db.flush()
+    return row

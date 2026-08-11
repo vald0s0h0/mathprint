@@ -2,13 +2,14 @@
 // classe (nom, cycle, année, élèves collés), tableau enrichi qui se compacte
 // quand le volet de détail s'ouvre à droite.
 import {
-  ActionIcon, Badge, Button, Card, Grid, Group, Modal, Progress, ScrollArea,
+  ActionIcon, Badge, Button, Card, Checkbox, Grid, Group, Modal, Progress, ScrollArea,
   Select, Stack, Table, Tabs, Text, Textarea, TextInput, Title, Tooltip,
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
-import { AlertTriangle, Lock, Plus, RefreshCw, Users, X } from 'lucide-react'
+import { AlertTriangle, GripVertical, Lock, Plus, RefreshCw, X } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../api'
+import CompactClassSelector, { sortClassChoices } from '../components/CompactClassSelector'
 import { CYCLES, useAppState } from '../state/AppState'
 import { masteryColor } from '../utils/mastery'
 
@@ -17,12 +18,12 @@ type Cls = {
   student_count: number
 }
 type StudentRow = {
-  id: string; first_name: string; last_name: string; pseudonym: string
+  id: string; name: string; order_index: number; dyslexic: boolean; pseudonym: string
   level: number | null; level_locked: boolean
   avg_mastery: number | null; due_count: number; evidence_count: number
 }
 type Detail = {
-  id: string; first_name: string; last_name: string; pseudonym: string
+  id: string; name: string; order_index: number; dyslexic: boolean; pseudonym: string
   class_name: string | null; level: number | null; level_locked: boolean
   evidence_count: number
   competencies: { code: string; short_id: string; label: string; domain: string; chapter: string; mastery: number; confidence: number; recall_probability: number; due_at: string }[]
@@ -65,6 +66,7 @@ export default function Students() {
   const [reports, setReports] = useState<Report[]>([])
   const [batchText, setBatchText] = useState('')
   const [batchOpen, setBatchOpen] = useState(false)
+  const [draggedId, setDraggedId] = useState<string | null>(null)
   const { cycle, matches } = useAppState()
 
   // assistant de création de classe
@@ -91,14 +93,17 @@ export default function Students() {
   }, [])
 
   const cycleClasses = useMemo(
-    () => classes.filter((c) => matches(c.grade_level)), [classes, matches])
+    () => sortClassChoices(classes.filter((c) => matches(c.grade_level))), [classes, matches])
 
-  // si la classe sélectionnée sort du filtre cycle, on la désélectionne
+  // Première classe sélectionnée automatiquement, et repli sur la première du
+  // nouveau cycle lorsque le filtre global change.
   useEffect(() => {
-    if (selClass && !matches(selClass.grade_level)) {
+    if (cycleClasses.length === 0) {
       setSelClass(null); setStudents([]); setDetail(null)
+    } else if (!selClass || !cycleClasses.some((schoolClass) => schoolClass.id === selClass.id)) {
+      void pickClass(cycleClasses[0])
     }
-  }, [matches, selClass])
+  }, [cycleClasses, selClass])
 
   async function pickClass(c: Cls) {
     setSelClass(c); setDetail(null)
@@ -141,6 +146,39 @@ export default function Students() {
     pickClass(selClass); refreshClasses()
   }
 
+  async function moveStudent(targetId: string) {
+    if (!selClass || !draggedId || draggedId === targetId) return
+    const from = students.findIndex((s) => s.id === draggedId)
+    const to = students.findIndex((s) => s.id === targetId)
+    if (from < 0 || to < 0) return
+    const previous = students
+    const reordered = [...students]
+    const [moved] = reordered.splice(from, 1)
+    reordered.splice(to, 0, moved)
+    setStudents(reordered.map((s, index) => ({ ...s, order_index: index })))
+    setDraggedId(null)
+    try {
+      await api.put(`/api/classes/${selClass.id}/students/order`, {
+        student_ids: reordered.map((s) => s.id),
+      })
+    } catch (e) {
+      setStudents(previous)
+      notifications.show({ color: 'red', message: (e as Error).message })
+    }
+  }
+
+  async function setDyslexic(student: StudentRow, dyslexic: boolean) {
+    const previous = students
+    setStudents(students.map((s) => s.id === student.id ? { ...s, dyslexic } : s))
+    if (detail?.id === student.id) setDetail({ ...detail, dyslexic })
+    try {
+      await api.patch(`/api/students/${student.id}`, { dyslexic })
+    } catch (e) {
+      setStudents(previous)
+      notifications.show({ color: 'red', message: (e as Error).message })
+    }
+  }
+
   async function recomputeLevel() {
     if (!detail) return
     try {
@@ -177,40 +215,12 @@ export default function Students() {
       </Group>
 
       <Grid gutter="lg">
-        <Grid.Col span={compact ? 2.5 : 3}>
-          <Stack gap="xs">
-            {cycleClasses.length === 0 && (
-              <Card withBorder padding="lg">
-                <Stack align="center" gap={6}>
-                  <Users size={28} strokeWidth={1.4} opacity={0.5} />
-                  <Text size="sm" c="dimmed" ta="center">
-                    Aucune classe {cycle !== 'all' && `en ${cycle}`}.
-                  </Text>
-                </Stack>
-              </Card>
-            )}
-            {cycleClasses.map((c) => (
-              <Card key={c.id} withBorder padding="sm"
-                style={{
-                  cursor: 'pointer',
-                  borderColor: selClass?.id === c.id ? 'var(--mantine-primary-color-filled)' : undefined,
-                }}
-                onClick={() => pickClass(c)}>
-                <Group justify="space-between" wrap="nowrap">
-                  <Text fw={600} size="sm">{c.name}</Text>
-                  <Group gap={4}>
-                    <Badge size="xs" variant="light">{c.grade_level}</Badge>
-                  </Group>
-                </Group>
-                <Text size="xs" c="dimmed">
-                  {c.student_count} élèves{c.school_year ? ` · ${c.school_year}` : ''}
-                </Text>
-              </Card>
-            ))}
-          </Stack>
+        <Grid.Col span={1.5}>
+          <CompactClassSelector classes={cycleClasses} value={selClass?.id ?? null}
+            onChange={(schoolClass) => void pickClass(schoolClass as Cls)} />
         </Grid.Col>
 
-        <Grid.Col span={compact ? 4 : 9}>
+        <Grid.Col span={compact ? 4 : 10.5}>
           {selClass ? (
             <Stack gap="xs">
               <Group justify="space-between">
@@ -222,7 +232,9 @@ export default function Students() {
               <Table highlightOnHover verticalSpacing={6}>
                 <Table.Thead>
                   <Table.Tr>
+                    <Table.Th w={58}>Ordre</Table.Th>
                     <Table.Th>Élève</Table.Th>
+                    <Table.Th w={72}>Dys.</Table.Th>
                     <Table.Th w={80}>Niveau</Table.Th>
                     {!compact && <Table.Th w={160}>Maîtrise moyenne</Table.Th>}
                     {!compact && <Table.Th w={90}>À revoir</Table.Th>}
@@ -230,14 +242,35 @@ export default function Students() {
                   </Table.Tr>
                 </Table.Thead>
                 <Table.Tbody>
-                  {students.map((s) => (
-                    <Table.Tr key={s.id} style={{ cursor: 'pointer' }}
+                  {students.map((s, index) => (
+                    <Table.Tr key={s.id} draggable
+                      style={{ cursor: 'pointer', opacity: draggedId === s.id ? 0.5 : 1 }}
                       bg={detail?.id === s.id ? 'var(--mantine-primary-color-light)' : undefined}
+                      onDragStart={(e) => {
+                        setDraggedId(s.id)
+                        e.dataTransfer.effectAllowed = 'move'
+                      }}
+                      onDragEnd={() => setDraggedId(null)}
+                      onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move' }}
+                      onDrop={(e) => { e.preventDefault(); void moveStudent(s.id) }}
                       onClick={() => pickStudent(s.id)}>
                       <Table.Td>
+                        <Group gap={4} wrap="nowrap">
+                          <GripVertical size={15} color="var(--mantine-color-gray-5)" />
+                          <Text size="xs" c="dimmed">{index + 1}</Text>
+                        </Group>
+                      </Table.Td>
+                      <Table.Td>
                         <Text size="sm" fw={detail?.id === s.id ? 650 : 450}>
-                          {s.last_name} {s.first_name}
+                          {s.name}
                         </Text>
+                      </Table.Td>
+                      <Table.Td onClick={(e) => e.stopPropagation()}>
+                        <Tooltip label="Imprimer les sujets de cet élève en OpenDyslexic">
+                          <Checkbox checked={s.dyslexic}
+                            aria-label={`Police OpenDyslexic pour ${s.name}`}
+                            onChange={(e) => void setDyslexic(s, e.currentTarget.checked)} />
+                        </Tooltip>
                       </Table.Td>
                       <Table.Td>
                         {s.level != null ? (
@@ -289,11 +322,11 @@ export default function Students() {
         </Grid.Col>
 
         {detail && (
-          <Grid.Col span={5.5}>
+          <Grid.Col span={6.5}>
             <Card withBorder padding="lg">
               <Group justify="space-between" align="flex-start">
                 <div>
-                  <Title order={4}>{detail.first_name} {detail.last_name}</Title>
+                  <Title order={4}>{detail.name}</Title>
                   <Text size="xs" c="dimmed">
                     {detail.class_name} · {detail.evidence_count} preuve(s) de compétence
                   </Text>
@@ -406,8 +439,8 @@ export default function Students() {
           <Select label="Année scolaire" value={newYear} onChange={setNewYear}
             data={years.map((y) => ({ value: y.id, label: y.label + (y.active ? ' (en cours)' : '') }))} />
           <Textarea label="Élèves (facultatif)" rows={7} value={newStudents}
-            description="Un élève par ligne : « Nom Prénom » ou « Nom;Prénom » — vous pourrez en ajouter plus tard"
-            placeholder={'Durand Camille\nMartin Jules\n…'}
+            description="Un élève par ligne, dans l’ordre de la liste de classe — vous pourrez en ajouter ou les réordonner plus tard"
+            placeholder={'Camille\nJules M.\nDurand\n…'}
             onChange={(e) => setNewStudents(e.target.value)} />
           {parsedCount > 0 && (
             <Text size="xs" c="dimmed">{parsedCount} élève(s) détecté(s)</Text>
@@ -422,7 +455,7 @@ export default function Students() {
         title={<Text fw={650}>Ajouter des élèves — {selClass?.name}</Text>}>
         <Stack>
           <Text size="sm" c="dimmed">
-            Coller une liste : un élève par ligne, « Nom Prénom » ou « Nom;Prénom ».
+            Coller une liste : un nom d’élève par ligne. Les nouveaux élèves sont ajoutés à la fin.
           </Text>
           <Textarea rows={8} value={batchText} onChange={(e) => setBatchText(e.target.value)} />
           <Button onClick={addBatch} disabled={!batchText.trim()}>Ajouter</Button>

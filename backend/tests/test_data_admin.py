@@ -52,7 +52,7 @@ def _seed_finalized(db) -> Assessment:
     comps = db.query(Competency).all()
     cls = SchoolClass(name="5eD", grade_level="5e"); db.add(cls); db.flush()
     for i in range(2):
-        db.add(Student(class_id=cls.id, first_name=f"E{i}", last_name="T",
+        db.add(Student(class_id=cls.id, name=f"T E{i}", order_index=i,
                        llm_pseudonym=f"E{i}", active=True))
     a = Assessment(class_id=cls.id, type="control", title="Sujet", pages_target=1,
                    personalization_mode="common", note_base=20)
@@ -148,7 +148,7 @@ def test_purge_orphans_spares_valid_rows():
     db = _plain_db()
     fw = CompetencyFramework(grade_level="5e", name="T"); db.add(fw); db.flush()
     cls = SchoolClass(name="5eE", grade_level="5e"); db.add(cls); db.flush()
-    stu = Student(class_id=cls.id, first_name="A", last_name="B", llm_pseudonym="p")
+    stu = Student(class_id=cls.id, name="B A", llm_pseudonym="p")
     db.add(stu); db.flush()
     db.add(Copy(id="orphan", assessment_id="ghost", student_id="ghost"))
     db.flush()

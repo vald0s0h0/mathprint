@@ -3,7 +3,7 @@
 - la bande corrigé sous une carte est dimensionnée sur le TEXTE du corrigé
   (anticipée), jamais coupée, et son corps est plus petit que l'énoncé ;
 - les cases QCM du sujet sont décalées à droite pour réserver, à leur gauche,
-  la case de correction que l'overlay imprime en cas d'erreur ;
+  la case de correction attendue que l'overlay imprime systématiquement ;
 - les marques par champ (coche/croix, cases correction, traits de liaison) se
   dessinent sans erreur pour chaque type de réponse.
 """
@@ -11,6 +11,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+import numpy as np
 import pytest
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
@@ -18,7 +19,7 @@ from reportlab.pdfgen import canvas
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.services import grading, pdfgen
+from app.services import grading, pdfgen, worker_cv
 
 
 # ------------------------- placement inchangé malgré la bande dimensionnée
@@ -113,6 +114,38 @@ def test_qcm_reserves_correction_box_left_of_student_box():
         assert b["x_pt"] - (cb["x_pt"] + cb["w_pt"]) >= pdfgen.QCM_CORR_GAP - 0.5
 
 
+def test_manual_review_crop_overlays_expected_qcm_without_mutating_scan():
+    source = np.full((100, 200, 3), 255, dtype=np.uint8)
+    meta = {"boxes": [
+        {"index": 0, "correction_box": {"x_pt": 20, "y_pt": 30,
+                                          "w_pt": 5, "h_pt": 5}},
+        {"index": 1, "correction_box": {"x_pt": 20, "y_pt": 40,
+                                          "w_pt": 5, "h_pt": 5}},
+    ]}
+    out = worker_cv.draw_expected_answer(
+        source, zone_geo={"x_pt": 10, "y_pt": 20, "w_pt": 100,
+                          "h_pt": 50, "padding_pt": 0},
+        meta=meta, expected={"correct": [0]}, response_type="qcm_single")
+    red = np.array([40, 40, 198], dtype=np.uint8)  # BGR de #C62828
+    assert np.array_equal(out[75, 25], red)         # attendu : carré plein
+    assert np.array_equal(out[55, 25], [255, 255, 255])  # non attendu : centre vide
+    assert np.array_equal(out[50, 20], red)         # ...mais contour rouge
+    assert np.all(source == 255)                    # scan/dérivé jamais modifié
+
+
+def test_manual_review_crop_overlays_expected_matching_links():
+    source = np.full((100, 200, 3), 255, dtype=np.uint8)
+    point = lambda index, x: {"index": index, "x_pt": x, "y_pt": 32,
+                              "w_pt": 4, "h_pt": 4}
+    out = worker_cv.draw_expected_answer(
+        source, zone_geo={"x_pt": 10, "y_pt": 20, "w_pt": 100,
+                          "h_pt": 50, "padding_pt": 0},
+        meta={"left_points": [point(0, 20)], "right_points": [point(0, 80)]},
+        expected={"pairs": [[0, 0]]}, response_type="matching")
+    # Le milieu de la liaison attendue est rouge sur le scan blanc.
+    assert out[72, 84, 2] > 150 and out[72, 84, 0] < 100
+
+
 # ------------------------------------------------- dessin des marques (smoke)
 
 def _page(zones: list[dict]) -> dict:
@@ -172,7 +205,7 @@ def test_zone_marks_qcm_shows_correct_boxes_only_on_error():
     db = sessionmaker(bind=create_engine("sqlite:///:memory:"))()
     Base.metadata.create_all(db.bind)
     cls = SchoolClass(name="5A", grade_level="5e"); db.add(cls); db.flush()
-    stu = Student(class_id=cls.id, first_name="A", last_name="B", llm_pseudonym="p")
+    stu = Student(class_id=cls.id, name="A B", llm_pseudonym="p")
     db.add(stu); db.flush()
     a = Assessment(class_id=cls.id, title="C", type="control"); db.add(a); db.flush()
     copy = Copy(assessment_id=a.id, student_id=stu.id); db.add(copy); db.flush()
@@ -255,15 +288,17 @@ def test_qcm_overlay_fills_correct_boxes_and_marks_card_once():
     assert fc.lines > 0            # récap juste/faux dessiné (une fois)
 
 
-def test_qcm_overlay_no_correction_column_when_all_correct():
+def test_qcm_overlay_keeps_expected_column_when_all_correct():
     z = {"x_pt": 300, "y_pt": 400, "w_pt": 120, "h_pt": 40,
          "marks": {"kind": "qcm", "any_error": False, "boxes": [
              {"state": "ok", "correction_box": {"x_pt": 300, "y_pt": 425, "w_pt": 5, "h_pt": 5}},
              {"state": None, "correction_box": {"x_pt": 300, "y_pt": 415, "w_pt": 5, "h_pt": 5}}]}}
     fc = _FakeCanvas()
     pdfgen._draw_zone_marks(fc, z, pdfgen.black)
-    assert fc.rects == []          # aucune colonne correction si la carte est juste
-    assert fc.lines > 0            # seul le récap (coche) est dessiné
+    # Le corrigé attendu reste visible même si l'élève a tout juste : bonne
+    # réponse pleine à gauche de sa coche, mauvaise réponse vide.
+    assert [f for (_x, _y, _w, _h, f) in fc.rects] == [1, 0]
+    assert fc.lines > 0            # récap (coche) également dessiné
 
 
 def test_render_copy_review_smoke_no_background():

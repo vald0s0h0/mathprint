@@ -57,6 +57,10 @@ class Settings(BaseSettings):
     # exercice tant qu'il y en a (l'énoncé n'est alors écrit qu'une fois) ; au-delà
     # d'une dizaine, la sortie JSON s'allonge assez pour risquer la troncature.
     correction_batch_size: int = 8
+    # En dessous, même une réponse structurellement valide reste à confirmer par
+    # le professeur. Au-dessus, un verdict/points cohérent est appliqué sans
+    # encombrer l'assistant manuel.
+    correction_confidence_min: float = 0.90
     claude_model: str = "claude-haiku-4-5-20251001"
     # extraction Sésamaths (lecture fidèle des pages de manuel) : Mistral OCR,
     # moteur de reconnaissance de document dédié (pas un modèle de chat) —

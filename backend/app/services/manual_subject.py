@@ -224,7 +224,8 @@ def generate_manual_job(db: Session, assessment: Assessment, job: Job | None = N
     guide_mode = blueprint.get("guides", "overlay")
 
     school_class = db.get(SchoolClass, assessment.class_id)
-    students = [s for s in school_class.students if s.active]
+    students = sorted((s for s in school_class.students if s.active),
+                      key=lambda s: (s.order_index, s.id))
     if not students:
         raise ValueError("Aucun élève actif dans cette classe.")
 
@@ -310,11 +311,12 @@ def generate_manual_job(db: Session, assessment: Assessment, job: Job | None = N
             page_rows.append(page)
 
         zones = pdfgen.render_copy(
-            c, student_name=f"{student.last_name} {student.first_name}",
+            c, student_name=student.name,
             class_name=school_class.name, title=assessment.title,
             assessment_type=assessment.type, items=render_items,
             pages_meta=pages_meta, font_size=font_size, tpl=tpl,
-            placement=placement, min_pages=max_pages)
+            placement=placement, min_pages=max_pages,
+            dyslexic=student.dyslexic)
 
         used_pages = max(max_pages, max((z["page_index"] for z in zones), default=0) + 1)
         if used_pages > max_pages + PAGE_RESERVE:
