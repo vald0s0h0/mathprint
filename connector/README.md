@@ -4,6 +4,13 @@ Application Tauri minimale qui relie un compte MathPrint aux imprimantes déjà
 configurées sur le Mac ou le PC. Elle démarre avec la session, reste dans la
 zone de notification et ne conserve jamais le mot de passe. Le jeton de poste
 est stocké dans le trousseau macOS ou le gestionnaire d’identifiants Windows.
+L’instance `https://mathprint.fabrelexos.synology.me` est intégrée à
+l’application : l’utilisateur ne saisit que son e-mail et son mot de passe.
+
+Au lancement, le connecteur cherche, télécharge et installe silencieusement la
+dernière mise à jour signée. Si une impression est active, il attend sa fin ;
+en cas d’indisponibilité réseau, il continue à imprimer et réessaie au prochain
+lancement.
 
 ## Contrat d’impression
 
@@ -44,17 +51,18 @@ Les versions du connecteur sont indépendantes des images Docker. La CI ne se
 déclenche que sur un tag `connector-vX.Y.Z`, après avoir vérifié que cette
 version correspond à `package.json`, `Cargo.toml` et `tauri.conf.json`.
 
-Le workflow actuel produit sans secret de signature :
+Le workflow produit :
 
 - DMG Apple Silicon (`aarch64`) ;
 - DMG Intel (`x86_64`), cible minimale macOS 10.13 ;
 - installateur NSIS `.exe` Windows x64 ;
 - archive des sources SumatraPDF exigée par sa licence.
 
-Ces installateurs sont provisoirement non signés : Gatekeeper et SmartScreen
-peuvent donc afficher un avertissement. La mise à jour intégrée est également
-désactivée, car Tauri exige que ses artefacts soient signés. Lors du passage à
-une distribution signée, il faudra réactiver `createUpdaterArtifacts`, fournir
-la clé privée correspondant à la clé publique déjà embarquée, ainsi que les
-certificats Apple et Authenticode. Le fichier privé `.connector-updater.key` est
-ignoré par Git et doit rester sauvegardé dans un coffre.
+Les installateurs OS restent provisoirement sans certificat Apple ou
+Authenticode : Gatekeeper et SmartScreen peuvent donc afficher un avertissement
+à la première installation. Les artefacts de mise à jour, eux, sont signés par
+Tauri et vérifiés avec la clé publique embarquée. Le secret GitHub
+`CONNECTOR_UPDATER_PRIVATE_KEY` contient la clé privée correspondante. Le
+fichier local `.connector-updater.key` est ignoré par Git et doit rester
+sauvegardé dans un coffre : sa perte empêcherait de mettre à jour les postes
+déjà installés.

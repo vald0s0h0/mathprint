@@ -18,12 +18,12 @@ use tauri::{
 #[cfg(target_os = "macos")]
 use tauri_plugin_autostart::MacosLauncher;
 use tokio::sync::{Mutex, RwLock};
-use url::Url;
 use uuid::Uuid;
 use wait_timeout::ChildExt;
 
 const KEYRING_SERVICE: &str = "MathPrint Connector";
 const MAX_PDF_BYTES: usize = 200 * 1024 * 1024;
+const SERVER_URL: &str = "https://mathprint.fabrelexos.synology.me";
 
 fn autostart_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
     #[cfg(target_os = "macos")]
@@ -166,22 +166,6 @@ fn api_url(base: &str, path: &str) -> String {
     format!("{}{}", base.trim_end_matches('/'), path)
 }
 
-fn validate_server_url(raw: &str) -> Result<String, String> {
-    let normalized = raw.trim().trim_end_matches('/').to_string();
-    let parsed = Url::parse(&normalized).map_err(|_| "Adresse MathPrint invalide".to_string())?;
-    let host = parsed.host_str().unwrap_or_default();
-    let local = matches!(host, "localhost" | "127.0.0.1" | "::1");
-    if parsed.scheme() != "https" && !(local && parsed.scheme() == "http") {
-        return Err(
-            "MathPrint doit utiliser HTTPS (HTTP n'est permis qu'en développement local)".into(),
-        );
-    }
-    if parsed.query().is_some() || parsed.fragment().is_some() {
-        return Err("L'adresse MathPrint ne doit contenir ni paramètres ni fragment".into());
-    }
-    Ok(normalized)
-}
-
 fn load_config(path: &Path) -> StoredConfig {
     fs::read(path)
         .ok()
@@ -261,6 +245,9 @@ fn delete_token(installation_id: &str) {
 async fn response_error(response: reqwest::Response) -> String {
     let status = response.status();
     let text = response.text().await.unwrap_or_default();
+    if status == reqwest::StatusCode::NOT_FOUND {
+        return "404 : le service Connecteur n'est pas encore disponible sur le serveur MathPrint. L'administrateur doit mettre à jour l'image API du NAS.".into();
+    }
     if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
         if let Some(detail) = value.get("detail").and_then(|v| v.as_str()) {
             return format!("{}: {}", status.as_u16(), detail);
@@ -286,12 +273,10 @@ async fn connector_state(
 
 #[tauri::command]
 async fn login(
-    server_url: String,
     email: String,
     password: String,
     state: State<'_, Arc<RuntimeState>>,
 ) -> Result<ConnectorStateView, String> {
-    let server_url = validate_server_url(&server_url)?;
     let email = email.trim().to_lowercase();
     if email.is_empty() || password.is_empty() {
         return Err("Identifiants incomplets".into());
@@ -308,7 +293,7 @@ async fn login(
             .filter(|v| !v.trim().is_empty())
             .unwrap_or_else(|| "Poste professeur".into());
     }
-    config.server_url = server_url;
+    config.server_url = SERVER_URL.into();
     config.email = email;
 
     let response = state
@@ -853,7 +838,11 @@ pub fn run() {
             let cache_dir = app.path().app_cache_dir()?.join("print-jobs");
             fs::create_dir_all(&config_dir)?;
             let config_path = config_dir.join("connector.json");
-            let config = load_config(&config_path);
+            let mut config = load_config(&config_path);
+            // Le connecteur MathPrint est dédié à cette instance. Écraser aussi
+            // l'ancienne valeur lors d'une mise à jour évite de conserver une
+            // adresse saisie dans une version antérieure.
+            config.server_url = SERVER_URL.into();
             let token = read_token(&config.installation_id);
             let view = ConnectorStateView {
                 connected: token.is_some(),
@@ -965,9 +954,7 @@ mod tests {
     }
 
     #[test]
-    fn public_server_requires_https() {
-        assert!(validate_server_url("https://mathprint.example").is_ok());
-        assert!(validate_server_url("http://localhost:8787").is_ok());
-        assert!(validate_server_url("http://mathprint.example").is_err());
+    fn production_server_is_fixed() {
+        assert_eq!(SERVER_URL, "https://mathprint.fabrelexos.synology.me");
     }
 }

@@ -2179,7 +2179,7 @@ dependencies = [
 
 [[package]]
 name = "mathprint-connector"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "hostname",
  "keyring",
@@ -2194,7 +2194,6 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
  "tokio",
- "url",
  "uuid",
  "wait-timeout",
  "windows-sys 0.61.2",

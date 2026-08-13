@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "MathPrint Connector",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "identifier": "fr.mathprint.connector",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -26,7 +26,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "createUpdaterArtifacts": false,
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -44,7 +44,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaW5pIHB1YmxpYyBrZXk6IDUzOTlENkM0OEJGRkUzNTMKUldSVDQvK0x4TmFaVTlTd2dCTFFrWHdZcnppQWkwWEVxdzBEclhpVk52YjRHRzNtcXAvZEF6REUK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDUzOTlENkM0OEJGRkUzNTMKUldSVDQvK0x4TmFaVTlTd2dCTFFrWHdZcnppQWkwWEVxdzBEclhpVk52YjRHRzNtcXAvZEF6REUK",
       "endpoints": [
         "https://github.com/vald0s0h0/mathprint/releases/download/connector-latest/latest.json"
       ],

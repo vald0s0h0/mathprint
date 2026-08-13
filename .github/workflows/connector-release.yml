@@ -18,10 +18,10 @@ jobs:
         include:
           - platform: macos-latest
             target: aarch64-apple-darwin
-            args: --target aarch64-apple-darwin --bundles dmg
+            args: --target aarch64-apple-darwin --bundles app,dmg
           - platform: macos-latest
             target: x86_64-apple-darwin
-            args: --target x86_64-apple-darwin --bundles dmg
+            args: --target x86_64-apple-darwin --bundles app,dmg
           - platform: windows-latest
             target: ""
             args: --bundles nsis
@@ -63,6 +63,12 @@ jobs:
         working-directory: connector
         run: npm ci
 
+      - name: Exiger la clé de signature des mises à jour
+        shell: bash
+        env:
+          CONNECTOR_UPDATER_PRIVATE_KEY: ${{ secrets.CONNECTOR_UPDATER_PRIVATE_KEY }}
+        run: test -n "$CONNECTOR_UPDATER_PRIVATE_KEY"
+
       - name: Préparer le moteur PDF Windows vérifié
         if: runner.os == 'Windows'
         shell: pwsh
@@ -82,13 +88,16 @@ jobs:
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.CONNECTOR_UPDATER_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         with:
           projectPath: connector
           tagName: connector-v__VERSION__
           releaseName: MathPrint Connector v__VERSION__
-          releaseBody: Installateurs non signés macOS Apple Silicon, macOS Intel (10.13+) et Windows x64. Le système peut afficher un avertissement de sécurité à l'installation.
+          releaseBody: Installateurs macOS Apple Silicon, macOS Intel (10.13+) et Windows x64. Les installateurs OS ne sont pas certifiés Apple/Microsoft, mais les mises à jour automatiques sont signées et vérifiées par le connecteur.
           releaseDraft: false
           prerelease: false
+          updaterJsonPreferNsis: true
           args: ${{ matrix.args }}
 
   publish-third-party-sources:
@@ -105,3 +114,15 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "$GITHUB_REF_NAME" SumatraPDF-3.6.1-source.zip --repo "$GITHUB_REPOSITORY" --clobber
+
+      - name: Publier le manifeste stable de mise à jour
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir updater
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --pattern latest.json --dir updater
+          gh release delete connector-latest --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes || true
+          gh release create connector-latest updater/latest.json --repo "$GITHUB_REPOSITORY" \
+            --title "MathPrint Connector — canal stable" \
+            --notes "Manifeste stable signé ; les installateurs sont dans $GITHUB_REF_NAME." \
+            --latest=false

@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { disable as disableAutostart, enable as enableAutostart } from '@tauri-apps/plugin-autostart'
 import { relaunch } from '@tauri-apps/plugin-process'
-import { check, type Update } from '@tauri-apps/plugin-updater'
+import { check } from '@tauri-apps/plugin-updater'
 import { FormEvent, useEffect, useState } from 'react'
 
 type Job = {
@@ -39,19 +39,16 @@ function jobLabel(status: string) {
 
 export default function App() {
   const [state, setState] = useState<ConnectorState>(empty)
-  const [serverUrl, setServerUrl] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [update, setUpdate] = useState<Update | null>(null)
   const [updating, setUpdating] = useState(false)
 
   async function refresh() {
     try {
       const next = await invoke<ConnectorState>('connector_state')
       setState(next)
-      if (!serverUrl && next.server_url) setServerUrl(next.server_url)
       if (!email && next.email) setEmail(next.email)
     } catch (e) {
       setError(String(e))
@@ -60,33 +57,51 @@ export default function App() {
 
   useEffect(() => {
     refresh()
+    let cancelled = false
     const updateTimer = window.setTimeout(async () => {
-      try { setUpdate(await check({ timeout: 10_000 })) } catch { /* la connexion reste prioritaire */ }
-    }, 3000)
-    const timer = window.setInterval(refresh, 1500)
-    return () => { window.clearInterval(timer); window.clearTimeout(updateTimer) }
-  }, [])
+      let workerPaused = false
+      try {
+        const available = await check({ timeout: 15_000 })
+        if (!available || cancelled) return
+        setUpdating(true)
 
-  async function installUpdate() {
-    if (!update || state.current_job) return
-    setUpdating(true); setError('')
-    try {
-      await invoke('pause_worker', { paused: true })
-      await update.downloadAndInstall()
-      await relaunch()
-    } catch (e) {
-      try { await invoke('pause_worker', { paused: false }) } catch { /* le redémarrage réinitialise la pause */ }
-      setError(`Mise à jour impossible : ${String(e)}`)
-      setUpdating(false)
+        // Une mise à jour ne doit jamais interrompre un document déjà confié
+        // au spouleur. On attend silencieusement que le travail courant finisse.
+        while (!cancelled) {
+          const snapshot = await invoke<ConnectorState>('connector_state')
+          if (!snapshot.current_job) break
+          await new Promise((resolve) => window.setTimeout(resolve, 2000))
+        }
+        if (cancelled) return
+
+        await invoke('pause_worker', { paused: true })
+        workerPaused = true
+        await available.downloadAndInstall()
+        await relaunch()
+      } catch (e) {
+        // La connexion et l'impression restent disponibles. Le connecteur
+        // réessaiera automatiquement au prochain lancement.
+        console.warn('Mise à jour automatique différée', e)
+        if (workerPaused) {
+          try { await invoke('pause_worker', { paused: false }) } catch { /* relance suivante */ }
+        }
+        setUpdating(false)
+      }
+    }, 1500)
+    const timer = window.setInterval(refresh, 1500)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+      window.clearTimeout(updateTimer)
     }
-  }
+  }, [])
 
   async function login(event: FormEvent) {
     event.preventDefault()
     setBusy(true); setError('')
     try {
       const next = await invoke<ConnectorState>('login', {
-        serverUrl, email, password,
+        email, password,
       })
       setPassword('')
       setState(next)
@@ -118,20 +133,12 @@ export default function App() {
         <div><h1>MathPrint Connector</h1><p>Impression locale sécurisée</p></div>
       </header>
 
-      {update && <div className="update">
-        <span>Version {update.version} disponible</span>
-        <button onClick={installUpdate} disabled={updating || !!state.current_job}
-          title={state.current_job ? 'Disponible après l’impression en cours' : undefined}>
-          {updating ? 'Installation…' : 'Mettre à jour'}
-        </button>
+      {updating && <div className="update">
+        <span>Mise à jour automatique en cours…</span>
       </div>}
 
       {!state.connected ? (
         <form onSubmit={login}>
-          <label>Adresse de MathPrint
-            <input type="url" required placeholder="https://mathprint.exemple.fr"
-              value={serverUrl} onChange={(e) => setServerUrl(e.target.value)} />
-          </label>
           <label>Adresse e-mail
             <input type="email" required autoComplete="username"
               value={email} onChange={(e) => setEmail(e.target.value)} />
