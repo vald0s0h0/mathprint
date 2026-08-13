@@ -15,6 +15,7 @@ use tauri::{
     tray::TrayIconBuilder,
     AppHandle, Manager, State, WindowEvent,
 };
+#[cfg(target_os = "macos")]
 use tauri_plugin_autostart::MacosLauncher;
 use tokio::sync::{Mutex, RwLock};
 use url::Url;
@@ -23,6 +24,18 @@ use wait_timeout::ChildExt;
 
 const KEYRING_SERVICE: &str = "MathPrint Connector";
 const MAX_PDF_BYTES: usize = 200 * 1024 * 1024;
+
+fn autostart_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
+    #[cfg(target_os = "macos")]
+    {
+        return tauri_plugin_autostart::Builder::new()
+            .macos_launcher(MacosLauncher::LaunchAgent)
+            .build();
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    tauri_plugin_autostart::Builder::new().build()
+}
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 struct StoredConfig {
@@ -834,11 +847,7 @@ pub fn run() {
                 let _ = window.set_focus();
             }
         }))
-        .plugin(
-            tauri_plugin_autostart::Builder::new()
-                .macos_launcher(MacosLauncher::LaunchAgent)
-                .build(),
-        )
+        .plugin(autostart_plugin())
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
             let cache_dir = app.path().app_cache_dir()?.join("print-jobs");
