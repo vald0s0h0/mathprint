@@ -18,11 +18,12 @@ use std::{
 };
 use tauri::{
     menu::{Menu, MenuItem},
-    tray::TrayIconBuilder,
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Manager, State, WindowEvent,
 };
 #[cfg(target_os = "macos")]
 use tauri_plugin_autostart::MacosLauncher;
+use tauri_plugin_autostart::ManagerExt as AutostartExt;
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 use tokio::sync::{Mutex, RwLock};
@@ -44,11 +45,22 @@ fn autostart_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
     {
         tauri_plugin_autostart::Builder::new()
             .macos_launcher(MacosLauncher::LaunchAgent)
+            .arg("--background")
             .build()
     }
 
     #[cfg(not(target_os = "macos"))]
-    tauri_plugin_autostart::Builder::new().build()
+    tauri_plugin_autostart::Builder::new()
+        .arg("--background")
+        .build()
+}
+
+fn show_main_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -1072,13 +1084,18 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.set_focus();
-            }
+            show_main_window(app);
         }))
         .plugin(autostart_plugin())
         .setup(|app| {
+            #[cfg(target_os = "macos")]
+            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
+            // L'entrée est réécrite à chaque lancement : les installations
+            // provenant d'une ancienne version reçoivent ainsi l'argument de
+            // démarrage silencieux sans intervention du professeur.
+            let _ = app.autolaunch().enable();
+
             let config_dir = app.path().app_config_dir()?;
             let cache_dir = app.path().app_cache_dir()?.join("print-jobs");
             fs::create_dir_all(&config_dir)?;
@@ -1133,23 +1150,44 @@ pub fn run() {
             app.manage(runtime.clone());
             tauri::async_runtime::spawn(worker_loop(app.handle().clone(), runtime));
 
-            let open = MenuItem::with_id(app, "open", "Ouvrir", true, None::<&str>)?;
-            let quit = MenuItem::with_id(app, "quit", "Quitter", true, None::<&str>)?;
+            let open = MenuItem::with_id(
+                app,
+                "open",
+                "Ouvrir MathPrint Connector",
+                true,
+                None::<&str>,
+            )?;
+            let quit = MenuItem::with_id(app, "quit", "Quitter complètement", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&open, &quit])?;
-            TrayIconBuilder::new()
+            let mut tray = TrayIconBuilder::with_id("mathprint-connector")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
+                .tooltip("MathPrint Connector — actif en arrière-plan")
+                .icon_as_template(cfg!(target_os = "macos"))
                 .on_menu_event(|app, event| match event.id.as_ref() {
-                    "open" => {
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                        }
-                    }
+                    "open" => show_main_window(app),
                     "quit" => app.exit(0),
                     _ => {}
                 })
-                .build(app)?;
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        show_main_window(tray.app_handle());
+                    }
+                });
+            if let Some(icon) = app.default_window_icon() {
+                tray = tray.icon(icon.clone());
+            }
+            tray.build(app)?;
+
+            let background_launch = std::env::args_os().any(|arg| arg == "--background");
+            if !background_launch {
+                show_main_window(app.handle());
+            }
             Ok(())
         })
         .on_window_event(|window, event| {

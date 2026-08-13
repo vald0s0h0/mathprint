@@ -12,6 +12,21 @@ dernière mise à jour signée. Si une impression est active, il attend sa fin ;
 en cas d’indisponibilité réseau, il continue à imprimer et réessaie au prochain
 lancement.
 
+## Fonctionnement en arrière-plan
+
+Le lancement automatique utilise l’argument interne `--background` : la
+fenêtre reste masquée, mais le worker, les impressions et le raccourci ProNote
+continuent de fonctionner. Fermer la fenêtre produit le même comportement.
+
+- Windows : icône dans la zone de notification, sans fenêtre dans la barre des
+  tâches une fois celle-ci fermée ;
+- macOS : icône dans la barre des menus et aucune icône dans le Dock ;
+- clic gauche sur l’icône : réouverture de la fenêtre ;
+- clic droit : menu permettant notamment de quitter complètement le worker.
+
+Le démarrage automatique reste activé après une déconnexion du compte, afin
+que les fonctions locales restent disponibles.
+
 ## Contrat d’impression
 
 Le serveur prépare un PDF final et immuable avant sa mise en file :

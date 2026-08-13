@@ -1,5 +1,4 @@
 import { invoke } from '@tauri-apps/api/core'
-import { disable as disableAutostart, enable as enableAutostart } from '@tauri-apps/plugin-autostart'
 import { relaunch } from '@tauri-apps/plugin-process'
 import { check } from '@tauri-apps/plugin-updater'
 import { FormEvent, KeyboardEvent as ReactKeyboardEvent, useEffect, useState } from 'react'
@@ -140,7 +139,6 @@ export default function App() {
       })
       setPassword('')
       setState(next)
-      try { await enableAutostart() } catch { /* reste utilisable sans autostart */ }
     } catch (e) {
       setError(String(e))
     } finally {
@@ -153,7 +151,6 @@ export default function App() {
     try {
       setState(await invoke<ConnectorState>('logout'))
       setPassword('')
-      try { await disableAutostart() } catch { /* la déconnexion serveur reste acquise */ }
     } catch (e) {
       setError(String(e))
     } finally {
@@ -193,7 +190,7 @@ export default function App() {
     <main>
       <header>
         <div className="mark">M</div>
-        <div><h1>MathPrint Connector</h1><p>Impression locale sécurisée</p></div>
+        <div><h1>MathPrint Connector</h1><p>Actif en arrière-plan</p></div>
       </header>
 
       {updating && <div className="update">
