@@ -13,7 +13,9 @@ import { api } from '../api'
 export type PrinterRow = {
   id?: string
   name: string
-  source: 'cups_local' | 'network_ipp'
+  display_name?: string
+  device_name?: string
+  source: 'cups_local' | 'connector_local' | 'network_ipp'
   uri?: string
   status: string
   system_default?: boolean
@@ -168,14 +170,17 @@ export default function PrinterSettings({ printers, refresh }: {
                       <Group gap="xs" wrap="nowrap">
                         <Printer size={16} />
                         <Box>
-                          <Text size="sm" fw={600}>{row.name}</Text>
+                          <Text size="sm" fw={600}>{row.display_name || row.name}</Text>
+                          {row.device_name && <Text size="xs" c="dimmed">{row.device_name}</Text>}
                           {row.uri && <Text size="xs" c="dimmed">{row.uri}</Text>}
                         </Box>
                       </Group>
                     </Table.Td>
                     <Table.Td>
-                      <Badge size="sm" variant="light" color={row.source === 'cups_local' ? 'blue' : 'violet'}>
-                        {row.source === 'cups_local' ? 'Locale · CUPS' : 'Réseau · IPP'}
+                      <Badge size="sm" variant="light"
+                        color={row.source === 'network_ipp' ? 'violet' : row.source === 'connector_local' ? 'teal' : 'blue'}>
+                        {row.source === 'cups_local' ? 'Locale · CUPS'
+                          : row.source === 'connector_local' ? 'Locale · Connecteur' : 'Réseau · IPP'}
                       </Badge>
                     </Table.Td>
                     <Table.Td ta="center">
@@ -237,7 +242,7 @@ export default function PrinterSettings({ printers, refresh }: {
           </Table.ScrollContainer>
         ) : (
           <Alert color="gray" icon={<Info size={16} />}>
-            Aucune file CUPS ni imprimante IPP détectée sur cette machine.
+            Aucune file locale (CUPS ou connecteur) ni imprimante IPP détectée.
           </Alert>
         )}
       </Card>

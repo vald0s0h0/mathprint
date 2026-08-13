@@ -1,0 +1,184 @@
+name: Release MathPrint Connector
+
+# Le connecteur a son propre cycle de publication. Un push sur main, un dump
+# ou une release Docker ne déclenche jamais la fabrication des installateurs.
+on:
+  push:
+    tags:
+      - "connector-v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            args: --target aarch64-apple-darwin --bundles dmg
+          - platform: macos-latest
+            target: x86_64-apple-darwin
+            args: --target x86_64-apple-darwin --bundles dmg
+          - platform: windows-latest
+            target: ""
+            args: --config src-tauri/tauri.windows.signing.conf.json --bundles nsis
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: connector/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: connector/src-tauri -> target
+
+      - name: Vérifier la cohérence de la version
+        shell: bash
+        run: |
+          node - <<'NODE'
+          const fs = require('fs')
+          const expected = process.env.GITHUB_REF_NAME.replace(/^connector-v/, '')
+          const pkg = JSON.parse(fs.readFileSync('connector/package.json')).version
+          const tauri = JSON.parse(fs.readFileSync('connector/src-tauri/tauri.conf.json')).version
+          const cargo = fs.readFileSync('connector/src-tauri/Cargo.toml', 'utf8')
+            .match(/^version = "([^"]+)"/m)?.[1]
+          if (!expected || [pkg, tauri, cargo].some(v => v !== expected)) {
+            throw new Error(`Tag=${expected}, package=${pkg}, tauri=${tauri}, cargo=${cargo}`)
+          }
+          NODE
+
+      - name: Installer les dépendances du connecteur
+        working-directory: connector
+        run: npm ci
+
+      - name: Exiger la clé de mise à jour
+        shell: bash
+        env:
+          CONNECTOR_UPDATER_PRIVATE_KEY: ${{ secrets.CONNECTOR_UPDATER_PRIVATE_KEY }}
+        run: test -n "$CONNECTOR_UPDATER_PRIVATE_KEY"
+
+      - name: Exiger la signature et la notarisation Apple
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          test -n "$APPLE_CERTIFICATE"
+          test -n "$APPLE_CERTIFICATE_PASSWORD"
+          test -n "$APPLE_SIGNING_IDENTITY"
+          test -n "$APPLE_ID"
+          test -n "$APPLE_PASSWORD"
+          test -n "$APPLE_TEAM_ID"
+
+      - name: Importer le certificat Authenticode Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          if (-not $env:WINDOWS_CERTIFICATE -or -not $env:WINDOWS_CERTIFICATE_PASSWORD) {
+            throw 'Secrets de signature Authenticode Windows absents'
+          }
+          $encoded = Join-Path $env:RUNNER_TEMP 'mathprint-cert.txt'
+          $pfx = Join-Path $env:RUNNER_TEMP 'mathprint-cert.pfx'
+          Set-Content -Path $encoded -Value $env:WINDOWS_CERTIFICATE
+          certutil -decode $encoded $pfx | Out-Null
+          $password = ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD `
+            -Force -AsPlainText
+          $imported = @(Import-PfxCertificate -FilePath $pfx `
+            -CertStoreLocation Cert:\CurrentUser\My -Password $password)
+          $signing = $imported | Where-Object HasPrivateKey | Select-Object -First 1
+          if (-not $signing) { throw 'Le PFX ne contient aucun certificat avec clé privée' }
+          $config = @{
+            bundle = @{
+              windows = @{
+                certificateThumbprint = $signing.Thumbprint
+                digestAlgorithm = 'sha256'
+                timestampUrl = 'http://timestamp.digicert.com'
+              }
+            }
+          }
+          $config | ConvertTo-Json -Depth 5 | Set-Content `
+            'connector/src-tauri/tauri.windows.signing.conf.json'
+
+      - name: Préparer le moteur PDF Windows vérifié
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $url = 'https://www.sumatrapdfreader.org/dl/rel/3.6.1/SumatraPDF-3.6.1-64.zip'
+          $archive = Join-Path $env:RUNNER_TEMP 'SumatraPDF-3.6.1-64.zip'
+          $folder = Join-Path $env:RUNNER_TEMP 'sumatra'
+          Invoke-WebRequest -Uri $url -OutFile $archive
+          $actual = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
+          $expected = '98b33a518d42986856d225064b0cd2d3643ecf78cbf84ab873d26cc51877a544'
+          if ($actual -ne $expected) { throw "Empreinte SumatraPDF incorrecte: $actual" }
+          Expand-Archive -Path $archive -DestinationPath $folder
+          Copy-Item (Join-Path $folder 'SumatraPDF-3.6.1-64.exe') `
+            'connector/src-tauri/binaries/SumatraPDF.exe'
+
+      - name: Construire et publier les installateurs
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.CONNECTOR_UPDATER_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          projectPath: connector
+          tagName: connector-v__VERSION__
+          releaseName: MathPrint Connector v__VERSION__
+          releaseBody: Installateurs macOS Apple Silicon, macOS Intel (10.13+) et Windows x64.
+          releaseDraft: false
+          prerelease: false
+          updaterJsonPreferNsis: true
+          args: ${{ matrix.args }}
+
+  publish-metadata:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Télécharger et vérifier les sources SumatraPDF
+        run: |
+          curl -fL --retry 3 -o SumatraPDF-3.6.1-source.zip \
+            https://github.com/sumatrapdfreader/sumatrapdf/archive/refs/tags/3.6.1rel.zip
+          echo "67bcd66f9d25fa5338ef7c4d882ce7597dc94083b5d7fe4d44da392640c8dec1  SumatraPDF-3.6.1-source.zip" | sha256sum --check
+
+      - name: Joindre les sources tierces à la release versionnée
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$GITHUB_REF_NAME" SumatraPDF-3.6.1-source.zip --repo "$GITHUB_REPOSITORY" --clobber
+
+      - name: Publier le manifeste stable de mise à jour
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir updater
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --pattern latest.json --dir updater
+          gh release delete connector-latest --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes || true
+          gh release create connector-latest updater/latest.json --repo "$GITHUB_REPOSITORY" \
+            --title "MathPrint Connector — canal stable" \
+            --notes "Manifeste stable de mise à jour ; les installateurs sont dans $GITHUB_REF_NAME." \
+            --latest=false

@@ -120,7 +120,9 @@ def test_application_default_is_independent_and_exclusive(monkeypatch):
         {"name": "Salle", "source": "cups_local", "status": "idle", "default": True},
     ])
     try:
-        initial = list_printers(db)
+        user = User(email="defaults@x.fr", password_hash="x")
+        db.add(user); db.commit()
+        initial = list_printers(db, user)
         assert next(p for p in initial["local"] if p["name"] == "Salle")["app_default"]
         update_printer_preferences(
             PrinterPreferencesIn(name="Bureau", app_default=True, duplex=True,

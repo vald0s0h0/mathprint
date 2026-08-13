@@ -1,0 +1,27 @@
+:root { font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #172033; background: #f4f6fa; }
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 360px; min-height: 560px; }
+main { max-width: 520px; margin: 0 auto; padding: 28px; }
+header { display: flex; align-items: center; gap: 13px; margin-bottom: 28px; }
+.mark { width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center; background: #4f46e5; color: white; font-weight: 800; font-size: 22px; }
+h1 { font-size: 20px; margin: 0; } header p { margin: 3px 0 0; color: #6b7280; font-size: 13px; }
+form, section { background: white; border: 1px solid #e2e6ee; border-radius: 16px; padding: 22px; box-shadow: 0 8px 30px rgba(23,32,51,.06); }
+label { display: block; font-size: 13px; font-weight: 650; margin-bottom: 15px; }
+input { width: 100%; margin-top: 6px; border: 1px solid #cfd5e1; border-radius: 9px; padding: 11px 12px; font: inherit; outline: none; }
+input:focus { border-color: #6366f1; box-shadow: 0 0 0 3px rgba(99,102,241,.13); }
+button { width: 100%; border: 0; border-radius: 9px; background: #4f46e5; color: white; padding: 11px 14px; font-weight: 700; cursor: pointer; }
+button:disabled { opacity: .55; cursor: default; }
+button.secondary { margin-top: 18px; background: #eef0f5; color: #3c465b; }
+.update { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: -12px 0 16px; padding: 10px 12px; border: 1px solid #c7d2fe; border-radius: 10px; background: #eef2ff; color: #3730a3; font-size: 12px; font-weight: 650; }
+.update button { width: auto; padding: 7px 10px; font-size: 11px; }
+.hint { color: #7b8496; font-size: 12px; line-height: 1.45; text-align: center; margin: 12px 5px 0; }
+.error { color: #9f1d2d; background: #fff0f2; border-radius: 8px; padding: 10px; font-size: 12px; margin: 10px 0; }
+.connected { display: flex; align-items: center; gap: 11px; padding-bottom: 17px; border-bottom: 1px solid #eceef3; }
+.connected div { display: flex; flex-direction: column; gap: 3px; }.connected small, article small { color: #788196; }
+.dot { width: 11px; height: 11px; border-radius: 50%; background: #18a36d; box-shadow: 0 0 0 5px #e6f7f0; }
+dl { margin: 8px 0; } dl div { display: flex; justify-content: space-between; gap: 15px; padding: 9px 0; font-size: 13px; } dt { color: #778094; } dd { margin: 0; font-weight: 650; text-align: right; }
+.current { margin: 14px 0; padding: 11px; border-radius: 9px; background: #eef2ff; color: #3730a3; font-size: 13px; }
+.jobs { margin-top: 18px; }.jobs h2 { font-size: 13px; margin: 0 0 7px; color: #596277; }
+article { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 0; border-top: 1px solid #f0f1f5; font-size: 12px; }
+article div { min-width: 0; display: flex; flex-direction: column; gap: 3px; } article strong { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.status { flex: none; border-radius: 999px; padding: 4px 7px; background: #eef0f5; color: #626c80; }.status.submitted { background: #e6f7f0; color: #08754a; }.status.failed, .status.uncertain { background: #fff0f2; color: #a21d31; }.status.claimed { background: #eef2ff; color: #4338ca; }

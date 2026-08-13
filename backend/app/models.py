@@ -732,6 +732,60 @@ class Printer(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
+class PrintConnector(Base):
+    """Poste professeur autorisé à récupérer des travaux d'impression.
+
+    Le secret remis au connecteur n'est jamais persisté en clair : seul son
+    SHA-256 est conservé. ``installation_id`` est généré localement une fois et
+    permet de reconnecter la même installation sans multiplier les appareils.
+    """
+    __tablename__ = "print_connectors"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    installation_id: Mapped[str] = mapped_column(String, unique=True)
+    name: Mapped[str] = mapped_column(String, default="MathPrint Connector")
+    token_hash: Mapped[str] = mapped_column(String, unique=True)
+    platform: Mapped[str] = mapped_column(String, default="")
+    arch: Mapped[str] = mapped_column(String, default="")
+    app_version: Mapped[str] = mapped_column(String, default="")
+    printers_json: Mapped[list] = mapped_column(JSON, default=list)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
+class ConnectorPrintJob(Base):
+    """PDF prêt à imprimer, réclamé exclusivement par un connecteur.
+
+    Le PDF stocké a déjà subi les transformations de pages (passe recto/verso
+    et ordre inverse). Le client n'a plus aucune décision métier à prendre et
+    n'accepte jamais une commande arbitraire envoyée par le serveur.
+    """
+    __tablename__ = "connector_print_jobs"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
+    connector_id: Mapped[str] = mapped_column(ForeignKey("print_connectors.id"))
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    printer_id: Mapped[str] = mapped_column(ForeignKey("printers.id"))
+    assessment_id: Mapped[str | None] = mapped_column(
+        ForeignKey("assessments.id"), nullable=True)
+    title: Mapped[str] = mapped_column(String, default="Impression MathPrint")
+    file_name: Mapped[str] = mapped_column(String, default="")
+    pass_side: Mapped[str] = mapped_column(String, default="all")
+    native_printer_name: Mapped[str] = mapped_column(String)
+    status: Mapped[str] = mapped_column(String, default="queued")
+    # queued|claimed|submitted|failed|uncertain|cancelled
+    options_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    document_relpath: Mapped[str] = mapped_column(String)
+    document_sha256: Mapped[str] = mapped_column(String)
+    document_size: Mapped[int] = mapped_column(Integer, default=0)
+    spool_job_id: Mapped[str] = mapped_column(String, default="")
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
 class CalibrationProfile(Base):
     __tablename__ = "calibration_profiles"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)

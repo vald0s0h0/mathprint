@@ -9,6 +9,13 @@ node_modules/
 dist/
 *.tsbuildinfo
 
+# Connecteur bureau (artefacts locaux et secrets de signature)
+connector/src-tauri/target/
+connector/src-tauri/gen/
+connector/src-tauri/binaries/SumatraPDF.exe
+.connector-updater.key
+.connector-updater.key.pub
+
 # Données d'exécution (générées, jamais versionnées) — racine seulement,
 # ne pas masquer backend/app/data/competencies_fr.json (source versionnée)
 /data/

@@ -9,9 +9,11 @@
 - Réglage imposé « taille réelle 100 % » : print-scaling=none (§11.5).
 - Chaque job est journalisé : fichier, imprimante, utilisateur, heure, résultat.
 """
+import hashlib
 import os
 import subprocess
 import tempfile
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 from typing import Literal
@@ -26,8 +28,9 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..db import get_db
 from ..deps import current_user
-from ..models import (AuditLog, Assessment, Copy, DocumentPage, Job, Printer,
-                      ScanBatch, Student, User)
+from ..models import (AuditLog, Assessment, ConnectorPrintJob, Copy,
+                      DocumentPage, Job, PrintConnector, Printer, ScanBatch,
+                      Student, User)
 
 router = APIRouter(prefix="/api/printers", tags=["printing"],
                    dependencies=[Depends(current_user)])
@@ -72,6 +75,28 @@ def _profile_view(p: Printer | None) -> dict:
         "app_default": bool(p.app_default) if p else False,
         "adf_reverse_order": bool(p.adf_reverse_order) if p else False,
     }
+
+
+def _connector_for_profile(db: Session, profile: Printer | None) -> PrintConnector | None:
+    if not profile or profile.protocol != "connector":
+        return None
+    connector_id = (profile.capabilities_json or {}).get("connector_id")
+    return db.get(PrintConnector, connector_id) if connector_id else None
+
+
+def _assert_profile_access(db: Session, profile: Printer | None, user: User):
+    connector = _connector_for_profile(db, profile)
+    if connector and connector.user_id != user.id:
+        raise HTTPException(404, "Imprimante inconnue")
+
+
+def _connector_online(connector: PrintConnector) -> bool:
+    if not connector.active or not connector.last_seen_at:
+        return False
+    seen = connector.last_seen_at
+    if seen.tzinfo is None:
+        seen = seen.replace(tzinfo=timezone.utc)
+    return seen >= datetime.now(timezone.utc) - timedelta(seconds=90)
 
 
 def _get_or_create_profile(db: Session, name: str, *, protocol: str = "cups") -> Printer:
@@ -120,16 +145,39 @@ def _lp_command(*, printer: str, path: Path, copies: int, duplex: bool,
 
 
 @router.get("")
-def list_printers(db: Session = Depends(get_db)):
+def list_printers(db: Session = Depends(get_db),
+                  user: User = Depends(current_user)):
     local = _local_printers()
     profiles = {p.name: p for p in db.query(Printer).all()}
     local_names = {p["name"] for p in local}
-    local_rows = [{**p, "system_default": bool(p.get("default")),
+    local_rows = [{**p, "display_name": p["name"],
+                   "system_default": bool(p.get("default")),
                    **_profile_view(profiles.get(p["name"]))} for p in local]
+    connectors = {c.id: c for c in db.query(PrintConnector).filter_by(
+        user_id=user.id, active=True).all()}
+    for profile in profiles.values():
+        if not profile.active or profile.protocol != "connector":
+            continue
+        caps = profile.capabilities_json or {}
+        connector = connectors.get(caps.get("connector_id"))
+        if not connector:
+            continue
+        local_rows.append({
+            "id": profile.id,
+            "name": profile.name,
+            "display_name": caps.get("native_name") or profile.name,
+            "device_name": connector.name,
+            "source": "connector_local",
+            "status": "online" if _connector_online(connector) else "offline",
+            "system_default": bool(caps.get("is_default")),
+            **_profile_view(profile),
+        })
     network_rows = [{"id": p.id, "name": p.name, "source": "network_ipp",
-                     "uri": p.uri, "status": "registered", **_profile_view(p)}
+                     "display_name": p.name, "uri": p.uri,
+                     "status": "registered", **_profile_view(p)}
                     for p in profiles.values()
-                    if p.active and p.protocol != "cups" and p.uri and p.name not in local_names]
+                    if p.active and p.protocol not in ("cups", "connector")
+                    and p.uri and p.name not in local_names]
 
     # Il y a toujours un défaut applicatif visible. Avant la première sélection
     # explicite, on reprend sans surprise le défaut CUPS, puis la première file.
@@ -173,11 +221,13 @@ class PrinterPreferencesIn(BaseModel):
 
 @router.patch("/preferences")
 def update_printer_preferences(body: PrinterPreferencesIn,
-                               db: Session = Depends(get_db)):
+                               db: Session = Depends(get_db),
+                               user: User = Depends(current_user)):
     local_names = {p["name"] for p in _local_printers()}
     existing = db.query(Printer).filter_by(name=body.name).first()
     if body.name not in local_names and existing is None:
         raise HTTPException(404, "Imprimante inconnue")
+    _assert_profile_access(db, existing, user)
     p = existing or _get_or_create_profile(db, body.name)
     for field in ("duplex", "pickup_reverse_order", "adf_reverse_order"):
         value = getattr(body, field)
@@ -195,7 +245,7 @@ def update_printer_preferences(body: PrinterPreferencesIn,
 @router.delete("/network/{printer_id}")
 def delete_network_printer(printer_id: str, db: Session = Depends(get_db)):
     p = db.get(Printer, printer_id)
-    if not p or p.protocol == "cups" or not p.uri:
+    if not p or p.protocol in ("cups", "connector") or not p.uri:
         raise HTTPException(404, "Imprimante réseau inconnue")
     db.delete(p)
     db.commit()
@@ -244,6 +294,76 @@ def _subject_pass_pdf(db: Session, assessment_id: str, source: Path,
     return out.getvalue()
 
 
+def _reverse_pdf_pages(pdf: bytes) -> bytes:
+    """Inverse réellement les pages pour ne dépendre d'aucune option pilote.
+
+    Windows n'a pas d'équivalent universel à ``outputorder=reverse``. Le PDF
+    remis au connecteur devient donc l'autorité commune macOS/Windows.
+    """
+    from pypdf import PdfReader, PdfWriter
+
+    reader = PdfReader(BytesIO(pdf))
+    writer = PdfWriter()
+    for page in reversed(reader.pages):
+        writer.add_page(page)
+    out = BytesIO()
+    writer.write(out)
+    return out.getvalue()
+
+
+def _queue_connector_job(*, db: Session, user: User, profile: Printer,
+                         title: str, file_name: str, pass_side: str,
+                         document: bytes, assessment_id: str | None,
+                         copies: int, duplex: bool, reverse: bool) -> ConnectorPrintJob:
+    connector = _connector_for_profile(db, profile)
+    if not connector or not connector.active or connector.user_id != user.id:
+        raise HTTPException(409, "Le connecteur de cette imprimante est déconnecté")
+    caps = profile.capabilities_json or {}
+    native_name = caps.get("native_name")
+    if not isinstance(native_name, str) or not native_name.strip():
+        raise HTTPException(409, "Nom local de l'imprimante indisponible")
+
+    prepared = _reverse_pdf_pages(document) if reverse else document
+    job = ConnectorPrintJob(
+        connector_id=connector.id, user_id=user.id, printer_id=profile.id,
+        assessment_id=assessment_id, title=title, file_name=file_name,
+        pass_side=pass_side, native_printer_name=native_name,
+        options_json={
+            "copies": max(1, min(50, copies)),
+            "media": "A4",
+            "scale": "none",
+            "collate": True,
+            "duplex": bool(duplex),
+            "reverse_applied_to_pdf": bool(reverse),
+            "pickup_reverse_order": bool(profile.pickup_reverse_order),
+            "output_reverse_order": bool(profile.output_reverse_order),
+            "adf_reverse_order": bool(profile.adf_reverse_order),
+        },
+        document_relpath="pending", document_sha256="pending",
+        document_size=len(prepared))
+    db.add(job)
+    db.flush()
+    relative = Path("connector_jobs") / f"{job.id}.pdf"
+    output = settings.data_dir / relative
+    output.parent.mkdir(parents=True, exist_ok=True)
+    # Remplacement atomique : un claim ne verra jamais un PDF partiel.
+    fd, raw_temp = tempfile.mkstemp(prefix=f"{job.id}-", suffix=".pdf",
+                                    dir=output.parent)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(prepared)
+            stream.flush()
+            os.fsync(stream.fileno())
+        Path(raw_temp).replace(output)
+    finally:
+        Path(raw_temp).unlink(missing_ok=True)
+    job.document_relpath = str(relative)
+    job.document_sha256 = hashlib.sha256(prepared).hexdigest()
+    job.document_size = len(prepared)
+    db.commit()
+    return job
+
+
 @router.post("/print")
 def print_file(body: PrintIn, db: Session = Depends(get_db),
                user: User = Depends(current_user)):
@@ -255,6 +375,7 @@ def print_file(body: PrintIn, db: Session = Depends(get_db),
         raise HTTPException(404, "Fichier non encore généré")
 
     profile = db.query(Printer).filter_by(name=body.printer, active=True).first()
+    _assert_profile_access(db, profile, user)
     assessment = db.get(Assessment, body.assessment_id)
     if body.pass_side != "all":
         if body.file != "subject_batch.pdf" or not assessment or not assessment.duplex:
@@ -266,6 +387,21 @@ def print_file(body: PrintIn, db: Session = Depends(get_db),
     if body.pass_side != "all":
         duplex = False
     reverse = _effective_reverse(profile, body.file)
+
+    if profile and profile.protocol == "connector":
+        document = (_subject_pass_pdf(db, body.assessment_id, Path(path), body.pass_side)
+                    if body.pass_side != "all" else Path(path).read_bytes())
+        job = _queue_connector_job(
+            db=db, user=user, profile=profile,
+            title=f"{assessment.title if assessment else 'MathPrint'} — "
+                  f"{body.pass_side if body.pass_side != 'all' else body.file}",
+            file_name=body.file, pass_side=body.pass_side, document=document,
+            assessment_id=body.assessment_id, copies=body.copies,
+            duplex=duplex, reverse=reverse)
+        connector = _connector_for_profile(db, profile)
+        return {"ok": True, "queued": True, "job_id": job.id,
+                "lp_output": f"En attente sur {connector.name if connector else 'le connecteur'}"}
+
     local_names = {p["name"] for p in _local_printers()}
     print_path = Path(path)
     temp_path: Path | None = None
@@ -361,6 +497,16 @@ def print_test_pages(body: TestPrintIn, db: Session = Depends(get_db),
     renseigner les cases ADF/imprimante sans qu'une compensation déjà cochée ne
     fausse le diagnostic."""
     profile = db.query(Printer).filter_by(name=body.printer, active=True).first()
+    _assert_profile_access(db, profile, user)
+    if profile and profile.protocol == "connector":
+        job = _queue_connector_job(
+            db=db, user=user, profile=profile, title="Test MathPrint 1–2",
+            file_name="printer_test.pdf", pass_side="all",
+            document=_test_pages_pdf(), assessment_id=None, copies=1,
+            duplex=False, reverse=False)
+        connector = _connector_for_profile(db, profile)
+        return {"ok": True, "queued": True, "job_id": job.id,
+                "lp_output": f"Test en attente sur {connector.name if connector else 'le connecteur'}"}
     local_names = {p["name"] for p in _local_printers()}
     fd, raw_path = tempfile.mkstemp(prefix="mathprint-order-", suffix=".pdf")
     path = Path(raw_path)
@@ -393,3 +539,13 @@ def print_jobs(db: Session = Depends(get_db)):
             .order_by(Job.created_at.desc()).limit(30).all())
     return [{"id": j.id, "status": j.status, "error": j.error_code,
              "payload": j.payload_json, "created_at": str(j.created_at)} for j in rows]
+
+
+@router.get("/jobs/{job_id}")
+def connector_job_status(job_id: str, db: Session = Depends(get_db),
+                         user: User = Depends(current_user)):
+    job = db.get(ConnectorPrintJob, job_id)
+    if not job or job.user_id != user.id:
+        raise HTTPException(404, "Travail d'impression inconnu")
+    return {"id": job.id, "status": job.status,
+            "error": job.error_message, "spool_job_id": job.spool_job_id}
