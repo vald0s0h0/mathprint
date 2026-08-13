@@ -2,7 +2,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { disable as disableAutostart, enable as enableAutostart } from '@tauri-apps/plugin-autostart'
 import { relaunch } from '@tauri-apps/plugin-process'
 import { check } from '@tauri-apps/plugin-updater'
-import { FormEvent, useEffect, useState } from 'react'
+import { FormEvent, KeyboardEvent as ReactKeyboardEvent, useEffect, useState } from 'react'
 
 type Job = {
   id: string
@@ -22,11 +22,43 @@ type ConnectorState = {
   printer_count: number
   current_job?: string | null
   jobs: Job[]
+  pronote_shortcut: string
+  pronote_shortcut_active: boolean
+  pronote_running: boolean
+  pronote_status: string
+  pronote_last_count?: number | null
 }
 
 const empty: ConnectorState = {
   connected: false, email: '', server_url: '', device_name: '',
   status: 'Déconnecté', printer_count: 0, jobs: [],
+  pronote_shortcut: 'CmdOrCtrl+Alt+Shift+N', pronote_shortcut_active: false,
+  pronote_running: false, pronote_status: '',
+}
+
+const isMac = navigator.userAgent.includes('Mac')
+
+function shortcutLabel(shortcut: string) {
+  const parts = shortcut.split('+')
+  if (isMac) {
+    const labels: Record<string, string> = {
+      CmdOrCtrl: '⌘', Alt: '⌥', Shift: '⇧',
+    }
+    return parts.map((part) => labels[part] || part).join(' ')
+  }
+  const labels: Record<string, string> = {
+    CmdOrCtrl: 'Ctrl', Alt: 'Alt', Shift: 'Maj',
+  }
+  return parts.map((part) => labels[part] || part).join(' + ')
+}
+
+function shortcutKey(event: ReactKeyboardEvent<HTMLButtonElement>) {
+  const primaryPressed = isMac ? event.metaKey : event.ctrlKey
+  if (!primaryPressed || !event.altKey || !event.shiftKey) return null
+  if (/^Key[A-Z]$/.test(event.code)) return event.code.slice(3)
+  if (/^Digit[0-9]$/.test(event.code)) return event.code.slice(5)
+  if (/^F(?:[1-9]|1[0-2])$/.test(event.code)) return event.code
+  return null
 }
 
 function jobLabel(status: string) {
@@ -44,6 +76,9 @@ export default function App() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [updating, setUpdating] = useState(false)
+  const [capturingShortcut, setCapturingShortcut] = useState(false)
+  const [shortcutBusy, setShortcutBusy] = useState(false)
+  const [shortcutError, setShortcutError] = useState('')
 
   async function refresh() {
     try {
@@ -69,7 +104,7 @@ export default function App() {
         // au spouleur. On attend silencieusement que le travail courant finisse.
         while (!cancelled) {
           const snapshot = await invoke<ConnectorState>('connector_state')
-          if (!snapshot.current_job) break
+          if (!snapshot.current_job && !snapshot.pronote_running) break
           await new Promise((resolve) => window.setTimeout(resolve, 2000))
         }
         if (cancelled) return
@@ -126,6 +161,34 @@ export default function App() {
     }
   }
 
+  async function captureShortcut(event: ReactKeyboardEvent<HTMLButtonElement>) {
+    if (!capturingShortcut || event.repeat) return
+    event.preventDefault()
+    event.stopPropagation()
+    if (event.key === 'Escape') {
+      setCapturingShortcut(false)
+      setShortcutError('')
+      return
+    }
+    const key = shortcutKey(event)
+    if (!key) {
+      setShortcutError(`Maintenez ${isMac ? '⌘ + ⌥ + ⇧' : 'Ctrl + Alt + Maj'} puis appuyez sur une lettre, un chiffre ou F1–F12.`)
+      return
+    }
+    const shortcut = `CmdOrCtrl+Alt+Shift+${key}`
+    setShortcutBusy(true)
+    setShortcutError('')
+    try {
+      const next = await invoke<ConnectorState>('set_pronote_shortcut', { shortcut })
+      setState(next)
+      setCapturingShortcut(false)
+    } catch (e) {
+      setShortcutError(String(e))
+    } finally {
+      setShortcutBusy(false)
+    }
+  }
+
   return (
     <main>
       <header>
@@ -173,6 +236,43 @@ export default function App() {
           <p className="hint">Les alertes papier, bourrage et consommables restent affichées par la file d’impression du système.</p>
         </section>
       )}
+
+      <section className="pronote-card">
+        <div className="pronote-title">
+          <div><h2>Saisie ProNote</h2><p>Collez une colonne complète sans quitter ProNote.</p></div>
+          <span className={`shortcut-state ${state.pronote_shortcut_active ? 'active' : ''}`}>
+            {state.pronote_shortcut_active ? 'Actif' : 'À configurer'}
+          </span>
+        </div>
+        <ol>
+          <li>Dans MathPrint, copiez la colonne depuis l’onglet Notes.</li>
+          <li>Dans ProNote, sélectionnez la première cellule de la colonne.</li>
+          <li>Lancez le raccourci et ne touchez plus au clavier pendant la saisie.</li>
+        </ol>
+        <div className="shortcut-row">
+          <span>Raccourci</span>
+          <kbd>{shortcutLabel(state.pronote_shortcut)}</kbd>
+        </div>
+        <button
+          type="button"
+          className={`shortcut-button ${capturingShortcut ? 'capturing' : ''}`}
+          disabled={shortcutBusy || state.pronote_running}
+          onClick={() => { setCapturingShortcut((value) => !value); setShortcutError('') }}
+          onKeyDown={captureShortcut}
+        >
+          {shortcutBusy ? 'Activation…' : capturingShortcut
+            ? `Tapez ${isMac ? '⌘ + ⌥ + ⇧ + une touche' : 'Ctrl + Alt + Maj + une touche'}`
+            : 'Modifier le raccourci'}
+        </button>
+        {shortcutError && <div className="error">{shortcutError}</div>}
+        {state.pronote_status && <p className={`pronote-status ${state.pronote_running ? 'running' : ''}`} aria-live="polite">
+          {state.pronote_status}
+        </p>}
+        <p className="hint">
+          Les lignes vides font avancer d’une cellule sans décaler la classe. Les absences sont saisies exactement comme « Abs ».
+          {isMac && ' macOS demandera l’autorisation Accessibilité lors de la première utilisation.'}
+        </p>
+      </section>
     </main>
   )
 }

@@ -1,3 +1,4 @@
+use enigo::{Direction::Click, Enigo, Key, Keyboard, Settings};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -7,7 +8,12 @@ use std::{
     io::Read,
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::Arc,
+    str::FromStr,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    thread,
     time::{Duration, Instant},
 };
 use tauri::{
@@ -17,6 +23,8 @@ use tauri::{
 };
 #[cfg(target_os = "macos")]
 use tauri_plugin_autostart::MacosLauncher;
+use tauri_plugin_clipboard_manager::ClipboardExt;
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
 use wait_timeout::ChildExt;
@@ -24,13 +32,19 @@ use wait_timeout::ChildExt;
 const KEYRING_SERVICE: &str = "MathPrint Connector";
 const MAX_PDF_BYTES: usize = 200 * 1024 * 1024;
 const SERVER_URL: &str = "https://mathprint.fabrelexos.synology.me";
+const DEFAULT_PRONOTE_SHORTCUT: &str = "CmdOrCtrl+Alt+Shift+N";
+const MAX_PRONOTE_ROWS: usize = 500;
+
+fn default_pronote_shortcut() -> String {
+    DEFAULT_PRONOTE_SHORTCUT.into()
+}
 
 fn autostart_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
     #[cfg(target_os = "macos")]
     {
-        return tauri_plugin_autostart::Builder::new()
+        tauri_plugin_autostart::Builder::new()
             .macos_launcher(MacosLauncher::LaunchAgent)
-            .build();
+            .build()
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -43,6 +57,8 @@ struct StoredConfig {
     email: String,
     installation_id: String,
     device_name: String,
+    #[serde(default = "default_pronote_shortcut")]
+    pronote_shortcut: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -65,6 +81,11 @@ struct ConnectorStateView {
     printer_count: usize,
     current_job: Option<String>,
     jobs: Vec<JobView>,
+    pronote_shortcut: String,
+    pronote_shortcut_active: bool,
+    pronote_running: bool,
+    pronote_status: String,
+    pronote_last_count: Option<usize>,
 }
 
 struct RuntimeState {
@@ -73,6 +94,7 @@ struct RuntimeState {
     token: RwLock<Option<String>>,
     paused: RwLock<bool>,
     job_gate: Mutex<()>,
+    pronote_gate: AtomicBool,
     client: Client,
     config_path: PathBuf,
     journal_path: PathBuf,
@@ -357,8 +379,214 @@ async fn pause_worker(paused: bool, state: State<'_, Arc<RuntimeState>>) -> Resu
     if paused && state.view.read().await.current_job.is_some() {
         return Err("Attendez la fin de l'envoi à l'imprimante".into());
     }
+    if paused
+        && state
+            .pronote_gate
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+    {
+        return Err("Attendez la fin de la saisie ProNote".into());
+    }
     *state.paused.write().await = paused;
+    if !paused {
+        state.pronote_gate.store(false, Ordering::Release);
+    }
     Ok(())
+}
+
+fn validate_pronote_shortcut(shortcut: &str) -> Result<(), String> {
+    let shortcut = shortcut.trim();
+    let parts: Vec<&str> = shortcut.split('+').collect();
+    if parts.len() != 4
+        || !parts[0].eq_ignore_ascii_case("CmdOrCtrl")
+        || !parts[1..parts.len() - 1]
+            .iter()
+            .any(|part| part.eq_ignore_ascii_case("Alt"))
+        || !parts[1..parts.len() - 1]
+            .iter()
+            .any(|part| part.eq_ignore_ascii_case("Shift"))
+    {
+        return Err(
+            "Choisissez Cmd/Ctrl + Alt + Maj + une lettre, un chiffre ou une touche F1–F12".into(),
+        );
+    }
+    let key = parts.last().copied().unwrap_or_default();
+    let supported_key = (key.len() == 1 && key.chars().all(|c| c.is_ascii_alphanumeric()))
+        || key
+            .strip_prefix('F')
+            .and_then(|number| number.parse::<u8>().ok())
+            .is_some_and(|number| (1..=12).contains(&number));
+    if !supported_key {
+        return Err("Utilisez une lettre, un chiffre ou une touche F1–F12".into());
+    }
+    Shortcut::from_str(shortcut)
+        .map(|_| ())
+        .map_err(|_| "Raccourci non reconnu".into())
+}
+
+fn parse_pronote_notes(clipboard: &str) -> Result<Vec<String>, String> {
+    if clipboard.is_empty() {
+        return Err("Le presse-papiers ne contient aucune note".into());
+    }
+    let normalized = clipboard.replace("\r\n", "\n").replace('\r', "\n");
+    let lines: Vec<String> = normalized
+        .split('\n')
+        .map(|line| {
+            let note = line.trim();
+            if note.eq_ignore_ascii_case("abs") {
+                "Abs".into()
+            } else {
+                note.into()
+            }
+        })
+        .collect();
+    if lines.len() > MAX_PRONOTE_ROWS {
+        return Err(format!(
+            "Le presse-papiers contient plus de {MAX_PRONOTE_ROWS} lignes"
+        ));
+    }
+    for (index, note) in lines.iter().enumerate() {
+        if note.chars().count() > 32 || note.chars().any(char::is_control) {
+            return Err(format!("La ligne {} n'est pas une note valide", index + 1));
+        }
+    }
+    Ok(lines)
+}
+
+fn enter_pronote_notes(app: &AppHandle) -> Result<usize, String> {
+    let clipboard = app
+        .clipboard()
+        .read_text()
+        .map_err(|e| format!("Lecture du presse-papiers impossible : {e}"))?;
+    let notes = parse_pronote_notes(&clipboard)?;
+    let mut enigo = Enigo::new(&Settings::default()).map_err(|e| {
+        if cfg!(target_os = "macos") {
+            format!(
+                "Autorisez MathPrint Connector dans Réglages Système > Confidentialité et sécurité > Accessibilité, puis relancez le raccourci ({e})"
+            )
+        } else {
+            format!("Accès au clavier impossible : {e}")
+        }
+    })?;
+
+    // Laisser le temps au système de libérer les touches du raccourci avant
+    // de commencer la saisie dans la cellule ProNote qui conserve le focus.
+    thread::sleep(Duration::from_millis(450));
+    for note in &notes {
+        // Une ligne vide avance tout de même d'un élève : elle n'est jamais
+        // supprimée, afin de préserver strictement l'alignement de la classe.
+        if !note.is_empty() {
+            enigo
+                .text(note)
+                .map_err(|e| format!("Saisie clavier interrompue : {e}"))?;
+            thread::sleep(Duration::from_millis(45));
+        }
+        enigo
+            .key(Key::Return, Click)
+            .map_err(|e| format!("Validation de la cellule impossible : {e}"))?;
+        thread::sleep(Duration::from_millis(110));
+    }
+    Ok(notes.len())
+}
+
+fn start_pronote_paste(app: AppHandle) {
+    let Some(managed) = app.try_state::<Arc<RuntimeState>>() else {
+        return;
+    };
+    let runtime = managed.inner().clone();
+    if runtime
+        .pronote_gate
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
+
+    tauri::async_runtime::spawn(async move {
+        {
+            let mut view = runtime.view.write().await;
+            view.pronote_running = true;
+            view.pronote_status = "Saisie ProNote en cours… Ne touchez pas au clavier.".into();
+        }
+        let worker_app = app.clone();
+        let outcome =
+            tauri::async_runtime::spawn_blocking(move || enter_pronote_notes(&worker_app))
+                .await
+                .map_err(|e| e.to_string())
+                .and_then(|result| result);
+        {
+            let mut view = runtime.view.write().await;
+            view.pronote_running = false;
+            match outcome {
+                Ok(count) => {
+                    view.pronote_last_count = Some(count);
+                    view.pronote_status = format!("{count} ligne(s) saisie(s) dans ProNote");
+                }
+                Err(error) => {
+                    view.pronote_status = error;
+                }
+            }
+        }
+        runtime.pronote_gate.store(false, Ordering::Release);
+    });
+}
+
+#[tauri::command]
+async fn set_pronote_shortcut(
+    app: AppHandle,
+    shortcut: String,
+    state: State<'_, Arc<RuntimeState>>,
+) -> Result<ConnectorStateView, String> {
+    let shortcut = shortcut.trim().to_string();
+    validate_pronote_shortcut(&shortcut)?;
+    let current = state.config.read().await.clone();
+    if shortcut == current.pronote_shortcut {
+        if state.view.read().await.pronote_shortcut_active {
+            return Ok(state.view.read().await.clone());
+        }
+        app.global_shortcut()
+            .register(shortcut.as_str())
+            .map_err(|_| {
+                "Ce raccourci est déjà utilisé par le système ou une autre application".to_string()
+            })?;
+        let mut view = state.view.write().await;
+        view.pronote_shortcut_active = true;
+        view.pronote_status = "Raccourci ProNote actif".into();
+        return Ok(view.clone());
+    }
+
+    app.global_shortcut()
+        .register(shortcut.as_str())
+        .map_err(|_| {
+            "Ce raccourci est déjà utilisé par le système ou une autre application".to_string()
+        })?;
+
+    let mut next = current.clone();
+    next.pronote_shortcut = shortcut.clone();
+    if let Err(error) = atomic_json(&state.config_path, &next) {
+        let _ = app.global_shortcut().unregister(shortcut.as_str());
+        return Err(error);
+    }
+    *state.config.write().await = next;
+
+    if !current.pronote_shortcut.is_empty()
+        && app
+            .global_shortcut()
+            .unregister(current.pronote_shortcut.as_str())
+            .is_err()
+    {
+        // Repartir d'une liste connue évite qu'un ancien raccourci reste actif.
+        let _ = app.global_shortcut().unregister_all();
+        app.global_shortcut()
+            .register(shortcut.as_str())
+            .map_err(|e| format!("Impossible d'activer le nouveau raccourci : {e}"))?;
+    }
+
+    let mut view = state.view.write().await;
+    view.pronote_shortcut = shortcut;
+    view.pronote_shortcut_active = true;
+    view.pronote_status = "Raccourci ProNote actif".into();
+    Ok(view.clone())
 }
 
 #[cfg(target_os = "macos")]
@@ -660,7 +888,7 @@ fn print_document(_app: &AppHandle, job: &RemoteJob, path: &Path) -> Result<Stri
     let _reverse_was_applied = job.options.reverse_applied_to_pdf;
     #[cfg(target_os = "macos")]
     {
-        return run_with_timeout(Path::new("/usr/bin/lp"), &mac_print_args(job, path));
+        run_with_timeout(Path::new("/usr/bin/lp"), &mac_print_args(job, path))
     }
     #[cfg(target_os = "windows")]
     {
@@ -673,7 +901,7 @@ fn print_document(_app: &AppHandle, job: &RemoteJob, path: &Path) -> Result<Stri
         if !engine.exists() {
             return Err("Moteur PDF Windows absent de l'installation".into());
         }
-        return run_with_timeout(&engine, &windows_print_args(job, path));
+        run_with_timeout(&engine, &windows_print_args(job, path))
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
@@ -824,6 +1052,23 @@ async fn worker_loop(app: AppHandle, runtime: Arc<RuntimeState>) {
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, _shortcut, event| {
+                    if event.state() == ShortcutState::Pressed {
+                        if app
+                            .get_webview_window("main")
+                            .and_then(|window| window.is_focused().ok())
+                            == Some(true)
+                        {
+                            return;
+                        }
+                        start_pronote_paste(app.clone());
+                    }
+                })
+                .build(),
+        )
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
@@ -843,7 +1088,14 @@ pub fn run() {
             // l'ancienne valeur lors d'une mise à jour évite de conserver une
             // adresse saisie dans une version antérieure.
             config.server_url = SERVER_URL.into();
+            if config.pronote_shortcut.is_empty() {
+                config.pronote_shortcut = default_pronote_shortcut();
+            }
             let token = read_token(&config.installation_id);
+            let pronote_shortcut_active = app
+                .global_shortcut()
+                .register(config.pronote_shortcut.as_str())
+                .is_ok();
             let view = ConnectorStateView {
                 connected: token.is_some(),
                 email: config.email.clone(),
@@ -854,6 +1106,13 @@ pub fn run() {
                 } else {
                     "Déconnecté".into()
                 },
+                pronote_shortcut: config.pronote_shortcut.clone(),
+                pronote_shortcut_active,
+                pronote_status: if pronote_shortcut_active {
+                    "Raccourci ProNote actif".into()
+                } else {
+                    "Raccourci indisponible : choisissez-en un autre".into()
+                },
                 ..Default::default()
             };
             let runtime = Arc::new(RuntimeState {
@@ -862,6 +1121,7 @@ pub fn run() {
                 token: RwLock::new(token),
                 paused: RwLock::new(false),
                 job_gate: Mutex::new(()),
+                pronote_gate: AtomicBool::new(false),
                 client: Client::builder()
                     .connect_timeout(Duration::from_secs(10))
                     .timeout(Duration::from_secs(90))
@@ -902,7 +1162,8 @@ pub fn run() {
             connector_state,
             login,
             logout,
-            pause_worker
+            pause_worker,
+            set_pronote_shortcut
         ])
         .run(tauri::generate_context!())
         .expect("échec du lancement de MathPrint Connector");
@@ -956,5 +1217,26 @@ mod tests {
     #[test]
     fn production_server_is_fixed() {
         assert_eq!(SERVER_URL, "https://mathprint.fabrelexos.synology.me");
+    }
+
+    #[test]
+    fn pronote_notes_keep_every_student_in_order() {
+        assert_eq!(
+            parse_pronote_notes("12,5\r\nabs\r\n\r\n8").unwrap(),
+            vec!["12,5", "Abs", "", "8"]
+        );
+        assert_eq!(parse_pronote_notes("14\n").unwrap(), vec!["14", ""]);
+    }
+
+    #[test]
+    fn pronote_rejects_an_empty_clipboard() {
+        assert!(parse_pronote_notes("").is_err());
+    }
+
+    #[test]
+    fn pronote_shortcut_requires_the_safe_modifier_set() {
+        assert!(validate_pronote_shortcut(DEFAULT_PRONOTE_SHORTCUT).is_ok());
+        assert!(validate_pronote_shortcut("CmdOrCtrl+Shift+N").is_err());
+        assert!(validate_pronote_shortcut("CmdOrCtrl+Alt+Shift+Enter").is_err());
     }
 }

@@ -25,3 +25,17 @@ dl { margin: 8px 0; } dl div { display: flex; justify-content: space-between; ga
 article { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 0; border-top: 1px solid #f0f1f5; font-size: 12px; }
 article div { min-width: 0; display: flex; flex-direction: column; gap: 3px; } article strong { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .status { flex: none; border-radius: 999px; padding: 4px 7px; background: #eef0f5; color: #626c80; }.status.submitted { background: #e6f7f0; color: #08754a; }.status.failed, .status.uncertain { background: #fff0f2; color: #a21d31; }.status.claimed { background: #eef2ff; color: #4338ca; }
+.pronote-card { margin-top: 16px; }
+.pronote-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.pronote-title h2 { margin: 0; font-size: 15px; }
+.pronote-title p { margin: 4px 0 0; color: #788196; font-size: 12px; }
+.shortcut-state { flex: none; border-radius: 999px; padding: 4px 8px; background: #fff4df; color: #946108; font-size: 11px; font-weight: 700; }
+.shortcut-state.active { background: #e6f7f0; color: #08754a; }
+.pronote-card ol { margin: 16px 0; padding-left: 20px; color: #566075; font-size: 12px; line-height: 1.55; }
+.pronote-card li + li { margin-top: 4px; }
+.shortcut-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin: 8px 0 10px; color: #778094; font-size: 12px; }
+kbd { border: 1px solid #cfd5e1; border-bottom-width: 2px; border-radius: 7px; background: #f7f8fb; color: #273147; padding: 6px 9px; font-family: inherit; font-size: 12px; font-weight: 750; }
+button.shortcut-button { background: #eef0f5; color: #3c465b; }
+button.shortcut-button.capturing { background: #eef2ff; color: #3730a3; box-shadow: 0 0 0 3px rgba(99,102,241,.14); }
+.pronote-status { margin: 11px 0 0; border-radius: 8px; background: #f4f6fa; color: #596277; padding: 9px 10px; font-size: 11px; text-align: center; }
+.pronote-status.running { background: #eef2ff; color: #3730a3; font-weight: 650; }
