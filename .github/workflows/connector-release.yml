@@ -24,7 +24,7 @@ jobs:
             args: --target x86_64-apple-darwin --bundles dmg
           - platform: windows-latest
             target: ""
-            args: --config src-tauri/tauri.windows.signing.conf.json --bundles nsis
+            args: --bundles nsis
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -63,62 +63,6 @@ jobs:
         working-directory: connector
         run: npm ci
 
-      - name: Exiger la clé de mise à jour
-        shell: bash
-        env:
-          CONNECTOR_UPDATER_PRIVATE_KEY: ${{ secrets.CONNECTOR_UPDATER_PRIVATE_KEY }}
-        run: test -n "$CONNECTOR_UPDATER_PRIVATE_KEY"
-
-      - name: Exiger la signature et la notarisation Apple
-        if: runner.os == 'macOS'
-        shell: bash
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          test -n "$APPLE_CERTIFICATE"
-          test -n "$APPLE_CERTIFICATE_PASSWORD"
-          test -n "$APPLE_SIGNING_IDENTITY"
-          test -n "$APPLE_ID"
-          test -n "$APPLE_PASSWORD"
-          test -n "$APPLE_TEAM_ID"
-
-      - name: Importer le certificat Authenticode Windows
-        if: runner.os == 'Windows'
-        shell: pwsh
-        env:
-          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
-          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-        run: |
-          if (-not $env:WINDOWS_CERTIFICATE -or -not $env:WINDOWS_CERTIFICATE_PASSWORD) {
-            throw 'Secrets de signature Authenticode Windows absents'
-          }
-          $encoded = Join-Path $env:RUNNER_TEMP 'mathprint-cert.txt'
-          $pfx = Join-Path $env:RUNNER_TEMP 'mathprint-cert.pfx'
-          Set-Content -Path $encoded -Value $env:WINDOWS_CERTIFICATE
-          certutil -decode $encoded $pfx | Out-Null
-          $password = ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD `
-            -Force -AsPlainText
-          $imported = @(Import-PfxCertificate -FilePath $pfx `
-            -CertStoreLocation Cert:\CurrentUser\My -Password $password)
-          $signing = $imported | Where-Object HasPrivateKey | Select-Object -First 1
-          if (-not $signing) { throw 'Le PFX ne contient aucun certificat avec clé privée' }
-          $config = @{
-            bundle = @{
-              windows = @{
-                certificateThumbprint = $signing.Thumbprint
-                digestAlgorithm = 'sha256'
-                timestampUrl = 'http://timestamp.digicert.com'
-              }
-            }
-          }
-          $config | ConvertTo-Json -Depth 5 | Set-Content `
-            'connector/src-tauri/tauri.windows.signing.conf.json'
-
       - name: Préparer le moteur PDF Windows vérifié
         if: runner.os == 'Windows'
         shell: pwsh
@@ -138,25 +82,16 @@ jobs:
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.CONNECTOR_UPDATER_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           projectPath: connector
           tagName: connector-v__VERSION__
           releaseName: MathPrint Connector v__VERSION__
-          releaseBody: Installateurs macOS Apple Silicon, macOS Intel (10.13+) et Windows x64.
+          releaseBody: Installateurs non signés macOS Apple Silicon, macOS Intel (10.13+) et Windows x64. Le système peut afficher un avertissement de sécurité à l'installation.
           releaseDraft: false
           prerelease: false
-          updaterJsonPreferNsis: true
           args: ${{ matrix.args }}
 
-  publish-metadata:
+  publish-third-party-sources:
     needs: build
     runs-on: ubuntu-latest
     steps:
@@ -170,15 +105,3 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "$GITHUB_REF_NAME" SumatraPDF-3.6.1-source.zip --repo "$GITHUB_REPOSITORY" --clobber
-
-      - name: Publier le manifeste stable de mise à jour
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          mkdir updater
-          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --pattern latest.json --dir updater
-          gh release delete connector-latest --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes || true
-          gh release create connector-latest updater/latest.json --repo "$GITHUB_REPOSITORY" \
-            --title "MathPrint Connector — canal stable" \
-            --notes "Manifeste stable de mise à jour ; les installateurs sont dans $GITHUB_REF_NAME." \
-            --latest=false

@@ -44,25 +44,17 @@ Les versions du connecteur sont indépendantes des images Docker. La CI ne se
 déclenche que sur un tag `connector-vX.Y.Z`, après avoir vérifié que cette
 version correspond à `package.json`, `Cargo.toml` et `tauri.conf.json`.
 
-Secrets GitHub requis :
-
-- `CONNECTOR_UPDATER_PRIVATE_KEY` : contenu de `.connector-updater.key` ;
-- secrets Apple `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`,
-  `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID` pour
-  signer et notariser les deux DMG ;
-- `WINDOWS_CERTIFICATE` (PFX encodé en base64) et
-  `WINDOWS_CERTIFICATE_PASSWORD` pour la signature Authenticode de l’EXE.
-
-Le fichier privé `.connector-updater.key` est ignoré par Git et doit être
-sauvegardé dans un coffre. Sa perte empêcherait de mettre à jour les postes
-déjà installés. Le workflow produit :
+Le workflow actuel produit sans secret de signature :
 
 - DMG Apple Silicon (`aarch64`) ;
 - DMG Intel (`x86_64`), cible minimale macOS 10.13 ;
 - installateur NSIS `.exe` Windows x64 ;
-- artefacts signés et `latest.json` pour la mise à jour intégrée.
+- archive des sources SumatraPDF exigée par sa licence.
 
-Le workflow refuse de publier si une clé de mise à jour, un certificat Apple ou
-le certificat Authenticode manque. Authenticode évite l’éditeur inconnu de
-SmartScreen ; cette signature reste distincte de la signature cryptographique
-obligatoire des mises à jour Tauri.
+Ces installateurs sont provisoirement non signés : Gatekeeper et SmartScreen
+peuvent donc afficher un avertissement. La mise à jour intégrée est également
+désactivée, car Tauri exige que ses artefacts soient signés. Lors du passage à
+une distribution signée, il faudra réactiver `createUpdaterArtifacts`, fournir
+la clé privée correspondant à la clé publique déjà embarquée, ainsi que les
+certificats Apple et Authenticode. Le fichier privé `.connector-updater.key` est
+ignoré par Git et doit rester sauvegardé dans un coffre.
