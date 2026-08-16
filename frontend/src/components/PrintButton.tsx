@@ -6,12 +6,56 @@ import { useEffect, useState } from 'react'
 import { api } from '../api'
 
 type Printers = {
-  local: { name: string; display_name?: string; device_name?: string; app_default: boolean; duplex: boolean }[]
-  network: { name: string; display_name?: string; app_default: boolean; duplex: boolean }[]
+  local: PrinterDestination[]
+  network: PrinterDestination[]
   printing_available: boolean
+  online_connector_count: number
+}
+
+type PrinterDestination = {
+  name: string
+  display_name?: string
+  device_name?: string
+  connector_id?: string
+  source: 'cups_local' | 'connector_local' | 'network_ipp'
+  status: string
+  available: boolean
+  system_default?: boolean
+  app_default: boolean
+  duplex: boolean
 }
 
 type PrintResult = { lp_output: string; queued?: boolean; job_id?: string }
+const preferredDestinationKey = 'mathprint:preferred-print-destination'
+
+function chooseDestination(printers: Printers) {
+  const all = [...printers.local, ...printers.network]
+  const available = all.filter((destination) => destination.available)
+  const remembered = window.localStorage.getItem(preferredDestinationKey)
+  if (remembered) {
+    // Une destination hors ligne reste le choix du professeur : ne jamais
+    // basculer silencieusement le travail vers l'autre ordinateur.
+    return all.find((destination) => destination.name === remembered) ?? null
+  }
+
+  const explicitDefault = available.find((destination) => destination.app_default)
+  if (explicitDefault) return explicitDefault
+
+  const connectorDestinations = available.filter(
+    (destination) => destination.source === 'connector_local' && destination.connector_id,
+  )
+  const onlineConnectors = new Set(connectorDestinations.map(
+    (destination) => destination.connector_id,
+  ))
+  if (onlineConnectors.size === 1) {
+    return connectorDestinations.find((destination) => destination.system_default)
+      ?? connectorDestinations[0]
+  }
+  if (onlineConnectors.size > 1) return null
+
+  return available.find((destination) => destination.system_default)
+    ?? (available.length === 1 ? available[0] : null)
+}
 
 export default function PrintButton({
   assessmentId, file, label = 'Imprimer', size = 'xs', assessmentDuplex = false,
@@ -43,18 +87,32 @@ export default function PrintButton({
   }
 
   useEffect(() => {
-    if (opened && !printers) {
-      api.get<Printers>('/api/printers').then((p) => {
-        setPrinters(p)
-        const all = [...p.local, ...p.network]
-        const def = all.find((x) => x.app_default) ?? all[0]
-        if (def) {
-          setPrinter(def.name)
-          setRectoDone(window.sessionStorage.getItem(rectoSessionKey(def.name)) === 'submitted')
-        }
+    if (!opened) return
+    let active = true
+    async function loadPrinters() {
+      const next = await api.get<Printers>('/api/printers')
+      if (!active) return
+      setPrinters(next)
+      setPrinter((current) => {
+        // Après une sélection, conserver son identifiant exact même si le
+        // poste disparaît. L'utilisateur décidera lui-même du remplacement.
+        if (current) return current
+        return chooseDestination(next)?.name ?? null
       })
     }
-  }, [opened, printers])
+    loadPrinters().catch((error) => {
+      if (active) notifications.show({ color: 'red', message: (error as Error).message })
+    })
+    const timer = window.setInterval(() => {
+      loadPrinters().catch(() => { /* la prochaine actualisation réessaiera */ })
+    }, 5000)
+    return () => { active = false; window.clearInterval(timer) }
+  }, [opened])
+
+  useEffect(() => {
+    setRectoDone(Boolean(printer
+      && window.sessionStorage.getItem(rectoSessionKey(printer)) === 'submitted'))
+  }, [printer, assessmentId])
 
   useEffect(() => {
     if (!pendingJob) return
@@ -90,9 +148,10 @@ export default function PrintButton({
   }, [pendingJob])
 
   async function doPrint(passSide: 'all' | 'recto' | 'verso' = 'all') {
-    if (!printer) return
+    if (!printer || !selectedPrinter?.available) return
     setBusySide(passSide)
     try {
+      window.localStorage.setItem(preferredDestinationKey, printer)
       const r = await api.post<PrintResult>('/api/printers/print', {
         assessment_id: assessmentId, file, printer,
         duplex: file === 'subject_batch.pdf' && assessmentDuplex && selectedPrinter?.duplex,
@@ -118,14 +177,23 @@ export default function PrintButton({
   }
 
   const options = printers
-    ? [...printers.local.map((p) => ({ value: p.name,
-         label: `${p.display_name || p.name}${p.device_name ? ` — ${p.device_name}` : ''}${p.app_default ? ' (défaut MathPrint)' : ''}` })),
-       ...printers.network.map((p) => ({ value: p.name,
-         label: `${p.display_name || p.name} (réseau)${p.app_default ? ' · défaut MathPrint' : ''}` }))]
+    ? [...printers.local.map((p) => ({
+         value: p.name,
+         disabled: !p.available,
+         label: p.source === 'connector_local'
+           ? `${p.device_name || 'Poste'} — ${p.display_name || p.name}${p.system_default ? ' · défaut du poste' : ''}${!p.available ? ' · hors ligne' : ''}`
+           : `${p.display_name || p.name}${p.system_default ? ' · défaut système' : ''}`,
+       })),
+       ...printers.network.map((p) => ({
+         value: p.name,
+         disabled: !p.available,
+         label: `${p.display_name || p.name} — réseau${p.app_default ? ' · préférée' : ''}`,
+       }))]
     : []
 
   function selectPrinter(name: string | null) {
     setPrinter(name)
+    if (name) window.localStorage.setItem(preferredDestinationKey, name)
     setRectoDone(Boolean(name && window.sessionStorage.getItem(rectoSessionKey(name)) === 'submitted'))
   }
 
@@ -150,6 +218,16 @@ export default function PrintButton({
               Aucune imprimante détectée — télécharger le PDF et imprimer à 100 %.
             </Text>
           )}
+          {printers && printers.online_connector_count > 1 && !printer && (
+            <Alert color="blue" p="xs">
+              Plusieurs ordinateurs sont connectés. Choisissez une destination ; ce choix sera mémorisé sur ce navigateur.
+            </Alert>
+          )}
+          {printers && printer && !selectedPrinter?.available && (
+            <Alert color="orange" p="xs">
+              La destination choisie est hors ligne ou n’est plus déclarée. Aucun travail ne sera envoyé ailleurs automatiquement.
+            </Alert>
+          )}
           <Select size="xs" label="Imprimante" data={options} value={printer}
             onChange={selectPrinter} disabled={!!pendingJob} comboboxProps={{ withinPortal: false }} />
           {file === 'subject_batch.pdf' && assessmentDuplex && selectedPrinter?.duplex && (
@@ -169,19 +247,19 @@ export default function PrintButton({
                 Cette imprimante n’a pas de recto-verso automatique. Lancez les deux passes séparément.
               </Alert>
               <Button size="xs" variant={rectoDone ? 'light' : 'filled'}
-                onClick={() => doPrint('recto')} loading={busySide === 'recto'} disabled={!printer || !!pendingJob}>
+                onClick={() => doPrint('recto')} loading={busySide === 'recto'} disabled={!printer || !selectedPrinter?.available || !!pendingJob}>
                 Imprimer la 1re passe — Recto
               </Button>
               <Text size="xs" c="dimmed" ta="center">
                 Replacez la pile imprimée dans le bac, sans en modifier l’ordre.
               </Text>
               <Button size="xs" color="violet" onClick={() => doPrint('verso')}
-                loading={busySide === 'verso'} disabled={!printer || !!pendingJob || !rectoDone}>
+                loading={busySide === 'verso'} disabled={!printer || !selectedPrinter?.available || !!pendingJob || !rectoDone}>
                 Imprimer la 2e passe — Verso
               </Button>
             </Stack>
           ) : (
-            <Button size="xs" onClick={() => doPrint('all')} loading={busySide === 'all'} disabled={!printer || !!pendingJob}>
+            <Button size="xs" onClick={() => doPrint('all')} loading={busySide === 'all'} disabled={!printer || !selectedPrinter?.available || !!pendingJob}>
               Lancer l'impression
             </Button>
           )}

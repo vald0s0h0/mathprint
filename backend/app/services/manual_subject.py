@@ -12,7 +12,7 @@ Différences avec la pipeline automatique (services.generation) :
         voisins de table ;
       « par niveau » : exactement 3 variantes (facile/moyen/difficile),
         attribuées d'après le niveau de l'élève (StudentLevel, échelle 1-10) ;
-  • les guides (rappels d'auto-correction attachés à chaque exercice) sont
+  • les guides d'auto-correction attachés à chaque exercice sont
     pilotés globalement par le sujet : à la correction seulement (overlay),
     imprimés dès le sujet pour les élèves de niveau 1 à 4, ou supprimés (cf.
     pdfgen.GUIDES_*).
@@ -122,21 +122,39 @@ def _card(db: Session, row: GeneratedExercise, comp: Competency, tpl: dict,
     for mode in (pdfgen.GUIDES_OVERLAY, pdfgen.GUIDES_NONE):
         shape = generation.render_shape(row, mode)
         heights[mode] = pdfgen.estimate_item_height(
-            shape, font_size, math_fs, tpl["exercise"], tpl["lesson"])
+            shape, font_size, math_fs, tpl["exercise"])
+    grading = row.grading_json or {}
+    display_statement, calculator, is_problem = generation.indigo_display(row)
     return {
         "id": row.id,
         "competency_id": row.competency_id,
         "competency_label": _competency_label(comp),
         "chapter_code": comp.chapter_code, "chapter_name": comp.chapter_name,
-        "statement": row.statement,
+        "statement": display_statement,
         "response_type": row.response_type,
+        "expected": row.expected_json or {},
+        "grading": grading,
+        "choices": grading.get("choices") or [],
+        "row_labels": grading.get("row_labels"),
+        "col_labels": grading.get("col_labels"),
+        "lines": grading.get("lines"),
         "difficulty": row.difficulty_level,
         "kind": row.kind, "source": row.source,
         "badge_type": indigo.get("badge_type") or "",
         "title": indigo.get("title") or "",
-        "calculator": indigo.get("calculator") or "autorisee",
+        "calculator": calculator,
+        "is_problem": is_problem,
         "source_number": indigo.get("source_number") or "",
         "has_figure": bool(row.figure_json),
+        "figure": row.figure_json,
+        "figure_url": (f"/api/content/exercises/{row.id}/figure.png"
+                       if row.figure_json else None),
+        "correction_guide": (row.correction or "")
+                            if row.source in ("indigo", "gemini") else "",
+        "correction_solution": (indigo.get("correction_solution") or "")
+                               if row.source == "indigo"
+                               else (row.correction or "") if row.source != "gemini"
+                               else "",
         "bareme_points": scoring.item_bareme(row.grading_json, row.response_type),
         # hauteurs RÉELLES (points PDF) des deux mises en page possibles : c'est
         # la mesure de pdfgen, pas une estimation refaite côté navigateur.

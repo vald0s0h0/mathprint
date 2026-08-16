@@ -4,7 +4,7 @@ import {
 } from '@mantine/core'
 import {
   BookOpenCheck, ClipboardList, GraduationCap, LayoutDashboard, Library, LogOut,
-  Moon, ScanLine, Settings as SettingsIcon, Sun, Target, Users, FileText,
+  Moon, ScanLine, Settings as SettingsIcon, ShieldUser, Sun, Target, Users, FileText,
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
@@ -21,6 +21,7 @@ import Bank from './pages/Bank'
 import Exercices from './pages/Exercices'
 import Subjects from './pages/Subjects'
 import Grades from './pages/Grades'
+import UsersAdmin from './pages/UsersAdmin'
 import { CYCLES, useAppState, type Cycle } from './state/AppState'
 
 // `admin: true` => réservé au rôle admin (absent des builds utilisateur/correcteur).
@@ -29,6 +30,7 @@ const NAV = [
   { to: '/sujets', label: 'Sujets', icon: FileText },
   { to: '/banque', label: 'Banque', icon: Library },
   { to: '/exercices', label: 'Exercices', icon: BookOpenCheck, admin: true },
+  { to: '/utilisateurs', label: 'Utilisateurs', icon: Users, admin: true },
   { to: '/corrections', label: 'Corrections', icon: ScanLine },
   { to: '/eleves', label: 'Élèves', icon: Users },
   { to: '/notes', label: 'Notes', icon: ClipboardList },
@@ -127,6 +129,12 @@ export default function App() {
         {nav.map((n) => (
           <NavLink key={n.to} label={n.label} active={location.pathname === n.to}
             leftSection={<n.icon size={17} strokeWidth={1.9} />}
+            rightSection={n.admin ? (
+              <Tooltip label="Réservé aux administrateurs" position="right">
+                <ShieldUser size={14} color="var(--mantine-color-gray-6)"
+                  aria-label="Réservé aux administrateurs" />
+              </Tooltip>
+            ) : undefined}
             style={{ borderRadius: 8 }} fw={500} mb={2}
             onClick={() => navigate(n.to)} />
         ))}
@@ -139,6 +147,7 @@ export default function App() {
           <Route path="/sujets" element={<Subjects />} />
           <Route path="/banque" element={<Bank />} />
           {isAdmin && <Route path="/exercices" element={<Exercices />} />}
+          {isAdmin && <Route path="/utilisateurs" element={<UsersAdmin />} />}
           <Route path="/corrections" element={<Corrections />} />
           <Route path="/eleves" element={<Students />} />
           <Route path="/notes" element={<Grades />} />

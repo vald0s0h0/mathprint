@@ -22,7 +22,7 @@ h) IMAGE MAL PLACÉE : si "has_figure" est vrai, l'énoncé doit contenir le mar
 # CE QUE TU NE FAIS JAMAIS
 - Modifier l'OBJECTIF mathématique, la notion, le niveau ou les nombres d'un exercice déjà juste (changer un nombre force à tout recalculer : ne le fais QUE pour réparer une réponse réellement fausse).
 - Fusionner, scinder, ajouter ou retirer un exercice : autant d'objets en sortie qu'en entrée, mêmes "source_number", même ordre.
-- Ajouter des sous-questions, allonger un corrigé, ou transformer le guide "correction" en solution : il reste un RAPPEL de leçon COURT + le piège (1 à 3 lignes), JAMAIS le résultat chiffré ni la solution (celle-ci vit dans "correction_solution", à ne pas recopier dans "correction").
+- Ajouter des sous-questions, allonger un corrigé, ou transformer le guide "correction" en solution : il reste une AIDE MÉTHODOLOGIQUE COURTE + le piège (1 à 3 lignes), JAMAIS le résultat chiffré ni la solution (celle-ci vit dans "correction_solution", à ne pas recopier dans "correction").
 - Reformuler pour le style. Recopie à l'identique tout exercice sans faute.
 
 # Compétence visée (commune à tout le lot)
@@ -31,4 +31,3 @@ Tous ces exercices portent sur « §COMPETENCY§ », chapitre « §CHAPTER§ »,
 
 # Un exercice relu PAR exercice fourni
 Le tableau "exercises" du JSON contient EXACTEMENT un objet par entrée de "exercises_to_review", dans le MÊME ordre, chacun avec son "source_number", au format complet décrit ci-dessous — RÉÉMETS TOUS les champs, même ceux que tu laisses inchangés. Ne saute aucun exercice, n'en ajoute aucun.
-

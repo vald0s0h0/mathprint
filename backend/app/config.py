@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     # --- Registre de modèles par défaut (RM-011 : jamais codé en dur ailleurs) ---
     deepseek_model: str = "deepseek-v4-flash"
     deepseek_reasoning_model: str = "deepseek-v4-flash-thinking"
-    # création d'exercices et de rappels de leçon : modèle pro
+    # création et réparation des exercices : modèle pro
     deepseek_pro_model: str = "deepseek-v4-pro"
     # plafond de tokens de SORTIE d'un appel DeepSeek JSON. Bien plus bas que les
     # budgets Claude (16k-48k) : les modèles DeepSeek coupent la sortie autour de
@@ -178,9 +178,6 @@ class Settings(BaseSettings):
     # l'intérieur de la moitié Mathpix.
     exercise_kind_mix: dict = {"qcm": 0.50, "application": 0.30, "probleme": 0.20}
     next_plan_max_age_days: int = 60     # au-delà, le plan post-correction stocké est ignoré
-    lesson_review_mastery_threshold: float = 0.5  # maîtrise sous ce seuil = lacune -> rappel de leçon
-    max_lessons_per_copy: int = 2        # rappels de leçon max insérés dans une même copie
-
     # --- MathALÉA (service Node headless, conteneur "mathalea" §11.1) ---
     mathalea_url: str = "http://localhost:8123"
     # délai TOTAL maximal d'un appel MathALÉA (cold start possible du service

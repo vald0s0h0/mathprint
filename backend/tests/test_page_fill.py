@@ -45,7 +45,7 @@ def _heights(items: list[dict]) -> list[float]:
     tpl = DEFAULT_TEMPLATES
     return [pdfgen.estimate_item_height(
         i, int(tpl["exercise"].get("font_size", 9)), int(tpl["exercise"].get("math_size", 12)),
-        tpl["exercise"], tpl["lesson"]) for i in items]
+        tpl["exercise"]) for i in items]
 
 
 @pytest.mark.parametrize("n", [1, 3, 5, 7, 8, 9, 12, 20])

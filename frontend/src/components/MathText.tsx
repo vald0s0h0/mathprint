@@ -89,15 +89,15 @@ function frenchSpacing(s: string): string {
  *  jusqu'au bord droit — approché par flex:1 dans le fil de texte). */
 function BlankBox({ kind = 'normal' }: { kind?: 'normal' | 'mini' | 'right' }) {
   const base = {
-    display: 'inline-block', height: kind === 'mini' ? '0.95em' : '1.05em',
+    display: 'inline-block', height: kind === 'mini' ? '7mm' : '8mm',
     border: '1px solid var(--mantine-color-gray-5)', borderRadius: 2,
     margin: '0 0.12em', verticalAlign: '-0.18em',
   } as const
   if (kind === 'right')
-    return <Box component="span" aria-label="case à remplir" style={{ ...base, minWidth: '3em', width: '55%' }} />
+    return <Box component="span" aria-label="case à remplir" style={{ ...base, minWidth: '22mm', width: '55%' }} />
   if (kind === 'mini')
-    return <Box component="span" aria-label="mini-case" style={{ ...base, width: '1.3em' }} />
-  return <Box component="span" aria-label="case à remplir" style={{ ...base, width: '2.6em' }} />
+    return <Box component="span" aria-label="mini-case" style={{ ...base, width: '9mm' }} />
+  return <Box component="span" aria-label="case à remplir" style={{ ...base, width: '20mm' }} />
 }
 
 const TOKEN_KIND: Record<string, 'normal' | 'mini' | 'right'> = {

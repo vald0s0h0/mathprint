@@ -1,4 +1,4 @@
-"""Banque de contenus (exercices générés & rappels de leçon) — onglet Banque.
+"""Banque d'exercices — onglet Banque.
 
 La banque grandit à la demande (compétence × niveau réellement utilisés) ;
 cet onglet donne la visibilité et le contrôle : couverture, aperçu fidèle
@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from ..deps import current_user, require_role
 from ..models import (
-    Competency, CompetencyFramework, GeneratedExercise, LessonSnippet,
+    Competency, CompetencyFramework, GeneratedExercise,
     SesamathsChapterExtraction, SesamathsLlmCache,
 )
 from ..services import exercise_gen, figures, scoring
@@ -26,6 +26,10 @@ router = APIRouter(prefix="/api/content", tags=["content"],
 
 
 def _exercise_out(ex: GeneratedExercise, comp: Competency | None) -> dict:
+    from ..services import generation
+    grading = ex.grading_json or {}
+    indigo = (ex.raw_extract_json or {}).get("indigo") or {}
+    display_statement, calculator, is_problem = generation.indigo_display(ex)
     return {
         "id": ex.id, "competency_id": ex.competency_id,
         "competency_code": comp.code if comp else "",
@@ -33,17 +37,35 @@ def _exercise_out(ex: GeneratedExercise, comp: Competency | None) -> dict:
         "competency_label": comp.label if comp else "",
         "chapter_name": comp.chapter_name if comp else "",
         "level": ex.difficulty_level, "variant": ex.variant,
-        "statement": ex.statement, "correction": ex.correction,
+        "statement": display_statement, "correction": ex.correction,
         "response_type": ex.response_type,
-        "choices": (ex.grading_json or {}).get("choices", []),
-        "expected": ex.expected_json,
+        "choices": grading.get("choices", []),
+        "expected": ex.expected_json or {},
+        # Contrat complet du rendu feuille. Ces valeurs ne sont pas recalculées
+        # dans le navigateur : ce sont exactement celles que pdfgen consomme.
+        "grading": grading,
+        "row_labels": grading.get("row_labels"),
+        "col_labels": grading.get("col_labels"),
+        "lines": grading.get("lines"),
         "source": ex.source or "deepseek", "kind": ex.kind or "application",
+        "calculator": calculator, "is_problem": is_problem,
         # barème d'EFFORT (ce que l'exercice vaut, cf. services.scoring) : il
         # vit dans grading_json, avec un repli déterministe quand le LLM n'en a
         # pas produit — la banque doit l'afficher comme l'onglet Exercices.
         "bareme_points": scoring.item_bareme(ex.grading_json or {}, ex.response_type),
         "quality": ex.quality_json or {},
         "figure": ex.figure_json,
+        "figure_url": (f"/api/content/exercises/{ex.id}/figure.png"
+                       if ex.figure_json else None),
+        # Dans la banque publiée Indigo, `correction` est le guide élève et la
+        # vraie solution reste dans les métadonnées versionnées. Les autres
+        # sources historiques n'ont qu'un corrigé : on l'expose comme solution.
+        "correction_guide": (ex.correction
+                             if ex.source in ("indigo", "gemini") else ""),
+        "correction_solution": (indigo.get("correction_solution", "")
+                                if ex.source == "indigo"
+                                else "" if ex.source == "gemini"
+                                else ex.correction),
         "status": ex.status,
         "created_at": ex.created_at.isoformat() if ex.created_at else None,
         # blocs OCR Mistral bruts (title/text/table/image/...) dont provient
@@ -53,27 +75,12 @@ def _exercise_out(ex: GeneratedExercise, comp: Competency | None) -> dict:
     }
 
 
-def _lesson_out(sn: LessonSnippet, comp: Competency | None) -> dict:
-    return {
-        "id": sn.id, "competency_id": sn.competency_id,
-        "competency_code": comp.code if comp else "",
-        "competency_short_id": comp.short_id if comp else "",
-        "competency_label": comp.label if comp else "",
-        "chapter_name": comp.chapter_name if comp else "",
-        "level_min": sn.level_min, "level_max": sn.level_max,
-        "title": sn.title, "blocks": sn.blocks_json or None,
-        "content": sn.content_latex, "example": sn.example_latex,
-        "figure": sn.figure_json, "validated": sn.validated,
-        "status": sn.status,
-    }
-
-
 @router.get("/summary")
 def summary(grade_level: str | None = None, db: Session = Depends(get_db)):
     """Couverture de la banque par compétence : nb d'exercices actifs par
     niveau 1-5, nb de "problèmes" (kind=probleme, badge probleme/énigme
-    confondus), et présence des rappels (1-3 / 4-5). Renvoie aussi domaine/
-    chapitre (codes ET libellés, H1/H2) pour que le front puisse regrouper la
+    confondus). Renvoie aussi domaine/chapitre (codes ET libellés, H1/H2)
+    pour que le front puisse regrouper la
     table par domaine > chapitre > compétence (H1/H2/H3)."""
     comp_q = (db.query(Competency, CompetencyFramework.grade_level)
               .join(CompetencyFramework,
@@ -98,17 +105,9 @@ def summary(grade_level: str | None = None, db: Session = Depends(get_db)):
         db.query(GeneratedExercise.competency_id, func.count())
         .filter(GeneratedExercise.status == "active", GeneratedExercise.kind == "probleme")
         .group_by(GeneratedExercise.competency_id).all())
-    lessons = dict()
-    for sn in db.query(LessonSnippet).filter(LessonSnippet.status == "active"):
-        lessons.setdefault(sn.competency_id, []).append(
-            {"level_min": sn.level_min, "level_max": sn.level_max,
-             "validated": sn.validated})
-
     out = []
     for comp, grade in comps:
         by_level = ex_counts.get(comp.id, {})
-        if not by_level and comp.id not in lessons:
-            continue  # la banque s'agrandit à la demande : n'afficher que l'existant
         out.append({
             "competency_id": comp.id, "code": comp.code, "short_id": comp.short_id,
             "label": comp.label, "order_index": comp.order_index,
@@ -118,7 +117,6 @@ def summary(grade_level: str | None = None, db: Session = Depends(get_db)):
             "by_level": {str(l): by_level.get(l, 0) for l in range(1, 6)},
             "total": sum(by_level.values()),
             "problems": prob_counts.get(comp.id, 0),
-            "lessons": lessons.get(comp.id, []),
         })
     out.sort(key=lambda r: (r["grade_level"], r["code"]))
     return out
@@ -155,27 +153,9 @@ def sesamaths_raw(competency_id: str, db: Session = Depends(get_db)):
     return sesamaths.extraction_state(db, comp)
 
 
-@router.get("/lessons")
-def list_lessons(competency_id: str | None = None, grade_level: str | None = None,
-                 db: Session = Depends(get_db)):
-    q = db.query(LessonSnippet, Competency).join(
-        Competency, LessonSnippet.competency_id == Competency.id)
-    if competency_id:
-        q = q.filter(LessonSnippet.competency_id == competency_id)
-    if grade_level:
-        q = (q.join(CompetencyFramework,
-                    Competency.framework_id == CompetencyFramework.id)
-             .filter(CompetencyFramework.grade_level == grade_level))
-    q = q.filter(LessonSnippet.status == "active")
-    return [_lesson_out(sn, comp) for sn, comp in q.all()]
-
-
-class GenerateIn(BaseModel):
+class GenerateExercisesIn(BaseModel):
     competency_id: str
     level: int  # 1-5
-
-
-class GenerateExercisesIn(GenerateIn):
     # même choix que dans l'assistant sujet (cf. assessments.AssessmentPatch) :
     # extraction du manuel ou création Gemini — les deux pools sont séparés
     source: Literal["sesamaths", "gemini"] = "sesamaths"
@@ -200,20 +180,6 @@ def generate_exercises(body: GenerateExercisesIn, db: Session = Depends(get_db))
     return {"count": len(rows), "exercises": [_exercise_out(ex, comp) for ex in rows]}
 
 
-@router.post("/lessons/generate",
-             dependencies=[Depends(require_role("admin", "teacher"))])
-def generate_lesson(body: GenerateIn, db: Session = Depends(get_db)):
-    comp = db.get(Competency, body.competency_id)
-    if not comp:
-        raise HTTPException(404, "Compétence inconnue")
-    try:
-        sn = exercise_gen.ensure_lesson(db, comp, max(1, min(5, body.level)))
-    except Exception as e:
-        raise HTTPException(502, f"Génération impossible : {e}")
-    db.commit()
-    return _lesson_out(sn, comp)
-
-
 @router.post("/exercises/{exercise_id}/retire",
              dependencies=[Depends(require_role("admin", "teacher"))])
 def retire_exercise(exercise_id: str, db: Session = Depends(get_db)):
@@ -227,17 +193,6 @@ def retire_exercise(exercise_id: str, db: Session = Depends(get_db)):
     return {"id": ex.id, "status": ex.status}
 
 
-@router.post("/lessons/{lesson_id}/retire",
-             dependencies=[Depends(require_role("admin", "teacher"))])
-def retire_lesson(lesson_id: str, db: Session = Depends(get_db)):
-    sn = db.get(LessonSnippet, lesson_id)
-    if not sn:
-        raise HTTPException(404, "Rappel inconnu")
-    sn.status = "retired"
-    db.commit()
-    return {"id": sn.id, "status": sn.status}
-
-
 @router.post("/bank/purge", dependencies=[Depends(require_role("admin"))])
 def purge_bank(db: Session = Depends(get_db)):
     """Vide ENTIÈREMENT la banque d'exercices (toutes sources confondues) ET
@@ -247,7 +202,7 @@ def purge_bank(db: Session = Depends(get_db)):
     pool mis en cache par Série (SesamathsChapterExtraction.validated_json)
     resservirait le même contenu à la prochaine génération sans jamais
     ré-extraire — cause identifiée des exercices qui "reviennent" malgré un
-    retrait. Ne touche pas aux rappels de leçon (hors périmètre)."""
+    retrait."""
     n_exercises = db.query(GeneratedExercise).delete(synchronize_session=False)
     n_extractions = db.query(SesamathsChapterExtraction).delete(synchronize_session=False)
     n_cache = db.query(SesamathsLlmCache).delete(synchronize_session=False)

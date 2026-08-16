@@ -8,7 +8,6 @@ Design des sujets :
 - chaque exercice dans une carte à coins arrondis avec ombre portée, badge
   numéroté coloré par difficulté (1 bleu -> 5 rouge), l'énoncé démarrant sur
   la même ligne que le badge ;
-- rappels de leçon dans un cadre distinct (fond ambre clair, icône livre) ;
 - zones de réponse ÉLÈVE en rouge saumon clair (dropout, supprimé avant OCR) ;
 - bande de correction en pointillés gris sous chaque exercice : réservée à
   l'overlay, l'élève n'y écrit pas (distinction visuelle demandée) ;
@@ -91,9 +90,6 @@ DROPOUT = HexColor(settings.dropout_color)      # rouge saumon clair — élève
 CARD_BORDER = HexColor("#C7CDD4")
 CARD_SHADOW = Color(0.75, 0.77, 0.80, alpha=0.5)
 DOTTED_GRAY = HexColor("#9AA3AC")               # pointillés — réservé overlay
-LESSON_BG = HexColor("#FFF6DF")
-LESSON_BORDER = HexColor("#E4C46A")
-LESSON_TEXT = HexColor("#6B5310")
 TITLE_RULE = HexColor("#37474F")
 DOT_ON = HexColor("#455A64")
 
@@ -150,17 +146,6 @@ def _exercise_badge_color(level5: int, probleme: bool) -> Color:
     exercice ordinaire, graduée par difficulté (3 niveaux) pour un problème."""
     return _probleme_color(level5) if probleme else EXERCISE_BADGE
 
-# encarts typés d'un rappel de leçon (§ rendu rappels) : trois icônes/couleurs
-# fixes indépendantes du thème de la carte, pour rester reconnaissables quelle
-# que soit la couleur choisie par l'enseignant dans l'éditeur de gabarit.
-ADMONITION_GUTTER = 5.5 * mm
-_ADMONITION_COLORS = {
-    "conseil": {"border": HexColor("#2F9E8F"), "bg": HexColor("#E9F7F4"),
-                "text": HexColor("#0F5C52")},
-    "attention": {"border": HexColor("#D8531D"), "bg": HexColor("#FDECE4"),
-                  "text": HexColor("#7A2E10")},
-}
-
 CARD_PAD = 2.6 * mm
 # Bande de correction (réservée à l'overlay) : sa hauteur n'est plus figée, elle
 # est ANTICIPÉE sur le TEXTE du corrigé de la banque (_correction_strip_layout)
@@ -177,7 +162,7 @@ STRIP_NOTE_W = 17 * mm  # réserve droite pour la note de barème (imprimée en 
 CORR_FS_DELTA = 1.0     # le corrigé s'imprime un cran plus petit que l'énoncé
 
 # --- modes de guide (§ assistant « Créer mon sujet ») ------------------------
-# Le « guide » est le court rappel d'auto-correction attaché à chaque exercice
+# Le « guide » est l'aide d'auto-correction attachée à chaque exercice
 # (GeneratedExercise.correction, alias correction_guide côté Indigo). Trois
 # modes, portés par item["guides"] et figés dans la géométrie de la copie :
 #   GUIDES_OVERLAY : comportement historique — la bande est dimensionnée sur le
@@ -197,7 +182,7 @@ GUIDES_NONE = "none"
 GUIDE_BG = HexColor("#F3F6FA")          # fond discret du guide imprimé
 GUIDE_TEXT = HexColor("#3A4A5C")
 RADIUS = 2.2 * mm
-GAP = 3.5 * mm          # espace vertical entre deux cartes/rappels
+GAP = 3.5 * mm          # espace vertical entre deux cartes
 COL_W = (PAGE_W - 2 * MARGIN - COL_GAP) / 2
 
 # En-tête en 4 zones horizontales, pleine hauteur, séparées par une gouttière
@@ -269,56 +254,6 @@ def _draw_markers(c: canvas.Canvas, page_payload: str):
         "BR": (PAGE_W - MARGIN - QR_MINI, MARGIN),
     }.items():
         c.drawImage(_fiducial_image(FIDUCIAL_IDS[role]), x, y, QR_MINI, QR_MINI)
-
-
-# ------------------------------------------------------------------- icônes
-
-def _icon_book(c: canvas.Canvas, x: float, y: float, size: float = 3.4 * mm,
-               color=LESSON_TEXT):
-    """Petit livre vectoriel (couverture pleine + reliure claire) — reste
-    lisible en petite taille dans la marge, icône "rappel de leçon"."""
-    c.saveState()
-    w, h = size * 0.9, size * 0.72
-    c.setFillColor(color)
-    c.roundRect(x - w / 2, y, w, h, size * 0.09, stroke=0, fill=1)
-    c.setStrokeColor(white)
-    c.setLineWidth(0.7)
-    c.line(x, y + size * 0.1, x, y + h - size * 0.1)
-    c.restoreState()
-
-
-def _icon_bulb(c: canvas.Canvas, x: float, y: float, size: float = 3.4 * mm,
-               color=DOT_ON):
-    """Petite ampoule vectorielle — icône "conseil"."""
-    c.saveState()
-    r = size * 0.34
-    cx, cy = x, y + size * 0.5
-    c.setFillColor(color)
-    c.circle(cx, cy, r, stroke=0, fill=1)
-    base_w, base_h = size * 0.32, size * 0.24
-    c.roundRect(cx - base_w / 2, cy - r - base_h + 0.3, base_w, base_h,
-               base_w * 0.25, stroke=0, fill=1)
-    c.restoreState()
-
-
-def _icon_warning(c: canvas.Canvas, x: float, y: float, size: float = 3.4 * mm,
-                  color=DOT_ON):
-    """Triangle d'alerte vectoriel — icône "attention"."""
-    c.saveState()
-    c.setStrokeColor(color)
-    c.setFillColor(color)
-    h = size * 0.92
-    p = c.beginPath()
-    p.moveTo(x, y + h)
-    p.lineTo(x - size * 0.52, y)
-    p.lineTo(x + size * 0.52, y)
-    p.close()
-    c.setLineWidth(0.9)
-    c.drawPath(p, stroke=1, fill=0)
-    c.setLineWidth(0.9)
-    c.line(x, y + h * 0.32, x, y + h * 0.64)
-    c.circle(x, y + h * 0.16, 0.35 * mm, stroke=0, fill=1)
-    c.restoreState()
 
 
 BADGE_GAP = 1.8 * mm    # blanc entre le badge et le début de l'énoncé
@@ -482,7 +417,7 @@ def _wrap(text: str, width_pt: float, font_size: int) -> list[str]:
 
 
 # ------------------------------------------------------- mise en forme maths
-# Contrat exgen-3 : les textes (énoncés, corrections, rappels) contiennent des
+# Contrat exgen-3 : les textes (énoncés, corrections, guides) contiennent des
 # spans $...$ en LaTeX validé (mathrender). Chaque span est rasterisé en PNG
 # haute résolution (mathtext, cache disque) et posé sur la ligne de base du
 # texte — mêmes formules à l'écran (KaTeX) et sur papier.
@@ -1835,163 +1770,6 @@ def _strip_meta(c: canvas.Canvas, x: float, y: float, w: float,
     return geo
 
 
-_ADMONITION_KINDS = ("rappel", "conseil", "attention")
-
-
-def _lesson_layout(blocks: dict, width: float, fs: float) -> dict:
-    """Met en page un rappel structuré v4. Retourne {parts, height}.
-    parts = liste de (type, layout|image|str, extra) empilés verticalement.
-    L'essentiel et les encarts (conseil/attention) sont mis en page en
-    admonitions à icône de marge (largeur réduite de ADMONITION_GUTTER) ;
-    méthode/exemple restent un flot pleine largeur avec sous-titre."""
-    inner = width - 2 * CARD_PAD
-    admo_w = max(10 * mm, inner - ADMONITION_GUTTER)
-    parts: list[tuple] = []
-    height = 0.0
-
-    def _push(kind, text, indent=0.0, gap=1.2 * mm, font_fs=fs):
-        nonlocal height
-        lay = _rich_layout(text, inner - indent, font_fs)
-        parts.append((kind, lay, indent, font_fs, gap))
-        height += lay["height"] + gap
-
-    def _push_subtitle(text):
-        nonlocal height
-        parts.append(("subtitle", text, 0.0, fs, 0.7 * mm))
-        height += fs * 0.9 + 0.7 * mm
-
-    def _push_admonition(kind, text, gap=2.3 * mm):
-        nonlocal height
-        lay = _rich_layout(text, admo_w, fs)
-        parts.append((kind, lay, 0.0, fs, gap))
-        height += lay["height"] + gap
-
-    if blocks.get("essentiel"):
-        _push_admonition("rappel", blocks["essentiel"])
-
-    methode = blocks.get("methode") or []
-    if methode:
-        _push_subtitle("Méthode")
-        for i, step in enumerate(methode):
-            _push("methode", f"{i + 1}. {step}", indent=1.5 * mm, gap=0.6 * mm)
-
-    ex = blocks.get("exemple") or {}
-    if ex.get("enonce"):
-        _push_subtitle("Exemple résolu")
-        height += 1.2 * mm  # respiration avant l'encadré exemple
-        parts.append(("exemple_start", None, 0.0, fs, 0.0))
-        _push("exemple", ex["enonce"], indent=2 * mm)
-        for step in ex.get("etapes") or []:
-            _push("exemple", step, indent=4 * mm, gap=0.6 * mm)
-        if ex.get("resultat"):
-            _push("exemple", ex["resultat"], indent=2 * mm)
-        parts.append(("exemple_end", None, 0.0, fs, 0.0))
-        height += 2.2 * mm
-
-    encarts = blocks.get("encarts")
-    if not encarts and blocks.get("astuce"):  # compat rappels générés avant v4
-        encarts = [{"type": "conseil", "texte": blocks["astuce"]}]
-    for enc in (encarts or [])[:3]:
-        etype = enc.get("type") if enc.get("type") in ("conseil", "attention") else "conseil"
-        texte = str(enc.get("texte") or "").strip()
-        if texte:
-            _push_admonition(etype, texte)
-
-    figure = _figure_image(blocks.get("figure"), min(inner, 55 * mm), 32 * mm)
-    if figure:
-        parts.append(("figure", figure, 0.0, fs, 1.5 * mm))
-        height += figure[2] + 1.5 * mm
-    return {"parts": parts, "height": height}
-
-
-def _lesson_card_h(layout: dict, tpl: dict) -> float:
-    return 5 * mm + layout["height"] + 2.5 * CARD_PAD
-
-
-def _draw_lesson_card(c: canvas.Canvas, x: float, y_top: float, w: float,
-                      title: str, layout: dict, tpl: dict) -> float:
-    """Cadre rappel de leçon structuré : fond ambre, icône livre, l'essentiel
-    en admonition (icône de marge), sous-titres Méthode/Exemple, méthode
-    numérotée, exemple résolu encadré, encarts conseil/attention à icône et
-    teinte dédiées, figure éventuelle."""
-    fs = max(6, float(tpl.get("font_size", 8)))
-    bg = HexColor(tpl.get("bg", "#FFF6DF"))
-    border = HexColor(tpl.get("border", "#E4C46A"))
-    text_color = HexColor(tpl.get("text", "#6B5310"))
-    head_h = 5 * mm
-    card_h = _lesson_card_h(layout, tpl)
-    y = y_top - card_h
-
-    c.setFillColor(bg)
-    c.setStrokeColor(border)
-    c.setLineWidth(0.9)
-    c.roundRect(x, y, w, card_h, RADIUS, stroke=1, fill=1)
-
-    ty = y + card_h - head_h
-    _icon_book(c, x + CARD_PAD + 1.6 * mm, ty + 0.6 * mm, color=text_color)
-    c.setFillColor(text_color)
-    c.setFont(_font("bold"), _subject_font_size(fs))
-    c.drawString(x + CARD_PAD + 4.4 * mm, ty + 0.8 * mm, _pdf_safe(title)[:80])
-
-    inner = w - 2 * CARD_PAD
-    gutter_x = x + CARD_PAD
-    line_y = ty - 1.2 * mm
-    example_top = None
-    for kind, payload, indent, part_fs, part_gap in layout["parts"]:
-        if kind == "subtitle":
-            c.setFillColor(border)
-            c.setFont(_font("bold"),
-                      _subject_font_size(max(6.5, part_fs - 0.5)))
-            c.drawString(gutter_x, line_y - part_fs * 0.72, _pdf_safe(payload).upper())
-            line_y -= part_fs * 0.9 + part_gap
-            continue
-        if kind == "exemple_start":
-            line_y -= 1.6 * mm
-            example_top = line_y
-            continue
-        if kind == "exemple_end":
-            # encadré blanc translucide derrière l'exemple, redessiné dessous :
-            # on trace seulement un filet vertical discret à gauche (citation)
-            c.setStrokeColor(border)
-            c.setLineWidth(1.4)
-            c.line(gutter_x + 0.4 * mm, line_y + 0.6 * mm,
-                   gutter_x + 0.4 * mm, example_top - 0.4 * mm)
-            line_y -= 2.2 * mm
-            example_top = None
-            continue
-        if kind == "figure":
-            fimg, fw, fh = payload
-            c.drawImage(fimg, x + (w - fw) / 2, line_y - fh, width=fw, height=fh,
-                        mask="auto", preserveAspectRatio=True)
-            line_y -= fh + 1.5 * mm
-            continue
-        if kind in _ADMONITION_KINDS:
-            block_h = payload["height"]
-            text_x = gutter_x + ADMONITION_GUTTER
-            icon_y = line_y - part_fs * 0.7
-            if kind == "rappel":
-                txt_color = text_color
-                _icon_book(c, gutter_x + 1.7 * mm, icon_y, size=3.2 * mm, color=text_color)
-            else:
-                style = _ADMONITION_COLORS[kind]
-                pad_v = 0.9 * mm
-                c.setFillColor(style["bg"])
-                c.roundRect(gutter_x, line_y - block_h - pad_v,
-                           inner, block_h + 2 * pad_v, 1.3 * mm, stroke=0, fill=1)
-                icon_fn = _icon_bulb if kind == "conseil" else _icon_warning
-                icon_fn(c, gutter_x + 1.7 * mm, icon_y, size=3.2 * mm, color=style["border"])
-                txt_color = style["text"]
-            font = _font("italic") if kind == "rappel" else _font()
-            _draw_rich(c, text_x, line_y, payload, color=txt_color, font=font)
-            line_y -= block_h + part_gap
-            continue
-        _draw_rich(c, gutter_x + indent, line_y, payload,
-                   color=text_color, font=_font())
-        line_y -= payload["height"] + part_gap
-    c.setFillColor(black)
-    return card_h
-
-
 # ------------------------------------------------------------- copie entière
 
 # Géométrie verticale d'une colonne — UNE seule définition, partagée par le
@@ -2239,18 +2017,9 @@ def _draw_composite_card(c: canvas.Canvas, x: float, y_top: float, w: float, seq
 
 
 def estimate_item_height(item: dict, font_size: int, math_fs: int,
-                         ex_tpl: dict, lesson_tpl: dict) -> float:
+                         ex_tpl: dict) -> float:
     """Hauteur (pt) qu'occuperait `item` (placement inclus), sans dessiner —
     mesure pure réutilisée par le remplissage automatique de page."""
-    if item.get("kind") == "lesson":
-        fs = max(6, int(lesson_tpl.get("font_size", 8)))
-        blocks = item.get("blocks") or {
-            "essentiel": item.get("content", ""),
-            "exemple": {"enonce": item.get("example", ""), "etapes": [],
-                        "resultat": ""} if item.get("example") else {},
-        }
-        lay = _lesson_layout(blocks, COL_W, fs)
-        return _lesson_card_h(lay, lesson_tpl) + GAP
     if item.get("response_type") == "composite":
         return _composite_card_h(_composite_layout(item, font_size, math_fs)) + GAP
     layout, _fs, zone_h, strip = _exercise_layout(item, font_size, math_fs)
@@ -2282,9 +2051,8 @@ def _render_copy(pdf_canvas: canvas.Canvas, *, student_name: str, class_name: st
                  tpl: dict | None = None,
                  placement: list[tuple[int, int]] | None = None,
                  min_pages: int = 0) -> list[dict]:
-    """Dessine une copie complète. `items` : dicts avec kind=exercise
-    (item_id, statement, response_type, choices, level5) ou kind=lesson
-    (title, content, example). `tpl` : templates éditables (runtime_settings).
+    """Dessine une copie complète. `items` contient les exercices à imprimer.
+    `tpl` porte les templates éditables (runtime_settings).
     Retourne les zones pour le manifeste.
 
     `placement` (assistant « Créer mon sujet ») : une paire (page, colonne) PAR
@@ -2300,7 +2068,7 @@ def _render_copy(pdf_canvas: canvas.Canvas, *, student_name: str, class_name: st
     une page laissée volontairement blanche par le professeur reste une page du
     sujet (elle porte son QR signé et sera scannée comme les autres)."""
     tpl = tpl or DEFAULT_TEMPLATES
-    ex_tpl, lesson_tpl = tpl["exercise"], tpl["lesson"]
+    ex_tpl = tpl["exercise"]
     font_size = float(ex_tpl.get("font_size", font_size))
     math_fs = int(ex_tpl.get("math_size", 12))
     zones = []
@@ -2358,23 +2126,6 @@ def _render_copy(pdf_canvas: canvas.Canvas, *, student_name: str, class_name: st
     for idx, item in enumerate(items):
         slot = placement[idx] if placement and idx < len(placement) else None
         x = MARGIN + col * (col_w + COL_GAP)
-        if item.get("kind") == "lesson":
-            fs = max(6, float(lesson_tpl.get("font_size", 8)))
-            blocks = item.get("blocks") or {
-                # compatibilité rappels v2 (deux paragraphes plats)
-                "essentiel": item.get("content", ""),
-                "exemple": {"enonce": item.get("example", ""), "etapes": [],
-                            "resultat": ""} if item.get("example") else {},
-            }
-            lay = _lesson_layout(blocks, col_w, fs)
-            h = _lesson_card_h(lay, lesson_tpl) + gap
-            goto(slot, h) if slot else place(h)
-            x = MARGIN + col * (col_w + COL_GAP)
-            used = _draw_lesson_card(pdf_canvas, x, y_cursor, col_w,
-                                     item.get("title", "Rappel"), lay, lesson_tpl)
-            y_cursor -= used + gap
-            continue
-
         seq += 1
         if item["response_type"] == "composite":
             cl = _composite_layout(item, font_size, math_fs)

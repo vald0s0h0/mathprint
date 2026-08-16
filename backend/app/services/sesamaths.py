@@ -180,7 +180,7 @@ _ADAPT_INTRO = (
     "- \"caption\" : la légende d'une figure ou d'un tableau ;\n"
     "- autres (\"code\"/\"references\"/\"aside_text\"/\"header\"/\"footer\"/"
     "\"signature\") : ignore-les, ce ne sont jamais des exercices, ni les "
-    "rubriques « Culture » ou les rappels de leçon (« À RETENIR »).\n\n"
+    "rubriques « Culture » ou les encarts de cours (« À RETENIR »).\n\n"
 
     "# Nettoyage préalable — l'OCR décrit la MISE EN PAGE, pas la structure : "
     "utilise le bon sens avant de faire confiance à un type de bloc\n"

@@ -12,7 +12,7 @@
 //     à une compétence ; un problème appartient à un CHAPITRE entier — il est
 //     donc proposé dès qu'une seule compétence de son chapitre est cochée.
 import {
-  ActionIcon, Alert, Badge, Box, Button, Card, Group, ScrollArea,
+  ActionIcon, Alert, Badge, Box, Button, Group, ScrollArea,
   SegmentedControl, Stack, Text, TextInput, Tooltip,
 } from '@mantine/core'
 import {
@@ -20,14 +20,20 @@ import {
   GripVertical, Image as ImageIcon, Search, Sparkles, Trash2, X,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import ExercisePrintPreview from '../../components/ExercisePrintPreview'
 import MathText from '../../components/MathText'
 
 export type PoolItem = {
   id: string; competency_id: string; competency_label: string
   chapter_code: string; chapter_name: string
   statement: string; response_type: string; difficulty: number
+  expected: Record<string, any>; grading: Record<string, any>; choices: string[]
+  row_labels: string[] | null; col_labels: string[] | null; lines: number | null
+  figure: Record<string, any> | null; figure_url: string | null
+  correction_solution: string; correction_guide: string
   kind: string; source: string; badge_type: string; title: string
   calculator: string; source_number: string; has_figure: boolean
+  is_problem: boolean
   bareme_points: number; height_pt: number; height_pt_no_guide: number
 }
 export type Metrics = {
@@ -117,28 +123,20 @@ function PoolCard({ it, used, fillCandidate, onDragStart }: {
   // que la distribution automatique). Il reste évidemment disponible pour les
   // AUTRES variantes, qui ont chacune leur plan.
   return (
-    <Card withBorder padding="xs" draggable={!used} onDragStart={onDragStart}
+    <Box p={6} draggable={!used} onDragStart={onDragStart}
       className={fillCandidate ? 'manual-fill-pulse' : undefined}
-      style={{ cursor: used ? 'default' : 'grab', opacity: used ? 0.5 : 1 }}>
-      <Group gap={6} wrap="nowrap" align="flex-start">
-        <GripVertical size={14} opacity={0.4} style={{ marginTop: 2, flexShrink: 0 }} />
-        <Stack gap={4} style={{ minWidth: 0, flex: 1 }}>
-          <Group gap={6} wrap="nowrap" justify="space-between">
-            <Text size="xs" c="dimmed" lineClamp={1}>
-              {it.source_number && <b>n°{it.source_number} · </b>}{it.competency_label}
-            </Text>
-            {used && (
-              <Badge size="xs" color="indigo" variant="light"
-                style={{ flexShrink: 0 }}>placé</Badge>
-            )}
-          </Group>
-          <Text size="sm" style={{ whiteSpace: 'normal', overflowWrap: 'anywhere' }}>
-            <MathText text={it.statement || it.title} />
-          </Text>
-          <ItemChips it={it} />
-        </Stack>
-      </Group>
-    </Card>
+      style={{ cursor: used ? 'default' : 'grab', opacity: used ? 0.5 : 1, borderRadius: 6 }}>
+      <ExercisePrintPreview exercise={it}
+        color={it.kind === 'probleme' ? 'orange' : 'indigo'}
+        beforeFrame={<Text size="xs" c="dimmed" lineClamp={1}>
+          {it.source_number && <b>n°{it.source_number} · </b>}{it.competency_label}
+        </Text>}
+        badges={<ItemChips it={it} />}
+        actions={<Group gap={4} wrap="nowrap">
+          {used && <Badge size="xs" color="indigo" variant="light">placé</Badge>}
+          <GripVertical size={15} opacity={0.45} />
+        </Group>} />
+    </Box>
   )
 }
 

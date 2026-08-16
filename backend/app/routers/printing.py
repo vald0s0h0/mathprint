@@ -13,7 +13,6 @@ import hashlib
 import os
 import subprocess
 import tempfile
-from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 from typing import Literal
@@ -31,6 +30,8 @@ from ..deps import current_user
 from ..models import (AuditLog, Assessment, ConnectorPrintJob, Copy,
                       DocumentPage, Job, PrintConnector, Printer, ScanBatch,
                       Student, User)
+from ..services.print_connectors import (connector_online,
+                                         expire_stale_queued_jobs)
 
 router = APIRouter(prefix="/api/printers", tags=["printing"],
                    dependencies=[Depends(current_user)])
@@ -90,15 +91,6 @@ def _assert_profile_access(db: Session, profile: Printer | None, user: User):
         raise HTTPException(404, "Imprimante inconnue")
 
 
-def _connector_online(connector: PrintConnector) -> bool:
-    if not connector.active or not connector.last_seen_at:
-        return False
-    seen = connector.last_seen_at
-    if seen.tzinfo is None:
-        seen = seen.replace(tzinfo=timezone.utc)
-    return seen >= datetime.now(timezone.utc) - timedelta(seconds=90)
-
-
 def _get_or_create_profile(db: Session, name: str, *, protocol: str = "cups") -> Printer:
     p = db.query(Printer).filter_by(name=name).first()
     if p is None:
@@ -150,11 +142,13 @@ def list_printers(db: Session = Depends(get_db),
     local = _local_printers()
     profiles = {p.name: p for p in db.query(Printer).all()}
     local_names = {p["name"] for p in local}
-    local_rows = [{**p, "display_name": p["name"],
+    local_rows = [{**p, "display_name": p["name"], "available": True,
                    "system_default": bool(p.get("default")),
                    **_profile_view(profiles.get(p["name"]))} for p in local]
     connectors = {c.id: c for c in db.query(PrintConnector).filter_by(
         user_id=user.id, active=True).all()}
+    connector_rows = []
+    connector_printer_counts: dict[str, int] = {}
     for profile in profiles.values():
         if not profile.active or profile.protocol != "connector":
             continue
@@ -162,31 +156,48 @@ def list_printers(db: Session = Depends(get_db),
         connector = connectors.get(caps.get("connector_id"))
         if not connector:
             continue
+        online = connector_online(connector)
+        connector_printer_counts[connector.id] = connector_printer_counts.get(connector.id, 0) + 1
         local_rows.append({
             "id": profile.id,
             "name": profile.name,
             "display_name": caps.get("native_name") or profile.name,
             "device_name": connector.name,
+            "device_platform": connector.platform,
+            "connector_id": connector.id,
             "source": "connector_local",
-            "status": "online" if _connector_online(connector) else "offline",
+            "status": "online" if online else "offline",
+            "available": online,
+            "last_seen_at": connector.last_seen_at.isoformat()
+                if connector.last_seen_at else None,
             "system_default": bool(caps.get("is_default")),
             **_profile_view(profile),
         })
+    for connector in sorted(connectors.values(), key=lambda value: value.name.lower()):
+        online = connector_online(connector)
+        connector_rows.append({
+            "id": connector.id,
+            "name": connector.name,
+            "platform": connector.platform,
+            "status": "online" if online else "offline",
+            "last_seen_at": connector.last_seen_at.isoformat()
+                if connector.last_seen_at else None,
+            "printer_count": connector_printer_counts.get(connector.id, 0),
+        })
     network_rows = [{"id": p.id, "name": p.name, "source": "network_ipp",
                      "display_name": p.name, "uri": p.uri,
-                     "status": "registered", **_profile_view(p)}
+                     "status": "registered", "available": True,
+                     **_profile_view(p)}
                     for p in profiles.values()
                     if p.active and p.protocol not in ("cups", "connector")
                     and p.uri and p.name not in local_names]
 
-    # Il y a toujours un défaut applicatif visible. Avant la première sélection
-    # explicite, on reprend sans surprise le défaut CUPS, puis la première file.
     all_rows = [*local_rows, *network_rows]
-    if all_rows and not any(p["app_default"] for p in all_rows):
-        fallback = next((p for p in local_rows if p["system_default"]), all_rows[0])
-        fallback["app_default"] = True
     return {"local": local_rows, "network": network_rows,
-            "printing_available": bool(all_rows)}
+            "connectors": connector_rows,
+            "online_connector_count": sum(
+                row["status"] == "online" for row in connector_rows),
+            "printing_available": any(row["available"] for row in all_rows)}
 
 
 class NetworkPrinterIn(BaseModel):
@@ -316,8 +327,14 @@ def _queue_connector_job(*, db: Session, user: User, profile: Printer,
                          document: bytes, assessment_id: str | None,
                          copies: int, duplex: bool, reverse: bool) -> ConnectorPrintJob:
     connector = _connector_for_profile(db, profile)
-    if not connector or not connector.active or connector.user_id != user.id:
+    if not connector or connector.user_id != user.id:
         raise HTTPException(409, "Le connecteur de cette imprimante est déconnecté")
+    if not connector_online(connector):
+        raise HTTPException(
+            409,
+            f"Le poste « {connector.name} » est hors ligne. "
+            "Ouvrez MathPrint Connector sur ce poste avant d'imprimer.",
+        )
     caps = profile.capabilities_json or {}
     native_name = caps.get("native_name")
     if not isinstance(native_name, str) or not native_name.strip():
@@ -544,6 +561,7 @@ def print_jobs(db: Session = Depends(get_db)):
 @router.get("/jobs/{job_id}")
 def connector_job_status(job_id: str, db: Session = Depends(get_db),
                          user: User = Depends(current_user)):
+    expire_stale_queued_jobs(db, user_id=user.id)
     job = db.get(ConnectorPrintJob, job_id)
     if not job or job.user_id != user.id:
         raise HTTPException(404, "Travail d'impression inconnu")

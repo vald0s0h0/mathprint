@@ -29,6 +29,7 @@ def get_db():
 # `_default_sql` (ex. assessments.note_base : les contrôles créés avant la
 # notion de base de notation étaient tous notés sur 20).
 _ADDED_COLUMNS: dict[str, list[tuple[str, ...]]] = {
+    "users": [("subscription_plan", "TEXT")],
     "scan_batches": [("overlay_printed", "BOOLEAN"), ("overlay_distributed", "BOOLEAN")],
     "copies": [("appreciation_json", "JSON"), ("variant_key", "TEXT")],
     "generated_exercises": [
@@ -39,13 +40,6 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, ...]]] = {
         ("kind", "TEXT"),
         ("quality_json", "JSON"),
         ("raw_extract_json", "JSON"),
-    ],
-    "lesson_snippets": [
-        ("verifier_model", "TEXT"),
-        ("verifier_verdict_json", "JSON"),
-        ("figure_json", "JSON"),
-        ("status", "TEXT"),
-        ("blocks_json", "JSON"),
     ],
     "jobs": [
         ("assessment_id", "TEXT"),
@@ -66,9 +60,6 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, ...]]] = {
     ],
     "student_levels": [
         ("assessment_id", "TEXT"),
-    ],
-    "copy_items": [
-        ("lesson_snippet_id", "TEXT"),
     ],
     "competency_frameworks": [
         ("cycle", "INTEGER"),
@@ -110,9 +101,19 @@ _RENAMED_COLUMNS: dict[str, list[tuple[str, str]]] = {
 # qui est le SEUL barème (§ services.scoring) : la banque ne lisait déjà que
 # celui-ci, la colonne ne servait qu'à l'affichage et pouvait diverger.
 _DROPPED_COLUMNS: dict[str, list[str]] = {
+    # `is_mock` a disparu avec la classe de démonstration. Sur les bases
+    # PostgreSQL déjà créées, cette ancienne colonne NOT NULL restait pourtant
+    # présente et faisait échouer tout nouvel INSERT dans `classes`, car le
+    # modèle courant ne lui fournit plus de valeur.
+    "classes": ["is_mock"],
     "indigo_exercises": ["effort_points"],
     "students": ["first_name", "last_name"],
+    "copy_items": ["lesson_snippet_id"],
 }
+
+# Tables supprimées du produit. Elles sont retirées après leurs colonnes de
+# référence éventuelles afin que la migration fonctionne aussi sous Postgres.
+_DROPPED_TABLES = {"lesson_snippets"}
 
 
 def _default_sql(col_type: str) -> str:
@@ -179,6 +180,9 @@ def run_migrations():
             for name in columns:
                 if name in existing:
                     conn.execute(text(f"ALTER TABLE {table} DROP COLUMN {name}"))
+        for table in _DROPPED_TABLES:
+            if table in tables:
+                conn.execute(text(f"DROP TABLE {table}"))
         for table, columns in _ADDED_COLUMNS.items():
             if table not in tables:
                 continue
@@ -191,6 +195,20 @@ def run_migrations():
                 conn.execute(text(
                     f"ALTER TABLE {table} ADD COLUMN {name} {col_type} "
                     f"DEFAULT {default}"))
+        if "users" in tables:
+            # `viewer` était le nom historique, jamais exposé dans l'UI, du
+            # futur rôle correcteur. Les utilisateurs classiques déjà en base
+            # commencent sur l'offre gratuite ; les comptes système restent
+            # volontairement sans abonnement.
+            conn.execute(text(
+                "UPDATE users SET role='corrector' WHERE role='viewer'"))
+            conn.execute(text(
+                "UPDATE users SET subscription_plan='free' "
+                "WHERE role='teacher' AND "
+                "(subscription_plan IS NULL OR subscription_plan='')"))
+            conn.execute(text(
+                "UPDATE users SET subscription_plan=NULL "
+                "WHERE role IN ('admin', 'corrector')"))
         if "assessments" in tables:
             conn.execute(text(
                 "UPDATE assessments SET personalization_mode='common_variants' "

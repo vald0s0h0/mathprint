@@ -17,19 +17,8 @@ generate_assessment_job tourne dans le worker de fond (services.job_worker),
 plus dans la requête HTTP : les appels DeepSeek/Claude déclenchés par une
 banque manquante n'y bloquent donc plus la connexion du navigateur.
 
-Rappels de leçon : pour un entraînement (jamais en contrôle), chaque élève
-reçoit jusqu'à settings.max_lessons_per_copy rappels (lesson_snippets),
-insérés avant le premier exercice de la compétence concernée. Les
-compétences ciblées viennent de services.distribution.lesson_review_targets
-— en priorité le plan post-correction personnalisé (lacunes identifiées par
-le LLM à la correction précédente, cf. services.appreciation), à défaut un
-repli déterministe sur la courbe de l'oubli (maîtrise faible), à défaut
-le filet de sécurité des élèves de niveau 1 à 4. Jamais deux fois la
-même compétence dans une même copie ; un rappel peut en revanche réapparaître
-d'un sujet à l'autre pour le même élève tant que la lacune persiste — c'est
-voulu (accompagnement personnalisé, pas de nouveauté à tout prix). Chaque
-insertion est tracée sur CopyItem.lesson_snippet_id (exercice qui suit
-immédiatement le rappel), pour audit/traçabilité.
+Les guides d'auto-correction sont attachés directement aux exercices dans
+GeneratedExercise.correction ; aucun contenu de leçon séparé n'est injecté.
 """
 import hashlib
 import logging
@@ -44,7 +33,7 @@ from ..models import (
     Assessment, Competency, Copy, CopyItem, DocumentPage, FileObject, Job,
     ResponseZone, SchoolClass, StudentLevel,
 )
-from . import distribution, exercise_gen, forgetting, scoring
+from . import distribution, exercise_gen, scoring
 from . import pdfgen
 from .runtime_settings import doc_templates
 from .security import sign_page
@@ -128,7 +117,6 @@ def render_shape(row, guides: str = pdfgen.GUIDES_OVERLAY) -> dict:
 
 
 def build_render_item(db: Session, *, row, copy_id: str, catalog_id: str, seq: int,
-                      lesson_snippet_id: str | None = None,
                       guides: str = pdfgen.GUIDES_OVERLAY) -> dict | None:
     """Crée la (ou les) CopyItem d'une ligne de banque et retourne la carte à
     rendre par pdfgen. UNE seule définition, partagée par la génération
@@ -142,14 +130,13 @@ def build_render_item(db: Session, *, row, copy_id: str, catalog_id: str, seq: i
         # une CopyItem PAR PARTIE (chacune un type feuille normal, corrigée par
         # la pipeline existante) mais UNE seule carte unifiée à l'impression.
         part_ids = []
-        for pi, part in enumerate(render["grading"]["parts"]):
+        for part in render["grading"]["parts"]:
             p_item = CopyItem(
                 copy_id=copy_id, catalog_id=catalog_id, sequence=seq,
                 difficulty=row.difficulty_level * 2,
                 response_type=part["response_type"],
                 statement=part["statement"], correction=row.correction,
-                expected_json=part["expected"], grading_json=part["grading"],
-                lesson_snippet_id=(lesson_snippet_id if pi == 0 else None))
+                expected_json=part["expected"], grading_json=part["grading"])
             db.add(p_item)
             db.flush()
             part_ids.append(p_item.id)
@@ -161,8 +148,7 @@ def build_render_item(db: Session, *, row, copy_id: str, catalog_id: str, seq: i
         copy_id=copy_id, catalog_id=catalog_id, sequence=seq,
         difficulty=row.difficulty_level * 2, response_type=row.response_type,
         statement=row.statement, correction=row.correction,
-        expected_json=row.expected_json, grading_json=render["grading"],
-        lesson_snippet_id=lesson_snippet_id)
+        expected_json=row.expected_json, grading_json=render["grading"])
     db.add(item)
     db.flush()
     return {**render, "item_id": item.id}
@@ -244,16 +230,11 @@ def generate_assessment_job(db: Session, assessment: Assessment,
         if assessment.personalization_mode == "individual":
             target_mix, level5 = distribution.apply_next_plan(student, target_mix, level5)
         priority = distribution.priority_competencies(db, student.id, ordered_ids)
-        due = forgetting.due_competencies(db, student.id)
-        lesson_targets = set(distribution.lesson_review_targets(
-            priority, student, due, level, assessment.type))
-
         copy = Copy(assessment_id=assessment.id, student_id=student.id, seed=seed)
         db.add(copy)
         db.flush()
 
         render_items: list[dict] = []
-        lessons_added: set[str] = set()
         kind_counts: dict[str, int] = {}
         # exercices déjà servis dans CETTE copie, par identité de CONTENU et non
         # par id de ligne : deux compétences voisines peuvent avoir en banque le
@@ -285,22 +266,6 @@ def generate_assessment_job(db: Session, assessment: Assessment,
                 warnings.append(f"{comp.code} ({student.llm_pseudonym}) : {e}")
                 return False
 
-            # une carte de remplissage ne traîne jamais de rappel de leçon :
-            # elle est là pour occuper un petit trou, pas pour enseigner
-            lesson_snippet_id = None
-            if (not filler and comp.id in lesson_targets and comp.id not in lessons_added
-                    and len(lessons_added) < settings.max_lessons_per_copy):
-                try:
-                    snippet = exercise_gen.ensure_lesson(db, comp, level)
-                    render_items.append({"kind": "lesson", "title": snippet.title,
-                                         "blocks": snippet.blocks_json or None,
-                                         "content": snippet.content_latex,
-                                         "example": snippet.example_latex})
-                    lessons_added.add(comp.id)
-                    lesson_snippet_id = snippet.id
-                except Exception as e:
-                    warnings.append(f"Rappel {comp.code} ({student.llm_pseudonym}) indisponible : {e}")
-
             identity = distribution.exercise_identity(row)
             picked_keys.add(identity)
             # les cartes de remplissage ne passent pas par le tirage équilibré
@@ -309,7 +274,7 @@ def generate_assessment_job(db: Session, assessment: Assessment,
 
             render = build_render_item(
                 db, row=row, copy_id=copy.id, catalog_id=catalog_refs[comp_id].id,
-                seq=seq, lesson_snippet_id=lesson_snippet_id)
+                seq=seq)
             if render is None:
                 return False
             render_items.append({**render, "_identity": identity, "_bucket": bucket})
@@ -334,33 +299,18 @@ def generate_assessment_job(db: Session, assessment: Assessment,
         # tenir dans la place restante.
         def _heights(items: list[dict]) -> list[float]:
             return [pdfgen.estimate_item_height(
-                ri, ex_tpl_font_size, math_fs, tpl["exercise"], tpl["lesson"])
+                ri, ex_tpl_font_size, math_fs, tpl["exercise"])
                 for ri in items]
 
         def _pack(items: list[dict]) -> tuple[list[dict], list[float]]:
             """Réordonne les cartes pour un remplissage colonne par colonne
             efficace (First-Fit-Decreasing, cf. pdfgen.pack_reading_order) :
             les grandes cartes d'abord, les petites comblant les bas de colonne,
-            au lieu du grand vide laissé par l'ordre de production du LLM. Chaque
-            rappel de leçon reste collé à l'exercice qu'il précède (unité
-            indissociable). Retourne (cartes réordonnées, leurs hauteurs)."""
+            au lieu du grand vide laissé par l'ordre de production du LLM.
+            Retourne (cartes réordonnées, leurs hauteurs)."""
             hs = _heights(items)
-            units: list[tuple[list[dict], list[float]]] = []
-            i = 0
-            while i < len(items):
-                if items[i].get("kind") == "lesson" and i + 1 < len(items):
-                    units.append(([items[i], items[i + 1]], [hs[i], hs[i + 1]]))
-                    i += 2
-                else:
-                    units.append(([items[i]], [hs[i]]))
-                    i += 1
-            order = pdfgen.pack_reading_order([sum(h) for _, h in units])
-            packed_items: list[dict] = []
-            packed_h: list[float] = []
-            for k in order:
-                packed_items.extend(units[k][0])
-                packed_h.extend(units[k][1])
-            return packed_items, packed_h
+            order = pdfgen.pack_reading_order(hs)
+            return [items[i] for i in order], [hs[i] for i in order]
 
         def _rollback(before: int) -> None:
             nonlocal total_non_qcm

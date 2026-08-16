@@ -8,6 +8,7 @@ from .db import Base, SessionLocal, engine, run_migrations
 from .routers import (
     assessments, auth, connectors, content, data_admin, grades,
     indigo as indigo_router, misc, org, printing, scans, setup, students, system,
+    users_admin,
 )
 from .seed import seed
 from .services import errorlog, indigo, job_worker
@@ -26,7 +27,7 @@ app.add_middleware(
 for r in (setup.router, auth.router, org.router, assessments.router, scans.router,
           students.router, misc.router, printing.router, system.router,
           connectors.router, content.router, data_admin.router, grades.router,
-          indigo_router.router):
+          indigo_router.router, users_admin.router):
     app.include_router(r)
 
 

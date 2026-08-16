@@ -97,6 +97,12 @@ export default function SettingsPage() {
       .catch(() => setWebBuild(null))
   }
   useEffect(refresh, [])
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      api.get<PrintersInfo>('/api/printers').then(setPrinters).catch(() => {})
+    }, 10_000)
+    return () => window.clearInterval(timer)
+  }, [])
 
   // onglet Données : réservé au rôle admin côté API — silencieux si 403.
   // Vue compactée : on ne tire que l'agrégat par classe ; le détail d'une classe

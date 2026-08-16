@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from .models import (
     Competency, CompetencyEvidence, CompetencyFramework, CompetencyStateHistory,
-    ExerciseCatalog, ExerciseCompetency, GeneratedExercise, LessonSnippet,
+    ExerciseCatalog, ExerciseCompetency, GeneratedExercise,
     SchoolYear, StudentCompetencyState,
 )
 from .services.exercises import GENERATORS
@@ -81,13 +81,13 @@ NEW_5E_VERSION = CAHIER_VERSION
 def _purge_frameworks(db: Session, frameworks: list[CompetencyFramework]):
     """Supprime des référentiels et toutes les lignes qui en dépendent
     (liens exercices, preuves, états élèves, historiques, exercices générés,
-    extraits de leçon)."""
+    exercices générés)."""
     old_ids = [f.id for f in frameworks]
     comp_ids = [c.id for c in
                 db.query(Competency.id).filter(Competency.framework_id.in_(old_ids))]
     if comp_ids:
         for model in (ExerciseCompetency, CompetencyEvidence, StudentCompetencyState,
-                      CompetencyStateHistory, GeneratedExercise, LessonSnippet):
+                      CompetencyStateHistory, GeneratedExercise):
             db.query(model).filter(
                 model.competency_id.in_(comp_ids)).delete(synchronize_session=False)
         db.query(Competency).filter(Competency.id.in_(comp_ids)).delete(synchronize_session=False)

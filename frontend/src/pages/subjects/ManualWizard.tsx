@@ -43,7 +43,7 @@ const LEVEL_LABELS: Record<string, string> = {
 }
 const MAX_VARIANTS = 6
 
-// Les trois politiques de guide. Un « guide » est le court rappel
+// Les trois politiques de guide. Un « guide » est l'aide courte
 // d'auto-correction attaché à chaque exercice/problème.
 const GUIDE_OPTIONS = [
   {
@@ -317,7 +317,7 @@ export default function ManualWizard({ opened, classes, onClose, onCreated }: {
               <div>
                 <Text size="sm" fw={600}>Guides</Text>
                 <Text size="xs" c="dimmed" mb="xs">
-                  Chaque exercice et chaque problème porte un court rappel
+                  Chaque exercice et chaque problème porte un guide élève court
                   d'auto-correction. Ce choix décide de la place qu'il occupe sur
                   la feuille — il vaut pour tout le sujet.
                 </Text>

@@ -44,7 +44,7 @@ def test_pages_needed_matches_render_copy_with_correction():
     c.save()
     real = max((z["page_index"] for z in zones), default=0) + 1
     tpl = pdfgen.DEFAULT_TEMPLATES
-    heights = [pdfgen.estimate_item_height(i, 9, 12, tpl["exercise"], tpl["lesson"])
+    heights = [pdfgen.estimate_item_height(i, 9, 12, tpl["exercise"])
                for i in items]
     assert pdfgen.pages_needed(heights) == real
 

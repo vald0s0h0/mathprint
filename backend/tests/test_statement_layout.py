@@ -268,7 +268,7 @@ def test_subquestion_gets_a_badge_coloured_by_the_exercise_level():
 
 
 def test_subquestions_are_plain_text_when_no_colour_is_given():
-    """QCM, libellés de colonne, rappels de leçon : pas de pastille — le
+    """QCM et libellés de colonne : pas de pastille — le
     paramètre est ce qui distingue « énoncé d'exercice » du reste."""
     lines = _lines("a. Première ?\nb. Seconde ?")
     assert [ln["badge"] for ln in lines] == [None, None]

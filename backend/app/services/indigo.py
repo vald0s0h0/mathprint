@@ -767,7 +767,7 @@ def _prepare_exercise(doc_eleve, grade, comp, ex, corrections, extraction_id, or
     return row, manual
 
 
-_GUIDE_TODO = "À compléter : guide d'auto-correction (rappel de leçon + piège), à saisir."
+_GUIDE_TODO = "À compléter : guide d'auto-correction (règle utile + piège), à saisir."
 _SOLUTION_TODO = "À compléter : corrigé de référence à saisir."
 
 

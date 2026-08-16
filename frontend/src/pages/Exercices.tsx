@@ -5,7 +5,7 @@
 // demi-colonne A4) : extrait manuel → tags/badges → énoncé → guide → corrigé →
 // actions. « Modifier » ouvre une modale d'édition complète.
 import {
-  Accordion, ActionIcon, Alert, Badge, Box, Button, Card, Checkbox, Group,
+  ActionIcon, Alert, Badge, Box, Button, Card, Checkbox, Group,
   Loader, Modal, NumberInput, Paper, Progress, ScrollArea, SegmentedControl, Select,
   Stack, Table, TagsInput, Text, Textarea, TextInput, Title, Tooltip,
 } from '@mantine/core'
@@ -15,15 +15,15 @@ import {
   ImageOff, ImagePlus, Minus, Pencil, Plus, RefreshCw, RotateCcw, Slash, Sparkles,
   Trash2, UploadCloud, Wand2,
 } from 'lucide-react'
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../api'
 import AuthImg from '../components/AuthImg'
+import CompetencyHierarchy, { type CompetencyHierarchyColumn } from '../components/CompetencyHierarchy'
+import ExercisePrintPreview from '../components/ExercisePrintPreview'
 import FigureEditor, { type FigureBox, type ImageRect } from '../components/FigureEditor'
 import MathText from '../components/MathText'
 import { useAppState } from '../state/AppState'
-
-// largeur d'une demi-colonne d'A4 (≈ 86 mm) : l'aperçu ressemble à l'impression
-const CARD_W = 340
+import GradeSelectionRequired from '../components/GradeSelectionRequired'
 
 // ------------------------------------------------------------------- types
 type Comp = {
@@ -296,7 +296,7 @@ function RichBody({ text, color, size }: { text: string; color: string; size?: s
   )
 }
 
-/** Guide d'auto-correction = rappel de leçon : présenté dans un bloc enfant type
+/** Guide d'auto-correction : présenté dans un bloc enfant type
  *  « citation » (alinéa, filet coloré) avec une icône livre, taille de police
  *  par défaut (pas d'agrandissement), gras possible. Reste court (cf. prompt). */
 function GuideBlock({ text, color }: { text: string; color: string }) {
@@ -448,56 +448,35 @@ function ExerciseCard({ ex, onEdit, onChange, onDelete, selectable, selected, on
   // lisible et actionnable (on doit pouvoir la relire, la modifier, l'invalider).
   const done = ex.status === 'validated'
   return (
-    <Card withBorder radius="md" p="sm"
-      style={{
-        width: CARD_W,
-        outline: selected ? '2px solid var(--mantine-color-blue-5)' : undefined,
-        background: done ? 'var(--mantine-color-gray-1)' : undefined,
-        borderColor: done ? 'var(--mantine-color-gray-4)' : undefined,
-        opacity: done ? 0.72 : undefined,
-      }}>
-      {/* sélection (mode « régénérer ») */}
-      {selectable && (
-        <Checkbox mb={8} checked={!!selected} label={<Text size="xs" fw={600}>Sélectionner</Text>}
-          onChange={(e) => onToggleSelect?.(ex.id, e.currentTarget.checked)} />
-      )}
-      {/* 1 — extrait du manuel (image de référence, non éditable) */}
-      {ex.crop_url && (
-        <Box mb={8}>
-          <Text size="10px" c="dimmed" mb={2}>Extrait du manuel</Text>
-          <AuthImg src={ex.crop_url} alt="extrait" style={{ maxWidth: '100%', display: 'block', border: '1px solid var(--mantine-color-gray-3)', borderRadius: 4 }} />
-        </Box>
-      )}
-      {/* 2 — tags + badges */}
-      <BadgeRow ex={ex} />
-      {/* 3 — énoncé (avec figure + zone de réponse) */}
-      <Paper withBorder p="xs" radius="sm" mt={8}>
-        <StatementPreview ex={ex} color={color} />
-      </Paper>
-      {/* 4 — guide d'auto-correction (élève) = rappel de leçon en bloc citation */}
-      {ex.correction_guide && (
-        <Box mt={8}>
-          <Text size="10px" fw={700} c="dimmed" mb={2}>Guide (élève)</Text>
-          <GuideBlock text={ex.correction_guide} color={color} />
-        </Box>
-      )}
-      {/* 5 — corrigé (prof) */}
-      {ex.correction_solution && (
-        <Box mt={6}>
-          <Text size="10px" fw={700} c="dimmed">Corrigé (prof)</Text>
-          <RichBody text={ex.correction_solution} color={color} size="sm" />
-        </Box>
-      )}
-      {/* 6 — actions */}
-      <Group justify="space-between" mt={10}>
-        <ActionIcon color="red" variant="subtle" onClick={() => onDelete(ex.id)}><Trash2 size={16} /></ActionIcon>
-        <Group gap={6}>
-          <Button size="xs" variant="light" leftSection={<Pencil size={14} />} onClick={() => onEdit(ex)}>Modifier</Button>
-          {ex.status !== 'validated' &&
-            <Button size="xs" color="green" leftSection={<Check size={14} />} onClick={validate}>Valider</Button>}
-        </Group>
-      </Group>
-    </Card>
+    <Box style={{
+      minWidth: 0, padding: 8, borderRadius: 8,
+      outline: selected ? '2px solid var(--mantine-color-blue-5)' : undefined,
+      background: done ? 'var(--mantine-color-gray-1)' : undefined,
+      opacity: done ? 0.72 : undefined,
+    }}>
+      <ExercisePrintPreview exercise={ex} color={color} showGuide showCorrection
+        beforeFrame={<>
+          {selectable && (
+            <Checkbox mb={8} checked={!!selected} label={<Text size="xs" fw={600}>Sélectionner</Text>}
+              onChange={(e) => onToggleSelect?.(ex.id, e.currentTarget.checked)} />
+          )}
+          {ex.crop_url && (
+            <Box mb={8}>
+              <Text size="10px" c="dimmed" mb={2}>Extrait du manuel</Text>
+              <AuthImg src={ex.crop_url} alt="extrait" style={{ maxWidth: '100%', display: 'block', border: '1px solid var(--mantine-color-gray-3)', borderRadius: 4 }} />
+            </Box>
+          )}
+        </>}
+        badges={<BadgeRow ex={ex} />}
+        afterFrame={<Group justify="space-between" mt={2}>
+          <ActionIcon color="red" variant="subtle" onClick={() => onDelete(ex.id)}><Trash2 size={16} /></ActionIcon>
+          <Group gap={6}>
+            <Button size="xs" variant="light" leftSection={<Pencil size={14} />} onClick={() => onEdit(ex)}>Modifier</Button>
+            {ex.status !== 'validated' &&
+              <Button size="xs" color="green" leftSection={<Check size={14} />} onClick={validate}>Valider</Button>}
+          </Group>
+        </Group>} />
+    </Box>
   )
 }
 
@@ -616,7 +595,7 @@ function EditModal({ ex, onClose, onSaved, onChange }: {
         {/* aperçu live : ce que verra l'élève (pastilles a./b./1., puces, cases) */}
         <Paper withBorder p="xs" radius="sm" bg="var(--mantine-color-gray-0)">
           <Text size="10px" c="dimmed" mb={2}>Aperçu</Text>
-          <StatementPreview ex={form} color={badgeColor(form)} />
+          <ExercisePrintPreview exercise={form} color={badgeColor(form)} />
         </Paper>
 
         {form.response_type.startsWith('qcm') && (
@@ -908,90 +887,60 @@ function CompetencyTable({ rows, onSelect }: { rows: SummaryRow[]; onSelect: (r:
       })
       domain.chapters.get(r.chapter_code)!.rows.push(r)
     })
-    return Array.from(domainMap.values()).map((d) => ({ ...d, chapters: Array.from(d.chapters.values()) }))
+    return Array.from(domainMap.values()).map((domain) => ({
+      key: domain.code || domain.name,
+      code: domain.code,
+      name: domain.name,
+      chapters: Array.from(domain.chapters.values()).map((chapter) => ({
+        key: `${domain.code}/${chapter.code || chapter.name}`,
+        code: chapter.code,
+        name: chapter.name,
+        rows: chapter.rows,
+      })),
+    }))
   }, [rows])
 
   const count = (value: number, color: string) => value
-    ? <Badge color={color} variant="light">{value}</Badge>
+    ? <Badge size="sm" color={color} variant="light">{value}</Badge>
     : <Text c="dimmed" size="sm">—</Text>
 
+  const columns: CompetencyHierarchyColumn<SummaryRow>[] = [
+    { key: 'draft', label: 'Brouillon', width: 82, align: 'center',
+      render: (row) => count(row.draft, 'orange') },
+    { key: 'validated', label: 'Validé', width: 76, align: 'center',
+      render: (row) => count(row.validated, 'blue') },
+    { key: 'published', label: 'Publié', width: 76, align: 'center',
+      render: (row) => count(row.published, 'teal') },
+  ]
+
   return (
-    <Accordion multiple variant="separated" radius="md" defaultValue={domains.map((d) => d.code)}>
-      {domains.map((domain) => {
-        const objectiveCount = domain.chapters.reduce((n, ch) => n + ch.rows.length, 0)
+    <CompetencyHierarchy domains={domains} columns={columns} columnGroupLabel="Exercices"
+      showColumnHeaders={false}
+      getRowKey={(row) => row.competency_id}
+      getShortId={(row) => row.short_id}
+      getLabel={(row) => row.label}
+      onRowClick={onSelect}
+      chapterAside={(chapter) => {
+        const problem = chapter.rows[0]
+        if (!problem) return null
         return (
-          <Accordion.Item key={domain.code} value={domain.code}>
-            <Accordion.Control>
-              <Group gap="xs">
-                <Text fw={650} size="sm">{domain.name}</Text>
-                <Text size="xs" c="dimmed">{objectiveCount} objectifs</Text>
-              </Group>
-            </Accordion.Control>
-            <Accordion.Panel>
-              <Table highlightOnHover verticalSpacing={4} fz="sm">
-                <Table.Thead>
-                  <Table.Tr>
-                    <Table.Th rowSpan={2}>Chapitre</Table.Th>
-                    <Table.Th rowSpan={2}>Compétence</Table.Th>
-                    <Table.Th colSpan={3} ta="center"
-                      style={{ borderLeft: '1px solid var(--mantine-color-default-border)' }}>Exercices</Table.Th>
-                    <Table.Th colSpan={3} ta="center"
-                      style={{ borderLeft: '1px solid var(--mantine-color-default-border)' }}>Problèmes</Table.Th>
-                  </Table.Tr>
-                  <Table.Tr>
-                    <Table.Th w={82} ta="center" style={{ borderLeft: '1px solid var(--mantine-color-default-border)' }}>Brouillon</Table.Th>
-                    <Table.Th w={76} ta="center">Validé</Table.Th>
-                    <Table.Th w={76} ta="center">Publié</Table.Th>
-                    <Table.Th w={82} ta="center" style={{ borderLeft: '1px solid var(--mantine-color-default-border)' }}>Brouillon</Table.Th>
-                    <Table.Th w={76} ta="center">Validé</Table.Th>
-                    <Table.Th w={76} ta="center">Publié</Table.Th>
-                  </Table.Tr>
-                </Table.Thead>
-                <Table.Tbody>
-                  {domain.chapters.map((chapter) => (
-                    <Fragment key={chapter.code}>
-                      {chapter.rows.map((r, index) => (
-                        <Table.Tr key={r.competency_id} style={{ cursor: 'pointer' }} onClick={() => onSelect(r)}>
-                          {index === 0 && (
-                            <Table.Td rowSpan={chapter.rows.length} style={{ verticalAlign: 'top', minWidth: 180 }}>
-                              <Text size="xs" fw={700} c="dimmed" tt="uppercase">
-                                {chapter.code} {chapter.name}
-                              </Text>
-                              <Text size="10px" c="dimmed">{chapter.rows.length} compétence{chapter.rows.length > 1 ? 's' : ''}</Text>
-                            </Table.Td>
-                          )}
-                          <Table.Td>
-                            <Text size="sm" py={1} pl="sm"
-                              style={{ borderLeft: '2px solid var(--mantine-color-default-border)' }}>
-                              <Text span c="dimmed" size="xs" mr={6}>{r.short_id}</Text>{r.label}
-                            </Text>
-                          </Table.Td>
-                          <Table.Td ta="center" style={{ borderLeft: '1px solid var(--mantine-color-default-border)' }}>{count(r.draft, 'orange')}</Table.Td>
-                          <Table.Td ta="center">{count(r.validated, 'blue')}</Table.Td>
-                          <Table.Td ta="center">{count(r.published, 'teal')}</Table.Td>
-                          {index === 0 && <>
-                            <Table.Td rowSpan={chapter.rows.length} ta="center"
-                              style={{ verticalAlign: 'middle', borderLeft: '1px solid var(--mantine-color-default-border)' }}>
-                              {count(r.problem_draft, 'orange')}
-                            </Table.Td>
-                            <Table.Td rowSpan={chapter.rows.length} ta="center" style={{ verticalAlign: 'middle' }}>
-                              {count(r.problem_validated, 'blue')}
-                            </Table.Td>
-                            <Table.Td rowSpan={chapter.rows.length} ta="center" style={{ verticalAlign: 'middle' }}>
-                              {count(r.problem_published, 'teal')}
-                            </Table.Td>
-                          </>}
-                        </Table.Tr>
-                      ))}
-                    </Fragment>
-                  ))}
-                </Table.Tbody>
-              </Table>
-            </Accordion.Panel>
-          </Accordion.Item>
+          <Group gap="md" wrap="wrap">
+            <Text size="xs" fw={650}>Problèmes</Text>
+            <Group gap={5} wrap="nowrap">
+              <Text size="xs" c="dimmed">Brouillon</Text>
+              {count(problem.problem_draft, 'orange')}
+            </Group>
+            <Group gap={5} wrap="nowrap">
+              <Text size="xs" c="dimmed">Validé</Text>
+              {count(problem.problem_validated, 'blue')}
+            </Group>
+            <Group gap={5} wrap="nowrap">
+              <Text size="xs" c="dimmed">Publié</Text>
+              {count(problem.problem_published, 'teal')}
+            </Group>
+          </Group>
         )
-      })}
-    </Accordion>
+      }} />
   )
 }
 
@@ -1139,14 +1088,7 @@ export default function Exercices() {
   }
 
   if (isAll) {
-    return (
-      <Stack>
-        <Title order={2}>Exercices</Title>
-        <Alert color="blue" icon={<AlertTriangle size={16} />}>
-          Sélectionne une classe (6ᵉ, 5ᵉ, 4ᵉ ou 3ᵉ) avec le sélecteur en haut de la page pour voir ses compétences.
-        </Alert>
-      </Stack>
-    )
+    return <GradeSelectionRequired title="Exercices" />
   }
 
   const eleveOk = manuals?.manuals.eleve.available
@@ -1250,12 +1192,15 @@ export default function Exercices() {
           {exercises && exercises.length === 0 && (
             <Text c="dimmed" size="sm">Aucun exercice. Lance une extraction pour cette compétence.</Text>
           )}
-          <Group align="flex-start" gap="md" wrap="wrap">
+          <Box style={{
+            display: 'grid', gridTemplateColumns: 'repeat(3, minmax(280px, 1fr))',
+            alignItems: 'start', gap: 'var(--mantine-spacing-md)',
+          }}>
             {exercises?.map((ex) => (
               <ExerciseCard key={ex.id} ex={ex} onEdit={setEditing} onChange={onChange} onDelete={onDelete}
                 selectable={selMode} selected={selIds.has(ex.id)} onToggleSelect={toggleSel} />
             ))}
-          </Group>
+          </Box>
         </>
       )}
 

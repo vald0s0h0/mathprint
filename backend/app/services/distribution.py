@@ -5,11 +5,6 @@ copie. Remplace les anciennes heuristiques fixes (suggestion 60/30/10,
 remplissage par répétition sans diversité) — la sélection concrète des
 exercices en banque reste celle de exercise_gen (ensure_bank/bank_rows_near_level),
 jamais réinventée ici.
-
-Inclut aussi `lesson_review_targets` : quelles compétences doivent recevoir
-un rappel de leçon dans la copie d'un élève, pilotée par le même plan
-post-correction (lacunes/courbe d'oubli) que apply_next_plan — cf.
-services.generation pour l'insertion effective des rappels.
 """
 from datetime import datetime, timezone
 
@@ -169,47 +164,3 @@ def apply_next_plan(student: Student, target_mix: dict[str, float],
     plan_level = plan.get("difficulty_level")
     level = plan_level if isinstance(plan_level, int) and 1 <= plan_level <= 5 else level5
     return target_mix, level
-
-
-def lesson_review_targets(candidate_ids: list[str], student: Student, due: list[dict],
-                          level: int, assessment_type: str) -> list[str]:
-    """Compétences (parmi `candidate_ids`, cochées pour ce sujet) devant
-    recevoir un rappel de leçon dans cette copie — jamais en contrôle, jamais
-    plus de `settings.max_lessons_per_copy`. Un rappel de leçon peut se
-    répéter d'un sujet à l'autre pour le même élève (voulu, cf. accompagnement
-    personnalisé) ; ne jamais l'inclure deux fois DANS la même copie reste à
-    la charge de l'appelant (dédoublonnage sur competency_id).
-
-    Priorité, jamais cumulée :
-      1. le plan post-correction personnalisé (`Student.next_plan_json
-         ["lesson_competency_ids"]`, cf. services.appreciation) — lacunes
-         identifiées par le LLM à partir de la courbe d'oubli lors de la
-         dernière correction ;
-      2. à défaut (plan absent/périmé/vide), repli déterministe : compétences
-         de `due` (services.forgetting.due_competencies) dont la maîtrise
-         est sous `lesson_review_mastery_threshold` — une vraie lacune, pas
-         simplement "due" par le temps ;
-      3. filet de sécurité historique pour un élève sans aucune preuve
-         encore : niveau global <= 4 -> 1re compétence du sujet.
-    """
-    if assessment_type != "training" or not candidate_ids:
-        return []
-    candidates = set(candidate_ids)
-    cap = settings.max_lessons_per_copy
-
-    plan = _fresh_plan(student)
-    if plan:
-        planned = [cid for cid in (plan.get("lesson_competency_ids") or [])
-                  if cid in candidates]
-        if planned:
-            return planned[:cap]
-
-    weak = [d["competency_id"] for d in due
-            if d["competency_id"] in candidates
-            and d.get("mastery", 1.0) < settings.lesson_review_mastery_threshold]
-    if weak:
-        return weak[:cap]
-
-    if level <= 4:
-        return candidate_ids[:1]
-    return []

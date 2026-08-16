@@ -471,26 +471,6 @@ def _deepseek_mock(operation: str, payload: dict) -> dict:
                     "answer": {"type": "choice", "correct": [choices.index(f"${good}$")]},
                     "difficulty": difficulty})
         return {"exercises": exercises, "confidence": 0.9, "reason_code": "mock_structure"}
-    if operation in ("lesson_snippet", "lesson_repair"):
-        label = payload.get("competency_label", "la notion")
-        return {
-            "title": f"Rappel — {label}"[:100],
-            "essentiel": f"Pour {label.lower()}, on avance pas à pas. "
-                         "Relis la règle avant de commencer.",
-            "methode": [
-                "Repère les données utiles de l'énoncé.",
-                "Applique la règle vue en classe.",
-                "Vérifie que ton résultat est logique."],
-            "exemple": {
-                "enonce": "On veut calculer $12 + 9$.",
-                "etapes": ["On pose $12 + 9$.", "On calcule : $12 + 9 = 21$."],
-                "resultat": "Le résultat est $21$."},
-            "encarts": [
-                {"type": "conseil",
-                 "texte": "Vérifie toujours l'ordre de grandeur de ton résultat."},
-                {"type": "attention",
-                 "texte": "Ne confonds pas l'ordre des opérations avec l'ordre de l'énoncé."}],
-            "confidence": 0.9, "reason_code": "mock_lesson"}
     if operation == "level_proposal":
         return {"proposed_level": payload.get("current_level", 5), "confidence": 0.7,
                 "reason_code": "mock_stable", "evidence_ids": []}
@@ -542,7 +522,7 @@ def claude_json(db: Session, operation: str, system: str, payload: dict,
                 max_tokens: int = 500, model: str | None = None,
                 correlation_id: str | None = None,
                 total_timeout: float | None = None) -> dict:
-    """Claude en mode JSON pour vérification croisée (exercices, rappels) et
+    """Claude en mode JSON pour vérification croisée des exercices et
     pour l'adaptateur Sésamaths (JSON brut -> contrat app, texte pur, pas
     d'image). `model` explicite prioritaire sur la config."""
     cfg = _config(db, "anthropic")
@@ -553,27 +533,21 @@ def claude_json(db: Session, operation: str, system: str, payload: dict,
     if _mock_enabled(db, cfg):
         _record(db, "anthropic", model, operation, input_tokens=400, output_tokens=80,
                 cost=0.0, correlation_id=correlation_id)
-        # Mock pour exercice/leçon : verdict structuré favorable (contrat exgen-3)
+        # Mock pour exercice : verdict structuré favorable (contrat exgen-3)
         if operation == "exercise_verification":
             return {"valide": True,
                     "scores": {"justesse": 5, "adequation_competence": 5,
                                "adequation_niveau": 4, "clarte": 5},
                     "problemes": [], "reparable": False,
                     "raison": "Mock : verdict favorable en mode test"}
-        if operation == "lesson_verification":
-            return {"valide": True,
-                    "scores": {"justesse": 5, "simplicite": 5, "utilite": 5},
-                    "problemes": [], "reparable": False,
-                    "raison": "Mock : verdict favorable en mode test"}
         if operation == "appreciation_synthesis":
             due = payload.get("due_competencies") or []
-            weak = [d.get("competency_id") for d in due if (d.get("mastery") or 0) < 0.5]
             return {"synthesis": ("Bon travail sur ce sujet : les progrès mesurés sont "
                                   "nets, continue sur cette lancée pour la suite."),
                     "next_plan": {
                         "competency_ids": [d.get("competency_id") for d in due[:3]],
                         "difficulty_level": 3, "quantity": 4,
-                        "pacing_days": 7, "lesson_competency_ids": weak[:2]}}
+                        "pacing_days": 7}}
         if operation == "sesamaths_adapt":
             return _sesamaths_adapt_mock(correlation_id or "")
         return {}

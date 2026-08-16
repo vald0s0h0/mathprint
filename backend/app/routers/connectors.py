@@ -18,6 +18,7 @@ from ..config import settings
 from ..db import get_db
 from ..models import (Assessment, AuditLog, ConnectorPrintJob, PrintConnector,
                       Printer, ScanBatch, User)
+from ..services.print_connectors import expire_stale_queued_jobs
 from ..services.security import verify_password
 
 router = APIRouter(prefix="/api/connectors", tags=["print-connectors"])
@@ -169,6 +170,7 @@ def _profile_name(connector_id: str, native_name: str) -> str:
 def heartbeat(body: HeartbeatIn,
               connector: PrintConnector = Depends(current_connector),
               db: Session = Depends(get_db)):
+    expire_stale_queued_jobs(db, connector_id=connector.id)
     now = _utcnow()
     connector.last_seen_at = now
     if body.app_version:
@@ -228,6 +230,7 @@ def _job_view(job: ConnectorPrintJob, *, include_download: bool = False) -> dict
 @router.post("/jobs/claim")
 def claim_job(connector: PrintConnector = Depends(current_connector),
               db: Session = Depends(get_db)):
+    expire_stale_queued_jobs(db, connector_id=connector.id)
     connector.last_seen_at = _utcnow()
     # Après un redémarrage, rendre d'abord le job déjà réclamé. Le journal
     # local du connecteur décidera de le poursuivre ou de le déclarer incertain.

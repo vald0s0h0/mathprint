@@ -152,8 +152,8 @@ class TemplatesPreviewIn(BaseModel):
 @router.post("/settings/templates/preview")
 def templates_preview(body: TemplatesPreviewIn):
     """PDF d'exemple rendu avec les templates fournis (éditeur visuel des
-    Paramètres → Documents) : en-tête, cartes exercice (dont maths et QCM)
-    et rappel de leçon, sans toucher à la base."""
+    Paramètres → Documents) : en-tête et cartes exercice (dont maths et QCM),
+    sans toucher à la base."""
     from reportlab.lib.pagesizes import A4
     from reportlab.pdfgen import canvas as _canvas
 
@@ -167,10 +167,6 @@ def templates_preview(body: TemplatesPreviewIn):
     path = out_dir / "template_preview.pdf"
     c = _canvas.Canvas(str(path), pagesize=A4)
     items = [
-        {"kind": "lesson", "title": "Rappel — Additionner des fractions",
-         "content": "Pour additionner deux fractions, on les met au même "
-                    "dénominateur, puis on additionne les numérateurs.",
-         "example": "Exemple : 1/2 + 1/3 = 3/6 + 2/6 = 5/6."},
         {"kind": "exercise", "item_id": "demo-1",
          "statement": "Calculer : 3/4 + 5/6 = ?",
          "response_type": "short_text", "choices": [], "level5": 2},

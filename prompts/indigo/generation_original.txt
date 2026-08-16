@@ -32,7 +32,7 @@ INTERDIT ici : "manual_drawing" (reformule toujours en un format 1 à 7 — cf. 
 # La correction : DEUX champs distincts (par exercice) — TOUS DEUX OBLIGATOIRES
 Ces deux champs ne sont JAMAIS vides, pour CHAQUE exercice. Si la "correction" fournie est vide ou illisible, tu résous toi-même et tu les rédiges quand même.
 - "correction_solution" : la VRAIE solution, recopiée et remise au propre depuis la "correction" fournie — le résultat, et les étapes si le manuel les donne. Formules en LaTeX $...$. Si tu as ajusté les nombres, recalcule-la. C'est le CORRIGÉ de référence (côté professeur).
-- "correction" : un GUIDE d'auto-correction TRÈS COURT (1 à 3 lignes) pour l'ÉLÈVE, affiché seulement s'il s'est trompé. NI le résultat, NI la solution : la règle du cours à mobiliser (un RAPPEL de leçon) et LE PIÈGE PRÉCIS de CET exercice. Reste bref (jamais plus de 3 lignes). Ce champ est DIFFÉRENT de "correction_solution" : ne RECOPIE JAMAIS la solution ni le résultat chiffré ici — s'ils sont identiques, tu t'es trompé de champ.
+- "correction" : un GUIDE d'auto-correction TRÈS COURT (1 à 3 lignes) pour l'ÉLÈVE, affiché seulement s'il s'est trompé. NI le résultat, NI la solution : la règle utile à mobiliser et LE PIÈGE PRÉCIS de CET exercice. Reste bref (jamais plus de 3 lignes). Ce champ est DIFFÉRENT de "correction_solution" : ne RECOPIE JAMAIS la solution ni le résultat chiffré ici — s'ils sont identiques, tu t'es trompé de champ.
   Ce guide n'est JAMAIS vide, JAMAIS générique (« à compléter », « revois ton cours »), JAMAIS une simple reformulation de la consigne : rédige-le TOUJOURS, pour CHAQUE exercice, avec du CONTENU utile propre à cet exercice. Même pour un exercice trivial, il y a toujours une règle à nommer et un piège à signaler. Exemple pour un calcul de diviseurs : « Un diviseur divise le nombre SANS reste. Pense à tester $1$ et le nombre lui-même ; oublie souvent le milieu (ici $6$). » Un exercice livré sans guide utile est un défaut à ne plus jamais produire.
 
 # Correction automatique — contraintes non négociables
@@ -73,4 +73,3 @@ Tous ces exercices portent sur « §COMPETENCY§ », chapitre « §CHAPTER§ »,
 
 # Un exercice adapté PAR exercice fourni
 Le tableau "exercises" du JSON contient EXACTEMENT un objet par entrée de "exercises_to_adapt", dans le MÊME ordre, chacun avec le "source_number" de l'exercice qu'il adapte. Ne saute aucun exercice, n'en ajoute aucun.
-

@@ -1,18 +1,17 @@
-// Banque de contenus : exercices générés et rappels de leçon, par compétence.
+// Banque d'exercices, organisée par compétence.
 // La banque grandit à la demande (cycles réellement enseignés) ; cette page
 // donne la couverture, l'aperçu fidèle (KaTeX + figures identiques au PDF),
-// le retrait d'un contenu douteux et la génération ciblée.
+// le retrait d'un contenu douteux. Toute création reste hors de cet onglet.
 import {
-  ActionIcon, Alert, Badge, Box, Button, Card, Collapse, Group, Loader, Paper, ScrollArea,
-  SegmentedControl, Select, Stack, Table, Tabs, Text, Title, Tooltip,
+  ActionIcon, Badge, Box, Button, Checkbox, Collapse, Group, Loader, Paper, ScrollArea,
+  SegmentedControl, Stack, Text, Title, Tooltip,
 } from '@mantine/core'
-import { notifications } from '@mantine/notifications'
-import {
-  AlertTriangle, BookOpen, ChevronDown, ChevronUp, Lightbulb, Library, RefreshCw, ScanText, Trash2,
-} from 'lucide-react'
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
+import { ChevronDown, ChevronUp, Library } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../api'
-import FigurePreview from '../components/FigurePreview'
+import CompetencyHierarchy, { type CompetencyHierarchyColumn } from '../components/CompetencyHierarchy'
+import ExercisePrintPreview from '../components/ExercisePrintPreview'
+import GradeSelectionRequired from '../components/GradeSelectionRequired'
 import MathText from '../components/MathText'
 import { useAppState } from '../state/AppState'
 
@@ -21,39 +20,23 @@ type Summary = {
   order_index: number
   domain_code: string; domain_name: string; chapter_code: string; chapter_name: string
   by_level: Record<string, number>; total: number; problems: number
-  lessons: { level_min: number; level_max: number; validated: boolean }[]
 }
 type Exercise = {
   id: string; competency_id: string; level: number; variant: number
   statement: string; correction: string; response_type: string
   choices: string[]; source: string; kind: string
   quality: Record<string, number>; figure: Record<string, any> | null
-  bareme_points: number
+  bareme_points: number; figure_url: string | null
+  calculator: string
+  expected: Record<string, any>; grading: Record<string, any>
+  row_labels: string[] | null; col_labels: string[] | null; lines: number | null
+  correction_solution: string; correction_guide: string
   // extraction brute dont provient cette ligne : shape variable selon la
   // source. Seule source="sesamaths" porte des blocs OCR Mistral affichables
   // (title/text/table/list/equation/image/...) ; les autres sources (indigo,
   // gemini, mathalea) stockent ici des métadonnées de forme différente ou
   // rien — ne JAMAIS supposer `.blocks` présent sans vérifier.
   raw: Record<string, any> | null
-}
-type Lesson = {
-  id: string; competency_id: string; level_min: number; level_max: number
-  title: string; validated: boolean
-  blocks: {
-    essentiel?: string; methode?: string[]
-    exemple?: { enonce: string; etapes: string[]; resultat: string }
-    encarts?: { type: 'conseil' | 'attention'; texte: string }[]
-    astuce?: string; figure?: Record<string, any> | null
-  } | null
-  content: string; example: string; figure: Record<string, any> | null
-}
-type Framework = { id: string; name: string; grade_level: string }
-type Comp = { id: string; code: string; label: string }
-type SesamathsRaw = {
-  status: string; detail?: string; attempts?: number
-  series_number?: number | null; series_name?: string
-  updated_at?: string | null; n_exercises_validated?: number
-  pages: { page: number; markdown: string; blocks: { type: string; content: string }[] }[]
 }
 
 const RESPONSE_LABELS: Record<string, string> = {
@@ -70,14 +53,6 @@ const RESPONSE_LABELS: Record<string, string> = {
 const formatPoints = (v: number) =>
   (Number.isInteger(v) ? String(v) : v.toFixed(3).replace(/0+$/, '').replace('.', ','))
 
-const SOURCE_LABELS: Record<string, string> = {
-  mathalea: 'MathALÉA', sesamaths: 'Sésamaths', sesamaths_deepseek: 'Sésamaths (IA)',
-  gemini: 'Gemini',
-}
-const SOURCE_COLORS: Record<string, string> = {
-  mathalea: 'green', sesamaths: 'teal', sesamaths_deepseek: 'teal', gemini: 'violet',
-}
-
 function QualityBadge({ quality }: { quality: Record<string, number> }) {
   const vals = Object.values(quality || {})
   if (!vals.length) return null
@@ -90,7 +65,9 @@ function QualityBadge({ quality }: { quality: Record<string, number> }) {
   )
 }
 
-function ExerciseCard({ ex, onRetire }: { ex: Exercise; onRetire: (id: string) => void }) {
+function ExerciseCard({ ex, showCorrection, showGuide }: {
+  ex: Exercise; showCorrection: boolean; showGuide: boolean
+}) {
   const [showRaw, setShowRaw] = useState(false)
   // seule la source Sésamaths porte des blocs OCR affichables ici ; les
   // autres sources (indigo, gemini...) ont un raw_extract_json de forme
@@ -98,15 +75,13 @@ function ExerciseCard({ ex, onRetire }: { ex: Exercise; onRetire: (id: string) =
   // .map() plante et fait disparaître toute la page (cf. incident du 31/07).
   const rawBlocks = Array.isArray(ex.raw?.blocks) ? ex.raw!.blocks : null
   return (
-    <Card withBorder radius="md" p="sm">
-      <Group justify="space-between" wrap="nowrap" align="flex-start" mb={6}>
-        <Group gap={6}>
+    <Box>
+      <ExercisePrintPreview exercise={ex} color={ex.kind === 'probleme' ? 'orange' : 'indigo'}
+        showCorrection={showCorrection} showGuide={showGuide}
+        badges={<Group gap={6}>
           <Badge size="xs" variant="filled" color="indigo">Niv. {ex.level}</Badge>
           {ex.kind === 'probleme' && <Badge size="xs" variant="light" color="orange">problème</Badge>}
           <Badge size="xs" variant="light" color="gray">{RESPONSE_LABELS[ex.response_type] ?? ex.response_type}</Badge>
-          <Badge size="xs" variant="light" color={SOURCE_COLORS[ex.source] ?? 'blue'}>
-            {SOURCE_LABELS[ex.source] ?? 'IA vérifiée'}
-          </Badge>
           {/* barème d'effort : ce que l'exercice VAUT, résolu côté API (repli
               déterministe compris) — même information que dans l'onglet Exercices. */}
           {ex.bareme_points > 0 && (
@@ -115,8 +90,8 @@ function ExerciseCard({ ex, onRetire }: { ex: Exercise; onRetire: (id: string) =
             </Tooltip>
           )}
           <QualityBadge quality={ex.quality} />
-        </Group>
-        <Group gap={4} wrap="nowrap">
+        </Group>}
+        actions={<Group gap={4} wrap="nowrap">
           {rawBlocks && (
             <Tooltip label={showRaw ? 'Masquer le texte original' : 'Voir le texte original extrait du manuel'}>
               <ActionIcon variant="subtle" color="gray" size="sm" onClick={() => setShowRaw((v) => !v)}>
@@ -124,14 +99,8 @@ function ExerciseCard({ ex, onRetire }: { ex: Exercise; onRetire: (id: string) =
               </ActionIcon>
             </Tooltip>
           )}
-          <Tooltip label="Retirer de la banque (remplacé à la prochaine génération)">
-            <ActionIcon variant="subtle" color="red" size="sm" onClick={() => onRetire(ex.id)}>
-              <Trash2 size={14} />
-            </ActionIcon>
-          </Tooltip>
-        </Group>
-      </Group>
-      {rawBlocks && (
+        </Group>}
+        beforeFrame={rawBlocks && (
         <Collapse in={showRaw}>
           <Paper bg="var(--mantine-color-default-hover)" p={8} radius="sm" mb={8}
             style={{ borderLeft: '3px solid var(--mantine-color-gray-5)' }}>
@@ -152,306 +121,107 @@ function ExerciseCard({ ex, onRetire }: { ex: Exercise; onRetire: (id: string) =
             </Stack>
           </Paper>
         </Collapse>
-      )}
-      <MathText text={ex.statement} />
-      {ex.choices.length > 0 && (
-        <Group gap="md" mt={6}>
-          {ex.choices.map((c, i) => (
-            <Group key={i} gap={4} wrap="nowrap">
-              <Box w={12} h={12} style={{ border: '1.5px solid var(--mantine-color-gray-5)', borderRadius: 3 }} />
-              <MathText text={c} size="sm" />
-            </Group>
-          ))}
-        </Group>
-      )}
-      {ex.figure && <Box mt={8}><FigurePreview figureJson={ex.figure} /></Box>}
-      <Paper bg="var(--mantine-color-default-hover)" p={8} radius="sm" mt={8}>
-        <Text size="xs" c="dimmed" fw={600} mb={2}>Correction</Text>
-        <MathText text={ex.correction} size="sm" />
-      </Paper>
-    </Card>
-  )
-}
-
-const SESAMATHS_STATUS_LABELS: Record<string, string> = {
-  manual_missing: 'Manuel introuvable', chapter_missing: 'Chapitre absent du manuel',
-  not_extracted: 'Pas encore extrait', extracted: 'OCR fait, adaptation en attente',
-  done: 'Extrait et adapté',
-}
-
-// Onglet diagnostic : texte OCR Mistral BRUT, page par page, tel que lu —
-// jamais passé par l'adaptateur — pour vérifier que la donnée existe et est
-// fidèle avant de chercher un bug côté adaptation/format.
-function SesamathsRawPanel({ data }: { data: SesamathsRaw | null }) {
-  if (data === null) return <Loader size="sm" />
-  if (['manual_missing', 'chapter_missing', 'not_extracted'].includes(data.status)) {
-    return (
-      <Alert color={data.status === 'not_extracted' ? 'gray' : 'red'} variant="light"
-        title={SESAMATHS_STATUS_LABELS[data.status] ?? data.status}>
-        {data.status === 'not_extracted'
-          ? "Utilisez « Compléter la banque » dans l'onglet Exercices pour lancer l'extraction OCR de cette Série."
-          : (data.detail || 'Vérifiez la configuration du manuel dans Paramètres.')}
-      </Alert>
-    )
-  }
-  return (
-    <Stack gap="xs">
-      <Group gap={6} wrap="wrap">
-        {data.series_number != null && (
-          <Badge size="xs" variant="light" color="teal">
-            Série {data.series_number}{data.series_name ? ` — ${data.series_name}` : ''}
-          </Badge>
-        )}
-        <Badge size="xs" variant="light" color={data.status === 'done' ? 'teal' : 'yellow'}>
-          {SESAMATHS_STATUS_LABELS[data.status] ?? data.status}
-        </Badge>
-        {typeof data.n_exercises_validated === 'number' && (
-          <Badge size="xs" variant="light" color="indigo">
-            {data.n_exercises_validated} exercice(s) en banque
-          </Badge>
-        )}
-      </Group>
-      {data.detail && <Alert color="orange" variant="light" title="Dernière erreur">{data.detail}</Alert>}
-      {data.pages.length === 0 ? (
-        <Text c="dimmed" size="sm">Aucune page OCRisée pour l'instant.</Text>
-      ) : (
-        <ScrollArea.Autosize mah="58vh">
-          <Stack gap="xs">
-            {data.pages.map((p) => (
-              <Paper key={p.page} withBorder radius="sm" p={8}>
-                <Badge size="xs" variant="outline" color="gray" mb={4}>Page {p.page}</Badge>
-                {p.markdown ? (
-                  <Text size="xs" style={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace' }}>
-                    {p.markdown}
-                  </Text>
-                ) : (
-                  <Stack gap={4}>
-                    {p.blocks.map((b, i) => (
-                      <Group key={i} gap={6} wrap="nowrap" align="flex-start">
-                        <Badge size="xs" variant="outline" color="gray" style={{ flexShrink: 0 }}>
-                          {b.type}
-                        </Badge>
-                        {b.type === 'table'
-                          ? <Text size="xs" c="dimmed" style={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace' }}>
-                              {b.content}
-                            </Text>
-                          : <MathText text={b.content} size="sm" />}
-                      </Group>
-                    ))}
-                    {p.blocks.length === 0 && <Text size="xs" c="dimmed">(page vide)</Text>}
-                  </Stack>
-                )}
-              </Paper>
-            ))}
-          </Stack>
-        </ScrollArea.Autosize>
-      )}
-    </Stack>
-  )
-}
-
-// Encarts typés d'un rappel de leçon : icône dans une marge dédiée, teinte
-// distincte selon le type — reconnaissables au premier coup d'œil quel que
-// soit le thème choisi pour la carte.
-const ADMONITION: Record<'rappel' | 'conseil' | 'attention',
-  { icon: typeof BookOpen; bg: string; border: string; text: string }> = {
-  rappel: { icon: BookOpen, bg: 'var(--mantine-color-yellow-0)',
-    border: 'var(--mantine-color-yellow-6)', text: 'var(--mantine-color-yellow-9)' },
-  conseil: { icon: Lightbulb, bg: 'var(--mantine-color-teal-0)',
-    border: 'var(--mantine-color-teal-6)', text: 'var(--mantine-color-teal-9)' },
-  attention: { icon: AlertTriangle, bg: 'var(--mantine-color-orange-0)',
-    border: 'var(--mantine-color-orange-7)', text: 'var(--mantine-color-orange-9)' },
-}
-
-function Admonition({ type, children }: { type: 'rappel' | 'conseil' | 'attention'; children: React.ReactNode }) {
-  const s = ADMONITION[type]
-  const Icon = s.icon
-  return (
-    <Group align="flex-start" gap={8} wrap="nowrap" p={7}
-      style={{ background: s.bg, borderLeft: `3px solid ${s.border}`, borderRadius: 5 }}>
-      <Icon size={15} color={s.border} style={{ flexShrink: 0, marginTop: 2 }} />
-      <Box style={{ flex: 1, minWidth: 0, color: s.text }}>{children}</Box>
-    </Group>
-  )
-}
-
-function LessonCard({ lesson, onRetire }: { lesson: Lesson; onRetire: (id: string) => void }) {
-  const b = lesson.blocks
-  return (
-    <Card withBorder radius="md" p="sm"
-      style={{ borderColor: 'var(--mantine-color-yellow-4)' }}>
-      <Group justify="space-between" wrap="nowrap" mb={6}>
-        <Group gap={6}>
-          <BookOpen size={15} />
-          <Text fw={600} size="sm">{lesson.title}</Text>
-          <Badge size="xs" variant="light" color="gray">niveaux {lesson.level_min}-{lesson.level_max}</Badge>
-          {lesson.validated && <Badge size="xs" variant="light" color="teal">vérifié</Badge>}
-        </Group>
-        <Tooltip label="Retirer (regénéré à la prochaine demande)">
-          <ActionIcon variant="subtle" color="red" size="sm" onClick={() => onRetire(lesson.id)}>
-            <Trash2 size={14} />
-          </ActionIcon>
-        </Tooltip>
-      </Group>
-      {b ? (
-        <Stack gap={8}>
-          {b.essentiel && <Admonition type="rappel"><MathText text={b.essentiel} /></Admonition>}
-          {(b.methode ?? []).length > 0 && (
-            <Stack gap={2}>
-              <Text size="xs" c="dimmed" fw={700} tt="uppercase">Méthode</Text>
-              {b.methode!.map((m, i) => (
-                <Group key={i} gap={6} wrap="nowrap" align="flex-start">
-                  <Text size="sm" fw={600} c="dimmed">{i + 1}.</Text>
-                  <MathText text={m} size="sm" />
-                </Group>
-              ))}
-            </Stack>
-          )}
-          {b.exemple?.enonce && (
-            <Paper bg="var(--mantine-color-default-hover)" p={8} radius="sm"
-              style={{ borderLeft: '3px solid var(--mantine-color-gray-5)' }}>
-              <Text size="xs" c="dimmed" fw={700} tt="uppercase" mb={2}>Exemple résolu</Text>
-              <MathText text={b.exemple.enonce} size="sm" />
-              {b.exemple.etapes.map((e, i) => (
-                <Box key={i} ml={10}><MathText text={e} size="sm" /></Box>
-              ))}
-              <MathText text={b.exemple.resultat} size="sm" />
-            </Paper>
-          )}
-          {(b.encarts?.length ? b.encarts : b.astuce ? [{ type: 'conseil' as const, texte: b.astuce }] : [])
-            .map((enc, i) => (
-              <Admonition key={i} type={enc.type === 'attention' ? 'attention' : 'conseil'}>
-                <MathText text={enc.texte} size="sm" />
-              </Admonition>
-            ))}
-          {(b.figure || lesson.figure) && <FigurePreview figureJson={b.figure ?? lesson.figure} />}
-        </Stack>
-      ) : (
-        <Stack gap={4}>
-          <MathText text={lesson.content} size="sm" />
-          <MathText text={lesson.example} size="sm" />
-        </Stack>
-      )}
-    </Card>
+      )} />
+    </Box>
   )
 }
 
 export default function Bank() {
-  const { cycle, matches } = useAppState()
+  const { cycle } = useAppState()
   const [summary, setSummary] = useState<Summary[] | null>(null)
   const [selected, setSelected] = useState<Summary | null>(null)
   const [exercises, setExercises] = useState<Exercise[] | null>(null)
-  const [lessons, setLessons] = useState<Lesson[] | null>(null)
-  const [sesamathsRaw, setSesamathsRaw] = useState<SesamathsRaw | null>(null)
   const [levelFilter, setLevelFilter] = useState('all')
-  // source utilisée par « Compléter la banque » / « Générer la banque » : les
-  // deux pools sont séparés côté serveur, on choisit donc lequel on remplit
-  const [genSource, setGenSource] = useState('sesamaths')
-  const [busy, setBusy] = useState(false)
-  // ajout d'une compétence pas encore en banque
-  const [allComps, setAllComps] = useState<Comp[]>([])
-  const [newComp, setNewComp] = useState<string | null>(null)
+  const [showCorrections, setShowCorrections] = useState(false)
+  const [showGuides, setShowGuides] = useState(false)
 
-  const loadSummary = useCallback(() => {
-    const qs = cycle !== 'all' ? `?grade_level=${cycle}` : ''
-    api.get<Summary[]>(`/api/content/summary${qs}`).then(setSummary)
-  }, [cycle])
-
-  useEffect(() => { loadSummary() }, [loadSummary])
-
+  const isAll = cycle === 'all'
   useEffect(() => {
-    api.get<Framework[]>('/api/competencies/frameworks').then(async (fws) => {
-      const wanted = fws.filter((f) => cycle === 'all' || f.grade_level === cycle)
-      const lists = await Promise.all(
-        wanted.map((f) => api.get<Comp[]>(`/api/competencies?framework_id=${f.id}`)))
-      setAllComps(lists.flat())
-    }).catch(() => setAllComps([]))
-  }, [cycle])
+    setSelected(null)
+    setExercises(null)
+    setLevelFilter('all')
+    setShowCorrections(false)
+    setShowGuides(false)
+    if (isAll) {
+      setSummary(null)
+      return
+    }
+    setSummary(null)
+    let current = true
+    api.get<Summary[]>(`/api/content/summary?grade_level=${cycle}`)
+      .then((rows) => { if (current) setSummary(rows) })
+    return () => { current = false }
+  }, [cycle, isAll])
 
   const loadDetail = useCallback((s: Summary) => {
     setSelected(s)
     setExercises(null)
-    setLessons(null)
-    setSesamathsRaw(null)
+    setShowCorrections(false)
+    setShowGuides(false)
     api.get<Exercise[]>(`/api/content/exercises?competency_id=${s.competency_id}`).then(setExercises)
-    api.get<Lesson[]>(`/api/content/lessons?competency_id=${s.competency_id}`).then(setLessons)
-    api.get<SesamathsRaw>(`/api/content/sesamaths/raw?competency_id=${s.competency_id}`).then(setSesamathsRaw)
   }, [])
 
-  const retireExercise = (id: string) => {
-    api.post(`/api/content/exercises/${id}/retire`).then(() => {
-      setExercises((xs) => (xs ?? []).filter((x) => x.id !== id))
-      loadSummary()
-    })
-  }
-  const retireLesson = (id: string) => {
-    api.post(`/api/content/lessons/${id}/retire`).then(() => {
-      setLessons((ls) => (ls ?? []).filter((l) => l.id !== id))
-      loadSummary()
-    })
-  }
+  const rows = summary ?? []
 
-  const generate = (kind: 'exercises' | 'lessons', level: number) => {
-    if (!selected) return
-    setBusy(true)
-    api.post(`/api/content/${kind}/generate`,
-      { competency_id: selected.competency_id, level, ...(kind === 'exercises' && { source: genSource }) })
-      .then(() => {
-        notifications.show({ message: 'Génération terminée', color: 'teal' })
-        loadDetail(selected)
-        loadSummary()
-      })
-      .catch((e) => notifications.show({ message: String(e.message ?? e), color: 'red' }))
-      .finally(() => setBusy(false))
-  }
-
-  const addCompetency = () => {
-    if (!newComp) return
-    setBusy(true)
-    api.post('/api/content/exercises/generate', { competency_id: newComp, level: 3, source: genSource })
-      .then(() => {
-        notifications.show({ message: 'Banque amorcée (niveau 3)', color: 'teal' })
-        setNewComp(null)
-        loadSummary()
-      })
-      .catch((e) => notifications.show({ message: String(e.message ?? e), color: 'red' }))
-      .finally(() => setBusy(false))
-  }
-
-  const rows = useMemo(
-    () => (summary ?? []).filter((s) => matches(s.grade_level)),
-    [summary, matches])
-
-  // regroupe la liste plate (déjà triée grade+code côté serveur, donc déjà
-  // dans le bon ordre domaine>chapitre) en domaine (H1) > chapitre (H2) >
-  // compétences (H3), pour un tableau lisible avec en-têtes de domaine et une
-  // zone fusionnée par chapitre pour les problèmes (transverses aux
-  // compétences d'un même chapitre, donc affichés une seule fois par
-  // chapitre plutôt que répétés/éclatés sur chaque ligne H3).
+  // Même contrat hiérarchique que les onglets Exercices et Compétences.
   const domainGroups = useMemo(() => {
     const byDomain = new Map<string, { name: string; chapters: Map<string, { name: string; comps: Summary[] }> }>()
     for (const s of rows) {
-      let d = byDomain.get(s.domain_code)
-      if (!d) { d = { name: s.domain_name, chapters: new Map() }; byDomain.set(s.domain_code, d) }
+      const domainKey = `${s.grade_level}\0${s.domain_code}`
+      let d = byDomain.get(domainKey)
+      if (!d) { d = { name: s.domain_name, chapters: new Map() }; byDomain.set(domainKey, d) }
       let c = d.chapters.get(s.chapter_code)
       if (!c) { c = { name: s.chapter_name, comps: [] }; d.chapters.set(s.chapter_code, c) }
       c.comps.push(s)
     }
-    return Array.from(byDomain.entries()).map(([domain_code, d]) => ({
-      domain_code, domain_name: d.name,
-      chapters: Array.from(d.chapters.entries()).map(([chapter_code, c]) => ({
-        chapter_code, chapter_name: c.name, comps: c.comps,
-        problems: c.comps.reduce((n, x) => n + x.problems, 0),
-      })),
-    }))
+    return Array.from(byDomain.entries()).map(([domainKey, domain]) => {
+      const [gradeLevel, domainCode] = domainKey.split('\0')
+      const key = `${gradeLevel}/${domainCode || domain.name}`
+      return {
+        key,
+        code: domainCode,
+        name: domain.name,
+        chapters: Array.from(domain.chapters.entries()).map(([chapterCode, chapter]) => ({
+          key: `${key}/${chapterCode || chapter.name}`,
+          code: chapterCode,
+          name: chapter.name,
+          rows: chapter.comps,
+        })),
+      }
+    })
   }, [rows])
+
+  const columns = useMemo<CompetencyHierarchyColumn<Summary>[]>(() => {
+    const result: CompetencyHierarchyColumn<Summary>[] = [{
+      key: 'exercises', label: 'Exercices', width: 84, align: 'center',
+      render: (competency) => <Text size="xs">{competency.total}</Text>,
+    }]
+    if (!selected) result.push({
+      key: 'levels', label: 'Niv. 1–5', width: 102, align: 'center',
+      render: (competency) => (
+        <Group gap={3} justify="center" wrap="nowrap">
+          {[1, 2, 3, 4, 5].map((level) => (
+            <Tooltip key={level}
+              label={`Niveau ${level} : ${competency.by_level[String(level)]} exercice(s)`}>
+              <Box w={9} h={9} style={{
+                borderRadius: 2,
+                background: competency.by_level[String(level)] > 0
+                  ? 'var(--mantine-color-blue-5)'
+                  : 'var(--mantine-color-gray-3)',
+              }} />
+            </Tooltip>
+          ))}
+        </Group>
+      ),
+    })
+    return result
+  }, [selected])
 
   const shownExercises = useMemo(
     () => (exercises ?? []).filter((e) => levelFilter === 'all' || e.level === Number(levelFilter)),
     [exercises, levelFilter])
 
-  const inBank = new Set(rows.map((r) => r.competency_id))
-  const addable = allComps.filter((c) => !inBank.has(c.id))
+  if (isAll) return <GradeSelectionRequired title="Banque de contenus" />
 
   return (
     <Stack gap="md">
@@ -459,109 +229,47 @@ export default function Bank() {
         <Box>
           <Title order={2}><Group gap={8}><Library size={22} /> Banque de contenus</Group></Title>
           <Text c="dimmed" size="sm">
-            Exercices et rappels générés, vérifiés et réutilisés — la banque grandit avec vos sujets.
+            Consultez les exercices disponibles par domaine, chapitre et compétence.
           </Text>
         </Box>
-        <Group gap="xs">
-          <SegmentedControl size="xs" value={genSource} onChange={setGenSource} data={[
-            { value: 'sesamaths', label: 'Sésamaths' },
-            { value: 'gemini', label: 'Gemini' },
-          ]} />
-          <Select size="xs" w={300} searchable clearable placeholder="Amorcer une compétence…"
-            data={addable.map((c) => ({ value: c.id, label: `${c.code} — ${c.label}` }))}
-            value={newComp} onChange={setNewComp} disabled={busy} />
-          <Button size="xs" onClick={addCompetency} disabled={!newComp} loading={busy}>
-            Générer la banque
-          </Button>
-        </Group>
       </Group>
 
       <Group align="flex-start" gap="md" wrap="nowrap">
-        <Paper withBorder radius="md" p="xs" style={{ flex: selected ? '0 0 40%' : 1, minWidth: 0 }}>
+        <Paper withBorder radius="md" p="xs" style={{
+          flex: 1, minWidth: 0,
+        }}>
           {summary === null ? <Loader size="sm" m="md" /> : rows.length === 0 ? (
             <Text c="dimmed" size="sm" p="md">
-              Aucun contenu en banque pour ce cycle. Amorcez une compétence ci-dessus,
-              ou créez un sujet : la banque se remplit automatiquement.
+              Aucune compétence disponible pour ce cycle.
             </Text>
           ) : (
             <ScrollArea.Autosize mah="70vh">
-              <Table highlightOnHover verticalSpacing={4} fz="sm">
-                <Table.Thead>
-                  <Table.Tr>
-                    <Table.Th>Chapitre</Table.Th>
-                    <Table.Th>Compétence</Table.Th>
-                    <Table.Th ta="center">Exercices</Table.Th>
-                    {!selected && <Table.Th ta="center">Niv. 1-5</Table.Th>}
-                    <Table.Th ta="center">Problèmes</Table.Th>
-                    {!selected && <Table.Th ta="center">Rappels</Table.Th>}
-                  </Table.Tr>
-                </Table.Thead>
-                <Table.Tbody>
-                  {domainGroups.map((dg) => (
-                    <Fragment key={dg.domain_code}>
-                      <Table.Tr bg="var(--mantine-color-default-hover)">
-                        <Table.Td colSpan={selected ? 4 : 6}>
-                          <Text size="xs" fw={700} tt="uppercase" c="dimmed">
-                            {dg.domain_code ? `${dg.domain_code} — ` : ''}{dg.domain_name || 'Domaine'}
-                          </Text>
-                        </Table.Td>
-                      </Table.Tr>
-                      {dg.chapters.map((ch) => ch.comps.map((s, i) => (
-                        <Table.Tr key={s.competency_id}
-                          style={{ cursor: 'pointer' }}
-                          bg={selected?.competency_id === s.competency_id ? 'var(--mantine-color-default-hover)' : undefined}
-                          onClick={() => loadDetail(s)}>
-                          {i === 0 && (
-                            <Table.Td rowSpan={ch.comps.length} style={{ verticalAlign: 'top' }}>
-                              <Text size="xs" c="dimmed" fw={600} lineClamp={2}>
-                                {ch.chapter_code ? `${ch.chapter_code} — ` : ''}{ch.chapter_name}
-                              </Text>
-                            </Table.Td>
-                          )}
-                          <Table.Td>
-                            <Text size="sm" fw={500} lineClamp={1}>{s.short_id || s.code} — {s.label}</Text>
-                          </Table.Td>
-                          <Table.Td ta="center"><Text size="xs">{s.total}</Text></Table.Td>
-                          {!selected && (
-                            <Table.Td ta="center">
-                              <Group gap={3} justify="center" wrap="nowrap">
-                                {[1, 2, 3, 4, 5].map((l) => (
-                                  <Tooltip key={l} label={`Niveau ${l} : ${s.by_level[String(l)]} exercice(s)`}>
-                                    <Box w={9} h={9} style={{
-                                      borderRadius: 2,
-                                      background: s.by_level[String(l)] > 0
-                                        ? 'var(--mantine-color-indigo-5)'
-                                        : 'var(--mantine-color-default-border)',
-                                    }} />
-                                  </Tooltip>
-                                ))}
-                              </Group>
-                            </Table.Td>
-                          )}
-                          {i === 0 && (
-                            <Table.Td ta="center" rowSpan={ch.comps.length} style={{ verticalAlign: 'top' }}>
-                              <Tooltip label="Problèmes du chapitre — transverses aux compétences, comptés une seule fois pour tout le chapitre">
-                                <Text size="xs" c={ch.problems > 0 ? undefined : 'dimmed'}>{ch.problems || '—'}</Text>
-                              </Tooltip>
-                            </Table.Td>
-                          )}
-                          {!selected && (
-                            <Table.Td ta="center">
-                              <Text size="xs">{s.lessons.length}</Text>
-                            </Table.Td>
-                          )}
-                        </Table.Tr>
-                      )))}
-                    </Fragment>
-                  ))}
-                </Table.Tbody>
-              </Table>
+              <CompetencyHierarchy domains={domainGroups} columns={columns}
+                showColumnHeaders={false}
+                selectedKey={selected?.competency_id}
+                getRowKey={(competency) => competency.competency_id}
+                getShortId={(competency) => competency.short_id || competency.code}
+                getLabel={(competency) => competency.label}
+                onRowClick={loadDetail}
+                chapterAside={(chapter) => {
+                  const problems = chapter.rows.reduce((total, competency) => total + competency.problems, 0)
+                  return (
+                    <Tooltip label="Problèmes transverses du chapitre, comptés une seule fois">
+                      <Group gap={5} wrap="nowrap">
+                        <Text size="xs" c="dimmed">Problèmes</Text>
+                        <Text size="xs" fw={700}>{problems || '—'}</Text>
+                      </Group>
+                    </Tooltip>
+                  )
+                }} />
             </ScrollArea.Autosize>
           )}
         </Paper>
 
         {selected && (
-          <Paper withBorder radius="md" p="md" style={{ flex: 1, minWidth: 0 }}>
+          <Paper withBorder radius="md" p="md" style={{
+            flex: '0 0 372px', width: 372, minWidth: 372,
+          }}>
             <Group justify="space-between" mb="xs" wrap="nowrap">
               <Box>
                 <Text fw={600}>{selected.short_id || selected.code} — {selected.label}</Text>
@@ -569,65 +277,32 @@ export default function Bank() {
               </Box>
               <Button size="compact-xs" variant="subtle" onClick={() => setSelected(null)}>Fermer</Button>
             </Group>
-            <Tabs defaultValue="exercises">
-              <Tabs.List mb="xs">
-                <Tabs.Tab value="sesamaths" leftSection={<ScanText size={14} />}>Sésamaths</Tabs.Tab>
-                <Tabs.Tab value="exercises">Exercices ({(exercises ?? []).length})</Tabs.Tab>
-                <Tabs.Tab value="lessons">Rappels de leçon ({(lessons ?? []).length})</Tabs.Tab>
-              </Tabs.List>
-
-              <Tabs.Panel value="sesamaths">
-                <SesamathsRawPanel data={sesamathsRaw} />
-              </Tabs.Panel>
-
-              <Tabs.Panel value="exercises">
-                <Group justify="space-between" mb="xs">
-                  <SegmentedControl size="xs" value={levelFilter} onChange={setLevelFilter}
-                    data={[{ value: 'all', label: 'Tous' },
-                      ...[1, 2, 3, 4, 5].map((l) => ({ value: String(l), label: `Niv. ${l}` }))]} />
-                  <Button size="compact-xs" variant="light" loading={busy}
-                    leftSection={<RefreshCw size={13} />}
-                    onClick={() => generate('exercises', levelFilter === 'all' ? 3 : Number(levelFilter))}>
-                    Compléter la banque ({SOURCE_LABELS[genSource]})
-                  </Button>
-                </Group>
+            <Group justify="space-between" mb="xs" align="flex-end" wrap="wrap">
+              <Group gap="md">
+                <Checkbox size="xs" checked={showCorrections}
+                  onChange={(e) => setShowCorrections(e.currentTarget.checked)}
+                  label="Afficher les corrections" />
+                <Checkbox size="xs" checked={showGuides}
+                  onChange={(e) => setShowGuides(e.currentTarget.checked)}
+                  label="Afficher les guides élèves" />
+              </Group>
+              <SegmentedControl size="xs" value={levelFilter} onChange={setLevelFilter}
+                data={[{ value: 'all', label: 'Tous' },
+                  ...[1, 2, 3, 4, 5].map((l) => ({ value: String(l), label: `Niv. ${l}` }))]} />
+            </Group>
                 {exercises === null ? <Loader size="sm" /> : (
                   <ScrollArea.Autosize mah="58vh">
                     <Stack gap="xs">
                       {shownExercises.map((ex) => (
-                        <ExerciseCard key={ex.id} ex={ex} onRetire={retireExercise} />
+                        <ExerciseCard key={ex.id} ex={ex}
+                          showCorrection={showCorrections} showGuide={showGuides} />
                       ))}
                       {shownExercises.length === 0 && (
-                        <Text c="dimmed" size="sm">Aucun exercice pour ce filtre — utilisez « Compléter la banque ».</Text>
+                        <Text c="dimmed" size="sm">Aucun exercice disponible pour ce filtre.</Text>
                       )}
                     </Stack>
                   </ScrollArea.Autosize>
                 )}
-              </Tabs.Panel>
-
-              <Tabs.Panel value="lessons">
-                <Group mb="xs" gap="xs">
-                  <Button size="compact-xs" variant="light" loading={busy}
-                    onClick={() => generate('lessons', 2)}>Générer (niveaux 1-3)</Button>
-                  <Button size="compact-xs" variant="light" loading={busy}
-                    onClick={() => generate('lessons', 4)}>Générer (niveaux 4-5)</Button>
-                </Group>
-                {lessons === null ? <Loader size="sm" /> : (
-                  <ScrollArea.Autosize mah="58vh">
-                    <Stack gap="xs">
-                      {lessons.map((l) => (
-                        <LessonCard key={l.id} lesson={l} onRetire={retireLesson} />
-                      ))}
-                      {lessons.length === 0 && (
-                        <Text c="dimmed" size="sm">
-                          Aucun rappel — généré automatiquement pour les élèves de niveau 1 à 4, ou à la demande ci-dessus.
-                        </Text>
-                      )}
-                    </Stack>
-                  </ScrollArea.Autosize>
-                )}
-              </Tabs.Panel>
-            </Tabs>
           </Paper>
         )}
       </Group>

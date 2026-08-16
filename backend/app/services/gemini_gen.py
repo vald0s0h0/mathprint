@@ -228,7 +228,7 @@ _INTRO = (
     "doit être FORTEMENT liée à cet exercice-ci (renvoie aux nombres/à la "
     "situation de l'énoncé), jamais un conseil générique. Respecte la même mise "
     "en page que l'énoncé : formules en LaTeX $...$, et un saut de ligne \\n "
-    "quand tu passes du rappel de règle au piège (deux idées = deux lignes) ;\n"
+    "quand tu passes de la règle utile au piège (deux idées = deux lignes) ;\n"
     "- les distracteurs de tes QCM sont exactement ces erreurs classiques "
     "d'élèves, jamais des nombres pris au hasard : un distracteur doit être le "
     "résultat d'une faute plausible ;\n"

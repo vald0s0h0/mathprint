@@ -48,7 +48,7 @@ def llm_confidence_threshold(db: Session) -> float:
 # ---------------------------------------------------------------- templates
 
 # Templates de documents (§5) éditables dans Paramètres → Documents :
-# en-tête, carte exercice et rappel de leçon. Seuls les paramètres visuels
+# en-tête et carte exercice. Seuls les paramètres visuels
 # sont exposés — la géométrie des marqueurs (QR/fiduciels) reste FIGÉE.
 DEFAULT_TEMPLATES: dict = {
     "header": {
@@ -66,12 +66,6 @@ DEFAULT_TEMPLATES: dict = {
         # pas d'accent ni de title_size : la carte n'a plus de ligne de titre,
         # le numéro vit dans un badge dont la couleur EST la difficulté
         # (pdfgen.DIFFICULTY_COLORS, non réglable).
-    },
-    "lesson": {
-        "font_size": 8,
-        "bg": "#FFF6DF",
-        "border": "#E4C46A",
-        "text": "#6B5310",
     },
 }
 

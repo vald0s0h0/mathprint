@@ -90,10 +90,9 @@ jeton `read:packages`.
 - 534 exercices MathALÉA v2.8.2 (service Node headless, seedé) ;
 - 7 générateurs intégrés.
 
-**Design des copies** : cartes d'exercices à coins arrondis avec ombre, icône
-crayon et pastilles de difficulté (1-5) ; **rappels de leçon DeepSeek** pour
-les élèves fragiles (niveau ≤ 4, entraînement) dans un cadre distinct ambre
-avec icône livre, stockés dans `lesson_snippets` ; QCM compacts en ligne ;
+**Design des copies** : cartes d'exercices à coins arrondis avec ombre et
+champs de réponse dimensionnés ; chaque exercice possède son **guide élève**
+d'auto-correction, distinct de la solution professeur ; QCM compacts en ligne ;
 en-tête structuré (titre + filet, cartouche nom, case Note et bande
 Appréciation). **Distinction visuelle** : rouge saumon = l'élève écrit
 (dropout) ; **pointillés gris = réservé à l'overlay de correction** (case

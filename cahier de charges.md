@@ -152,7 +152,7 @@ Limiter les données envoyées aux services externes et suivre tous les coûts d
 |----------------|---------------------------------------------------------------------------------------------------|------------------------------------------|
 | 1 — Contexte   | Classe, date, durée, contrôle/entraînement, recto/verso.                                          | Dernière classe utilisée ; entraînement. |
 | 2 — Objectif   | Chapitre, compétences, notions à revoir, nombre de questions automatique afin de remplir la page. | Compétences dues selon l’oubli.          |
-| 3 — Adaptation | Sujet commun/variantes/individuel, difficulté, rappels de leçon.                                  | Proposition DeepSeek encadrée.           |
+| 3 — Adaptation | Sujet commun/variantes/individuel, difficulté, guides élèves.                                    | Proposition DeepSeek encadrée.           |
 | 4 — Validation | Aperçu, équilibre, pages, coûts estimés, génération.                                              | Blocage si anomalie documentaire.        |
 
 ## 3.2 Modes de personnalisation
@@ -162,7 +162,7 @@ Limiter les données envoyées aux services externes et suivre tous les coûts d
 | Commun                 | Même contenu et même difficulté pour tous ; données numériques éventuellement différentes. | Contrôle comparable.                        |
 | Variantes équivalentes | Plusieurs versions de difficulté calibrée identique.                                       | Contrôle anti-copie.                        |
 | Individuel encadré     | Sélection adaptée, mais même blueprint de compétences et même plage de difficulté.         | Contrôle différencié, comparaison prudente. |
-| Individuel libre       | Exercices, difficulté et rappels personnalisés.                                            | Entraînement.                               |
+| Individuel libre       | Exercices et difficulté personnalisés.                                                     | Entraînement.                               |
 
 <table>
 <colgroup>
@@ -188,16 +188,12 @@ Un catalogue d’exercices qualifie chaque exercice : compétences, difficulté 
 
 Les exercices sans réponse structurée disponible sont placés en validation obligatoire ou exclus de l’automatisation.
 
-## 3.4 Rappels de leçon
+## 3.4 Guides élèves
 
-Les rappels ne doivent pas être inventés librement à chaque génération. Ils proviennent d’une bibliothèque locale, versionnée et validée par un professeur. DeepSeek choisit seulement les identifiants des rappels pertinents.
-
-| **Condition**     | **Insertion proposée**                                                    |
-|-------------------|---------------------------------------------------------------------------|
-| Niveau global 1–3 | Rappel très court + exemple résolu + première question accessible.        |
-| Niveau 4–5        | Rappel de formule ou méthode si la compétence est fragile.                |
-| Niveau 6–8        | Aide minimale, uniquement pour une compétence échue ou récemment échouée. |
-| Niveau 9–10       | Pas de rappel par défaut ; défi ou transfert possible.                    |
+Chaque exercice possède un guide d’auto-correction court, contextualisé et
+validé avec l’exercice. Le guide rappelle la règle utile et le piège précis,
+sans donner le résultat ni recopier la solution professeur. Son affichage est
+désactivé par défaut et peut être activé dans les aperçus et la mise en page.
 
 # 4. Modèle d’exercices et types de réponses papier
 
@@ -220,7 +216,7 @@ Les rappels ne doivent pas être inventés librement à chaque génération. Ils
 | grading_policy      | Comparateur, tolérance, barème partiel, unités et règles de présentation.             |
 | competency_weights  | Compétences observées et poids de preuve.                                             |
 | difficulty          | Difficulté calibrée de 1 à 10.                                                        |
-| lesson_snippet_ids  | Rappels pouvant accompagner l’item.                                                   |
+| correction_guide    | Guide élève court et contextualisé, attaché à l’exercice.                             |
 | automation_tier     | auto, auto_with_llm, review_required ou manual.                                       |
 
 ## 4.3 Règles QCM
@@ -406,7 +402,7 @@ L’écran doit optimiser la vitesse : raccourcis clavier, affichage du crop ori
 |------------------|---------------------------------------------------------|----------------------------------------------|
 | Note             | Oui, barème verrouillé après impression.                | Non ; réussite, effort et progression.       |
 | Personnalisation | Commune ou encadrée pour préserver l’équité.            | Libre et individualisée.                     |
-| Rappel de leçon  | Désactivé par défaut ; explicitement visible si activé. | Automatique pour niveaux fragiles.           |
+| Guide élève      | Désactivé par défaut ; explicitement visible si activé. | Activable lors de la mise en page.            |
 | Indices          | Aucun ou règle commune.                                 | Possibles et tracés.                         |
 | Compétences      | Preuve forte, pondérée par difficulté et conditions.    | Preuve formative, pondérée plus faiblement.  |
 | Courbe d’oubli   | Met à jour la maîtrise après finalisation.              | Pilote directement les prochaines questions. |
@@ -652,7 +648,6 @@ Les clés primaires sont des UUID ; les dates sont stockées en UTC avec afficha
 | competency_frameworks    | id, grade_level, name, version, status, source                                             | Une version publiée est immuable.               |
 | competencies             | id, framework_id, code, label, description, parent_id, order_index                         | Arbre ou grille ; code stable dans une version. |
 | competency_prerequisites | competency_id, prerequisite_id, weight                                                     | Graphe sans cycle validé à l’import.            |
-| lesson_snippets          | id, competency_id, level_min/max, title, content_latex, example_latex, version             | Contenu validé ; sélectionnable par LLM.        |
 | exercise_catalog         | id, provider, provider_ref, title, grade_level, difficulty, response_type, automation_tier | Référence MathALÉA et capacité technique.       |
 | exercise_competencies    | exercise_id, competency_id, weight, evidence_strength                                      | Somme des poids contrôlée.                      |
 | exercise_configs         | id, exercise_id, schema_json, response_schema_json, active                                 | Paramètres autorisés et comparateur.            |
@@ -745,7 +740,7 @@ Volumes Docker et base sur stockage Btrfs ; surveillance de l’espace et rotati
 | /data/assessments/{id}/scans/original | Scans couleur immuables.                                      |
 | /data/assessments/{id}/scans/derived  | Pages recalées, crops et filtres reproductibles.              |
 | /data/assessments/{id}/overlays       | Overlays et archives fusionnées.                              |
-| /data/catalog                         | Rappels de leçon, assets, modèles LaTeX et versions MathALÉA. |
+| /data/catalog                         | Exercices, assets, modèles LaTeX et versions MathALÉA.      |
 | /data/backups                         | Exports chiffrés et journaux de sauvegarde.                   |
 
 ## 11.4 Sécurité et confidentialité
@@ -951,4 +946,3 @@ Ne pas pénaliser les élèves absents, même en mode contrôle / entrainement
 à chaque vue lot, mettre une barre de progression segmentée avec avancement par palier : vert ok et palier en orange si blocage et le professeur doit intervenir.
 
 Ajouter le nom de l'élève en Overlay de correction afin que l'élève puisse être rassuré que la correction en overlay est bien pour lui. Si en cas d'erreur, facile à identifier.
-

@@ -18,9 +18,8 @@ Un assistant en 4 étapes permet de composer un sujet en quelques minutes :
 - **Différenciation automatique** : chaque élève reçoit une version de
   l'exercice adaptée à son niveau réel (5 niveaux de difficulté), à partir
   d'une large banque d'exercices déjà validés.
-- **Rappels de leçon ciblés** : les élèves les plus fragiles sur une notion
-  reçoivent un encart de rappel de cours directement sur leur copie, avant
-  l'exercice concerné.
+- **Guides élèves par exercice** : chaque exercice possède une aide courte et
+  contextualisée, affichable selon les choix de mise en page du professeur.
 - **Mise en page soignée et lisible** : cartes d'exercices, pastilles de
   difficulté, QCM compacts, en-tête avec case note et bande d'appréciation —
   une copie prête à l'emploi, pas un brouillon.

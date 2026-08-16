@@ -1,5 +1,5 @@
-// Éditeur visuel des trois templates de documents : en-tête, carte exercice,
-// rappel de leçon. Cliquer un élément pour le sélectionner, tirer la poignée
+// Éditeur visuel des templates de documents : en-tête et carte exercice.
+// Cliquer un élément pour le sélectionner, tirer la poignée
 // pour redimensionner le texte, régler couleurs/coins/ombre à droite.
 // L'aperçu HTML est un miroir fidèle du rendu PDF (pdfgen) ; le bouton
 // « Aperçu PDF réel » rend un vrai PDF via le backend.
@@ -8,7 +8,7 @@ import {
   Slider, Stack, Switch, Text,
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
-import { BookOpen, Eye, RotateCcw, Save } from 'lucide-react'
+import { Eye, RotateCcw, Save } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, getToken } from '../api'
 import MathText from './MathText'
@@ -16,13 +16,11 @@ import MathText from './MathText'
 export type DocTemplates = {
   header: { name_size: number; title_size: number; accent: string; show_date: boolean }
   exercise: { font_size: number; math_size: number; border: string; radius: number; shadow: boolean }
-  lesson: { font_size: number; bg: string; border: string; text: string }
 }
 
 export const TEMPLATE_DEFAULTS: DocTemplates = {
   header: { name_size: 14, title_size: 8, accent: '#37474F', show_date: true },
   exercise: { font_size: 9, math_size: 12, border: '#C7CDD4', radius: 2.2, shadow: true },
-  lesson: { font_size: 8, bg: '#FFF6DF', border: '#E4C46A', text: '#6B5310' },
 }
 
 // pt (PDF) -> px (aperçu) : l'aperçu est agrandi pour rester lisible à l'écran
@@ -36,7 +34,6 @@ const DIFFICULTY_COLORS: Record<number, string> = {
 type Sel =
   | { part: 'header'; field: 'name_size' | 'title_size' }
   | { part: 'exercise'; field: 'font_size' | 'math_size' }
-  | { part: 'lesson'; field: 'font_size' }
   | null
 
 const FIELD_LABELS: Record<string, string> = {
@@ -100,7 +97,7 @@ function Resizable({ sel, me, onSelect, onResize, size, children, style }: {
 export default function TemplateEditor() {
   const [tpl, setTpl] = useState<DocTemplates>(TEMPLATE_DEFAULTS)
   const [sel, setSel] = useState<Sel>(null)
-  const [tab, setTab] = useState<'header' | 'exercise' | 'lesson'>('exercise')
+  const [tab, setTab] = useState<'header' | 'exercise'>('exercise')
   const [saving, setSaving] = useState(false)
   const [pdfUrl, setPdfUrl] = useState<string | null>(null)
   const [pdfBusy, setPdfBusy] = useState(false)
@@ -112,7 +109,6 @@ export default function TemplateEditor() {
         setTpl({
           header: { ...TEMPLATE_DEFAULTS.header, ...(saved.header || {}) },
           exercise: { ...TEMPLATE_DEFAULTS.exercise, ...(saved.exercise || {}) },
-          lesson: { ...TEMPLATE_DEFAULTS.lesson, ...(saved.lesson || {}) },
         })
       }
     })
@@ -151,7 +147,7 @@ export default function TemplateEditor() {
     }
   }
 
-  const h = tpl.header, ex = tpl.exercise, le = tpl.lesson
+  const h = tpl.header, ex = tpl.exercise
 
   return (
     <Stack>
@@ -273,26 +269,6 @@ export default function TemplateEditor() {
                 title="Bande de correction (hors carte, invisible sur le sujet imprimé)" />
             </div>
 
-            {/* rappel de leçon */}
-            <div style={{
-              background: le.bg, border: `1.5px solid ${le.border}`,
-              borderRadius: 8, padding: 10, color: le.text,
-            }}>
-              <Group gap={6} wrap="nowrap">
-                <BookOpen size={le.font_size * S} color={le.text} />
-                <Resizable sel={sel} me={{ part: 'lesson', field: 'font_size' }}
-                  onSelect={setSel} size={le.font_size}
-                  onResize={(v) => set('lesson', { font_size: v })}>
-                  <span style={{ fontWeight: 700, fontSize: le.font_size * S }}>
-                    Rappel — Additionner des fractions
-                  </span>
-                </Resizable>
-              </Group>
-              <div style={{ fontStyle: 'italic', fontSize: le.font_size * S, marginTop: 4 }}>
-                Pour additionner deux fractions, on les met au même dénominateur,
-                puis on additionne les numérateurs.
-              </div>
-            </div>
           </Stack>
         </Box>
 
@@ -301,8 +277,7 @@ export default function TemplateEditor() {
           <SegmentedControl fullWidth size="xs" value={tab}
             onChange={(v) => setTab(v as typeof tab)}
             data={[{ value: 'header', label: 'En-tête' },
-                   { value: 'exercise', label: 'Exercice' },
-                   { value: 'lesson', label: 'Leçon' }]} />
+                   { value: 'exercise', label: 'Exercice' }]} />
 
           {sel && (
             <Stack gap={4} mt="sm">
@@ -343,16 +318,6 @@ export default function TemplateEditor() {
               </div>
               <Switch size="xs" label="Ombre portée" checked={ex.shadow}
                 onChange={(e) => set('exercise', { shadow: e.currentTarget.checked })} />
-            </Stack>
-          )}
-          {tab === 'lesson' && (
-            <Stack gap="sm" mt="md">
-              <ColorInput size="xs" label="Fond"
-                value={le.bg} onChange={(v) => set('lesson', { bg: v })} />
-              <ColorInput size="xs" label="Bordure"
-                value={le.border} onChange={(v) => set('lesson', { border: v })} />
-              <ColorInput size="xs" label="Texte"
-                value={le.text} onChange={(v) => set('lesson', { text: v })} />
             </Stack>
           )}
         </Card>

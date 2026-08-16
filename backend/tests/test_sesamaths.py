@@ -63,7 +63,7 @@ def test_chapter_page_range_a1_a2_boundary(manual_doc, toc):
 
 
 def test_chapter_page_range_b4_two_page_lesson_recap(manual_doc, toc):
-    # B4 a un rappel de leçon sur 2 pages sans le code "B4" en pied de page —
+    # B4 a un encart de cours sur 2 pages sans le code "B4" en pied de page —
     # la règle table des matières + 2 doit primer sur le contrôle croisé
     # (cf. commentaire chapter_page_range)
     s, e = sesamaths_pdf.chapter_page_range(manual_doc, toc, "B4")

@@ -1,4 +1,5 @@
 """Contrat serveur du connecteur local : auth, profils et PDF déterministes."""
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from pypdf import PdfReader, PdfWriter
@@ -9,6 +10,7 @@ from app.db import Base
 from app.models import (Assessment, ConnectorPrintJob, Copy, DocumentPage,
                         PrintConnector, Printer, SchoolClass, Student, User)
 from app.routers import connectors, printing
+from app.services.print_connectors import expire_stale_queued_jobs
 from app.services.security import hash_password
 
 
@@ -67,7 +69,7 @@ def test_manual_duplex_jobs_are_split_then_physically_reversed(tmp_path, monkeyp
         connector = PrintConnector(
             user_id=user.id, installation_id="connector-paper-path-0001",
             name="PC professeur", token_hash="token", platform="windows",
-            active=True)
+            active=True, last_seen_at=datetime.now(timezone.utc))
         db.add(connector); db.flush()
         profile = Printer(
             name="connector-profile", protocol="connector", active=True,
@@ -126,7 +128,8 @@ def test_logout_cancels_waiting_jobs(tmp_path, monkeypatch):
         user = User(email="logout@example.fr", password_hash="x")
         connector = PrintConnector(
             user_id="pending", installation_id="logout-connector-0001",
-            name="Mac", token_hash="logout-token", active=True)
+            name="Mac", token_hash="logout-token", active=True,
+            last_seen_at=datetime.now(timezone.utc))
         db.add(user); db.flush()
         connector.user_id = user.id
         db.add(connector); db.flush()
@@ -176,5 +179,118 @@ def test_switching_account_never_delivers_the_previous_users_claimed_job():
         assert connector.user_id == second.id
         assert job.status == "uncertain"
         assert connectors.claim_job(connector, db) == {"job": None}
+    finally:
+        db.close()
+
+
+def test_same_printer_on_two_online_computers_remains_two_destinations():
+    db = _db()
+    try:
+        user = User(email="two-postes@example.fr", password_hash="x")
+        db.add(user); db.flush()
+        mac = PrintConnector(
+            user_id=user.id, installation_id="mac-installation-0001",
+            name="MacBook du professeur", token_hash="mac-token",
+            platform="macos", active=True)
+        pc = PrintConnector(
+            user_id=user.id, installation_id="pc-installation-00001",
+            name="PC de la salle", token_hash="pc-token",
+            platform="windows", active=True)
+        db.add_all([mac, pc]); db.commit()
+
+        heartbeat = connectors.HeartbeatIn(
+            app_version="1.0.0",
+            printers=[connectors.LocalPrinterIn(name="Canon USB", is_default=True)])
+        connectors.heartbeat(heartbeat, mac, db)
+        connectors.heartbeat(heartbeat, pc, db)
+
+        result = printing.list_printers(db, user)
+        canon = [row for row in result["local"]
+                 if row["display_name"] == "Canon USB"]
+        assert result["online_connector_count"] == 2
+        assert len(canon) == 2
+        assert {row["connector_id"] for row in canon} == {mac.id, pc.id}
+        assert {row["device_name"] for row in canon} == {
+            "MacBook du professeur", "PC de la salle"}
+        assert len({row["name"] for row in canon}) == 2
+        assert all(row["available"] for row in canon)
+
+        mac_profile = db.query(Printer).filter(
+            Printer.capabilities_json["connector_id"].as_string() == mac.id
+        ).one()
+        job = ConnectorPrintJob(
+            connector_id=mac.id, user_id=user.id, printer_id=mac_profile.id,
+            title="Sujet Mac", native_printer_name="Canon USB", status="queued",
+            document_relpath="connector_jobs/mac.pdf",
+            document_sha256="deadbeef", document_size=42)
+        db.add(job); db.commit()
+        assert connectors.claim_job(pc, db) == {"job": None}
+        assert connectors.claim_job(mac, db)["job"]["id"] == job.id
+    finally:
+        db.close()
+
+
+def test_offline_connector_refuses_new_jobs(tmp_path, monkeypatch):
+    db = _db()
+    try:
+        monkeypatch.setattr(printing.settings, "data_dir", tmp_path)
+        user = User(email="offline@example.fr", password_hash="x")
+        db.add(user); db.flush()
+        connector = PrintConnector(
+            user_id=user.id, installation_id="offline-installation-01",
+            name="PC éteint", token_hash="offline-token", active=True,
+            last_seen_at=datetime.now(timezone.utc) - timedelta(minutes=2))
+        db.add(connector); db.flush()
+        profile = Printer(
+            name="offline-printer", protocol="connector", active=True,
+            capabilities_json={"connector_id": connector.id,
+                               "native_name": "Canon USB"})
+        db.add(profile); db.commit()
+
+        try:
+            printing._queue_connector_job(
+                db=db, user=user, profile=profile, title="Test hors ligne",
+                file_name="printer_test.pdf", pass_side="all",
+                document=b"%PDF-test", assessment_id=None, copies=1,
+                duplex=False, reverse=False)
+        except printing.HTTPException as exc:
+            assert exc.status_code == 409
+            assert "PC éteint" in exc.detail
+        else:
+            raise AssertionError("Une destination hors ligne a accepté le travail")
+        assert db.query(ConnectorPrintJob).count() == 0
+    finally:
+        db.close()
+
+
+def test_unclaimed_job_expires_without_failing_over(tmp_path, monkeypatch):
+    db = _db()
+    try:
+        monkeypatch.setattr(printing.settings, "data_dir", tmp_path)
+        user = User(email="expiry@example.fr", password_hash="x")
+        connector = PrintConnector(
+            user_id="pending", installation_id="expiry-installation-01",
+            name="Mac", token_hash="expiry-token", active=True)
+        printer = Printer(name="expiry-printer", protocol="connector", active=True)
+        db.add(user); db.flush()
+        connector.user_id = user.id
+        db.add_all([connector, printer]); db.flush()
+        document = tmp_path / "connector_jobs" / "expired.pdf"
+        document.parent.mkdir(parents=True)
+        document.write_bytes(b"%PDF-test")
+        job = ConnectorPrintJob(
+            connector_id=connector.id, user_id=user.id, printer_id=printer.id,
+            title="Travail abandonné", native_printer_name="USB", status="queued",
+            document_relpath="connector_jobs/expired.pdf",
+            document_sha256="deadbeef", document_size=document.stat().st_size,
+            created_at=datetime.now(timezone.utc) - timedelta(minutes=6))
+        db.add(job); db.commit()
+
+        assert expire_stale_queued_jobs(db, user_id=user.id) == 1
+        db.refresh(job)
+        assert job.status == "cancelled"
+        assert "5 minutes" in job.error_message
+        assert not document.exists()
+        assert job.connector_id == connector.id
     finally:
         db.close()

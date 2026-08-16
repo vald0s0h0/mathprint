@@ -15,9 +15,13 @@ export type PrinterRow = {
   name: string
   display_name?: string
   device_name?: string
+  device_platform?: string
+  connector_id?: string
   source: 'cups_local' | 'connector_local' | 'network_ipp'
   uri?: string
   status: string
+  available: boolean
+  last_seen_at?: string | null
   system_default?: boolean
   app_default: boolean
   duplex: boolean
@@ -29,7 +33,23 @@ export type PrinterRow = {
 export type PrintersInfo = {
   local: PrinterRow[]
   network: PrinterRow[]
+  connectors: {
+    id: string
+    name: string
+    platform: string
+    status: 'online' | 'offline'
+    last_seen_at?: string | null
+    printer_count: number
+  }[]
+  online_connector_count: number
   printing_available: boolean
+}
+
+function lastSeenLabel(value?: string | null) {
+  if (!value) return 'jamais vu'
+  return `dernière activité ${new Date(value).toLocaleString('fr-FR', {
+    dateStyle: 'short', timeStyle: 'short',
+  })}`
 }
 
 function PilePicture({ reversed, caption, muted = false, onInvert, inverting = false }: {
@@ -76,8 +96,8 @@ export default function PrinterSettings({ printers, refresh }: {
   async function setPreference(row: PrinterRow, field: keyof Pick<PrinterRow,
     'duplex' | 'pickup_reverse_order' | 'output_reverse_order' | 'app_default'
     | 'adf_reverse_order'>, value: boolean) {
-    // Le défaut applicatif fonctionne comme un bouton radio tout en gardant la
-    // coche demandée : on choisit un autre défaut, on ne laisse jamais zéro défaut.
+    // La destination préférée sert de repli lorsque plusieurs postes sont en
+    // ligne. Le dernier choix du navigateur reste prioritaire.
     if (field === 'app_default' && !value) return
     setSaving(`${row.name}:${field}`)
     try {
@@ -144,9 +164,27 @@ export default function PrinterSettings({ printers, refresh }: {
             </Text>
           </Box>
           <Badge variant="light" color={printers?.printing_available ? 'green' : 'gray'}>
-            {rows.length} imprimante{rows.length > 1 ? 's' : ''}
+            {rows.filter((row) => row.available).length} disponible{rows.filter((row) => row.available).length > 1 ? 's' : ''}
           </Badge>
         </Group>
+
+        {printers && printers.connectors.length > 0 && (
+          <Group gap="xs" mb="md">
+            {printers.connectors.map((connector) => (
+              <Badge key={connector.id} variant="light"
+                color={connector.status === 'online' ? 'green' : 'gray'}>
+                {connector.name} · {connector.status === 'online' ? 'connecté' : 'hors ligne'}
+                {' · '}{connector.printer_count} imprimante{connector.printer_count > 1 ? 's' : ''}
+              </Badge>
+            ))}
+          </Group>
+        )}
+
+        {printers && printers.online_connector_count > 1 && (
+          <Alert color="blue" icon={<Info size={16} />} mb="md">
+            Plusieurs postes sont connectés. Une imprimante portant le même nom reste une destination distincte sur chaque poste.
+          </Alert>
+        )}
 
         {rows.length ? (
           <Table.ScrollContainer minWidth={1210}>
@@ -155,7 +193,7 @@ export default function PrinterSettings({ printers, refresh }: {
                 <Table.Tr>
                   <Table.Th>Imprimante</Table.Th>
                   <Table.Th>Connexion</Table.Th>
-                  <Table.Th ta="center">Défaut MathPrint</Table.Th>
+                  <Table.Th ta="center">Destination préférée</Table.Th>
                   <Table.Th ta="center">Recto verso automatique</Table.Th>
                   <Table.Th ta="center">ADF inverse la pile</Table.Th>
                   <Table.Th ta="center">Prélèvement : dernière d’abord</Table.Th>
@@ -171,16 +209,23 @@ export default function PrinterSettings({ printers, refresh }: {
                         <Printer size={16} />
                         <Box>
                           <Text size="sm" fw={600}>{row.display_name || row.name}</Text>
-                          {row.device_name && <Text size="xs" c="dimmed">{row.device_name}</Text>}
+                          {row.device_name && <Text size="xs" c="dimmed">
+                            {row.device_name}{row.device_platform ? ` · ${row.device_platform === 'macos' ? 'macOS' : 'Windows'}` : ''}
+                          </Text>}
+                          {row.source === 'connector_local' && <Text size="xs"
+                            c={row.available ? 'green' : 'dimmed'}>
+                            {row.available ? 'Connecté' : `Hors ligne · ${lastSeenLabel(row.last_seen_at)}`}
+                          </Text>}
                           {row.uri && <Text size="xs" c="dimmed">{row.uri}</Text>}
                         </Box>
                       </Group>
                     </Table.Td>
                     <Table.Td>
                       <Badge size="sm" variant="light"
-                        color={row.source === 'network_ipp' ? 'violet' : row.source === 'connector_local' ? 'teal' : 'blue'}>
+                        color={!row.available ? 'gray' : row.source === 'network_ipp' ? 'violet' : row.source === 'connector_local' ? 'teal' : 'blue'}>
                         {row.source === 'cups_local' ? 'Locale · CUPS'
-                          : row.source === 'connector_local' ? 'Locale · Connecteur' : 'Réseau · IPP'}
+                          : row.source === 'connector_local'
+                            ? `Connecteur · ${row.available ? 'en ligne' : 'hors ligne'}` : 'Réseau · IPP'}
                       </Badge>
                     </Table.Td>
                     <Table.Td ta="center">
@@ -226,7 +271,8 @@ export default function PrinterSettings({ printers, refresh }: {
                         <Button size="compact-xs" variant="light" leftSection={<Eye size={13} />}
                           onClick={() => setPreviewName(row.name)}>Aperçu</Button>
                         <Button size="compact-xs" variant="default" leftSection={<TestTube2 size={13} />}
-                          loading={testing === row.name} onClick={() => printTest(row)}>Test 1–2</Button>
+                          disabled={!row.available} loading={testing === row.name}
+                          onClick={() => printTest(row)}>Test 1–2</Button>
                         {row.source === 'network_ipp' && (
                           <Button size="compact-xs" variant="subtle" color="red" px={7}
                             aria-label={`Supprimer ${row.name}`} onClick={() => deleteNetwork(row)}>

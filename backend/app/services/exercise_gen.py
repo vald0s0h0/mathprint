@@ -6,7 +6,7 @@ pipelines qui produisent des exercices :
     ces mêmes blocs OCR comme référence de programme/niveau (`source="gemini"`).
 Toute autre source lève une erreur claire — pas de repli silencieux sur du
 contenu inventé hors pipeline assumée (la génération DeepSeek/MathALÉA et
-celle des rappels de leçon ont été retirées le 16/07).
+celle des anciens contenus de cours a été retirée le 16/07).
 
 Ce qui vit ici, et que les deux pipelines partagent SANS jamais le réécrire :
   - VALIDATION DÉTERMINISTE (_validate_exercise/_validate_cell) : LaTeX $...$
@@ -61,7 +61,6 @@ from sqlalchemy.orm import Session
 
 from ..models import (
     Competency, ExerciseCatalog, ExerciseCompetency, GeneratedExercise,
-    LessonSnippet,
 )
 from . import figures, grading, mathrender, scoring
 # alias : « statement » est le nom de la variable d'énoncé dans presque toutes
@@ -1504,29 +1503,5 @@ def ensure_catalog_ref(db: Session, competency: Competency) -> ExerciseCatalog:
     return row
 
 
-# ================================================================ rappels de leçon
-
-def ensure_lesson(db: Session, competency: Competency, level: int) -> LessonSnippet:
-    """Rappel de leçon pour un élève de niveau 1 à 4, par compétence × tranche de niveau
-    (1-3 / 4-5) — sert d'abord ce qui est déjà en banque (actif).
-
-    La génération DeepSeek d'un rappel a été retirée (16/07) en même temps que
-    la génération d'exercices : une pipeline de rappels basée sur la même
-    extraction Sésamaths (pages « À RETENIR » du manuel) est prévue pour la
-    remplacer, pas encore implémentée. En attendant, seuls les rappels déjà
-    en banque sont servis."""
-    lo, hi = (1, 3) if level <= 3 else (4, 5)
-    row = (db.query(LessonSnippet)
-           .filter_by(competency_id=competency.id, level_min=lo, level_max=hi,
-                      status="active")
-           .first())
-    if row:
-        return row
-    raise NotImplementedError(
-        f"Aucun rappel de leçon en banque pour {competency.code} (niveau {lo}-{hi}) : "
-        "la génération DeepSeek a été retirée, la pipeline de remplacement "
-        "(extraction Sésamaths) n'est pas encore implémentée.")
-
-
-__all__ = ["ensure_bank", "pick_exercise", "ensure_lesson",
+__all__ = ["ensure_bank", "pick_exercise",
            "student_level_to_difficulty"]

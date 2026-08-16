@@ -62,7 +62,7 @@ CE QUE TU NE FAIS JAMAIS
 - Fusionner, scinder, ajouter ou retirer un exercice : autant d'objets en sortie
   qu'en entrée, mêmes « source_number », même ordre.
 - Allonger un corrigé, ou transformer le guide « correction » en solution : il
-  reste un rappel de leçon COURT + le piège (1 à 2 lignes).
+  reste une aide méthodologique COURTE + le piège (1 à 2 lignes).
 - Reformuler pour le style. Recopie à l'identique tout exercice sans faute.
 
 COMPÉTENCE VISÉE (commune à tout le lot)

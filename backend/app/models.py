@@ -31,7 +31,13 @@ class User(Base):
     email: Mapped[str] = mapped_column(String, unique=True)
     password_hash: Mapped[str] = mapped_column(String)
     display_name: Mapped[str] = mapped_column(String, default="")
-    role: Mapped[str] = mapped_column(String, default="teacher")  # admin | teacher | viewer
+    # teacher = utilisateur classique (nom interne historique conservé pour
+    # compatibilité) ; les correcteurs auront leur interface dans une version
+    # ultérieure.
+    role: Mapped[str] = mapped_column(String, default="teacher")  # admin | teacher | corrector
+    # Un abonnement ne concerne que les utilisateurs classiques :
+    # free (100 copies/mois) | pro | max. Admins et correcteurs : NULL.
+    subscription_plan: Mapped[str | None] = mapped_column(String, nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
@@ -123,28 +129,6 @@ class Competency(Base):
     domain_name: Mapped[str] = mapped_column(String, default="")
     chapter_code: Mapped[str] = mapped_column(String, default="")
     chapter_name: Mapped[str] = mapped_column(String, default="")
-
-
-class LessonSnippet(Base):
-    __tablename__ = "lesson_snippets"
-    id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
-    competency_id: Mapped[str] = mapped_column(ForeignKey("competencies.id"))
-    level_min: Mapped[int] = mapped_column(Integer, default=1)
-    level_max: Mapped[int] = mapped_column(Integer, default=10)
-    title: Mapped[str] = mapped_column(String)
-    content_latex: Mapped[str] = mapped_column(Text, default="")
-    example_latex: Mapped[str] = mapped_column(Text, default="")
-    version: Mapped[str] = mapped_column(String, default="1.0")
-    validated: Mapped[bool] = mapped_column(Boolean, default=False)
-    # Vérification croisée Claude
-    verifier_model: Mapped[str] = mapped_column(String, default="")
-    verifier_verdict_json: Mapped[dict] = mapped_column(JSON, default=dict)
-    # Figure illustrative optionnelle
-    figure_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    # Status: active ou retired
-    status: Mapped[str] = mapped_column(String, default="active")  # active | retired
-    # Rappel structuré v3 : {essentiel, methode[], exemple{enonce,etapes[],resultat}, astuce}
-    blocks_json: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
 class ExerciseCatalog(Base):
@@ -264,13 +248,6 @@ class CopyItem(Base):
     correction: Mapped[str] = mapped_column(Text)       # instantané correction
     expected_json: Mapped[dict] = mapped_column(JSON, default=dict)   # réponse(s) attendue(s)
     grading_json: Mapped[dict] = mapped_column(JSON, default=dict)    # barème, tolérances
-    # rappel de leçon inséré juste avant cet exercice dans la copie (§
-    # accompagnement personnalisé, services.distribution.lesson_review_targets)
-    # — pas de ForeignKey stricte : trace historique même si le rappel en
-    # banque est ensuite retiré/régénéré, à l'image de statement/correction.
-    lesson_snippet_id: Mapped[str | None] = mapped_column(String, nullable=True)
-
-
 class DocumentPage(Base):
     __tablename__ = "document_pages"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)

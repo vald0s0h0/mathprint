@@ -59,7 +59,7 @@ def _height(item: dict) -> float:
     tpl = DEFAULT_TEMPLATES
     return pdfgen.estimate_item_height(
         item, int(tpl["exercise"]["font_size"]), int(tpl["exercise"]["math_size"]),
-        tpl["exercise"], tpl["lesson"])
+        tpl["exercise"])
 
 
 # ------------------------------------------------------------- placement
