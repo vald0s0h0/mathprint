@@ -16,7 +16,7 @@ from ..db import get_db
 from ..deps import require_role
 from ..models import (Competency, CompetencyFramework, GeneratedExercise,
                       IndigoExercise, IndigoExtraction, User)
-from ..services import indigo, indigo_llm, indigo_manual
+from ..services import indigo, indigo_index, indigo_llm, indigo_manual
 
 router = APIRouter(prefix="/api/indigo", tags=["indigo"],
                    dependencies=[Depends(require_role("admin"))])
@@ -90,6 +90,26 @@ def set_llm_provider(body: LlmProviderIn, db: Session = Depends(get_db),
     return {"provider": prov, "offline": indigo_llm.offline(db)}
 
 
+# ------------------------------------------------------------------ index manuel
+
+@router.get("/index")
+def get_index(grade_level: str = "3e", db: Session = Depends(get_db)):
+    """État de l'index + couverture par compétence (pages et numéros repérés).
+
+    C'est ce que l'assistant AUTOMATIQUE affiche avant de lancer : l'admin voit
+    ce qui sera extrait, et surtout ce qui manque, au lieu de le découvrir dans
+    le journal une fois l'extraction payée."""
+    return indigo_index.coverage(db, grade_level)
+
+
+@router.post("/index")
+def build_index(grade_level: str = "3e", db: Session = Depends(get_db),
+                user: User = Depends(require_role("admin"))):
+    """Lance (ou reprend) l'indexation du manuel dans la file de fond."""
+    ext = indigo.create_index_run(db, grade_level, created_by=user.id)
+    return indigo.extraction_out(ext)
+
+
 # ------------------------------------------------------------------ extractions
 
 class TargetIn(BaseModel):
@@ -120,6 +140,32 @@ def create_extraction(body: ExtractionIn, db: Session = Depends(get_db),
         raise HTTPException(422, "Renseigne au moins une compétence avec une plage de pages élève")
     ext = indigo.create_extraction(db, body.grade_level, targets, created_by=user.id)
     return indigo.extraction_out(ext)
+
+
+class AutoExtractionIn(BaseModel):
+    grade_level: str = "3e"
+    competency_ids: list[str]
+
+
+@router.post("/extractions/auto")
+def create_auto_extraction(body: AutoExtractionIn, db: Session = Depends(get_db),
+                           user: User = Depends(require_role("admin"))):
+    """Extraction SANS saisie de plages : les pages et les numéros viennent de
+    l'index du manuel. Une compétence que l'index ne couvre pas est refusée avec
+    son nom — jamais lancée « à vide » (elle produirait zéro exercice sans dire
+    pourquoi)."""
+    targets, missing = indigo_index.resolve_targets(db, body.grade_level,
+                                                    body.competency_ids)
+    if not targets:
+        raise HTTPException(422,
+                            "Aucune compétence couverte par l'index"
+                            + (f" ({', '.join(missing)})" if missing else "")
+                            + ". Lance l'indexation du manuel, ou saisis les "
+                              "plages à la main.")
+    ext = indigo.create_extraction(db, body.grade_level, targets, created_by=user.id)
+    out = indigo.extraction_out(ext)
+    out["skipped"] = missing
+    return out
 
 
 @router.get("/extractions")

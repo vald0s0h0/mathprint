@@ -21,6 +21,7 @@ from ..services import grading
 from ..services import providers
 from ..services import sandbox as sandbox_service
 from ..services import scan_intake, scoring
+from ..services.file_sniff import sniff_file as _sniff_file
 from ..services.pipeline import (
     build_overlays, effective_reading, finalize_batch, grade_stored_responses,
     pending_ocr_responses, process_batch,
@@ -28,21 +29,6 @@ from ..services.pipeline import (
 from ..services.runtime_settings import llm_confidence_threshold, ocr_confidence_threshold
 
 router = APIRouter(prefix="/api/scans", tags=["scans"], dependencies=[Depends(current_user)])
-
-
-def _sniff_file(content: bytes) -> tuple[str, str] | None:
-    """(extension, mime) reconnus par signature d'octets (magic bytes) — jamais
-    le Content-Type client, purement déclaratif (§5b : PDF, JPEG, PNG, HEIC)."""
-    if content.startswith(b"%PDF-"):
-        return ".pdf", "application/pdf"
-    if content.startswith(b"\xff\xd8\xff"):
-        return ".jpg", "image/jpeg"
-    if content.startswith(b"\x89PNG\r\n\x1a\n"):
-        return ".png", "image/png"
-    if len(content) >= 12 and content[4:8] == b"ftyp" and content[8:12] in (
-            b"heic", b"heix", b"hevc", b"hevx", b"mif1", b"msf1"):
-        return ".heic", "image/heic"
-    return None
 
 
 # Message unique du blocage « pas de clé Mathpix » — la correction lit
@@ -333,6 +319,19 @@ def _business_steps(status: str, progress: dict | None, pending: int,
 
 def _batch_view(db: Session, b: ScanBatch) -> dict:
     pending = _pending_reviews_query(db, b.assessment_id).count()
+    if b.status in ("graded", "review_pending") and not pending and not b.error:
+        # Auto-réparation : un lot déjà corrigé, sans revue à trancher, ne
+        # doit jamais rester affiché en attente d'un clic professeur (halte
+        # « Valider la correction » supprimée, 02/09) — filet de sécurité
+        # pour un lot antérieur à ce changement, au premier affichage.
+        try:
+            finalize_batch(db, b)
+        except Exception as e:
+            db.rollback()
+            b = db.get(ScanBatch, b.id)
+            b.error = str(e)
+            db.commit()
+        pending = _pending_reviews_query(db, b.assessment_id).count()
     pending_llm = (_pending_reviews_query(db, b.assessment_id)
                    .filter(GradingDecision.reason_code == "llm_unavailable").count())
     pending_ocr = len(pending_ocr_responses(db, b.assessment_id)) if (
@@ -882,67 +881,6 @@ def complete_ocr(batch_id: str, tasks: BackgroundTasks, db: Session = Depends(ge
     return {"ok": True, "status": batch.status}
 
 
-@router.get("/batches/{batch_id}/summary")
-def batch_summary(batch_id: str, db: Session = Depends(get_db)):
-    """Récapitulatif AVANT validation, pour la modale « Valider la correction » :
-    par copie scannée, points de barème obtenus/total et note PRÉVISIONNELLE
-    (calculés sans rien persister), plus le nombre de réponses encore à corriger.
-    Le professeur vérifie tout — notes de chaque élève, restes à corriger — avant
-    de verrouiller la correction."""
-    b = db.get(ScanBatch, batch_id)
-    if not b:
-        raise HTTPException(404)
-    assessment = db.get(Assessment, b.assessment_id)
-    base = scoring.assessment_note_base(assessment) if assessment else 0
-
-    open_resp_ids: set[str] = set()
-    for r in _pending_reviews_query(db, b.assessment_id).all():
-        d = db.get(GradingDecision, r.decision_id)
-        if d:
-            open_resp_ids.add(d.response_id)
-
-    copies_out = []
-    total_pending = 0
-    copies = db.query(Copy).filter_by(assessment_id=b.assessment_id).all()
-    for copy in copies:
-        student = db.get(Student, copy.student_id)
-        items = (db.query(CopyItem).filter_by(copy_id=copy.id)
-                 .order_by(CopyItem.sequence).all())
-        earned = total = 0.0
-        graded = flagged = 0
-        has_resp = False
-        for item in items:
-            resp = db.query(StudentResponse).filter_by(copy_item_id=item.id).first()
-            if not resp:
-                continue
-            has_resp = True
-            if resp.id in open_resp_ids:
-                flagged += 1
-            dec = _latest_decision_for_response(db, resp.id)
-            if not dec or dec.status == "review_pending" or not dec.max_score:
-                continue  # non tranché ou question annulée : hors barème
-            bareme = scoring.item_bareme(item.grading_json, item.response_type)
-            earned += scoring.earned_points(dec.score, dec.max_score, bareme)
-            total += bareme
-            graded += 1
-        if not has_resp:
-            continue  # copie non scannée : rien à valider
-        total_pending += flagged
-        note = None
-        if base and total:
-            _, note = scoring.note_from_points(earned, total, base)
-        copies_out.append({
-            "student": student.name,
-            "student_order": student.order_index,
-            "points_earned": round(earned, 2), "points_total": round(total, 2),
-            "note": note, "graded_items": graded, "flagged": flagged,
-        })
-    copies_out.sort(key=lambda c: c["student_order"])
-    return {"assessment_title": assessment.title if assessment else "?",
-            "note_base": base or None, "pending_reviews": total_pending,
-            "scanned_copies": len(copies_out), "copies": copies_out}
-
-
 def _zone_crop_path(assessment_id: str, zone_id: str, cell: int | None = None):
     """Crop scanné d'une zone de réponse, ou d'UNE case précise (`cell`) d'un
     tableau / de cases à trous — la modale de correction manuelle ne montre que
@@ -1126,6 +1064,26 @@ def _apply_resolution(db: Session, resp: StudentResponse, body: ResolveIn) -> di
         review.note = body.note
         review.resolved_at = datetime.now(timezone.utc)
     db.commit()
+
+    if review is not None:
+        # Dernière revue ouverte du lot tranchée : on enchaîne directement sur
+        # la finalisation et les copies corrigées, sans réclamer un clic
+        # professeur supplémentaire qui ne faisait que confirmer des notes
+        # déjà closes (halte « Valider la correction » supprimée, 02/09).
+        item = db.get(CopyItem, resp.copy_item_id)
+        copy = db.get(Copy, item.copy_id) if item else None
+        if copy is not None and not _pending_reviews_query(db, copy.assessment_id).count():
+            batch = (db.query(ScanBatch).filter_by(assessment_id=copy.assessment_id)
+                    .order_by(ScanBatch.created_at.desc()).first())
+            if batch is not None:
+                try:
+                    finalize_batch(db, batch)
+                except Exception as e:
+                    db.rollback()
+                    batch = db.get(ScanBatch, batch.id)
+                    if batch is not None:
+                        batch.error = str(e)
+                        db.commit()
     return {"ok": True}
 
 

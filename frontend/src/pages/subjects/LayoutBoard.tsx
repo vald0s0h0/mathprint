@@ -81,7 +81,10 @@ export function overfullColumns(layout: Layout, byId: Map<string, PoolItem>,
   return out
 }
 
-const DIFFICULTY_COLOR = ['gray', 'teal', 'green', 'yellow', 'orange', 'red']
+// 3 niveaux (facile / moyen / difficile), indexé par la difficulté 1-3 —
+// miroir de exercise_gen.DIFFICULTY_LEVELS
+const DIFFICULTY_COLOR = ['gray', 'green', 'orange', 'red']
+const DIFFICULTY_LABEL = ['', 'facile', 'moyen', 'difficile']
 const FILL_TRIGGER_RATIO = 0.4
 const RESPONSE_LABEL: Record<string, string> = {
   qcm_single: 'QCM', qcm_multiple: 'QCM multiple', short_text: 'réponse courte',
@@ -94,7 +97,7 @@ function ItemChips({ it }: { it: PoolItem }) {
   return (
     <Group gap={4} wrap="wrap">
       <Badge size="xs" variant="light" color={DIFFICULTY_COLOR[it.difficulty] ?? 'gray'}>
-        niv. {it.difficulty}
+        {DIFFICULTY_LABEL[it.difficulty] ?? `niv. ${it.difficulty}`}
       </Badge>
       <Badge size="xs" variant="outline" color="gray">
         {RESPONSE_LABEL[it.response_type] ?? it.response_type}

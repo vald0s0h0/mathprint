@@ -11,7 +11,7 @@ from .routers import (
     users_admin,
 )
 from .seed import seed
-from .services import errorlog, indigo, job_worker
+from .services import errorlog, indigo, job_worker, mail_intake
 from .services.bootstrap import ensure_strong_secrets
 
 app = FastAPI(title="MathPrint", version="0.9.0",
@@ -58,6 +58,7 @@ def startup():
         db.close()
     job_worker.start_worker()
     indigo.start_worker()
+    mail_intake.start_worker()
 
 
 @app.get("/api/health")

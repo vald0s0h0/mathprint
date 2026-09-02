@@ -1,12 +1,14 @@
 """Tests unitaires de services.distribution (répartition automatique des
-exercices : difficulté, mix homogène des types, plan post-correction)."""
+exercices : difficulté, mix homogène des types, anti-répétition dans une copie).
+
+Le choix des exercices d'un sujet INDIVIDUEL, lui, est testé dans
+test_student_history.py : il ne se fait plus ici."""
 import sys
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.models import GeneratedExercise, Student
+from app.models import GeneratedExercise
 from app.services import distribution
 
 
@@ -14,16 +16,16 @@ def _row(kind: str, response_type: str = "short_text") -> GeneratedExercise:
     return GeneratedExercise(kind=kind, response_type=response_type, difficulty_level=3)
 
 
-def test_difficulty_level5_neutral_for_common_modes():
-    assert distribution.difficulty_level5("common", student_level_1_10=10) == \
-        distribution.difficulty_level5("common", student_level_1_10=1)
-    assert distribution.difficulty_level5("common_variants", student_level_1_10=10) == \
-        distribution.difficulty_level5("common", student_level_1_10=1)
+def test_difficulty_level3_neutral_for_common_modes():
+    assert distribution.difficulty_level3("common", student_level_1_10=10) == \
+        distribution.difficulty_level3("common", student_level_1_10=1)
+    assert distribution.difficulty_level3("common_variants", student_level_1_10=10) == \
+        distribution.difficulty_level3("common", student_level_1_10=1)
 
 
-def test_difficulty_level5_individual_adapts_to_student():
-    weak = distribution.difficulty_level5("individual", student_level_1_10=1)
-    strong = distribution.difficulty_level5("individual", student_level_1_10=10)
+def test_difficulty_level3_individual_adapts_to_student():
+    weak = distribution.difficulty_level3("individual", student_level_1_10=1)
+    strong = distribution.difficulty_level3("individual", student_level_1_10=10)
     assert weak < strong
 
 
@@ -101,39 +103,3 @@ def test_pick_balanced_exercise_falls_back_when_everything_excluded():
         [row], {}, {"application": 1.0}, seed=0,
         exclude_keys={distribution.exercise_identity(row)})
     assert picked is row
-
-
-def test_apply_next_plan_ignored_when_absent():
-    student = Student(next_plan_json=None, next_plan_updated_at=None)
-    mix, level = distribution.apply_next_plan(student, {"application": 1.0}, 3)
-    assert mix == {"application": 1.0} and level == 3
-
-
-def test_apply_next_plan_used_when_recent():
-    student = Student(
-        next_plan_json={"difficulty_level": 5},
-        next_plan_updated_at=datetime.now(timezone.utc) - timedelta(days=1))
-    mix, level = distribution.apply_next_plan(student, {"application": 1.0}, 3)
-    assert level == 5                      # la difficulté, elle, reste personnalisée
-    assert mix == {"application": 1.0}
-
-
-def test_apply_next_plan_never_overrides_the_correction_load_mix():
-    # Le mix qcm/manuscrit répartit la charge de correction entre CV (gratuit)
-    # et OCR Mathpix (payant, sous quota) : c'est une contrainte globale, pas
-    # une préférence à personnaliser. Un vieux plan qui en porte encore un
-    # (champ retiré du prompt, mais des plans stockés en contiennent) ne doit
-    # PLUS l'imposer.
-    student = Student(
-        next_plan_json={"kind_mix": {"qcm": 1.0}, "difficulty_level": 5},
-        next_plan_updated_at=datetime.now(timezone.utc) - timedelta(days=1))
-    mix, _ = distribution.apply_next_plan(student, {"application": 1.0}, 3)
-    assert mix == {"application": 1.0}
-
-
-def test_apply_next_plan_ignored_when_stale():
-    student = Student(
-        next_plan_json={"difficulty_level": 5},
-        next_plan_updated_at=datetime.now(timezone.utc) - timedelta(days=200))
-    mix, level = distribution.apply_next_plan(student, {"application": 1.0}, 3)
-    assert mix == {"application": 1.0} and level == 3

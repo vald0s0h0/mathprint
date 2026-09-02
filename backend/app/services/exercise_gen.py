@@ -88,9 +88,39 @@ VALID_RESPONSE_TYPES = {"qcm_single", "qcm_multiple", "short_text", "multi_blank
                         "multiline_text", "table_fill", "matching", "manual_drawing",
                         "checkbox_grid", "composite"}
 
+# Échelle de difficulté des exercices : TROIS niveaux (facile / moyen / difficile),
+# et non plus cinq. Un manuel n'en distingue pas davantage (le badge Indigo donne
+# flash/exercice/expert, le titre d'un problème donne facile/moyen/difficile), et
+# la pipeline QCM produit exactement un trio base + dérivé facile + dérivé
+# difficile. Cinq niveaux étalaient la banque sur des paliers que rien ne
+# remplissait, obligeant la sélection à chercher « le niveau le plus proche » à
+# chaque copie.
+DIFFICULTY_LEVELS = (1, 2, 3)
+DIFFICULTY_MIN, DIFFICULTY_MAX = 1, 3
+
+
+def to_level3(value) -> int:
+    """Ancien niveau 1-5 -> niveau 1-3 (1,2 -> 1 ; 3 -> 2 ; 4,5 -> 3).
+
+    SOURCE UNIQUE de la conversion : migration de la base (services.db), seed des
+    exercices Indigo publiés et tout appelant historique passent ici. Deux tables
+    de correspondance écrites séparément finiraient par diverger, et un exercice
+    changerait de niveau selon le chemin emprunté."""
+    try:
+        v = int(value)
+    except (TypeError, ValueError):
+        return 2
+    if v <= 2:
+        return 1
+    if v == 3:
+        return 2
+    return 3
+
+
 def student_level_to_difficulty(level_1_10: int) -> int:
-    """Niveau élève 1-10 -> niveau d'exercice 1-5."""
-    return max(1, min(5, (max(1, min(10, level_1_10)) + 1) // 2))
+    """Niveau élève 1-10 -> niveau d'exercice 1-3 (1-4 -> 1, 5-7 -> 2, 8-10 -> 3)."""
+    lvl = max(1, min(10, level_1_10))
+    return DIFFICULTY_MIN + (lvl - 1) * 3 // 10
 
 
 # ================================================================ validation
@@ -1431,7 +1461,7 @@ def bank_rows_near_level(db: Session, competency: Competency, level: int,
     proche disponible (pour une sélection en aval équilibrée par type de
     réponse, cf. services.distribution). `source` : voir ensure_bank."""
     pool = _source_pool(source)
-    for candidate in sorted(range(1, 6), key=lambda l: abs(l - level)):
+    for candidate in sorted(DIFFICULTY_LEVELS, key=lambda l: abs(l - level)):
         try:
             rows = ensure_bank(db, competency, candidate, source=source)
         except Exception as e:
@@ -1467,7 +1497,7 @@ def filler_bank_rows(db: Session, competency: Competency, level: int,
     if source in ("sesamaths", "indigo"):
         return []
     from .gemini_gen import filler_rows
-    for candidate in sorted(range(1, 6), key=lambda l: abs(l - level)):
+    for candidate in sorted(DIFFICULTY_LEVELS, key=lambda l: abs(l - level)):
         rows = filler_rows(db, competency, candidate)
         if rows:
             return rows

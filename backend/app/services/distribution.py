@@ -6,44 +6,47 @@ remplissage par répétition sans diversité) — la sélection concrète des
 exercices en banque reste celle de exercise_gen (ensure_bank/bank_rows_near_level),
 jamais réinventée ici.
 """
-from datetime import datetime, timezone
-
 from sqlalchemy.orm import Session
 
-from ..config import settings
-from ..models import GeneratedExercise, Student, StudentCompetencyState
+from ..models import GeneratedExercise, StudentCompetencyState
 from . import exercise_gen, forgetting
 
 
-def _utc(dt: datetime | None) -> datetime | None:
-    if dt is not None and dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt
-
-
-def priority_competencies(db: Session, student_id: str, competency_ids: list[str]) -> list[str]:
-    """Trie les compétences cochées par urgence décroissante (probabilité de
-    rappel croissante) ; une compétence jamais évaluée revient en tête
-    (recall_probability = 0, cf. forgetting.recall_probability)."""
+def competency_states(db: Session, student_id: str,
+                      competency_ids: list[str]) -> dict[str, StudentCompetencyState]:
+    """États de maîtrise de l'élève pour les compétences cochées, indexés par id."""
     if not competency_ids:
-        return []
-    states = {
+        return {}
+    return {
         s.competency_id: s
         for s in db.query(StudentCompetencyState).filter(
             StudentCompetencyState.student_id == student_id,
             StudentCompetencyState.competency_id.in_(competency_ids)).all()
     }
 
-    def urgency(cid: str) -> float:
-        state = states.get(cid)
-        return forgetting.recall_probability(state) if state else 0.0
 
-    return sorted(competency_ids, key=urgency)
+def priority_competencies(db: Session, student_id: str, competency_ids: list[str]) -> list[str]:
+    """Trie les compétences cochées par priorité décroissante (cf.
+    forgetting.priority) ; une compétence jamais évaluée revient en tête.
+
+    La priorité combine la LACUNE et l'OUBLI (1 - maîtrise × fraîcheur). Le tri
+    ne regardait auparavant que la fraîcheur : une compétence revue hier et
+    ratée passait donc derrière une compétence acquise depuis longtemps, ce qui
+    est exactement l'inverse de ce qu'il faut retravailler."""
+    if not competency_ids:
+        return []
+    states = competency_states(db, student_id, competency_ids)
+    return sorted(competency_ids,
+                  key=lambda cid: -forgetting.priority(states.get(cid)))
 
 
-def difficulty_level5(personalization_mode: str, student_level_1_10: int) -> int:
-    """Niveau de banque (1-5) : neutre pour commun/variantes communes,
-    adapté au niveau élève (±2 autour d'une base neutre) en individuel."""
+def difficulty_level3(personalization_mode: str, student_level_1_10: int) -> int:
+    """Niveau de banque (1-3) : neutre pour commun/variantes communes,
+    adapté au niveau élève (±2 autour d'une base neutre) en individuel.
+
+    Le ±2 porte sur l'échelle ÉLÈVE (1-10), pas sur celle des exercices : c'est la
+    conversion finale qui a été ramenée de 5 à 3 niveaux (cf.
+    exercise_gen.student_level_to_difficulty)."""
     base = 5
     if personalization_mode == "individual":
         delta = max(-2, min(2, student_level_1_10 - 5))
@@ -129,38 +132,3 @@ def pick_unused_exercise(rows: list[GeneratedExercise], seed: int,
     if not available:
         return None
     return available[seed % len(available)]
-
-
-def _fresh_plan(student: Student) -> dict | None:
-    """Plan post-correction (services.appreciation) si présent et pas plus
-    vieux que next_plan_max_age_days, sinon None."""
-    plan = student.next_plan_json
-    if not plan or not student.next_plan_updated_at:
-        return None
-    age_days = (datetime.now(timezone.utc) - _utc(student.next_plan_updated_at)).days
-    if age_days > settings.next_plan_max_age_days:
-        return None
-    return plan
-
-
-def apply_next_plan(student: Student, target_mix: dict[str, float],
-                    level5: int) -> tuple[dict[str, float], int]:
-    """En mode "individuel", affine la difficulté à partir du plan
-    post-correction stocké pour l'élève (cf. services.appreciation) — évite un
-    second appel LLM à la création du sujet. Ignoré si absent ou plus vieux que
-    settings.next_plan_max_age_days ; le périmètre de compétences coché par le
-    professeur n'est jamais modifié par cette fonction.
-
-    Le mix de types, lui, n'est PLUS pris dans le plan (le LLM en proposait un
-    par élève, qui écrasait silencieusement settings.exercise_kind_mix) : ce
-    réglage fixe la répartition de la charge de correction entre CV (gratuit)
-    et OCR Mathpix (payant, sous quota), une contrainte d'infrastructure globale
-    — pas une préférence pédagogique à personnaliser élève par élève. Le retour
-    reste un couple (mix, niveau) : le mix passé par l'appelant est renvoyé
-    inchangé, la signature ne bouge pas."""
-    plan = _fresh_plan(student)
-    if not plan:
-        return target_mix, level5
-    plan_level = plan.get("difficulty_level")
-    level = plan_level if isinstance(plan_level, int) and 1 <= plan_level <= 5 else level5
-    return target_mix, level

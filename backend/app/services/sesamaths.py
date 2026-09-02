@@ -65,6 +65,8 @@ from ..config import settings
 from ..models import CompetencyFramework, GeneratedExercise, SesamathsChapterExtraction, SesamathsLlmCache
 from . import exercise_gen, figures, providers, sesamaths_pdf
 
+SESAMATHS_LEVEL = 2      # niveau « moyen » (§ exercise_gen.DIFFICULTY_LEVELS)
+
 logger = logging.getLogger(__name__)
 
 # Entrent dans la clé du cache LLM : TOUJOURS bumper la version concernée en
@@ -308,7 +310,7 @@ def _to_candidate(item: dict, doc, blocks_by_index: dict[int, dict], competency,
         return None
     item = dict(item)
     source_idx = item.pop("source_blocks", None) or []
-    item.pop("difficulty", None)  # niveau non évalué par le LLM (cf. 17/07) : toujours 3
+    item.pop("difficulty", None)  # niveau non évalué par le LLM (cf. 17/07) : toujours "moyen"
 
     # figure : si l'adaptateur n'a pas décrit une figure paramétrique
     # (rectangle/triangle/...), et qu'un bloc "image" fait partie de ses
@@ -340,7 +342,7 @@ def _to_candidate(item: dict, doc, blocks_by_index: dict[int, dict], competency,
                        exercise_gen.diagnose_rejection(item, competency),
                        str(item.get("statement", "")).replace("\n", " "))
         return None
-    valid["difficulty"] = 3
+    valid["difficulty"] = SESAMATHS_LEVEL
     valid["raw_extract_json"] = {
         "blocks": [blocks_by_index[i] for i in source_idx if i in blocks_by_index]}
     return valid
@@ -724,7 +726,7 @@ def ensure_bank(db: Session, competency, level: int) -> list[GeneratedExercise]:
     ne « limitait » rien d'utile, il jetait le reste d'une extraction déjà payée
     et bornait à 3 le choix disponible pour remplir une page — d'où des copies
     qui répétaient les mêmes exercices."""
-    level = max(1, min(5, level))
+    level = max(1, min(exercise_gen.DIFFICULTY_MAX, level))
     rows = (db.query(GeneratedExercise)
             .filter(GeneratedExercise.competency_id == competency.id,
                    GeneratedExercise.difficulty_level == level,

@@ -33,7 +33,7 @@ from ..models import (
     Assessment, Competency, Copy, CopyItem, DocumentPage, FileObject, Job,
     ResponseZone, SchoolClass, StudentLevel,
 )
-from . import distribution, exercise_gen, scoring
+from . import distribution, exercise_gen, scoring, student_history
 from . import pdfgen
 from .runtime_settings import doc_templates
 from .security import sign_page
@@ -94,7 +94,7 @@ def render_shape(row, guides: str = pdfgen.GUIDES_OVERLAY) -> dict:
     grading_json = scoring.with_bareme(row.grading_json, row.response_type)
     disp_statement, calc, is_probleme = indigo_display(row)
     common = {"kind": "exercise", "statement": disp_statement,
-              "correction": row.correction, "level5": row.difficulty_level,
+              "correction": row.correction, "level3": row.difficulty_level,
               "calc": calc, "is_probleme": is_probleme, "figure": row.figure_json,
               "guides": guides}
     if row.response_type == "composite":
@@ -133,7 +133,8 @@ def build_render_item(db: Session, *, row, copy_id: str, catalog_id: str, seq: i
         for part in render["grading"]["parts"]:
             p_item = CopyItem(
                 copy_id=copy_id, catalog_id=catalog_id, sequence=seq,
-                difficulty=row.difficulty_level * 2,
+                generated_exercise_id=row.id,
+                difficulty=row.difficulty_level * 3,
                 response_type=part["response_type"],
                 statement=part["statement"], correction=row.correction,
                 expected_json=part["expected"], grading_json=part["grading"])
@@ -146,7 +147,8 @@ def build_render_item(db: Session, *, row, copy_id: str, catalog_id: str, seq: i
 
     item = CopyItem(
         copy_id=copy_id, catalog_id=catalog_id, sequence=seq,
-        difficulty=row.difficulty_level * 2, response_type=row.response_type,
+        generated_exercise_id=row.id,
+        difficulty=row.difficulty_level * 3, response_type=row.response_type,
         statement=row.statement, correction=row.correction,
         expected_json=row.expected_json, grading_json=render["grading"])
     db.add(item)
@@ -216,6 +218,10 @@ def generate_assessment_job(db: Session, assessment: Assessment,
     # compétences suffisait à l'épuiser, d'où des bas de page vides), la vraie
     # borne étant la stagnation (plus rien ne tient dans la place restante).
     MAX_FILL_ATTEMPTS = 80
+    # Longueur de la trame demandée à student_history : assez de cases pour
+    # remplir les pages les plus denses, la génération s'arrêtant de toute façon
+    # quand la page est pleine (la hauteur des cartes n'est pas connue d'avance).
+    MAX_FILL_ROUNDS = 6
     total_non_qcm = 0
 
     for s_idx, student in enumerate(students):
@@ -225,11 +231,24 @@ def generate_assessment_job(db: Session, assessment: Assessment,
         logger.info("Copie %s/%s (%s)", s_idx + 1, len(students), student.llm_pseudonym)
         seed = distribution.variant_seed(base_seed, assessment.personalization_mode, s_idx)
         level = _student_level(db, student.id)
-        level5 = distribution.difficulty_level5(assessment.personalization_mode, level)
+        level3 = distribution.difficulty_level3(assessment.personalization_mode, level)
         target_mix = settings.exercise_kind_mix
-        if assessment.personalization_mode == "individual":
-            target_mix, level5 = distribution.apply_next_plan(student, target_mix, level5)
-        priority = distribution.priority_competencies(db, student.id, ordered_ids)
+        individual = assessment.personalization_mode == "individual"
+        # Sujet INDIVIDUEL : la trame vient de l'historique réel de l'élève
+        # (exercices déjà faits, réussites, dates), calculée ici — au moment où
+        # l'on connaît enfin la date du sujet, donc le délai écoulé depuis
+        # chaque compétence. Un dérivé PAR COMPÉTENCE, pas un niveau unique
+        # pour toute la copie.
+        ex_log = student_history.exercise_log(db, student.id) if individual else {}
+        if individual:
+            slots, _stats = student_history.student_plan(
+                db, student.id, ordered_ids, level,
+                n_slots=len(ordered_ids) * MAX_FILL_ROUNDS)
+            priority = [sl.competency_id for sl in slots]
+            slot_levels = [sl.level3 for sl in slots]
+        else:
+            priority = distribution.priority_competencies(db, student.id, ordered_ids)
+            slot_levels = [level3] * len(priority)
         copy = Copy(assessment_id=assessment.id, student_id=student.id, seed=seed)
         db.add(copy)
         db.flush()
@@ -243,22 +262,39 @@ def generate_assessment_job(db: Session, assessment: Assessment,
         picked_keys: set[str] = set()
 
         def _add_item(seq: int, comp_id: str, item_seed: int,
-                      filler: bool = False) -> bool:
-            nonlocal total_non_qcm
+                      filler: bool = False, level: int | None = None,
+                      allow_repeat: bool = False) -> bool:
+            """`allow_repeat` : filet de sécurité de la passe OBLIGATOIRE, où
+            mieux vaut répéter un exercice que laisser une compétence cochée
+            sans rien. Au REMPLISSAGE il n'y a aucune obligation : servir deux
+            fois le même exercice à un élève n'est plus un moindre mal, c'est du
+            gaspillage — on préfère alors laisser la place à une autre carte."""
             comp = competencies[comp_id]
+            want = level3 if level is None else level
             try:
                 if filler:
                     # petites cartes (un calcul, un QCM court) pour combler les
                     # trous de bas de page : jamais répétées (None = épuisées)
                     rows = exercise_gen.filler_bank_rows(
-                        db, comp, level5, source=exercise_source)
+                        db, comp, want, source=exercise_source)
                     row = distribution.pick_unused_exercise(
                         rows, item_seed, exclude_keys=picked_keys)
                     if row is None:
                         return False
                 else:
                     bank, _ = exercise_gen.bank_rows_near_level(
-                        db, comp, level5, source=exercise_source)
+                        db, comp, want, source=exercise_source)
+                    # En individuel, on n'équilibre les types de réponse que
+                    # DANS le meilleur rang de candidats (inédit > raté ancien >
+                    # déjà réussi) : autrement un exercice déjà servi, mais du
+                    # bon type, passerait devant un inédit.
+                    if individual:
+                        bank = student_history.preferred_rows(bank, ex_log) or bank
+                    if not allow_repeat:
+                        bank = [r for r in bank
+                                if distribution.exercise_identity(r) not in picked_keys]
+                        if not bank:
+                            return False    # banque épuisée pour cette compétence
                     row = distribution.pick_balanced_exercise(
                         bank, kind_counts, target_mix, item_seed, exclude_keys=picked_keys)
             except Exception as e:
@@ -266,6 +302,13 @@ def generate_assessment_job(db: Session, assessment: Assessment,
                 warnings.append(f"{comp.code} ({student.llm_pseudonym}) : {e}")
                 return False
 
+            return _add_row(seq, comp_id, row, filler=filler)
+
+        def _add_row(seq: int, comp_id: str, row, filler: bool = False) -> bool:
+            """Pose en base une ligne de banque DÉJÀ choisie. Séparé de la
+            sélection pour que la passe best-fit, qui choisit sur la hauteur
+            mesurée, emprunte exactement le même chemin d'écriture."""
+            nonlocal total_non_qcm
             identity = distribution.exercise_identity(row)
             picked_keys.add(identity)
             # les cartes de remplissage ne passent pas par le tirage équilibré
@@ -282,8 +325,16 @@ def generate_assessment_job(db: Session, assessment: Assessment,
                 total_non_qcm += 1
             return True
 
-        for seq, comp_id in enumerate(priority):
-            _add_item(seq, comp_id, seed * 100 + seq)
+        # Passe OBLIGATOIRE : une fois chaque compétence cochée, quel que soit
+        # le score de l'élève. Le périmètre choisi par le professeur est un
+        # contrat, jamais rétréci par la personnalisation. Les premières cases
+        # de la trame sont exactement ces compétences-là, une chacune, dans
+        # l'ordre de priorité (cf. student_history.student_plan).
+        n_required = len(ordered_ids)
+        for seq in range(n_required):
+            _add_item(seq, priority[seq], seed * 100 + seq,
+                      level=slot_levels[seq] if seq < len(slot_levels) else None,
+                      allow_repeat=True)
 
         # remplissage automatique (§ remplissage) : tant qu'il reste de la
         # place sur les pages_target pages, on repioche dans les compétences
@@ -340,10 +391,16 @@ def generate_assessment_job(db: Session, assessment: Assessment,
             attempts = stagnant = 0
             stop_stagnant = 2 * max(1, len(priority))
             while attempts < MAX_FILL_ATTEMPTS and stagnant < stop_stagnant:
+                # La trame individuelle est une SUITE de cases (compétence +
+                # dérivé) déjà pondérée par la priorité : on la déroule, puis on
+                # reboucle dessus. En commun/variantes, tour de rôle inchangé.
                 comp_id = priority[seq % len(priority)]
+                want = slot_levels[seq] if seq < len(slot_levels) else (
+                    slot_levels[seq % len(slot_levels)] if slot_levels else None)
                 attempts += 1
                 before = len(render_items)
-                if not _add_item(seq, comp_id, seed * 100 + seq, filler=filler):
+                if not _add_item(seq, comp_id, seed * 100 + seq, filler=filler,
+                                 level=want):
                     seq += 1
                     stagnant += 1
                     continue
@@ -359,11 +416,103 @@ def generate_assessment_job(db: Session, assessment: Assessment,
                 seq += 1
             return seq
 
+        def _best_fit(start_seq: int) -> None:
+            """Dernière passe : COMBLER les trous restants en choisissant une
+            carte qui y tient, au lieu d'en essayer une au hasard.
+
+            Les deux passes précédentes tirent l'exercice suivant sans jamais
+            regarder sa HAUTEUR : quand il ne reste que deux centimètres, elles
+            proposent des cartes trop grandes, les créent en base, mesurent,
+            les suppriment, et abandonnent après quelques échecs — sans avoir
+            essayé la petite carte qui tenait. D'où des bas de page vides.
+
+            Ici on mesure AVANT de créer (`render_shape` ne touche pas la base),
+            on ne retient que les cartes qui rentrent dans le plus grand trou, et
+            on prend la plus grande d'entre elles (best-fit : le trou restant
+            après coup est le plus petit possible).
+
+            Cette passe ne dépend d'aucun pool de « cartes de remplissage » : elle
+            marche donc aussi pour les sources à pool fini (Indigo, Sésamaths),
+            où la passe filler ne fait rien du tout — c'est-à-dire justement là
+            où les bas de page restaient blancs."""
+            # Tous les dérivés que CETTE copie a le droit de servir : le mix
+            # individuel en couvre plusieurs (cf. student_history.level_quota),
+            # un sujet commun un seul. Se limiter à un niveau laisserait un trou
+            # béant alors qu'un exercice parfaitement légitime le comblait.
+            allowed_levels = sorted(set(slot_levels)) or [level3]
+            # Banque mesurée UNE fois : la hauteur d'une carte ne dépend que de
+            # sa ligne, jamais de ce qui est déjà placé. `rank` est la préférence
+            # de l'élève (0 = inédit, 1 = raté ancien, 2 = déjà réussi) — on
+            # garde TOUS les rangs, pour que l'épuisement du meilleur n'oblige
+            # pas à laisser un trou ouvert.
+            measured: list[tuple[int, float, str, object]] = []
+            seen_rows: set[str] = set()
+            for comp_id in dict.fromkeys(priority):
+                comp = competencies[comp_id]
+                rows = []
+                for lvl in allowed_levels:
+                    try:
+                        lvl_rows, _ = exercise_gen.bank_rows_near_level(
+                            db, comp, lvl, source=exercise_source)
+                    except Exception:
+                        continue        # source indisponible : déjà signalée
+                    rows.extend(r for r in lvl_rows if r.id not in seen_rows)
+                    seen_rows.update(r.id for r in lvl_rows)
+                for row in rows:
+                    rank = (student_history.candidate_rank(row, ex_log)[0]
+                            if individual else 0)
+                    measured.append((rank, pdfgen.estimate_item_height(
+                        render_shape(row), ex_tpl_font_size, math_fs,
+                        tpl["exercise"]), comp_id, row))
+            # rang croissant d'abord (ce que l'élève n'a pas encore vu), puis
+            # hauteur décroissante : à préférence égale, la plus grande carte qui
+            # tient laisse le plus petit trou derrière elle.
+            measured.sort(key=lambda m: (m[0], -m[1]))
+
+            # Cartes qui, à l'essai, faisaient déborder malgré un trou annoncé
+            # suffisant : le re-packing FFD peut redistribuer les colonnes et
+            # réclamer une page de plus. On les écarte et on continue — une
+            # carte PLUS PETITE peut encore tenir. Abandonner au premier échec
+            # (ce que faisait le remplissage historique) laissait justement le
+            # bas de page blanc.
+            blocked: set[str] = set()
+            seq = start_seq
+            for _ in range(MAX_FILL_ATTEMPTS):
+                holes = pdfgen.free_space(_heights(render_items), max_pages)
+                biggest = max(holes) if holes else 0.0
+                if biggest <= 0 or not measured:
+                    return
+                # best-fit : la PLUS GRANDE carte qui tienne encore, pour que le
+                # trou restant soit le plus petit possible (`measured` est trié
+                # décroissant, donc la première qui rentre est la bonne).
+                pick = next(
+                    (m for m in measured
+                     if m[1] <= biggest and m[3].id not in blocked
+                     and distribution.exercise_identity(m[3]) not in picked_keys),
+                    None)
+                if pick is None:
+                    return              # plus rien ne rentre : place inexploitable
+                _rank, _h, comp_id, row = pick
+                before = len(render_items)
+                if not _add_row(seq, comp_id, row):
+                    blocked.add(row.id)
+                    continue
+                # ceinture : la simulation de placement reste l'autorité finale
+                if pdfgen.pages_needed(_pack(render_items)[1]) > max_pages:
+                    _rollback(before)
+                    blocked.add(row.id)
+                    continue
+                seq += 1
+
         if priority:
             # 1) remplir au maximum avec les exercices classiques (grandes cartes) ;
-            # 2) combler les trous de bas de page restants avec les cartes courtes.
-            next_seq = _fill(len(priority), filler=False)
-            _fill(next_seq, filler=True)
+            # 2) combler les trous de bas de page restants avec les cartes courtes ;
+            # 3) finir au plus juste, en choisissant ce qui TIENT dans ce qui reste.
+            # On reprend la trame là où la passe obligatoire l'a laissée : ses
+            # cases suivantes sont déjà pondérées par la priorité.
+            next_seq = _fill(n_required, filler=False)
+            next_seq = _fill(next_seq, filler=True)
+            _best_fit(next_seq)
 
         # Ordre DÉFINITIF des cartes : le remplissage colonne par colonne (FFD)
         # est figé ici, une fois toutes les cartes choisies. On renumérote alors

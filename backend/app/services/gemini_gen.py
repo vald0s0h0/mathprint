@@ -78,7 +78,7 @@ logger = logging.getLogger(__name__)
 PROMPT_VERSION = "gemini-exgen-4-tables"
 SOURCE = "gemini"
 # Seul niveau produit : la difficulté n'est pas évaluée (cf. en-tête).
-GENERATED_LEVEL = 3
+GENERATED_LEVEL = 2
 
 # Exercices COURTS de remplissage : petites cartes (un seul calcul, un énoncé
 # très court, un QCM) créées par un appel Gemini DÉDIÉ (prompt _FILLER_INTRO),
@@ -552,11 +552,11 @@ def ensure_bank(db: Session, competency: Competency, level: int) -> list[Generat
     Pool strictement séparé (source="gemini") : les exercices CRÉÉS d'après le
     manuel ne se mélangent jamais à ceux qui en sont EXTRAITS (source
     "sesamaths"), même si les deux pipelines lisent les mêmes pages."""
-    level = max(1, min(5, level))
+    level = max(1, min(exercise_gen.DIFFICULTY_MAX, level))
     rows = _bank_rows(db, competency, level)
     if level != GENERATED_LEVEL:
-        # cette pipeline ne produit que du niveau 3 (difficulté non évaluée) :
-        # ne RIEN générer ici, bank_rows_near_level se rabattra sur le 3 plutôt
+        # cette pipeline ne produit que le niveau MOYEN (difficulté non évaluée) :
+        # ne RIEN générer ici, bank_rows_near_level se rabattra dessus plutôt
         # que de nous faire ranger des exercices moyens sous une autre étiquette
         return rows
     if competency.domain_code in exercise_gen.GEOMETRY_DOMAINS:

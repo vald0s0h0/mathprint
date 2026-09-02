@@ -30,6 +30,15 @@ def ocr_confidence_threshold(db: Session) -> float:
     return value if 0.0 < value <= 1.0 else 0.90
 
 
+def appreciation_synthesis_enabled(db: Session) -> bool:
+    """Phrase encourageante Claude Haiku de la zone Appréciation (services
+    .appreciation) — désactivée par défaut : la partie déterministe
+    (progrès de compétences) reste affichée quoi qu'il arrive, seule la
+    synthèse Haiku est concernée par ce réglage."""
+    saved = get_setting(db, "appreciation_synthesis_enabled") or {}
+    return bool(saved.get("value", False))
+
+
 def llm_confidence_threshold(db: Session) -> float:
     """Seuil DeepSeek -> correction manuelle, réglable en Pédagogie.
 

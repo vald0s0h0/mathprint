@@ -32,8 +32,9 @@ from ..config import _APP_DIR, settings
 from ..db import SessionLocal
 from ..models import (Competency, CompetencyFramework, GeneratedExercise,
                       IndigoExercise, IndigoExtraction, uid)
-from . import (figures, indigo_cv, indigo_fields, indigo_gemini, indigo_llm,
-               indigo_manual, indigo_segment, indigo_verify, providers, scoring)
+from . import (exercise_gen, figures, indigo_cv, indigo_fields, indigo_gemini,
+               indigo_llm, indigo_manual, indigo_qcm, indigo_segment,
+               indigo_verify, providers, scoring)
 from . import statement as statement_mod
 
 logger = logging.getLogger("app.indigo")
@@ -69,11 +70,17 @@ def normalize_target(t: dict) -> dict:
     out = dict(t)
     er = str(t.get("eleve_page_range") or "").strip()
     pr = str(t.get("prof_page_range") or "").strip()
-    if er:
+    # Les listes CONCRÈTES l'emportent sur les plages. Une cible déduite de
+    # l'index (services.indigo_index) porte les deux : ses listes sont exactes
+    # (pages et numéros réellement repérés), ses plages ne sont là que pour être
+    # lisibles dans le journal. Ré-étaler la plage écraserait une liste de
+    # numéros trouée par les exercices d'une autre compétence.
+    if er and not t.get("eleve_pages"):
         out["eleve_pages"] = [p - 1 for p in parse_int_range(er) if p >= 1]
-    if pr:
+    if pr and not t.get("prof_pages"):
         out["prof_pages"] = [p - 1 for p in parse_int_range(pr) if p >= 1]
-    out["numbers"] = parse_int_range(t.get("number_range"))
+    if not t.get("numbers"):
+        out["numbers"] = parse_int_range(t.get("number_range"))
     return out
 # Compétences mathématiques officielles (folded -> affichage). Dans le manuel
 # Indigo, un PROBLÈME affiche, JUSTE APRÈS son titre, une petite ligne listant
@@ -195,11 +202,27 @@ def _find_markers(text: str) -> tuple[list[str], int]:
 
 # --------------------------------------------------------- OCR & segmentation
 
-def _ocr_pages(db, doc, page_indices: list[int], tag: str) -> list[dict]:
-    """OCR Mistral des pages `page_indices` du document. Retourne une liste
-    {source_page, dims, blocks} dans l'ordre des pages fournies."""
+def _ocr_pages(db, doc, page_indices: list[int], tag: str, *,
+               grade: str = "", which: str = "", use_index: bool = True) -> list[dict]:
+    """Blocs des pages `page_indices` : {source_page, dims, blocks} dans l'ordre.
+
+    L'INDEX D'ABORD (services.indigo_index) : une page déjà lue n'est jamais
+    relue, ce qui rend une extraction rejouable à l'identique et gratuite. Seules
+    les pages absentes de l'index partent à l'OCR Mistral. `use_index=False` sert
+    à la CONSTRUCTION de l'index elle-même, qui ne peut évidemment pas se lire.
+    """
     if not page_indices:
         return []
+    if use_index and grade and which:
+        from . import indigo_index
+        cached = {i: indigo_index.page_entry(grade, which, i) for i in page_indices}
+        missing = [i for i, entry in cached.items() if entry is None]
+        if not missing:
+            return [cached[i] for i in page_indices]
+        if len(missing) < len(page_indices):
+            fresh = {e["source_page"]: e for e in
+                     _ocr_pages(db, doc, missing, tag, use_index=False)}
+            return [cached[i] or fresh[i] for i in page_indices if cached[i] or i in fresh]
     pdf_bytes = indigo_manual.build_mini_pdf(doc, page_indices)
     data = providers.mistral_ocr(db, f"indigo_ocr_{tag}", pdf_bytes,
                                  len(page_indices), correlation_id=f"indigo-{tag}")
@@ -503,9 +526,11 @@ def _process_target(db, doc_eleve, doc_prof, grade: str, target: dict,
     exp_set = set(expected)
 
     progress_cb(f"OCR élève ({comp.short_id or comp.code})…")
-    eleve = _ocr_pages(db, doc_eleve, eleve_pages, f"eleve-{comp.code}")
+    eleve = _ocr_pages(db, doc_eleve, eleve_pages, f"eleve-{comp.code}",
+                       grade=grade, which="eleve")
     progress_cb(f"OCR prof ({comp.short_id or comp.code})…")
-    prof = _ocr_pages(db, doc_prof, prof_pages, f"prof-{comp.code}") if doc_prof else []
+    prof = (_ocr_pages(db, doc_prof, prof_pages, f"prof-{comp.code}",
+                       grade=grade, which="prof") if doc_prof else [])
 
     corrections = _collect_corrections(db, comp, grade, prof, expected, exp_set, progress_cb)
 
@@ -530,6 +555,50 @@ def _process_target(db, doc_eleve, doc_prof, grade: str, target: dict,
     progress_cb(f"{comp.short_id or comp.code} : {len(prepared)} exercice(s) "
                 "découpé(s), adaptation…")
 
+    # 2-4) génération + persistance, selon le MODE choisi dans l'onglet :
+    #   • classique : adaptation libre (indigo_gemini) puis relecture (indigo_verify) ;
+    #   • QCM only  : conversion en QCM vérifiés (indigo_qcm), un TRIO de lignes
+    #     par exercice source (base + dérivé facile + dérivé difficile).
+    # Les deux rendent le même quadruplet, pour que le compte rendu de fin de
+    # cible (ci-dessous) reste écrit UNE seule fois.
+    if indigo_llm.mode(db) == indigo_llm.MODE_QCM:
+        made, adapted_ok, stopped, errors = _run_qcm(
+            db, comp, grade, prepared, progress_cb)
+    else:
+        made, adapted_ok, stopped, errors = _run_classic(
+            db, comp, grade, prepared, progress_cb)
+
+    # RENDRE VISIBLE l'échec d'adaptation, ET SA CAUSE : un exercice non adapté
+    # est un repli OCR brut (short_text, guide/corrigé « à compléter »), pas une
+    # « mauvaise génération ». Le message doit nommer la cause dès qu'il en
+    # manque UN (pas seulement quand il n'y en a aucun) : c'est l'absence de
+    # cause sur un « 1/21 adapté(s) » qui a rendu l'incident A1.3 indéchiffrable.
+    fallback = made - adapted_ok
+    if fallback and made:
+        prov = indigo_llm.label(db)
+        if indigo_llm.offline(db):
+            cause = f"clé {prov} absente/inactive (adaptation en mode hors-ligne)"
+        elif stopped:
+            cause = f"{stopped} — plafond de dépense quotidien"
+        elif errors:
+            cause = f"erreurs {prov} : " + " ; ".join(dict.fromkeys(errors))[:300]
+        else:
+            cause = ("sorties refusées par le validateur (format non conforme) — "
+                     "voir les journaux serveur pour le détail par exercice")
+        level = "⚠" if adapted_ok else "⛔"
+        progress_cb(f"{level} {comp.short_id or comp.code} : {adapted_ok}/{made} "
+                    f"exercice(s) adapté(s), {fallback} en repli OCR brut — {cause}. "
+                    f"Vérifie Paramètres → Fournisseurs ({prov}) et la page Coûts.")
+    else:
+        progress_cb(f"{comp.short_id or comp.code} : {adapted_ok}/{made} exercice(s) "
+                    f"adapté(s)")
+    return made
+
+
+def _run_classic(db, comp, grade, prepared, progress_cb) -> tuple[int, int, str, list[str]]:
+    """Mode CLASSIQUE : adaptation libre par lots, relecture finale, persistance.
+
+    Retourne (exercices créés, exercices adaptés, cause d'arrêt, erreurs)."""
     # 2) adaptation DeepSeek pro PAR LOTS de 5 à 7 (moins d'appels, réponses plus
     #    courtes donc plus fiables — cf. demande utilisateur « lots de 5 à 7
     #    selon le nombre »). On COLLECTE les (row, manual, valid) sans persister :
@@ -596,31 +665,53 @@ def _process_target(db, doc_eleve, doc_prof, grade: str, target: dict,
         if made % 10 == 0:
             db.commit()
     db.commit()
-    # RENDRE VISIBLE l'échec d'adaptation, ET SA CAUSE : un exercice non adapté
-    # est un repli OCR brut (short_text, guide/corrigé « à compléter »), pas une
-    # « mauvaise génération ». Le message doit nommer la cause dès qu'il en
-    # manque UN (pas seulement quand il n'y en a aucun) : c'est l'absence de
-    # cause sur un « 1/21 adapté(s) » qui a rendu l'incident A1.3 indéchiffrable.
-    fallback = made - adapted_ok
-    if fallback and made:
-        prov = indigo_llm.label(db)
-        if indigo_llm.offline(db):
-            cause = f"clé {prov} absente/inactive (adaptation en mode hors-ligne)"
-        elif stopped:
-            cause = f"{stopped} — plafond de dépense quotidien"
-        elif errors:
-            cause = f"erreurs {prov} : " + " ; ".join(dict.fromkeys(errors))[:300]
-        else:
-            cause = ("sorties refusées par le validateur (format non conforme) — "
-                     "voir les journaux serveur pour le détail par exercice")
-        level = "⚠" if adapted_ok else "⛔"
-        progress_cb(f"{level} {comp.short_id or comp.code} : {adapted_ok}/{made} "
-                    f"exercice(s) adapté(s), {fallback} en repli OCR brut — {cause}. "
-                    f"Vérifie Paramètres → Fournisseurs ({prov}) et la page Coûts.")
-    else:
-        progress_cb(f"{comp.short_id or comp.code} : {adapted_ok}/{made} exercice(s) "
-                    f"adapté(s)")
-    return made
+    return made, adapted_ok, stopped, errors
+
+
+def _run_qcm(db, comp, grade, prepared, progress_cb) -> tuple[int, int, str, list[str]]:
+    """Mode « QCM only » : chaque exercice du manuel donne un TRIO de QCM
+    vérifiés (base + dérivé facile + dérivé difficile), corrigeables par CV.
+
+    Même contrat de retour que `_run_classic`. Un exercice dont AUCUNE variante
+    n'a survécu à la vérification déterministe est persisté en repli OCR brut,
+    exactement comme une adaptation ratée en mode classique : jamais un exercice
+    manquant en silence, jamais un QCM non vérifié sur une copie.
+
+    Le dé-doublonnage est partagé par toute la CIBLE (`existing_norms`) : deux
+    dérivés identiques, ou un « facile » recopié de la base, sont écartés au
+    profit de la base — c'est elle qui est validée en premier (§ indigo_qcm)."""
+    made = adapted_ok = 0
+    errors: list[str] = []
+    stopped = ""
+    existing_norms: set[str] = set()
+    batch_size = indigo_qcm.choose_batch_size(len(prepared))
+    for i in range(0, len(prepared), batch_size):
+        chunk = prepared[i:i + batch_size]
+        converted: dict[str, dict] = {}
+        if not stopped:
+            try:
+                converted = indigo_qcm.generate_batch(
+                    db, comp, grade, [m for _r, m in chunk], existing_norms, errors)
+            except providers.BudgetExceeded as e:
+                stopped = str(e)
+        for row, manual in chunk:
+            entry = converted.get(str(manual["number"]).strip())
+            made += _persist_qcm_trio(db, row, manual, entry)
+            if entry:
+                adapted_ok += 1
+        db.commit()
+        done = min(i + batch_size, len(prepared))
+        progress_cb(f"{comp.short_id or comp.code} : {done}/{len(prepared)} traité(s), "
+                    f"{adapted_ok} converti(s) en QCM, {made} exercice(s) créé(s)…")
+        if stopped:
+            spent, cap = providers.budget_state(db, indigo_llm.config_provider_key(db))
+            progress_cb(f"⛔ {comp.short_id or comp.code} : conversion QCM ARRÊTÉE — "
+                        f"{stopped} ({spent:.2f} € dépensés sur 24 h, plafond "
+                        f"{cap:.2f} €). Les exercices restants sont en repli OCR "
+                        f"brut : relance l'extraction quand le plafond est "
+                        f"reconduit, ou augmente "
+                        f"MATHPRINT_LLM_DAILY_COST_LIMIT_EUR.")
+    return made, adapted_ok, stopped, errors
 
 
 def _collect_exercises(db, comp, comps, grade, eleve, eleve_pages,
@@ -851,7 +942,112 @@ def _persist_exercise(db, row: IndigoExercise, manual: dict, valid: dict | None)
     db.add(row)
 
 
+def _persist_qcm_trio(db, row: IndigoExercise, manual: dict,
+                      entry: dict | None) -> int:
+    """Persiste le TRIO d'un exercice source. Retourne le nombre de lignes créées.
+
+    La ligne `row` déjà préparée (crop, figure, badge CV) porte la variante de
+    BASE ; chaque dérivé est une NOUVELLE ligne qui la référence
+    (`derived_from_id`) et reçoit sa PROPRE copie du fichier figure — partager le
+    chemin ferait qu'une suppression d'image sur l'un viderait les trois.
+
+    Les trois lignes partagent le MÊME guide d'auto-correction (il est déjà porté
+    par chaque contrat validé) : même notion, même règle, même piège — seuls les
+    nombres changent d'une variante à l'autre.
+
+    `entry` vide (aucune variante n'a passé la vérification déterministe) : on
+    retombe sur le repli OCR brut, comme une adaptation ratée en mode classique.
+    Un exercice ne disparaît jamais en silence."""
+    if not entry or not entry.get("variants"):
+        _persist_exercise(db, row, manual, None)
+        return 1
+    # `manual` est passé TEL QUEL : son champ "correction" est le corrigé du
+    # manuel du PROFESSEUR, lu gratuitement, et c'est lui qui alimente
+    # `correction_solution` (le modèle ne le réécrit plus — cf. indigo_qcm).
+    made = 0
+    for kind, valid in entry["variants"]:
+        target = row if kind == "base" else _clone_for_variant(row, kind)
+        target.variant_kind = kind
+        target.difficulty = indigo_qcm.VARIANT_LEVEL[kind]
+        target.derived_from_id = None if kind == "base" else row.id
+        _persist_exercise(db, target, manual, valid)
+        target.prompt_version = indigo_qcm.PROMPT_VERSION
+        made += 1
+    return made
+
+
+def _clone_for_variant(row: IndigoExercise, kind: str) -> IndigoExercise:
+    """Nouvelle ligne pour un DÉRIVÉ : mêmes provenance et images que la base.
+
+    Le crop de référence et la figure sont RECOPIÉS sur disque sous le nouvel
+    id — `delete_exercise` supprime les fichiers de la ligne qu'il efface, et
+    trois lignes qui pointeraient le même PNG se videraient mutuellement."""
+    new_id = uid()
+    clone = IndigoExercise(
+        id=new_id, extraction_id=row.extraction_id, competency_id=row.competency_id,
+        grade_level=row.grade_level, source_page=row.source_page,
+        source_number=row.source_number, order_index=row.order_index,
+        badge_type=row.badge_type, calculator=row.calculator, title=row.title,
+        tags_json=list(row.tags_json or []),
+        badge_color_json=dict(row.badge_color_json or {}),
+        crop_box_json=dict(row.crop_box_json or {}))
+    for attr, suffix in (("crop_path", ""), ("figure_path", "_fig")):
+        rel = getattr(row, attr, "")
+        if not rel:
+            continue
+        src = crop_abs_path(rel)
+        if not src.exists():
+            continue
+        dest_rel = f"indigo/drafts/{new_id}{suffix}.png"
+        dest = crop_abs_path(dest_rel)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(src.read_bytes())
+        setattr(clone, attr, dest_rel)
+    if clone.figure_path:
+        clone.has_figure = True
+        clone.figure_box_json = dict(row.figure_box_json or {})
+    return clone
+
+
+# Une INDEXATION est un run comme un autre : même table, même worker, même
+# bannière de progression dans l'UI. Elle se reconnaît à sa cible unique, ce qui
+# évite d'ajouter une colonne (et donc une migration) pour un simple aiguillage.
+INDEX_TARGET = {"kind": "index"}
+
+
+def is_index_run(extraction: IndigoExtraction) -> bool:
+    targets = extraction.targets_json or []
+    return len(targets) == 1 and (targets[0] or {}).get("kind") == "index"
+
+
+def _run_index(db, extraction: IndigoExtraction) -> None:
+    grade = extraction.grade_level
+    log: list[str] = []
+
+    def progress(msg: str, frac: float | None = None):
+        extraction.progress_message = msg
+        if frac is not None:
+            extraction.progress = int(max(0, min(100, frac * 100)))
+        extraction.updated_at = datetime.now(timezone.utc)
+        log.append(msg)
+        extraction.log_text = "\n".join(log[-200:])
+        db.commit()
+
+    from . import indigo_index
+    stats = indigo_index.build(db, grade, progress)
+    extraction.stats_json = {"index": stats}
+    extraction.status = "done"
+    extraction.progress = 100
+    extraction.progress_message = (f"Index : {stats.get('eleve', 0)} page(s) élève, "
+                                   f"{stats.get('prof', 0)} page(s) prof")
+    extraction.updated_at = datetime.now(timezone.utc)
+    db.commit()
+
+
 def _run_extraction(db, extraction: IndigoExtraction) -> None:
+    if is_index_run(extraction):
+        _run_index(db, extraction)
+        return
     grade = extraction.grade_level
     doc_eleve = indigo_manual.open_doc(grade, "eleve")
     doc_prof = indigo_manual.open_doc(grade, "prof")
@@ -991,6 +1187,23 @@ def dismiss_extraction(db, ext: IndigoExtraction) -> IndigoExtraction:
     return ext
 
 
+def create_index_run(db, grade_level: str, created_by: str | None = None) -> IndigoExtraction:
+    """Met en file une INDEXATION du manuel. Idempotente côté file : une
+    indexation déjà en attente ou en cours est renvoyée telle quelle plutôt que
+    d'en empiler une seconde qui lirait les mêmes pages."""
+    for ext in (db.query(IndigoExtraction)
+                .filter(IndigoExtraction.status.in_(("pending", "running")))
+                .order_by(IndigoExtraction.created_at.desc()).all()):
+        if is_index_run(ext):
+            return ext
+    ext = IndigoExtraction(grade_level=grade_level, targets_json=[dict(INDEX_TARGET)],
+                           status="pending", created_by=created_by)
+    db.add(ext)
+    db.commit()
+    _wake.set()
+    return ext
+
+
 def create_extraction(db, grade_level: str, targets: list[dict],
                       created_by: str | None = None) -> IndigoExtraction:
     # développe les plages saisies (« 34-40 » de pages, « 34-67 » de numéros) en
@@ -1027,6 +1240,9 @@ def exercise_out(db, ex: IndigoExercise) -> dict:
         "source_page": ex.source_page, "source_number": ex.source_number,
         "order_index": ex.order_index,
         "badge_type": ex.badge_type, "difficulty": ex.difficulty,
+        # trio base / dérivé facile / dérivé difficile (§ services.indigo_qcm)
+        "variant_kind": ex.variant_kind or "base",
+        "derived_from_id": ex.derived_from_id,
         "badge_color": ex.badge_color_json, "calculator": ex.calculator,
         "title": ex.title, "tags": ex.tags_json,
         "has_figure": ex.has_figure,
@@ -1278,6 +1494,34 @@ def add_figure(db, ex: IndigoExercise) -> IndigoExercise:
     return ex
 
 
+def _regen_classic(db, comp, ex: IndigoExercise, manual: dict) -> dict | None:
+    """Régénération en mode classique : adaptation solo puis relecture."""
+    valid = indigo_gemini.adapt_one(db, comp, ex.grade_level, manual)
+    if valid is None:
+        return None
+    reviewed = indigo_verify.review(db, comp, ex.grade_level, [(ex, manual, valid)])
+    return (reviewed.get(str(ex.source_number).strip())
+            or indigo_verify._strip_raw(valid))
+
+
+def _regen_qcm(db, comp, ex: IndigoExercise, manual: dict) -> dict | None:
+    """Régénération en mode QCM : on rejoue le trio et on garde la variante de
+    CETTE ligne. Un dérivé reste un dérivé — le régénérer ne le promeut pas en
+    base, sinon les trois lignes d'un même exercice finiraient au même niveau.
+
+    Rend None si la variante attendue n'a pas survécu à la vérification
+    déterministe : l'appelant laisse alors la ligne INCHANGÉE, jamais dégradée."""
+    kind = ex.variant_kind or "base"
+    out = indigo_qcm.generate_batch(db, comp, ex.grade_level, [manual], set())
+    entry = out.get(str(ex.source_number).strip())
+    if not entry:
+        return None
+    for got_kind, valid in entry["variants"]:
+        if got_kind == kind:
+            return valid
+    return None
+
+
 def regenerate_exercises(db, ids: list[str]) -> dict:
     """Régénère des exercices DEPUIS L'OCR déjà stocké (`raw_ocr_json` =
     {statement, correction}), avec le PROMPT et le fournisseur LLM ACTUELS —
@@ -1303,12 +1547,9 @@ def regenerate_exercises(db, ids: list[str]) -> dict:
         final = None
         if comp is not None:
             try:
-                valid = indigo_gemini.adapt_one(db, comp, ex.grade_level, manual)
-                if valid is not None:
-                    reviewed = indigo_verify.review(db, comp, ex.grade_level,
-                                                    [(ex, manual, valid)])
-                    final = (reviewed.get(str(ex.source_number).strip())
-                             or indigo_verify._strip_raw(valid))
+                final = (_regen_qcm(db, comp, ex, manual)
+                         if indigo_llm.mode(db) == indigo_llm.MODE_QCM
+                         else _regen_classic(db, comp, ex, manual))
             except providers.BudgetExceeded as e:
                 stopped = str(e)
                 final = None
@@ -1342,12 +1583,20 @@ def validate_exercise(db, ex: IndigoExercise, user_id: str | None) -> IndigoExer
     return ex
 
 
-def delete_exercise(db, ex: IndigoExercise) -> None:
+def delete_exercise(db, ex: IndigoExercise, *, cascade: bool = True) -> None:
     """Supprime le brouillon ET le désenregistre de la banque publiée s'il y
     était déjà (GeneratedExercise + fichier versionné) : sans ce câblage, un
     exercice supprimé depuis l'onglet Exercices restait servi aux élèves et
     ressurgissait au prochain démarrage (seed_published resème le fichier tel
-    quel — cf. publish() / _unpublish())."""
+    quel — cf. publish() / _unpublish()).
+
+    Supprimer une BASE emporte ses DÉRIVÉS (§ services.indigo_qcm) : c'est le
+    même exercice du manuel à deux autres niveaux, et laisser derrière soi des
+    dérivés pointant une base disparue rendrait le trio incohérent dans l'onglet
+    comme dans la banque. `cascade=False` sert à la récursion elle-même."""
+    if cascade:
+        for child in db.query(IndigoExercise).filter_by(derived_from_id=ex.id).all():
+            delete_exercise(db, child, cascade=False)
     for rel in (ex.crop_path, ex.figure_path):
         if rel:
             p = crop_abs_path(rel)
@@ -1421,6 +1670,8 @@ def publish(db) -> dict:
             "id": ex.id, "competency_code": comp.code if comp else "",
             "grade_level": ex.grade_level, "source_number": ex.source_number,
             "badge_type": ex.badge_type, "difficulty": ex.difficulty,
+            "variant_kind": ex.variant_kind or "base",
+            "derived_from_id": ex.derived_from_id,
             "calculator": ex.calculator, "title": ex.title, "tags": ex.tags_json,
             "statement": ex.statement, "response_type": ex.response_type,
             # `grading` porte le barème (bareme_points) : rien à publier à côté
@@ -1481,6 +1732,28 @@ def load_published() -> dict:
         return {"exercises": []}
 
 
+# Version du fichier publié à partir de laquelle `difficulty` est déjà sur
+# l'échelle à TROIS niveaux. En deçà (fichier écrit avant la migration), il
+# porte encore un 1-5 qu'il faut replier — et on ne peut pas trancher sur la
+# seule valeur : « 3 » valait « moyen » avant et « difficile » après.
+_LEVEL3_SCHEMA_VERSION = 2
+
+
+def _published_level(data: dict, rec: dict) -> int:
+    """Niveau 1-3 d'un exercice publié, quelle que soit la version du fichier."""
+    try:
+        version = int(data.get("version") or 1)
+    except (TypeError, ValueError):
+        version = 1
+    raw = rec.get("difficulty", 2)
+    if version >= _LEVEL3_SCHEMA_VERSION:
+        try:
+            return min(3, max(1, int(raw)))
+        except (TypeError, ValueError):
+            return 2
+    return exercise_gen.to_level3(raw)
+
+
 def seed_published(db) -> int:
     """Charge les exercices publiés en lignes GeneratedExercise (source=indigo).
     Idempotent : purge puis réinsère (le fichier versionné fait autorité).
@@ -1499,7 +1772,7 @@ def seed_published(db) -> int:
             fig_json = {"type": "image", "params": {"path": str(figs / rec["figure_file"])}}
         db.add(GeneratedExercise(
             id=rec["id"], competency_id=comp.id,
-            difficulty_level=max(1, min(5, int(rec.get("difficulty", 3)))), variant=0,
+            difficulty_level=_published_level(data, rec), variant=0,
             statement=rec.get("statement", ""), correction=rec.get("correction_guide", ""),
             response_type=rec.get("response_type", "short_text"),
             expected_json=rec.get("expected") or {}, grading_json=rec.get("grading") or {},
@@ -1508,7 +1781,8 @@ def seed_published(db) -> int:
             status="active", figure_json=fig_json,
             raw_extract_json={"indigo": {k: rec.get(k) for k in (
                 "badge_type", "difficulty", "calculator", "title", "tags",
-                "correction_solution", "crop_file", "source_number")}},
+                "correction_solution", "crop_file", "source_number",
+                "variant_kind", "derived_from_id")}},
             model=rec.get("model", ""), prompt_version=rec.get("prompt_version", "")))
         n += 1
     db.commit()

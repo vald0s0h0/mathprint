@@ -1,17 +1,18 @@
 // Paramètres (§9.6) : Mon compte, API, Imprimantes, Calibration, Pédagogie,
 // Documents (éditeur de templates), Système, Données.
 import {
-  Accordion, ActionIcon, Alert, Badge, Button, Card, ColorInput, FileButton,
-  Group, Loader, Modal, NumberInput, PasswordInput, SimpleGrid, Stack, Table, Tabs, Text,
+  Accordion, ActionIcon, Alert, Badge, Box, Button, Card, ColorInput, FileButton,
+  Group, Loader, Modal, NumberInput, PasswordInput, SimpleGrid, Stack, Switch, Table, Tabs, Text,
   TextInput, Title,
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
 import {
-  AlertTriangle, Database, FileText, FlaskConical, KeyRound, Printer,
+  AlertTriangle, Database, FileText, FlaskConical, KeyRound, Mail, Printer,
   RefreshCw, Ruler, ScrollText, Save, SlidersHorizontal, Trash2, UserRound,
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { api, getToken } from '../api'
+import MailIntakeSettings from '../components/MailIntakeSettings'
 import PrinterSettings, { type PrintersInfo } from '../components/PrinterSettings'
 import TemplateEditor from '../components/TemplateEditor'
 
@@ -206,6 +207,14 @@ export default function SettingsPage() {
     refresh()
   }
 
+  async function saveAppreciationSynthesis(value: boolean) {
+    await api.post('/api/settings/system', {
+      key: 'appreciation_synthesis_enabled', value: { value },
+    })
+    notifications.show({ color: 'green', message: 'Réglage enregistré' })
+    refresh()
+  }
+
   async function saveShortcut(field: string, value: string) {
     const key = (value || '').trim().slice(0, 1).toLowerCase()
     if (!key) return
@@ -328,6 +337,7 @@ export default function SettingsPage() {
           <Tabs.Tab value="compte" leftSection={<UserRound size={15} />}>Mon compte</Tabs.Tab>
           <Tabs.Tab value="api" leftSection={<KeyRound size={15} />}>API</Tabs.Tab>
           <Tabs.Tab value="imprimantes" leftSection={<Printer size={15} />}>Imprimantes</Tabs.Tab>
+          <Tabs.Tab value="mail" leftSection={<Mail size={15} />}>Scans par mail</Tabs.Tab>
           <Tabs.Tab value="calibration" leftSection={<Ruler size={15} />}>Calibration</Tabs.Tab>
           <Tabs.Tab value="pedagogie" leftSection={<SlidersHorizontal size={15} />}>Pédagogie</Tabs.Tab>
           <Tabs.Tab value="documents" leftSection={<FileText size={15} />}>Documents</Tabs.Tab>
@@ -401,6 +411,10 @@ export default function SettingsPage() {
 
         <Tabs.Panel value="imprimantes" pt="md">
           <PrinterSettings printers={printers} refresh={refresh} />
+        </Tabs.Panel>
+
+        <Tabs.Panel value="mail" pt="md">
+          <MailIntakeSettings />
         </Tabs.Panel>
 
         <Tabs.Panel value="calibration" pt="md">
@@ -497,6 +511,21 @@ export default function SettingsPage() {
                   key={`q-${system.correction_shortcuts?.zero ?? 'q'}`}
                   defaultValue={system.correction_shortcuts?.zero ?? 'q'}
                   onBlur={(e) => saveShortcut('zero', e.currentTarget.value)} />
+              </Group>
+            </Card>
+            <Card withBorder>
+              <Group justify="space-between" align="flex-start">
+                <Box>
+                  <Text fw={600} mb={4}>Phrase encourageante (Claude Haiku)</Text>
+                  <Text size="xs" c="dimmed" maw={440}>
+                    Une phrase courte générée par IA dans la zone Appréciation des copies
+                    corrigées, en plus des progrès de compétences (toujours affichés,
+                    sans IA). Désactivée par défaut.
+                  </Text>
+                </Box>
+                <Switch
+                  checked={system.appreciation_synthesis_enabled?.value ?? false}
+                  onChange={(e) => saveAppreciationSynthesis(e.currentTarget.checked)} />
               </Group>
             </Card>
             <Card withBorder>

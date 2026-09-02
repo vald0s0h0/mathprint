@@ -613,6 +613,18 @@ et aucun marqueur `{{figure}}`.
 
 # CORRECTION PROFESSEUR ET VÉRIFICATION MATHÉMATIQUE
 
+""
+La correction du professeur est une source fiable, tu dois scrupuleusement la respecter. Attention, il peut y avoir parfois des coquilles, donc résous toi-même chaque exercice afin de vérifier que : 
+* l'énoncé restauré est mathématiquement cohérent ;
+* `answer` est correct ;
+* `correction_solution` est correct ;
+* les mêmes nombres apparaissent partout.
+
+Ensuite si ta correction et celle du professeur correspondent, tu peux recopier celle du professeur. 
+S'il y a une coquille dans la correction du professeur, corrige la et adapte la correction du professeur mais garde toujours la structure.
+Ne fabrique pas de réponse pratique. N'invente pas de réponse. 
+""
+
 La correction professeur est une source de référence importante, mais ne la recopies pas aveuglément.
 
 Résous toi-même chaque exercice afin de vérifier que :

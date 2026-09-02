@@ -40,7 +40,7 @@ from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfbase.ttfonts import TTFont
 
 from ..config import settings
-from . import scoring
+from . import exercise_gen, scoring
 from . import statement as statement_mod
 from .runtime_settings import DEFAULT_TEMPLATES
 
@@ -93,58 +93,50 @@ DOTTED_GRAY = HexColor("#9AA3AC")               # pointillés — réservé over
 TITLE_RULE = HexColor("#37474F")
 DOT_ON = HexColor("#455A64")
 
-# Badge de numéro d'exercice : la difficulté 1-5 n'est plus affichée en clair
-# (pastilles), elle EST la couleur du badge. Dégradé froid -> chaud, teintes
-# assez foncées pour porter un numéro blanc lisible (le jaune franc ne le
-# ferait pas).
+# Badge de numéro d'exercice : la difficulté n'est plus affichée en clair
+# (pastilles), elle EST la couleur du badge. Trois niveaux (§
+# exercise_gen.DIFFICULTY_LEVELS), froid -> chaud, teintes assez foncées pour
+# porter un numéro blanc lisible (le jaune franc ne le ferait pas).
 DIFFICULTY_COLORS = {
-    1: HexColor("#2563EB"),   # bleu
-    2: HexColor("#16A34A"),   # vert
-    3: HexColor("#CA8A04"),   # jaune
-    4: HexColor("#EA580C"),   # orange
-    5: HexColor("#DC2626"),   # rouge
+    1: HexColor("#16A34A"),   # facile    — vert
+    2: HexColor("#EA580C"),   # moyen     — orange
+    3: HexColor("#DC2626"),   # difficile — rouge
 }
 
 
-def _difficulty_color(level5: int) -> Color:
-    try:
-        lvl = int(level5)
-    except (TypeError, ValueError):
-        lvl = 3
-    return DIFFICULTY_COLORS[min(5, max(1, lvl))]
+def _difficulty_color(level3: int) -> Color:
+    return DIFFICULTY_COLORS[_level3(level3)]
 
 
-# Couleur du badge numéroté d'un exercice. La difficulté 1-5 n'est PLUS affichée
-# sur les exercices ordinaires (demande utilisateur) : ils portent tous une
-# teinte NEUTRE. Seuls les PROBLÈMES gardent une difficulté, en TROIS niveaux
-# (facile / moyen / difficile), lue par CV sur la couleur du titre du manuel et
-# stockée en 2/3/4 (cf. indigo_cv.DIFFICULTY_BY_LEVEL).
-EXERCISE_BADGE = HexColor("#455A64")            # gris-bleu neutre (= DOT_ON)
-PROBLEME_COLORS = {
-    2: HexColor("#16A34A"),   # facile — vert
-    3: HexColor("#EA580C"),   # moyen  — orange
-    4: HexColor("#DC2626"),   # difficile — rouge
-}
-
-
-def _probleme_color(level: int) -> Color:
-    """Couleur d'un PROBLÈME selon sa difficulté (3 niveaux). Tolère une échelle
-    1-5 résiduelle en la repliant sur facile/moyen/difficile."""
+def _level3(level) -> int:
+    """Niveau borné à 1-3. Tolère une échelle 1-5 résiduelle (exercice de banque
+    figé sur une copie AVANT la migration) en la repliant par la conversion
+    partagée — jamais une seconde table de correspondance ici."""
     try:
         lvl = int(level)
     except (TypeError, ValueError):
-        lvl = 3
-    if lvl <= 2:
-        return PROBLEME_COLORS[2]
-    if lvl == 3:
-        return PROBLEME_COLORS[3]
-    return PROBLEME_COLORS[4]
+        return 2
+    return exercise_gen.to_level3(lvl) if lvl > 3 else max(1, lvl)
 
 
-def _exercise_badge_color(level5: int, probleme: bool) -> Color:
+# Couleur du badge numéroté d'un exercice. La difficulté n'est PLUS affichée
+# sur les exercices ordinaires (demande utilisateur) : ils portent tous une
+# teinte NEUTRE. Seuls les PROBLÈMES gardent une difficulté, en TROIS niveaux
+# (facile / moyen / difficile), lue par CV sur la couleur du titre du manuel
+# (cf. indigo_cv.DIFFICULTY_BY_LEVEL).
+EXERCISE_BADGE = HexColor("#455A64")            # gris-bleu neutre (= DOT_ON)
+PROBLEME_COLORS = dict(DIFFICULTY_COLORS)
+
+
+def _probleme_color(level: int) -> Color:
+    """Couleur d'un PROBLÈME selon sa difficulté (facile / moyen / difficile)."""
+    return PROBLEME_COLORS[_level3(level)]
+
+
+def _exercise_badge_color(level3: int, probleme: bool) -> Color:
     """Teinte du badge numéroté + des pastilles de sous-question : neutre pour un
     exercice ordinaire, graduée par difficulté (3 niveaux) pour un problème."""
-    return _probleme_color(level5) if probleme else EXERCISE_BADGE
+    return _probleme_color(level3) if probleme else EXERCISE_BADGE
 
 CARD_PAD = 2.6 * mm
 # Bande de correction (réservée à l'overlay) : sa hauteur n'est plus figée, elle
@@ -1643,7 +1635,7 @@ def _draw_calc_icon(c: canvas.Canvas, x_right: float, y_top: float, size: float,
 
 def _draw_exercise_card(c: canvas.Canvas, x: float, y_top: float, w: float,
                         seq: int, layout: dict, zone_h: float, strip: dict,
-                        level5: int, response_type: str, choices: list[str],
+                        level3: int, response_type: str, choices: list[str],
                         tpl: dict, font_size: float, zone_fs: float,
                         grading: dict | None = None,
                         calc: str = "autorisee",
@@ -1681,7 +1673,7 @@ def _draw_exercise_card(c: canvas.Canvas, x: float, y_top: float, w: float,
     # Le badge numéroté occupe le retrait réservé en tête de 1re ligne.
     ty = card_bottom + card_h_body - CARD_PAD
     inline_blanks: list = []
-    badge_color = _exercise_badge_color(level5, probleme)
+    badge_color = _exercise_badge_color(level3, probleme)
     first = layout["intro"]["lines"][0] if layout["intro"]["lines"] else None
     _draw_badge(c, x + CARD_PAD, ty - (first["asc"] if first else font_size * 0.78),
                 font_size, str(seq), badge_color)
@@ -1847,21 +1839,50 @@ def pack_reading_order(heights: list[float]) -> list[int]:
     sur les mêmes colonnes. `pages_needed` reste ainsi la mesure fidèle du rendu.
     Les hauteurs de colonne diffèrent (la 1re page porte l'en-tête élève, cf.
     `_top_of_page`), d'où une capacité par page."""
+    return [i for col in pack_columns(heights) for i in col]
+
+
+def column_capacity(col_index: int) -> float:
+    """Hauteur utile d'une colonne, dans l'ordre de lecture (2 par page)."""
+    return _top_of_page(col_index // 2) - _BOTTOM_LIMIT
+
+
+def pack_columns(heights: list[float]) -> list[list[int]]:
+    """Affectation First-Fit-Decreasing des cartes aux colonnes : une liste
+    d'index d'origine PAR COLONNE, dans l'ordre de lecture.
+
+    Définition unique du placement : `pack_reading_order` l'aplatit, et
+    `free_space` en déduit ce qu'il reste à remplir. Deux parcours FFD écrits
+    séparément finiraient par diverger, et le remplissage viserait alors des
+    trous que le rendu ne laisse pas."""
     order = sorted(range(len(heights)), key=lambda i: heights[i], reverse=True)
     cols: list[list[int]] = []      # index d'origine, par colonne (ordre de lecture)
     used: list[float] = []          # hauteur déjà occupée dans chaque colonne
     for i in order:
         h = heights[i]
         for b in range(len(cols)):
-            cap = _top_of_page(b // 2) - _BOTTOM_LIMIT   # 2 colonnes par page
-            if used[b] + h <= cap:
+            if used[b] + h <= column_capacity(b):
                 cols[b].append(i)
                 used[b] += h
                 break
         else:
             cols.append([i])        # aucune colonne existante : on en ouvre une
             used.append(h)
-    return [i for col in cols for i in col]
+    return cols
+
+
+def free_space(heights: list[float], pages: int) -> list[float]:
+    """Place encore libre dans chaque colonne d'un sujet de `pages` pages, une
+    fois ces cartes placées (ordre décroissant, la plus grande d'abord).
+
+    C'est ce que le remplissage doit viser : ajouter une carte PLUS HAUTE que le
+    plus grand de ces trous ne peut que déborder. Mesurer avant de choisir
+    remplace l'ancien tâtonnement (créer la carte, mesurer, la supprimer), qui
+    abandonnait sans avoir essayé la petite carte qui tenait."""
+    cols = pack_columns(heights)
+    used = [sum(heights[i] for i in col) for col in cols]
+    return [column_capacity(b) - (used[b] if b < len(used) else 0.0)
+            for b in range(2 * max(1, pages))]
 
 
 def _exercise_layout(item: dict, font_size: int,
@@ -1878,7 +1899,7 @@ def _exercise_layout(item: dict, font_size: int,
     l'overlay l'imprime en entier — d'où les valeurs distinctes."""
     rtype = item["response_type"]
     badge_w, _bh, _bfs = _badge_metrics(font_size)
-    sub_color = _exercise_badge_color(item.get("level5", 3), item.get("is_probleme", False))
+    sub_color = _exercise_badge_color(item.get("level3", 3), item.get("is_probleme", False))
     layout = _statement_layout(item["statement"], COL_W - 2 * CARD_PAD, font_size,
                                math_fs, item.get("figure"),
                                first_indent=badge_w + BADGE_GAP,
@@ -1925,7 +1946,7 @@ def _composite_parts(item: dict) -> list[dict]:
 
 def _composite_layout(item: dict, font_size: int, math_fs: int) -> dict:
     badge_w, _bh, _bfs = _badge_metrics(font_size)
-    sub_color = _exercise_badge_color(item.get("level5", 3), item.get("is_probleme", False))
+    sub_color = _exercise_badge_color(item.get("level3", 3), item.get("is_probleme", False))
     stmt = _statement_layout(item.get("statement", ""), COL_W - 2 * CARD_PAD, font_size,
                              math_fs, item.get("figure"),
                              first_indent=badge_w + BADGE_GAP,
@@ -2151,7 +2172,7 @@ def _render_copy(pdf_canvas: canvas.Canvas, *, student_name: str, class_name: st
 
         _, zone_geo, meta = _draw_exercise_card(
             pdf_canvas, x, y_cursor, col_w, seq, layout, zone_h, strip,
-            item.get("level5", 3), item["response_type"], choices, ex_tpl,
+            item.get("level3", 3), item["response_type"], choices, ex_tpl,
             font_size, zone_fs, item.get("grading"), item.get("calc", "autorisee"),
             probleme=item.get("is_probleme", False))
         zones.append({

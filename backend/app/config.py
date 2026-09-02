@@ -79,7 +79,13 @@ class Settings(BaseSettings):
     # depuis l'onglet (toggle, persisté dans SystemSetting 'indigo_llm_provider',
     # cf. services.indigo_llm). Défaut = Anthropic. Deux câblages :
     #   • anthropic : découpage + génération = Sonnet, vérification = Opus ;
-    #   • deepseek  : les trois étapes = DeepSeek pro v4 (clé « deepseek-pro »).
+    #   • deepseek  : les trois étapes = DeepSeek pro v4 (clé « deepseek-pro ») ;
+    #   • qcm       : pipeline « QCM only » (services.indigo_qcm) — DeepSeek pro,
+    #     un prompt court, trois formats de réponse (QCM unique / multiple /
+    #     grille), barème CODÉ et vérification mathématique Python. C'est un
+    #     MODE de génération, pas seulement un fournisseur : il remplace
+    #     l'adaptation + la relecture par un seul appel qui produit, pour chaque
+    #     exercice du manuel, un trio base + dérivé facile + dérivé difficile.
     # Sans la clé du fournisseur choisi, les trois étapes tournent hors-ligne
     # (replis OCR bruts). Indigo n'utilise plus Gemini.
     indigo_llm_provider_default: str = "anthropic"
@@ -98,6 +104,15 @@ class Settings(BaseSettings):
     # adaptation un par un (5-7x plus d'appels → budget quotidien épuisé).
     indigo_llm_call_timeout_s: int = 600
     indigo_deepseek_model: str = "deepseek-v4-pro"
+    # Modèle du mode « QCM only ». Le pro (et pas une variante flash) : la
+    # justesse mathématique des propositions est ce qui fait ou défait un QCM —
+    # un distracteur égal à la bonne réponse rend l'exercice incorrigeable. La
+    # vérification Python (services.indigo_check) est un FILET, pas une béquille.
+    indigo_qcm_model: str = "deepseek-v4-pro"
+    # Exercices SOURCE par appel en mode QCM. Chacun rend TROIS variantes (base,
+    # facile, difficile) : 2 sources ≈ le volume de sortie d'un lot classique de
+    # 4 à 6, donc sous le plafond de 8 k tokens de DeepSeek (incident A1.3).
+    indigo_qcm_batch_size: int = 2
     # vérification désactivable seule (appel payant par cible), quel que soit le
     # fournisseur (cf. exercise_gen.format_contract, contrat partagé).
     indigo_review_enabled: bool = True
@@ -177,7 +192,14 @@ class Settings(BaseSettings):
     # Le ratio application/probleme historique (55/35) est conservé à
     # l'intérieur de la moitié Mathpix.
     exercise_kind_mix: dict = {"qcm": 0.50, "application": 0.30, "probleme": 0.20}
-    next_plan_max_age_days: int = 60     # au-delà, le plan post-correction stocké est ignoré
+    # --- sujets individuels : choix des exercices sur l'historique réel
+    # (services.student_history, aucun LLM) ---
+    # Un exercice RATÉ redevient un bon candidat passé ce délai : assez tard
+    # pour ne pas le resservir de mémoire, assez tôt pour rattraper la lacune.
+    history_replay_min_days: int = 21
+    # Au-dessus, un exercice compte comme réussi (donc à ne resservir qu'en
+    # dernier recours, banque épuisée).
+    history_success_threshold: float = 0.5
     # --- MathALÉA (service Node headless, conteneur "mathalea" §11.1) ---
     mathalea_url: str = "http://localhost:8123"
     # délai TOTAL maximal d'un appel MathALÉA (cold start possible du service
@@ -207,7 +229,7 @@ class Settings(BaseSettings):
         "3e": {"eleve": str(_REPO_ROOT / "context" / "3_indigo.pdf"),
                "prof": str(_REPO_ROOT / "context" / "3_indigo_prof.pdf")},
     }
-    indigo_schema_version: str = "1"
+    indigo_schema_version: str = "2"   # 2 = difficulté sur 3 niveaux (cf. indigo._published_level)
 
     # --- Prompts LLM éditables (hors code) ---
     # Les prompts des pipelines de CRÉATION d'exercices (Indigo côté API, cli-exos

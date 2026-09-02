@@ -38,6 +38,17 @@ type SummaryRow = {
   draft: number; validated: number; published: number; done: boolean
   problem_draft: number; problem_validated: number; problem_published: number
 }
+// Couverture de l'index du manuel : ce que la pipeline SAIT déjà, par
+// compétence. C'est ce qui remplace la saisie à la main des trois plages.
+type IndexCoverage = {
+  grade_level: string
+  eleve: { indexed: number; total: number }
+  prof: { indexed: number; total: number }
+  competencies: {
+    competency_id: string; code: string; short_id: string; label: string
+    chapter_name: string; pages: number[]; numbers: number[]; prof_pages: number[]
+  }[]
+}
 type Extraction = {
   id: string; status: string; progress: number; progress_message: string
   error_message: string; stats: Record<string, any>; created_at: string
@@ -46,6 +57,8 @@ type Exercise = {
   id: string; ref: string; competency_id: string; competency_short_id: string
   source_page: number; source_number: string; order_index: number
   badge_type: string; difficulty: number; calculator: string
+  // trio produit par le mode « QCM only » : la base et ses deux dérivés
+  variant_kind: 'base' | 'facile' | 'difficile'; derived_from_id: string | null
   title: string; tags: string[]; has_figure: boolean; figure_required: boolean
   statement: string; response_type: string; expected: Record<string, any>; choices: string[]
   adapted: boolean
@@ -62,12 +75,21 @@ type Exercise = {
 const BADGE_COLOR: Record<string, string> = {
   exercice: 'indigo', flash: 'yellow', expert: 'grape', enigme: 'pink', probleme: 'orange',
 }
-const PROBLEME_COLOR: Record<number, string> = { 2: 'green', 3: 'orange', 4: 'red' }
-// difficulté = 3 niveaux, UNIQUEMENT pour les problèmes (2/3/4 = facile/moyen/difficile)
-const DIFF_LABEL: Record<number, string> = { 2: 'Facile', 3: 'Moyen', 4: 'Difficile' }
+const PROBLEME_COLOR: Record<number, string> = { 1: 'green', 2: 'orange', 3: 'red' }
+// difficulté = 3 niveaux (1/2/3 = facile/moyen/difficile), miroir de
+// exercise_gen.DIFFICULTY_LEVELS côté backend
+const DIFF_LABEL: Record<number, string> = { 1: 'Facile', 2: 'Moyen', 3: 'Difficile' }
 const DIFF_OPTS = [
-  { value: '2', label: 'Facile' }, { value: '3', label: 'Moyen' }, { value: '4', label: 'Difficile' },
+  { value: '1', label: 'Facile' }, { value: '2', label: 'Moyen' }, { value: '3', label: 'Difficile' },
 ]
+// Les trois positions du sélecteur. « QCM only » n'est pas qu'un fournisseur :
+// c'est un MODE de génération (formats restreints, barème codé, vérification
+// Python, trio de dérivés) qui implique DeepSeek pro.
+const PROVIDER_NAME: Record<string, string> = {
+  anthropic: 'Anthropic (Sonnet + Opus)',
+  deepseek: 'DeepSeek pro v4',
+  qcm: 'QCM only (DeepSeek pro v4)',
+}
 const isProbleme = (ex: { badge_type: string }) => ex.badge_type === 'probleme' || ex.badge_type === 'enigme'
 const BADGE_LABEL: Record<string, string> = {
   exercice: 'Exercice', flash: 'Flash', expert: 'Expert', enigme: 'Énigme', probleme: 'Problème',
@@ -389,6 +411,19 @@ function BadgeRow({ ex }: { ex: Exercise }) {
         {/* la difficulté (3 niveaux) n'est affichée QUE pour les problèmes */}
         {isProb ? ` · ${DIFF_LABEL[ex.difficulty] ?? 'Moyen'}` : ''}
       </Badge>
+      {/* DÉRIVÉ : même exercice du manuel, repris plus simple ou plus exigeant.
+          À ne pas confondre avec les VARIANTES d'un sujet (anti-copie entre
+          voisins) — d'où le mot « dérivé » dans toute l'interface. */}
+      {ex.variant_kind && ex.variant_kind !== 'base' && (
+        <Tooltip label={ex.variant_kind === 'facile'
+          ? "Dérivé FACILE du même exercice : servi aux élèves en difficulté"
+          : "Dérivé DIFFICILE du même exercice : servi aux élèves à l'aise"}>
+          <Badge variant="filled" size="xs"
+            color={ex.variant_kind === 'facile' ? 'green' : 'red'}>
+            Dérivé {DIFF_LABEL[ex.difficulty]?.toLowerCase() ?? ex.variant_kind}
+          </Badge>
+        </Tooltip>
+      )}
       <CalcIcon mode={ex.calculator} size={16} />
       <Badge variant="outline" color="gray" size="xs">{rtLabel(ex.response_type)}</Badge>
       {/* barème : ce que l'exercice VAUT (multiple de 0,125, jusqu'à 5). Affiché
@@ -568,7 +603,7 @@ function EditModal({ ex, onClose, onSaved, onChange }: {
           {/* difficulté = 3 niveaux, UNIQUEMENT pour les problèmes/énigmes */}
           {isProb && (
             <Select label="Difficulté" data={DIFF_OPTS} value={String(form.difficulty)}
-              onChange={(v) => setForm({ ...form, difficulty: Number(v) || 3 })} />
+              onChange={(v) => setForm({ ...form, difficulty: Number(v) || 2 })} />
           )}
         </Group>
         <Group grow align="flex-end">
@@ -752,15 +787,49 @@ function PagePeek({ grade, which, info }: { grade: string; which: 'eleve' | 'pro
   )
 }
 
-function ExtractionAssistant({ opened, onClose, comps, manuals, grade, onLaunched }: {
+function ExtractionAssistant({ opened, onClose, comps, manuals, grade, coverage, onLaunched }: {
   opened: boolean; onClose: () => void; comps: Comp[]; manuals: Manuals | null
-  grade: string; onLaunched: () => void
+  grade: string; coverage: IndexCoverage | null; onLaunched: () => void
 }) {
   const [step, setStep] = useState(0)
   const [chosen, setChosen] = useState<string[]>([])
   const [targets, setTargets] = useState<Record<string, TargetDraft>>({})
   const [busy, setBusy] = useState(false)
-  useEffect(() => { if (opened) { setStep(0); setChosen([]); setTargets({}) } }, [opened])
+  // Mode AUTOMATIQUE par défaut dès que l'index couvre quelque chose : c'est
+  // tout l'intérêt de l'index (plus aucune plage à relever dans deux PDF de
+  // 161 et 216 pages). La saisie manuelle reste accessible d'un clic — elle est
+  // le repli quand l'index ne reconnaît pas une compétence.
+  const [manual, setManual] = useState(false)
+  useEffect(() => { if (opened) { setStep(0); setChosen([]); setTargets({}); setManual(false) } }, [opened])
+
+  // ce que l'index sait, par compétence
+  const cov = useMemo(() => {
+    const m = new Map<string, IndexCoverage['competencies'][number]>()
+    ;(coverage?.competencies ?? []).forEach((c) => m.set(c.competency_id, c))
+    return m
+  }, [coverage])
+  const covered = (id: string) => {
+    const c = cov.get(id)
+    return !!c && c.pages.length > 0 && c.numbers.length > 0
+  }
+  const indexed = (coverage?.competencies ?? []).some(
+    (c) => c.pages.length > 0 && c.numbers.length > 0)
+  const autoReady = !manual && chosen.length > 0 && chosen.some(covered)
+  const launchAuto = async () => {
+    setBusy(true)
+    try {
+      const r = await api.post<{ skipped: string[] }>('/api/indigo/extractions/auto',
+        { grade_level: grade, competency_ids: chosen })
+      notifications.show({
+        color: r.skipped?.length ? 'orange' : 'indigo',
+        message: r.skipped?.length
+          ? `Extraction lancée. Non couvertes par l'index : ${r.skipped.join(', ')} — saisis leurs plages à la main.`
+          : 'Extraction lancée en file de fond (pages et numéros déduits de l\'index)',
+      })
+      onLaunched(); onClose()
+    } catch (e: any) { notifications.show({ color: 'red', message: e.message }) }
+    finally { setBusy(false) }
+  }
 
   const toggleComp = (id: string) => {
     setChosen((c) => c.includes(id) ? c.filter((x) => x !== id) : [...c, id])
@@ -802,33 +871,69 @@ function ExtractionAssistant({ opened, onClose, comps, manuals, grade, onLaunche
       <Stack>
         {step === 0 && (
           <>
-            <Text size="sm" c="dimmed">1. Choisis une ou plusieurs compétences. Le manuel élève fournit les énoncés, le manuel prof les corrigés.</Text>
-            <ScrollArea h={380}>
+            <Text size="sm" c="dimmed">
+              Choisis une ou plusieurs compétences. Le manuel élève fournit les énoncés,
+              le manuel prof les corrigés.
+            </Text>
+            {!indexed && (
+              <Alert color="orange" icon={<AlertTriangle size={16} />}>
+                Le manuel n'est pas encore indexé : il faut saisir les plages à la main.
+                Lance <b>Indexer le manuel</b> une fois, et l'assistant se réduira à cocher
+                une compétence.
+              </Alert>
+            )}
+            <ScrollArea h={indexed ? 340 : 380}>
               <Stack gap="xs">
                 {byChapter.map(([chap, list]) => (
                   <Box key={chap}>
                     <Text size="xs" fw={700} c="dimmed" mb={4}>{chap}</Text>
                     <Stack gap={2}>
-                      {list.map((c) => (
-                        <Checkbox key={c.id} checked={chosen.includes(c.id)} onChange={() => toggleComp(c.id)}
-                          label={<Text size="sm"><b>{c.short_id}</b> {c.label}</Text>} />
-                      ))}
+                      {list.map((c) => {
+                        const k = cov.get(c.id)
+                        return (
+                          <Checkbox key={c.id} checked={chosen.includes(c.id)} onChange={() => toggleComp(c.id)}
+                            label={
+                              <Group gap={6} wrap="nowrap">
+                                <Text size="sm"><b>{c.short_id}</b> {c.label}</Text>
+                                {/* ce que l'index a trouvé : l'admin voit AVANT de lancer
+                                    ce qui sera extrait, au lieu de le découvrir après coup */}
+                                {indexed && covered(c.id) && (
+                                  <Badge size="xs" variant="light" color="teal">
+                                    n° {k!.numbers[0]}–{k!.numbers[k!.numbers.length - 1]}
+                                    {' · '}p. {k!.pages[0] + 1}–{k!.pages[k!.pages.length - 1] + 1}
+                                    {k!.prof_pages.length ? '' : ' · sans corrigé'}
+                                  </Badge>
+                                )}
+                                {indexed && !covered(c.id) && (
+                                  <Badge size="xs" variant="light" color="gray">hors index</Badge>
+                                )}
+                              </Group>
+                            } />
+                        )
+                      })}
                     </Stack>
                   </Box>
                 ))}
               </Stack>
             </ScrollArea>
-            <Group justify="flex-end">
-              <Button disabled={chosen.length === 0} onClick={() => setStep(1)}>Suivant ({chosen.length})</Button>
+            <Group justify="space-between">
+              <Button variant="subtle" size="xs" onClick={() => { setManual(true); setStep(1) }}>
+                Saisir les plages à la main
+              </Button>
+              <Button disabled={!autoReady} loading={busy} leftSection={<Sparkles size={16} />}
+                onClick={launchAuto}>
+                Lancer l'extraction ({chosen.filter(covered).length})
+              </Button>
             </Group>
           </>
         )}
         {step === 1 && (
           <>
             <Text size="sm" c="dimmed">
-              2. Pour chaque compétence, indique la PLAGE de pages (élève = énoncés, prof = corrigés)
-              et la PLAGE de numéros d'exercices — format « 34-67 », bornes incluses. Le NUMÉRO fait
-              foi : seuls les exercices de cette plage sont repris.
+              Saisie manuelle : pour chaque compétence, indique la PLAGE de pages (élève =
+              énoncés, prof = corrigés) et la PLAGE de numéros d'exercices — format
+              « 34-67 », bornes incluses. Le NUMÉRO fait foi : seuls les exercices de cette
+              plage sont repris.
             </Text>
             {/* aperçu d'une page pour repérer les bons numéros de page (PDF) */}
             <Group justify="center" gap="lg">
@@ -860,7 +965,7 @@ function ExtractionAssistant({ opened, onClose, comps, manuals, grade, onLaunche
               </Stack>
             </ScrollArea>
             <Group justify="space-between">
-              <Button variant="subtle" onClick={() => setStep(0)}>Retour</Button>
+              <Button variant="subtle" onClick={() => { setManual(false); setStep(0) }}>Retour</Button>
               <Button disabled={!ready} loading={busy} leftSection={<Sparkles size={16} />} onClick={launch}>Lancer l'extraction</Button>
             </Group>
           </>
@@ -960,8 +1065,10 @@ export default function Exercices() {
   const [publishing, setPublishing] = useState(false)
   const [confirmDeleteAll, setConfirmDeleteAll] = useState(false)   // modale « Tout supprimer »
   const [deletingAll, setDeletingAll] = useState(false)
-  const [provider, setProvider] = useState('anthropic')            // fournisseur LLM des 3 étapes
+  const [provider, setProvider] = useState('anthropic')            // fournisseur LLM / mode de génération
   const [providerOffline, setProviderOffline] = useState(false)
+  const [coverage, setCoverage] = useState<IndexCoverage | null>(null)  // index du manuel
+  const [indexing, setIndexing] = useState(false)
   const [selMode, setSelMode] = useState(false)                    // mode sélection (régénérer)
   const [selIds, setSelIds] = useState<Set<string>>(new Set())
   const [regenerating, setRegenerating] = useState(false)
@@ -981,14 +1088,19 @@ export default function Exercices() {
   const loadExercises = useCallback((cid: string) => {
     api.get<Exercise[]>(`/api/indigo/exercises?competency_id=${cid}`).then(setExercises)
   }, [])
+  const loadCoverage = useCallback(() => {
+    if (isAll) return
+    api.get<IndexCoverage>(`/api/indigo/index?grade_level=${grade}`)
+      .then(setCoverage).catch(() => setCoverage(null))
+  }, [grade, isAll])
 
   useEffect(() => {
     if (isAll) { setSummary(null); return }
     setSelected(null); setExercises(null)
     api.get<Manuals>(`/api/indigo/manuals?grade_level=${grade}`).then(setManuals)
     api.get<{ competencies: Comp[] }>(`/api/indigo/competencies?grade_level=${grade}`).then((r) => setComps(r.competencies))
-    loadSummary(); loadExtractions(); loadPub()
-  }, [grade, isAll, loadSummary, loadExtractions, loadPub])
+    loadSummary(); loadExtractions(); loadPub(); loadCoverage()
+  }, [grade, isAll, loadSummary, loadExtractions, loadPub, loadCoverage])
 
   useEffect(() => {   // fournisseur LLM global (indépendant de la classe)
     api.get<{ provider: string; offline: boolean }>('/api/indigo/llm-provider')
@@ -998,9 +1110,12 @@ export default function Exercices() {
   const active = extractions.some((e) => e.status === 'pending' || e.status === 'running')
   useEffect(() => {
     if (!active) return
-    const t = setInterval(() => { loadExtractions(); loadSummary(); if (selected) loadExercises(selected.competency_id) }, 2500)
+    const t = setInterval(() => {
+      loadExtractions(); loadSummary(); loadCoverage()
+      if (selected) loadExercises(selected.competency_id)
+    }, 2500)
     return () => clearInterval(t)
-  }, [active, selected, loadExtractions, loadSummary, loadExercises])
+  }, [active, selected, loadExtractions, loadSummary, loadExercises, loadCoverage])
 
   const openComp = (r: SummaryRow) => {
     setSelected(r); setExercises(null); setSelMode(false); setSelIds(new Set())
@@ -1056,14 +1171,27 @@ export default function Exercices() {
     try {
       const r = await api.post<{ provider: string; offline: boolean }>('/api/indigo/llm-provider', { provider: value })
       setProvider(r.provider); setProviderOffline(r.offline)
-      const name = r.provider === 'deepseek' ? 'DeepSeek pro v4' : 'Anthropic (Sonnet + Opus)'
+      const name = PROVIDER_NAME[r.provider] ?? r.provider
       notifications.show({
         color: r.offline ? 'orange' : 'green',
         message: r.offline
-          ? `Fournisseur : ${name} — ⚠ clé absente, les prochaines extractions seront en repli OCR brut`
-          : `Fournisseur des 3 étapes : ${name}`,
+          ? `Mode : ${name} — ⚠ clé absente, les prochaines extractions seront en repli OCR brut`
+          : `Mode de génération : ${name}`,
       })
     } catch (e: any) { setProvider(prev); notifications.show({ color: 'red', message: e.message }) }
+  }
+  const buildIndex = async () => {
+    setIndexing(true)
+    try {
+      await api.post(`/api/indigo/index?grade_level=${grade}`)
+      notifications.show({
+        color: 'indigo',
+        message: 'Indexation lancée. Le manuel prof se lit gratuitement ; les pages '
+          + 'élève passent une seule fois par l\'OCR, et une indexation interrompue reprend.',
+      })
+      loadExtractions()
+    } catch (e: any) { notifications.show({ color: 'red', message: e.message }) }
+    finally { setIndexing(false) }
   }
   const validatedCount = useMemo(() => {
     const rows = summary ?? []
@@ -1109,12 +1237,34 @@ export default function Exercices() {
               <Text size="xs" c="orange">{pub.seeded} en banque ⚠ {pub.published} figé(s) · {validatedCount} validé(s)</Text>
             </Tooltip>
           )}
-          <Tooltip label={`Modèle des 3 étapes (découpage · génération · vérification). Anthropic = Sonnet puis Opus ; DeepSeek = DeepSeek pro v4.${providerOffline ? ' ⚠ Clé du fournisseur choisi absente : repli OCR brut.' : ''}`}>
+          <Tooltip label={
+            'Mode de génération. Anthropic / DeepSeek : adaptation libre (10 formats de réponse), '
+            + 'barème estimé par le modèle, relecture LLM. QCM only : uniquement QCM à choix '
+            + 'unique, QCM multiple et grille à cocher — tous corrigés par vision par ordinateur, '
+            + 'barème CODÉ (1 pt par choix unique, 0,5 pt par case), vérification mathématique '
+            + 'Python, et un dérivé facile + un dérivé difficile par exercice.'
+            + (providerOffline ? ' ⚠ Clé du fournisseur choisi absente : repli OCR brut.' : '')}>
             <SegmentedControl size="xs" value={provider} onChange={onProviderChange}
               color={providerOffline ? 'orange' : 'blue'}
-              data={[{ label: 'Anthropic', value: 'anthropic' }, { label: 'DeepSeek', value: 'deepseek' }]} />
+              data={[{ label: 'Anthropic', value: 'anthropic' },
+                     { label: 'DeepSeek', value: 'deepseek' },
+                     { label: 'QCM only', value: 'qcm' }]} />
           </Tooltip>
-          <ActionIcon variant="light" onClick={() => { loadSummary(); loadExtractions(); if (selected) loadExercises(selected.competency_id) }}><RefreshCw size={16} /></ActionIcon>
+          <ActionIcon variant="light" onClick={() => { loadSummary(); loadExtractions(); loadCoverage(); if (selected) loadExercises(selected.competency_id) }}><RefreshCw size={16} /></ActionIcon>
+          <Tooltip label={
+            coverage
+              ? `Index du manuel : ${coverage.eleve.indexed}/${coverage.eleve.total} page(s) élève, `
+                + `${coverage.prof.indexed}/${coverage.prof.total} page(s) prof. Une fois indexé, `
+                + `l'assistant n'a plus besoin d'aucune plage — et l'OCR n'est jamais repayé.`
+              : "Lit le manuel une fois pour en déduire les pages et les numéros d'exercices "
+                + 'de chaque compétence. Reprend là où il s\'est arrêté.'}>
+            <Button variant="light" color="indigo" leftSection={<BookOpen size={16} />}
+              loading={indexing} disabled={!eleveOk} onClick={buildIndex}>
+              Indexer{coverage?.eleve.total
+                ? ` (${Math.round(100 * coverage.eleve.indexed / coverage.eleve.total)} %)`
+                : ''}
+            </Button>
+          </Tooltip>
           <Tooltip label="Fige les exercices validés dans des fichiers versionnés (à committer)">
             <Button variant="light" color="teal" leftSection={<UploadCloud size={16} />}
               loading={publishing} disabled={validatedCount === 0} onClick={publish}>Publier</Button>
@@ -1206,7 +1356,7 @@ export default function Exercices() {
 
       {manuals && (
         <ExtractionAssistant opened={assistant} onClose={() => setAssistant(false)} comps={comps}
-          manuals={manuals} grade={grade} onLaunched={loadExtractions} />
+          manuals={manuals} grade={grade} coverage={coverage} onLaunched={loadExtractions} />
       )}
       <EditModal ex={editing} onClose={() => setEditing(null)} onChange={onChange}
         onSaved={(e) => { onChange(e); setEditing(null) }} />

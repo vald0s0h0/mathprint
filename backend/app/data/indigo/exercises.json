@@ -1,8 +1,933 @@
 {
  "version": "1",
  "grade_level": "3e",
- "generated_at": "2026-08-02T17:17:21.283221+00:00",
+ "generated_at": "2026-08-25T17:50:12.228542+00:00",
  "exercises": [
+  {
+   "id": "35eee4f7-ac82-4c6e-b976-163833712b65",
+   "competency_code": "C2.1",
+   "grade_level": "3e",
+   "source_number": "13",
+   "badge_type": "flash",
+   "difficulty": 2,
+   "calculator": "autorisee",
+   "title": "",
+   "tags": [],
+   "statement": "Dans les figures ci-contre, les segments bleus sont parallèles.\n{{figure}}\nCoche toutes les figures dans lesquelles on peut utiliser le théorème de Thalès.",
+   "response_type": "qcm_multiple",
+   "expected": {
+    "type": "choice",
+    "correct": [
+     4,
+     5,
+     6,
+     7,
+     8
+    ]
+   },
+   "grading": {
+    "comparator": "qcm",
+    "max_score": 9,
+    "negative": 0,
+    "choices": [
+     "Figure 1",
+     "Figure 2",
+     "Figure 3",
+     "Figure 4",
+     "Figure 5",
+     "Figure 6",
+     "Figure 7",
+     "Figure 8",
+     "Figure 9"
+    ],
+    "bareme_points": 2.0
+   },
+   "correction_guide": "Pour utiliser le théorème de Thalès, il faut que les points soient alignés sur deux droites sécantes et que les segments correspondants soient parallèles.",
+   "correction_solution": "On peut utiliser le théorème de Thalès dans les figures ⑤, ⑥, ⑦ et ⑧.\nDans les figures ① et ③, les points ne sont pas alignés : on ne peut pas l'utiliser.\nDans les figures ② et ④, les droites ne sont pas parallèles : on ne peut pas l'utiliser.",
+   "has_figure": true,
+   "crop_file": "35eee4f7-ac82-4c6e-b976-163833712b65.png",
+   "figure_file": "35eee4f7-ac82-4c6e-b976-163833712b65.png",
+   "model": "claude-sonnet-5",
+   "prompt_version": "indigo-adapt-6-priorites"
+  },
+  {
+   "id": "2d5ac54e-6cc2-4928-be74-5197a1a1e465",
+   "competency_code": "C2.1",
+   "grade_level": "3e",
+   "source_number": "14",
+   "badge_type": "flash",
+   "difficulty": 2,
+   "calculator": "autorisee",
+   "title": "",
+   "tags": [],
+   "statement": "Dans chacune des figures ci-dessous, les droites rouges sont parallèles.\n{{figure}}\nPour chaque figure, écris l'égalité de Thalès correspondante, sous la forme de trois rapports égaux.",
+   "response_type": "composite",
+   "expected": {
+    "type": "composite",
+    "parts": [
+     {
+      "statement": "Figure a. : écris l'égalité de Thalès avec les points $C$, $D$, $A$, $E$, $V$.",
+      "response_type": "short_text",
+      "expected": {
+       "type": "text",
+       "value": "\\dfrac{CD}{CA} = \\dfrac{CE}{CV} = \\dfrac{DE}{AV}"
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "text_equal",
+       "bareme_points": 0.75
+      }
+     },
+     {
+      "statement": "Figure b. : écris l'égalité de Thalès avec les points $T$, $C$, $H$, $D$, $E$.",
+      "response_type": "short_text",
+      "expected": {
+       "type": "text",
+       "value": "\\dfrac{TC}{TH} = \\dfrac{TD}{TE} = \\dfrac{CD}{HE}"
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "text_equal",
+       "bareme_points": 0.75
+      }
+     },
+     {
+      "statement": "Figure c. : écris l'égalité de Thalès avec les points $K$, $J$, $I$, $L$, $M$.",
+      "response_type": "short_text",
+      "expected": {
+       "type": "text",
+       "value": "\\dfrac{KJ}{KI} = \\dfrac{KL}{KM} = \\dfrac{JL}{IM}"
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "text_equal",
+       "bareme_points": 0.75
+      }
+     },
+     {
+      "statement": "Figure d. : écris l'égalité de Thalès avec les points $C$, $F$, $P$, $R$, $H$.",
+      "response_type": "short_text",
+      "expected": {
+       "type": "text",
+       "value": "\\dfrac{CF}{CP} = \\dfrac{CR}{CH} = \\dfrac{FR}{PH}"
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "text_equal",
+       "bareme_points": 0.75
+      }
+     }
+    ]
+   },
+   "grading": {
+    "max_score": 4.0,
+    "comparator": "composite",
+    "parts": [
+     {
+      "statement": "Figure a. : écris l'égalité de Thalès avec les points $C$, $D$, $A$, $E$, $V$.",
+      "response_type": "short_text",
+      "expected": {
+       "type": "text",
+       "value": "\\dfrac{CD}{CA} = \\dfrac{CE}{CV} = \\dfrac{DE}{AV}"
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "text_equal",
+       "bareme_points": 0.75
+      }
+     },
+     {
+      "statement": "Figure b. : écris l'égalité de Thalès avec les points $T$, $C$, $H$, $D$, $E$.",
+      "response_type": "short_text",
+      "expected": {
+       "type": "text",
+       "value": "\\dfrac{TC}{TH} = \\dfrac{TD}{TE} = \\dfrac{CD}{HE}"
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "text_equal",
+       "bareme_points": 0.75
+      }
+     },
+     {
+      "statement": "Figure c. : écris l'égalité de Thalès avec les points $K$, $J$, $I$, $L$, $M$.",
+      "response_type": "short_text",
+      "expected": {
+       "type": "text",
+       "value": "\\dfrac{KJ}{KI} = \\dfrac{KL}{KM} = \\dfrac{JL}{IM}"
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "text_equal",
+       "bareme_points": 0.75
+      }
+     },
+     {
+      "statement": "Figure d. : écris l'égalité de Thalès avec les points $C$, $F$, $P$, $R$, $H$.",
+      "response_type": "short_text",
+      "expected": {
+       "type": "text",
+       "value": "\\dfrac{CF}{CP} = \\dfrac{CR}{CH} = \\dfrac{FR}{PH}"
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "text_equal",
+       "bareme_points": 0.75
+      }
+     }
+    ],
+    "bareme_points": 3.0
+   },
+   "correction_guide": "Le théorème de Thalès donne trois rapports égaux entre les longueurs de segments portés par les deux droites sécantes, dans le même ordre des sommets pour chaque droite.",
+   "correction_solution": "a. $\\dfrac{CD}{CA} = \\dfrac{CE}{CV} = \\dfrac{DE}{AV}$\nb. $\\dfrac{TC}{TH} = \\dfrac{TD}{TE} = \\dfrac{CD}{HE}$\nc. $\\dfrac{KJ}{KI} = \\dfrac{KL}{KM} = \\dfrac{JL}{IM}$\nd. $\\dfrac{CF}{CP} = \\dfrac{CR}{CH} = \\dfrac{FR}{PH}$\nDans chaque cas, on peut aussi écrire l'égalité avec les rapports inverses.",
+   "has_figure": true,
+   "crop_file": "2d5ac54e-6cc2-4928-be74-5197a1a1e465.png",
+   "figure_file": "2d5ac54e-6cc2-4928-be74-5197a1a1e465.png",
+   "model": "claude-sonnet-5",
+   "prompt_version": "indigo-adapt-6-priorites"
+  },
+  {
+   "id": "153a3306-943b-4f46-8457-4209ec8311d6",
+   "competency_code": "C2.1",
+   "grade_level": "3e",
+   "source_number": "15",
+   "badge_type": "flash",
+   "difficulty": 2,
+   "calculator": "autorisee",
+   "title": "",
+   "tags": [],
+   "statement": "Trouve la valeur de $x$ dans chacune des égalités suivantes.",
+   "response_type": "composite",
+   "expected": {
+    "type": "composite",
+    "parts": [
+     {
+      "statement": "$\\dfrac{3}{4} = \\dfrac{x}{12}$",
+      "response_type": "short_text",
+      "expected": {
+       "type": "integer",
+       "value": 9
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "numeric",
+       "tolerance": 0,
+       "bareme_points": 0.5
+      }
+     },
+     {
+      "statement": "$\\dfrac{x}{16} = \\dfrac{3}{12}$",
+      "response_type": "short_text",
+      "expected": {
+       "type": "integer",
+       "value": 4
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "numeric",
+       "tolerance": 0,
+       "bareme_points": 0.5
+      }
+     },
+     {
+      "statement": "$\\dfrac{8}{x} = \\dfrac{24}{15}$",
+      "response_type": "short_text",
+      "expected": {
+       "type": "integer",
+       "value": 5
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "numeric",
+       "tolerance": 0,
+       "bareme_points": 0.5
+      }
+     },
+     {
+      "statement": "$\\dfrac{2{,}1}{4} = \\dfrac{x}{12}$",
+      "response_type": "short_text",
+      "expected": {
+       "type": "decimal",
+       "value": 6.3
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "numeric",
+       "tolerance": 0,
+       "bareme_points": 0.5
+      }
+     }
+    ]
+   },
+   "grading": {
+    "max_score": 4.0,
+    "comparator": "composite",
+    "parts": [
+     {
+      "statement": "$\\dfrac{3}{4} = \\dfrac{x}{12}$",
+      "response_type": "short_text",
+      "expected": {
+       "type": "integer",
+       "value": 9
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "numeric",
+       "tolerance": 0,
+       "bareme_points": 0.5
+      }
+     },
+     {
+      "statement": "$\\dfrac{x}{16} = \\dfrac{3}{12}$",
+      "response_type": "short_text",
+      "expected": {
+       "type": "integer",
+       "value": 4
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "numeric",
+       "tolerance": 0,
+       "bareme_points": 0.5
+      }
+     },
+     {
+      "statement": "$\\dfrac{8}{x} = \\dfrac{24}{15}$",
+      "response_type": "short_text",
+      "expected": {
+       "type": "integer",
+       "value": 5
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "numeric",
+       "tolerance": 0,
+       "bareme_points": 0.5
+      }
+     },
+     {
+      "statement": "$\\dfrac{2{,}1}{4} = \\dfrac{x}{12}$",
+      "response_type": "short_text",
+      "expected": {
+       "type": "decimal",
+       "value": 6.3
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "numeric",
+       "tolerance": 0,
+       "bareme_points": 0.5
+      }
+     }
+    ],
+    "bareme_points": 2.0
+   },
+   "correction_guide": "Utilise les propriétés de la proportionnalité : multiplie ou divise le numérateur et le dénominateur par un même nombre, ou utilise le produit en croix.",
+   "correction_solution": "a. $x = 9$ car on multiplie le numérateur et le dénominateur de $\\dfrac{3}{4}$ par $3$.\nb. $x = 4$ car $\\dfrac{3}{12} = \\dfrac{1}{4} = \\dfrac{4}{16}$.\nc. $x = 5$ car on divise le numérateur et le dénominateur de $\\dfrac{24}{15}$ par $3$.\nd. $x = 6{,}3$ car $2{,}1 \\times 3 = 6{,}3$.",
+   "has_figure": false,
+   "crop_file": "153a3306-943b-4f46-8457-4209ec8311d6.png",
+   "figure_file": "",
+   "model": "claude-sonnet-5",
+   "prompt_version": "indigo-adapt-6-priorites"
+  },
+  {
+   "id": "315a6c91-a925-4adc-84f4-a2dca79c7866",
+   "competency_code": "C2.1",
+   "grade_level": "3e",
+   "source_number": "16",
+   "badge_type": "exercice",
+   "difficulty": 3,
+   "calculator": "autorisee",
+   "title": "",
+   "tags": [],
+   "statement": "CALCUL MENTAL\n{{figure}}\nDans la figure ci-contre, les droites $(EF)$ et $(HS)$ se coupent en $C$, et les droites $(EH)$ et $(FS)$ sont parallèles.\nQuelle est la longueur du segment $[CS]$, en cm ? {{blank_right}}",
+   "response_type": "short_text",
+   "expected": {
+    "type": "decimal",
+    "value": 4.2,
+    "inline": true
+   },
+   "grading": {
+    "max_score": 1,
+    "comparator": "numeric",
+    "tolerance": 0,
+    "bareme_points": 1.0
+   },
+   "correction_guide": "Utilise le théorème de Thalès pour comparer les longueurs des segments portés par les deux droites sécantes.",
+   "correction_solution": "Les points $C$, $E$, $F$ sont alignés, ainsi que $C$, $H$, $S$, et $(EH)$ est parallèle à $(FS)$.\nD'après le théorème de Thalès : $\\dfrac{CF}{CE} = \\dfrac{CS}{CH} = \\dfrac{FS}{EH}$.\nComme $\\dfrac{CF}{CE} = 3$, on obtient $CS = 3 \\times 1{,}4 = 4{,}2\\ \\text{cm}$.",
+   "has_figure": true,
+   "crop_file": "315a6c91-a925-4adc-84f4-a2dca79c7866.png",
+   "figure_file": "315a6c91-a925-4adc-84f4-a2dca79c7866.png",
+   "model": "claude-sonnet-5",
+   "prompt_version": "indigo-adapt-6-priorites"
+  },
+  {
+   "id": "4d74ea12-bb05-4175-a4bc-7b34dea9ba66",
+   "competency_code": "C2.1",
+   "grade_level": "3e",
+   "source_number": "17",
+   "badge_type": "exercice",
+   "difficulty": 3,
+   "calculator": "autorisee",
+   "title": "",
+   "tags": [],
+   "statement": "Dans une figure, les droites $(ST)$ et $(RP)$ sont parallèles.\n{{figure}}\nLes droites $(SP)$ et $(RT)$ se coupent en $U$, ce qui forme deux triangles $UST$ et $UPR$ en configuration de Thalès.\nCoche toutes les égalités exactes parmi les suivantes.",
+   "response_type": "qcm_multiple",
+   "expected": {
+    "type": "choice",
+    "correct": [
+     1,
+     2
+    ]
+   },
+   "grading": {
+    "comparator": "qcm",
+    "max_score": 5,
+    "negative": 0,
+    "choices": [
+     "$\\dfrac{SU}{UP} = \\dfrac{UT}{UR} = \\dfrac{RP}{ST}$",
+     "$\\dfrac{ST}{RP} = \\dfrac{US}{UP} = \\dfrac{UT}{UR}$",
+     "$\\dfrac{UP}{US} = \\dfrac{UR}{UT} = \\dfrac{RP}{ST}$",
+     "$\\dfrac{SU}{SP} = \\dfrac{TU}{TR} = \\dfrac{ST}{RP}$",
+     "$\\dfrac{US}{UR} = \\dfrac{UT}{UP} = \\dfrac{ST}{RP}$"
+    ],
+    "bareme_points": 2.5
+   },
+   "correction_guide": "Dans une configuration de Thalès, compare uniquement des côtés homologues des deux triangles formés par le point d'intersection. Un segment comme $SP$ n'est pas le côté d'un triangle : il ne peut pas intervenir directement dans un rapport de Thalès.",
+   "correction_solution": "La relation de Thalès correcte est $\\dfrac{US}{UP} = \\dfrac{UT}{UR} = \\dfrac{ST}{RP}$.\na. Faux : le dernier rapport est inversé, il devrait être $\\dfrac{ST}{RP}$ et non $\\dfrac{RP}{ST}$.\nb. Vrai : c'est la même égalité que la relation correcte, écrite dans un autre ordre.\nc. Vrai : c'est l'égalité obtenue en inversant chaque rapport de la relation correcte (les inverses de quantités égales restent égaux).\nd. Faux : $SP$ n'est pas le côté d'un triangle de la configuration, donc $\\dfrac{SU}{SP}$ n'est pas un rapport de Thalès valide.\ne. Faux : les segments $US$ et $UR$ appartiennent à des triangles différents, ce rapport mélange des côtés non homologues.",
+   "has_figure": true,
+   "crop_file": "4d74ea12-bb05-4175-a4bc-7b34dea9ba66.png",
+   "figure_file": "4d74ea12-bb05-4175-a4bc-7b34dea9ba66.png",
+   "model": "claude-sonnet-5",
+   "prompt_version": "indigo-adapt-6-priorites"
+  },
+  {
+   "id": "29eaa755-9c96-44ed-a8a5-30a00f7b7cf7",
+   "competency_code": "C2.1",
+   "grade_level": "3e",
+   "source_number": "18",
+   "badge_type": "exercice",
+   "difficulty": 3,
+   "calculator": "autorisee",
+   "title": "",
+   "tags": [],
+   "statement": "Dans la figure ci-dessous, les droites $(OT)$ et $(PU)$ sont parallèles, et les droites $(PT)$ et $(OU)$ se coupent en $E$.\n{{figure}}\nQuelle est la longueur du segment $[OT]$, en cm ? {{blank_right}}",
+   "response_type": "short_text",
+   "expected": {
+    "type": "decimal",
+    "value": 3.0,
+    "inline": true
+   },
+   "grading": {
+    "max_score": 1,
+    "comparator": "numeric",
+    "tolerance": 0,
+    "bareme_points": 0.5
+   },
+   "correction_guide": "Utilise le théorème de Thalès dans les triangles formés par les droites sécantes en $E$ : $\\dfrac{ET}{EP} = \\dfrac{EO}{EU} = \\dfrac{TO}{PU}$.",
+   "correction_solution": "Les points $O$, $E$, $U$ d'une part et $P$, $E$, $T$ d'autre part sont alignés, et les droites $(OT)$ et $(PU)$ sont parallèles.\nD'après le théorème de Thalès, $\\dfrac{ET}{EP} = \\dfrac{EO}{EU} = \\dfrac{TO}{PU}$.\nComme $\\dfrac{ET}{EP} = 1{,}5$, on a $OT = 1{,}5 \\times 2 = 3\\ \\text{cm}$.",
+   "has_figure": true,
+   "crop_file": "29eaa755-9c96-44ed-a8a5-30a00f7b7cf7.png",
+   "figure_file": "29eaa755-9c96-44ed-a8a5-30a00f7b7cf7.png",
+   "model": "claude-sonnet-5",
+   "prompt_version": "indigo-adapt-6-priorites"
+  },
+  {
+   "id": "5807c49b-8aee-4f66-91b2-99994ff01ad9",
+   "competency_code": "C2.1",
+   "grade_level": "3e",
+   "source_number": "19",
+   "badge_type": "exercice",
+   "difficulty": 3,
+   "calculator": "autorisee",
+   "title": "",
+   "tags": [],
+   "statement": "Dans la figure ci-contre, les droites $(EF)$ et $(HS)$ se coupent en $C$, et $(EH)$ et $(FS)$ sont parallèles.\n{{figure}}\nCalcule les longueurs $CE$ et $FS$.",
+   "response_type": "table_fill",
+   "expected": {
+    "type": "table",
+    "rows": 2,
+    "cols": 1,
+    "cells": [
+     [
+      {
+       "type": "rational",
+       "value": [
+        24,
+        7
+       ]
+      }
+     ],
+     [
+      {
+       "type": "rational",
+       "value": [
+        14,
+        3
+       ]
+      }
+     ]
+    ],
+    "unordered": false
+   },
+   "grading": {
+    "max_score": 2,
+    "comparator": "table_cells",
+    "cells": [
+     [
+      {
+       "type": "rational",
+       "value": [
+        24,
+        7
+       ]
+      }
+     ],
+     [
+      {
+       "type": "rational",
+       "value": [
+        14,
+        3
+       ]
+      }
+     ]
+    ],
+    "unordered": false,
+    "col_labels": null,
+    "row_labels": [
+     "$CE =$",
+     "$FS =$"
+    ],
+    "bareme_points": 2.0
+   },
+   "correction_guide": "Utilise le théorème de Thalès avec les points alignés $C, E, F$ et $C, H, S$. Associe bien chaque longueur à son correspondant dans les rapports.",
+   "correction_solution": "Les points $C, E, F$ d'une part et $C, H, S$ d'autre part sont alignés, et les droites $(EH)$ et $(FS)$ sont parallèles.\nD'après le théorème de Thalès : $\\dfrac{CE}{CF} = \\dfrac{CH}{CS} = \\dfrac{EH}{FS}$.\n$\\dfrac{CE}{8} = \\dfrac{3}{7} = \\dfrac{2}{FS}$\n$CE = \\dfrac{3 \\times 8}{7} = \\dfrac{24}{7}\\ \\text{cm}$ et $FS = \\dfrac{2 \\times 7}{3} = \\dfrac{14}{3}\\ \\text{cm}$.",
+   "has_figure": true,
+   "crop_file": "5807c49b-8aee-4f66-91b2-99994ff01ad9.png",
+   "figure_file": "5807c49b-8aee-4f66-91b2-99994ff01ad9.png",
+   "model": "claude-sonnet-5",
+   "prompt_version": "indigo-adapt-6-priorites"
+  },
+  {
+   "id": "21577ba9-ed7f-4aef-ad01-f426b56c3767",
+   "competency_code": "C2.1",
+   "grade_level": "3e",
+   "source_number": "20",
+   "badge_type": "exercice",
+   "difficulty": 3,
+   "calculator": "autorisee",
+   "title": "",
+   "tags": [],
+   "statement": "Dans la figure ci-contre, les droites $(AF)$ et $(EC)$ sont parallèles, et $(AE)$ et $(FC)$ se coupent en $G$.\n{{figure}}\nOn donne $GA = 3{,}2\\ \\text{cm}$, $GE = 3{,}6\\ \\text{cm}$ et $FA = 3{,}4\\ \\text{cm}$.",
+   "response_type": "composite",
+   "expected": {
+    "type": "composite",
+    "parts": [
+     {
+      "statement": "Peut-on calculer la longueur $GC$ avec les données de l'énoncé ?",
+      "response_type": "qcm_single",
+      "expected": {
+       "type": "choice",
+       "correct": [
+        1
+       ]
+      },
+      "grading": {
+       "max_score": 2,
+       "comparator": "qcm",
+       "negative": 0,
+       "choices": [
+        "Oui",
+        "Non"
+       ],
+       "exclusive": true,
+       "bareme_points": 0.5
+      }
+     },
+     {
+      "statement": "Calcule la longueur $EC$.",
+      "response_type": "short_text",
+      "expected": {
+       "type": "decimal",
+       "value": 3.825
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "numeric",
+       "tolerance": 0,
+       "bareme_points": 1.25
+      }
+     }
+    ]
+   },
+   "grading": {
+    "max_score": 3.0,
+    "comparator": "composite",
+    "parts": [
+     {
+      "statement": "Peut-on calculer la longueur $GC$ avec les données de l'énoncé ?",
+      "response_type": "qcm_single",
+      "expected": {
+       "type": "choice",
+       "correct": [
+        1
+       ]
+      },
+      "grading": {
+       "max_score": 2,
+       "comparator": "qcm",
+       "negative": 0,
+       "choices": [
+        "Oui",
+        "Non"
+       ],
+       "exclusive": true,
+       "bareme_points": 0.5
+      }
+     },
+     {
+      "statement": "Calcule la longueur $EC$.",
+      "response_type": "short_text",
+      "expected": {
+       "type": "decimal",
+       "value": 3.825
+      },
+      "grading": {
+       "max_score": 1,
+       "comparator": "numeric",
+       "tolerance": 0,
+       "bareme_points": 1.25
+      }
+     }
+    ],
+    "bareme_points": 1.75
+   },
+   "correction_guide": "Pense à vérifier que tu connais toutes les longueurs nécessaires avant d'appliquer le théorème de Thalès : sans elles, une longueur ne peut pas être déterminée.",
+   "correction_solution": "1. On ne peut pas déterminer la longueur $GC$ car on ne connaît pas la longueur $GF$.\n2. Les points $F, G, C$ d'une part et $A, G, E$ d'autre part sont alignés, et les droites $(FA)$ et $(EC)$ sont parallèles.\nD'après le théorème de Thalès : $\\dfrac{GF}{GC} = \\dfrac{GA}{GE} = \\dfrac{FA}{CE}$.\n$\\dfrac{3{,}2}{3{,}6} = \\dfrac{3{,}4}{CE}$ donc $CE = \\dfrac{3{,}6 \\times 3{,}4}{3{,}2} = 3{,}825\\ \\text{cm}$.",
+   "has_figure": true,
+   "crop_file": "21577ba9-ed7f-4aef-ad01-f426b56c3767.png",
+   "figure_file": "21577ba9-ed7f-4aef-ad01-f426b56c3767.png",
+   "model": "claude-sonnet-5",
+   "prompt_version": "indigo-adapt-6-priorites"
+  },
+  {
+   "id": "266641a0-25d3-419e-9a50-4de452294757",
+   "competency_code": "C2.1",
+   "grade_level": "3e",
+   "source_number": "21",
+   "badge_type": "exercice",
+   "difficulty": 3,
+   "calculator": "autorisee",
+   "title": "",
+   "tags": [],
+   "statement": "Dans la figure ci-contre, les droites $(ES)$ et $(VA)$ se coupent en $T$, et les droites $(AS)$ et $(EV)$ sont parallèles.\n{{figure}}\nOn donne :\n• $AS = 1{,}2\\ \\text{cm}$\n• $TA = 1{,}8\\ \\text{cm}$\n• $AV = 2\\ \\text{cm}$\n• $TE = 4{,}1\\ \\text{cm}$\nCalcule les valeurs approchées, au millimètre près, des longueurs $EV$ et $TS$.",
+   "response_type": "table_fill",
+   "expected": {
+    "type": "table",
+    "rows": 2,
+    "cols": 1,
+    "cells": [
+     [
+      {
+       "type": "decimal",
+       "value": 1.9
+      }
+     ],
+     [
+      {
+       "type": "decimal",
+       "value": 2.5
+      }
+     ]
+    ],
+    "unordered": false
+   },
+   "grading": {
+    "max_score": 2,
+    "comparator": "table_cells",
+    "cells": [
+     [
+      {
+       "type": "decimal",
+       "value": 1.9
+      }
+     ],
+     [
+      {
+       "type": "decimal",
+       "value": 2.5
+      }
+     ]
+    ],
+    "unordered": false,
+    "col_labels": null,
+    "row_labels": [
+     "$TS \\approx$",
+     "$EV \\approx$"
+    ],
+    "bareme_points": 1.5
+   },
+   "correction_guide": "Utilise le théorème de Thalès avec les points alignés $T, S, E$ et $T, A, V$. Pense à calculer d'abord $TV = TA + AV$ avant d'écrire les rapports.",
+   "correction_solution": "Les points $T, S, E$ d'une part et $T, A, V$ d'autre part sont alignés, et les droites $(SA)$ et $(EV)$ sont parallèles.\nD'après le théorème de Thalès : $\\dfrac{TS}{TE} = \\dfrac{TA}{TV} = \\dfrac{SA}{EV}$\nOn a $TV = TA + AV = 1{,}8 + 2 = 3{,}8\\ \\text{cm}$.\n$\\dfrac{TS}{4{,}1} = \\dfrac{1{,}8}{3{,}8} = \\dfrac{1{,}2}{EV}$\n$TS = \\dfrac{1{,}8 \\times 4{,}1}{3{,}8} \\approx 1{,}9\\ \\text{cm}$\n$EV = \\dfrac{1{,}2 \\times 3{,}8}{1{,}8} \\approx 2{,}5\\ \\text{cm}$",
+   "has_figure": true,
+   "crop_file": "266641a0-25d3-419e-9a50-4de452294757.png",
+   "figure_file": "266641a0-25d3-419e-9a50-4de452294757.png",
+   "model": "claude-sonnet-5",
+   "prompt_version": "indigo-adapt-6-priorites"
+  },
+  {
+   "id": "d1f38b1c-522f-415f-b4b4-71a4f07a645e",
+   "competency_code": "C2.1",
+   "grade_level": "3e",
+   "source_number": "22",
+   "badge_type": "exercice",
+   "difficulty": 3,
+   "calculator": "autorisee",
+   "title": "",
+   "tags": [],
+   "statement": "Dans la figure ci-contre, les droites $(DC)$ et $(EN)$ sont parallèles, et les droites $(DN)$ et $(CE)$ se coupent en $T$.\n{{figure}}\nOn donne :\n• $DT = 4{,}7\\ \\text{cm}$\n• $TN = 5{,}2\\ \\text{cm}$\n• $EN = 4{,}3\\ \\text{cm}$\n• $ET = 2{,}4\\ \\text{cm}$\nCalcule les valeurs approchées, au millimètre près, des longueurs $DC$ et $CT$.",
+   "response_type": "table_fill",
+   "expected": {
+    "type": "table",
+    "rows": 2,
+    "cols": 1,
+    "cells": [
+     [
+      {
+       "type": "decimal",
+       "value": 2.2
+      }
+     ],
+     [
+      {
+       "type": "decimal",
+       "value": 3.9
+      }
+     ]
+    ],
+    "unordered": false
+   },
+   "grading": {
+    "max_score": 2,
+    "comparator": "table_cells",
+    "cells": [
+     [
+      {
+       "type": "decimal",
+       "value": 2.2
+      }
+     ],
+     [
+      {
+       "type": "decimal",
+       "value": 3.9
+      }
+     ]
+    ],
+    "unordered": false,
+    "col_labels": null,
+    "row_labels": [
+     "$CT \\approx$",
+     "$DC \\approx$"
+    ],
+    "bareme_points": 1.5
+   },
+   "correction_guide": "Utilise le théorème de Thalès avec les points alignés $D, T, N$ et $C, T, E$, en identifiant bien les rapports égaux.",
+   "correction_solution": "Les points $D, T, N$ d'une part et $C, T, E$ d'autre part sont alignés, et les droites $(DC)$ et $(EN)$ sont parallèles.\nD'après le théorème de Thalès : $\\dfrac{TD}{TN} = \\dfrac{TC}{TE} = \\dfrac{DC}{EN}$\n$\\dfrac{4{,}7}{5{,}2} = \\dfrac{TC}{2{,}4} = \\dfrac{DC}{4{,}3}$\n$TC = \\dfrac{4{,}7 \\times 2{,}4}{5{,}2} \\approx 2{,}2\\ \\text{cm}$\n$DC = \\dfrac{4{,}7 \\times 4{,}3}{5{,}2} \\approx 3{,}9\\ \\text{cm}$",
+   "has_figure": true,
+   "crop_file": "d1f38b1c-522f-415f-b4b4-71a4f07a645e.png",
+   "figure_file": "d1f38b1c-522f-415f-b4b4-71a4f07a645e.png",
+   "model": "claude-sonnet-5",
+   "prompt_version": "indigo-adapt-6-priorites"
+  },
+  {
+   "id": "fd87d5e4-965d-4843-89ea-2d0292ee65d6",
+   "competency_code": "C2.1",
+   "grade_level": "3e",
+   "source_number": "23",
+   "badge_type": "exercice",
+   "difficulty": 3,
+   "calculator": "autorisee",
+   "title": "",
+   "tags": [],
+   "statement": "Sur la figure ci-dessous :\n{{figure}}\n• Les points $A$, $B$, $R$ sont alignés et les points $A$, $C$, $T$ sont alignés, avec $(BC)$ parallèle à $(RT)$.\n• Les points $S$, $A$, $C$ sont alignés et les points $E$, $A$, $B$ sont alignés, avec $(BC)$ parallèle à $(SE)$.\nOn donne : $AR = 5\\ \\text{cm}$, $AT = 5{,}5\\ \\text{cm}$, $AC = 3{,}3\\ \\text{cm}$, $BC = 2{,}3\\ \\text{cm}$, $AE = 4{,}5\\ \\text{cm}$.\nCalcule la longueur $SE$.",
+   "response_type": "multiline_text",
+   "expected": {
+    "type": "rubric",
+    "steps": [
+     {
+      "description": "Calcul de $AB$ grâce au théorème de Thalès dans la configuration $A,B,R$ et $A,C,T$ avec $(BC) \\parallel (RT)$",
+      "expected_text": "$\\dfrac{AB}{AR} = \\dfrac{AC}{AT}$ donc $AB = \\dfrac{3{,}3 \\times 5}{5{,}5} = 3$ cm",
+      "points": 1
+     },
+     {
+      "description": "Calcul de $SE$ grâce au théorème de Thalès dans la configuration $S,A,C$ et $E,A,B$ avec $(BC) \\parallel (SE)$",
+      "expected_text": "$\\dfrac{AE}{AB} = \\dfrac{SE}{CB}$ donc $SE = \\dfrac{2{,}3 \\times 4{,}5}{3} = 3{,}45$ cm",
+      "points": 1
+     }
+    ]
+   },
+   "grading": {
+    "max_score": 2,
+    "comparator": "rubric",
+    "steps": [
+     {
+      "description": "Calcul de $AB$ grâce au théorème de Thalès dans la configuration $A,B,R$ et $A,C,T$ avec $(BC) \\parallel (RT)$",
+      "expected_text": "$\\dfrac{AB}{AR} = \\dfrac{AC}{AT}$ donc $AB = \\dfrac{3{,}3 \\times 5}{5{,}5} = 3$ cm",
+      "points": 1
+     },
+     {
+      "description": "Calcul de $SE$ grâce au théorème de Thalès dans la configuration $S,A,C$ et $E,A,B$ avec $(BC) \\parallel (SE)$",
+      "expected_text": "$\\dfrac{AE}{AB} = \\dfrac{SE}{CB}$ donc $SE = \\dfrac{2{,}3 \\times 4{,}5}{3} = 3{,}45$ cm",
+      "points": 1
+     }
+    ],
+    "rubric": [
+     {
+      "description": "Calcul de $AB$ grâce au théorème de Thalès dans la configuration $A,B,R$ et $A,C,T$ avec $(BC) \\parallel (RT)$",
+      "expected_text": "$\\dfrac{AB}{AR} = \\dfrac{AC}{AT}$ donc $AB = \\dfrac{3{,}3 \\times 5}{5{,}5} = 3$ cm",
+      "points": 1
+     },
+     {
+      "description": "Calcul de $SE$ grâce au théorème de Thalès dans la configuration $S,A,C$ et $E,A,B$ avec $(BC) \\parallel (SE)$",
+      "expected_text": "$\\dfrac{AE}{AB} = \\dfrac{SE}{CB}$ donc $SE = \\dfrac{2{,}3 \\times 4{,}5}{3} = 3{,}45$ cm",
+      "points": 1
+     }
+    ],
+    "lines": 3,
+    "bareme_points": 2.0
+   },
+   "correction_guide": "Repère les deux configurations de Thalès emboîtées : calcule d'abord $AB$ avec la première, puis utilise ce résultat pour calculer $SE$ avec la seconde.",
+   "correction_solution": "D'après le théorème de Thalès dans la configuration $A,B,R$ / $A,C,T$ (droites $(BC)$ et $(RT)$ parallèles) :\n$\\dfrac{AB}{AR} = \\dfrac{AC}{AT}$\n$\\dfrac{AB}{5} = \\dfrac{3{,}3}{5{,}5}$\ndonc $AB = \\dfrac{3{,}3 \\times 5}{5{,}5} = 3$ cm.\nD'après le théorème de Thalès dans la configuration $S,A,C$ / $E,A,B$ (droites $(BC)$ et $(SE)$ parallèles) :\n$\\dfrac{AE}{AB} = \\dfrac{SE}{CB}$\n$\\dfrac{4{,}5}{3} = \\dfrac{SE}{2{,}3}$\ndonc $SE = \\dfrac{2{,}3 \\times 4{,}5}{3} = 3{,}45$ cm.",
+   "has_figure": true,
+   "crop_file": "",
+   "figure_file": "fd87d5e4-965d-4843-89ea-2d0292ee65d6.png",
+   "model": "claude-sonnet-5",
+   "prompt_version": "indigo-adapt-6-priorites"
+  },
+  {
+   "id": "7bbb6b97-097b-4ba3-b903-e7e3f0e88dbd",
+   "competency_code": "C2.1",
+   "grade_level": "3e",
+   "source_number": "24",
+   "badge_type": "exercice",
+   "difficulty": 3,
+   "calculator": "autorisee",
+   "title": "",
+   "tags": [],
+   "statement": "Dans la figure ci-contre, les droites $(JK)$ et $(PM)$ sont parallèles.\n{{figure}}\nLes droites $(MJ)$ et $(PK)$ se coupent en $L$, avec $LJ = 2\\ \\text{cm}$ et $LM = 7\\ \\text{cm}$.\nLes droites $(JP)$ et $(KM)$ se coupent en $A$, avec $AM = 6\\ \\text{cm}$.",
+   "response_type": "composite",
+   "expected": {
+    "type": "composite",
+    "parts": [
+     {
+      "statement": "Coche les affirmations vraies qui permettent d'identifier les deux configurations de Thalès de cette figure.",
+      "response_type": "qcm_multiple",
+      "expected": {
+       "type": "choice",
+       "correct": [
+        0,
+        1,
+        2,
+        3,
+        5
+       ]
+      },
+      "grading": {
+       "max_score": 6,
+       "comparator": "qcm",
+       "negative": 0,
+       "choices": [
+        "$L, J, M$ sont alignés",
+        "$L, K, P$ sont alignés",
+        "$J, A, P$ sont alignés",
+        "$K, A, M$ sont alignés",
+        "$J, K, A$ sont alignés",
+        "$(JK)$ et $(PM)$ sont parallèles"
+       ],
+       "exclusive": false,
+       "bareme_points": 1.5
+      }
+     },
+     {
+      "statement": "En déduire la valeur exacte de $AK$. $AK =$  $\\text{cm}$",
+      "response_type": "short_text",
+      "expected": {
+       "type": "rational",
+       "value": [
+        12,
+        7
+       ]
+      },
+      "grading": {
+       "max_score": 2,
+       "comparator": "rational_equiv",
+       "bareme_points": 1.25
+      }
+     }
+    ]
+   },
+   "grading": {
+    "max_score": 8.0,
+    "comparator": "composite",
+    "parts": [
+     {
+      "statement": "Coche les affirmations vraies qui permettent d'identifier les deux configurations de Thalès de cette figure.",
+      "response_type": "qcm_multiple",
+      "expected": {
+       "type": "choice",
+       "correct": [
+        0,
+        1,
+        2,
+        3,
+        5
+       ]
+      },
+      "grading": {
+       "max_score": 6,
+       "comparator": "qcm",
+       "negative": 0,
+       "choices": [
+        "$L, J, M$ sont alignés",
+        "$L, K, P$ sont alignés",
+        "$J, A, P$ sont alignés",
+        "$K, A, M$ sont alignés",
+        "$J, K, A$ sont alignés",
+        "$(JK)$ et $(PM)$ sont parallèles"
+       ],
+       "exclusive": false,
+       "bareme_points": 1.5
+      }
+     },
+     {
+      "statement": "En déduire la valeur exacte de $AK$. $AK =$  $\\text{cm}$",
+      "response_type": "short_text",
+      "expected": {
+       "type": "rational",
+       "value": [
+        12,
+        7
+       ]
+      },
+      "grading": {
+       "max_score": 2,
+       "comparator": "rational_equiv",
+       "bareme_points": 1.25
+      }
+     }
+    ],
+    "bareme_points": 2.75
+   },
+   "correction_guide": "Repère les deux triangles emboîtés formés par des points alignés, puis applique le théorème de Thalès à chacun : les deux rapports obtenus sont égaux à $\\dfrac{JK}{MP}$.",
+   "correction_solution": "1. Deux configurations de Thalès apparaissent : d'une part $L, J, M$ alignés et $L, K, P$ alignés, avec $(JK) \\parallel (PM)$ ; d'autre part $J, A, P$ alignés et $K, A, M$ alignés, avec $(JK) \\parallel (PM)$.\n2. Dans la première configuration, le théorème de Thalès donne $\\dfrac{LJ}{LM} = \\dfrac{LK}{LP} = \\dfrac{JK}{MP}$ donc $\\dfrac{2}{7} = \\dfrac{JK}{MP}$.\nDans la deuxième configuration : $\\dfrac{AK}{AM} = \\dfrac{AJ}{AP} = \\dfrac{JK}{MP}$ donc $\\dfrac{AK}{6} = \\dfrac{JK}{MP}$.\nOn en déduit $\\dfrac{AK}{6} = \\dfrac{2}{7}$ donc $AK = \\dfrac{2 \\times 6}{7} = \\dfrac{12}{7}\\ \\text{cm}$.",
+   "has_figure": true,
+   "crop_file": "",
+   "figure_file": "7bbb6b97-097b-4ba3-b903-e7e3f0e88dbd.png",
+   "model": "claude-sonnet-5",
+   "prompt_version": "indigo-adapt-6-priorites"
+  },
   {
    "id": "544c55cb-225a-47b9-a569-902f2b0e6e90",
    "competency_code": "A1.3",
@@ -13,7 +938,7 @@
    "calculator": "autorisee",
    "title": "",
    "tags": [],
-   "statement": "Pour chaque égalité, il existe peut-être un entier $n$ qui la vérifie.\nCoche les égalités pour lesquelles un tel entier $n$ existe.",
+   "statement": "Pour chaque égalité, il existe peut-être un entier $n$ qui la vérifie.\n{{figure}}\nCoche les égalités pour lesquelles un tel entier $n$ existe.",
    "response_type": "qcm_multiple",
    "expected": {
     "type": "choice",
@@ -23,8 +948,8 @@
     ]
    },
    "grading": {
-    "max_score": 1,
     "comparator": "qcm",
+    "max_score": 3,
     "negative": 0,
     "choices": [
      "$3^n = 9$",
@@ -35,7 +960,7 @@
    },
    "correction_guide": "Cherche si le nombre à droite est bien une puissance entière de la base indiquée.",
    "correction_solution": "$3^2 = 9$ donc l'égalité $3^n = 9$ est vraie pour $n = 2$.\n$10$ n'est pas une puissance de $2$ (il vaut $2 \\times 5$), donc $2^n = 10$ est fausse pour tout entier $n$.\n$5^3 = 125$ donc l'égalité $5^n = 125$ est vraie pour $n = 3$.",
-   "has_figure": false,
+   "has_figure": true,
    "crop_file": "544c55cb-225a-47b9-a569-902f2b0e6e90.png",
    "figure_file": "",
    "model": "claude-sonnet-5",
@@ -581,7 +1506,7 @@
    "source_number": "64",
    "badge_type": "exercice",
    "difficulty": 3,
-   "calculator": "autorisee",
+   "calculator": "interdite",
    "title": "",
    "tags": [],
    "statement": "Décompose chacun des nombres suivants en produit de facteurs premiers, sans calculatrice.",
@@ -670,7 +1595,7 @@
    "source_number": "65",
    "badge_type": "exercice",
    "difficulty": 3,
-   "calculator": "autorisee",
+   "calculator": "interdite",
    "title": "",
    "tags": [],
    "statement": "À la question « décompose $180$ en produit de facteurs premiers », Matéo a écrit sur sa copie :\n$180 = 4 \\times 5 \\times 9$",
@@ -848,7 +1773,7 @@
    "source_number": "67",
    "badge_type": "exercice",
    "difficulty": 3,
-   "calculator": "autorisee",
+   "calculator": "necessaire",
    "title": "",
    "tags": [],
    "statement": "Décompose chaque entier en produit de facteurs premiers.\nDonne le résultat sous la forme d'un produit de nombres premiers (utilise les puissances si besoin).",
@@ -924,7 +1849,7 @@
    "source_number": "68",
    "badge_type": "exercice",
    "difficulty": 3,
-   "calculator": "autorisee",
+   "calculator": "necessaire",
    "title": "",
    "tags": [],
    "statement": "Décompose chaque entier en produit de facteurs premiers.\nDonne le résultat sous la forme d'un produit de nombres premiers (utilise les puissances si besoin).",
@@ -1000,7 +1925,7 @@
    "source_number": "69",
    "badge_type": "exercice",
    "difficulty": 3,
-   "calculator": "autorisee",
+   "calculator": "interdite",
    "title": "",
    "tags": [],
    "statement": "Sam s'intéresse aux carrés parfaits.\nIl remarque que :\n$196 = 14 \\times 14$\n$225 = 15 \\times 15$\n$256 = 16 \\times 16$\nEn utilisant ces produits, complète le tableau des décompositions en produit de facteurs premiers.",
@@ -1076,7 +2001,7 @@
    "source_number": "70",
    "badge_type": "exercice",
    "difficulty": 3,
-   "calculator": "autorisee",
+   "calculator": "interdite",
    "title": "",
    "tags": [],
    "statement": "On considère les nombres $28$ et $30$.\nDécompose chacun en produit de facteurs premiers, puis utilise cette décomposition pour déterminer tous leurs diviseurs.",
@@ -2566,750 +3491,6 @@
    "figure_file": "",
    "model": "claude-sonnet-5",
    "prompt_version": "indigo-adapt-6-priorites"
-  },
-  {
-   "id": "ee7d5b99-af8d-4134-9156-8a425755149a",
-   "competency_code": "A1.2",
-   "grade_level": "3e",
-   "source_number": "43",
-   "badge_type": "flash",
-   "difficulty": 2,
-   "calculator": "autorisee",
-   "title": "",
-   "tags": [],
-   "statement": "Coche la ou les affirmations vraies concernant les nombres premiers.",
-   "response_type": "qcm_multiple",
-   "expected": {
-    "type": "choice",
-    "correct": [
-     2
-    ]
-   },
-   "grading": {
-    "max_score": 1,
-    "comparator": "qcm",
-    "negative": 0,
-    "choices": [
-     "$1$ est un nombre premier.",
-     "$0$ est un nombre premier.",
-     "$2$ est un nombre premier."
-    ],
-    "bareme_points": 1.0
-   },
-   "correction_guide": "Un nombre premier possède exactement deux diviseurs distincts : $1$ et lui-même. Attention à $0$ et $1$, cas particuliers à connaître par cœur.",
-   "correction_solution": "a. Faux : $1$ n'a qu'un seul diviseur, ce n'est pas un nombre premier.\nb. Faux : $0$ possède une infinité de diviseurs, ce n'est pas un nombre premier.\nc. Vrai : $2$ n'a que deux diviseurs ($1$ et $2$), c'est le seul nombre premier pair.",
-   "has_figure": false,
-   "crop_file": "ee7d5b99-af8d-4134-9156-8a425755149a.png",
-   "figure_file": "",
-   "model": "gemini-flash-latest",
-   "prompt_version": "indigo-adapt-5-matching"
-  },
-  {
-   "id": "e0d7830d-0cd6-4e7d-b9e2-e5428d79f42f",
-   "competency_code": "A1.2",
-   "grade_level": "3e",
-   "source_number": "44",
-   "badge_type": "flash",
-   "difficulty": 2,
-   "calculator": "autorisee",
-   "title": "",
-   "tags": [],
-   "statement": "Parmi les nombres suivants, coche ceux qui sont des nombres premiers.",
-   "response_type": "qcm_multiple",
-   "expected": {
-    "type": "choice",
-    "correct": [
-     1,
-     2
-    ]
-   },
-   "grading": {
-    "max_score": 1,
-    "comparator": "qcm",
-    "negative": 0,
-    "choices": [
-     "$256$",
-     "$11$",
-     "$37$",
-     "$4\\ 233$"
-    ],
-    "bareme_points": 2.0
-   },
-   "correction_guide": "Un nombre premier n'a que deux diviseurs : $1$ et lui-même. Pense aux critères de divisibilité par $2$, $3$, $5$ pour éliminer rapidement certains nombres.",
-   "correction_solution": "$256$ est pair (divisible par $2$) donc n'est pas premier.\n$11$ n'est divisible que par $1$ et $11$ : il est premier.\n$37$ n'est divisible que par $1$ et $37$ : il est premier.\nPour $4233$ : $4+2+3+3=12$, multiple de $3$, donc $4233$ est divisible par $3$ et n'est pas premier.\nLes nombres premiers sont donc $11$ et $37$.",
-   "has_figure": false,
-   "crop_file": "e0d7830d-0cd6-4e7d-b9e2-e5428d79f42f.png",
-   "figure_file": "",
-   "model": "gemini-flash-latest",
-   "prompt_version": "indigo-adapt-5-matching"
-  },
-  {
-   "id": "79241242-e43b-42ab-8043-af906dd7ff5b",
-   "competency_code": "A1.2",
-   "grade_level": "3e",
-   "source_number": "45",
-   "badge_type": "flash",
-   "difficulty": 2,
-   "calculator": "autorisee",
-   "title": "",
-   "tags": [],
-   "statement": "Parmi les nombres impairs suivants, coche ceux qui ne sont pas des nombres premiers.",
-   "response_type": "qcm_multiple",
-   "expected": {
-    "type": "choice",
-    "correct": [
-     0,
-     2,
-     4
-    ]
-   },
-   "grading": {
-    "max_score": 1,
-    "comparator": "qcm",
-    "negative": 0,
-    "choices": [
-     "9",
-     "11",
-     "15",
-     "17",
-     "21",
-     "23"
-    ],
-    "bareme_points": 1.5
-   },
-   "correction_guide": "Un nombre premier n'a que deux diviseurs : $1$ et lui-même. Cherche un diviseur autre que $1$ et lui-même parmi $3$, $5$, $7$...",
-   "correction_solution": "$9 = 3 \\times 3$, $15 = 3 \\times 5$ et $21 = 3 \\times 7$ ne sont pas premiers. $11$, $17$ et $23$ sont premiers (aucun diviseur autre que $1$ et eux-mêmes).",
-   "has_figure": false,
-   "crop_file": "79241242-e43b-42ab-8043-af906dd7ff5b.png",
-   "figure_file": "",
-   "model": "gemini-flash-latest",
-   "prompt_version": "indigo-adapt-5-matching"
-  },
-  {
-   "id": "435ae58c-2f94-47fb-ac92-4fd5a2581a0c",
-   "competency_code": "A1.2",
-   "grade_level": "3e",
-   "source_number": "46",
-   "badge_type": "flash",
-   "difficulty": 2,
-   "calculator": "autorisee",
-   "title": "",
-   "tags": [],
-   "statement": "Complète, dans l'ordre croissant, la liste de tous les nombres premiers inférieurs à $30$ :\nils sont {{blank}}, {{blank}}, {{blank}}, {{blank}}, {{blank}}, {{blank}}, {{blank}}, {{blank}}, {{blank}} et {{blank}}.",
-   "response_type": "multi_blank",
-   "expected": {
-    "type": "table",
-    "rows": 1,
-    "cols": 10,
-    "cells": [
-     [
-      {
-       "type": "integer",
-       "value": 2
-      },
-      {
-       "type": "integer",
-       "value": 3
-      },
-      {
-       "type": "integer",
-       "value": 5
-      },
-      {
-       "type": "integer",
-       "value": 7
-      },
-      {
-       "type": "integer",
-       "value": 11
-      },
-      {
-       "type": "integer",
-       "value": 13
-      },
-      {
-       "type": "integer",
-       "value": 17
-      },
-      {
-       "type": "integer",
-       "value": 19
-      },
-      {
-       "type": "integer",
-       "value": 23
-      },
-      {
-       "type": "integer",
-       "value": 29
-      }
-     ]
-    ]
-   },
-   "grading": {
-    "max_score": 10,
-    "comparator": "table_cells",
-    "cells": [
-     [
-      {
-       "type": "integer",
-       "value": 2
-      },
-      {
-       "type": "integer",
-       "value": 3
-      },
-      {
-       "type": "integer",
-       "value": 5
-      },
-      {
-       "type": "integer",
-       "value": 7
-      },
-      {
-       "type": "integer",
-       "value": 11
-      },
-      {
-       "type": "integer",
-       "value": 13
-      },
-      {
-       "type": "integer",
-       "value": 17
-      },
-      {
-       "type": "integer",
-       "value": 19
-      },
-      {
-       "type": "integer",
-       "value": 23
-      },
-      {
-       "type": "integer",
-       "value": 29
-      }
-     ]
-    ],
-    "col_labels": null,
-    "row_labels": null,
-    "bareme_points": 2.0
-   },
-   "correction_guide": "Un nombre premier possède exactement deux diviseurs : $1$ et lui-même. Attention, $1$ n'est pas premier ; teste chaque entier jusqu'à $29$.",
-   "correction_solution": "Les nombres premiers inférieurs à $30$ sont : $2$, $3$, $5$, $7$, $11$, $13$, $17$, $19$, $23$ et $29$.",
-   "has_figure": false,
-   "crop_file": "435ae58c-2f94-47fb-ac92-4fd5a2581a0c.png",
-   "figure_file": "",
-   "model": "gemini-flash-latest",
-   "prompt_version": "indigo-adapt-5-matching"
-  },
-  {
-   "id": "6435aa6c-f4e6-42b3-8d30-7bdc0ffe39c9",
-   "competency_code": "A1.2",
-   "grade_level": "3e",
-   "source_number": "47",
-   "badge_type": "flash",
-   "difficulty": 2,
-   "calculator": "autorisee",
-   "title": "",
-   "tags": [],
-   "statement": "Coche toutes les affirmations vraies parmi les suivantes.",
-   "response_type": "qcm_multiple",
-   "expected": {
-    "type": "choice",
-    "correct": [
-     2,
-     4
-    ]
-   },
-   "grading": {
-    "max_score": 1,
-    "comparator": "qcm",
-    "negative": 0,
-    "choices": [
-     "Tout entier naturel est diviseur de lui-même.",
-     "Tout nombre impair est premier.",
-     "Il y a une infinité de nombres premiers.",
-     "Tout nombre entier admet au moins deux diviseurs.",
-     "$1$ est diviseur de tous les nombres entiers.",
-     "$0$ est diviseur de tous les nombres entiers."
-    ],
-    "bareme_points": 2.0
-   },
-   "correction_guide": "Rappelle-toi la définition d'un nombre premier (exactement deux diviseurs : $1$ et lui-même) et celle d'un diviseur ($a$ divise $b$ si $b = a \\times k$).\nAttention aux cas particuliers $0$ et $1$, souvent source d'erreurs.",
-   "correction_solution": "a. Faux : $0$ n'est pas diviseur de lui-même.\nb. Faux : $15$ est impair mais non premier ($15 = 3 \\times 5$).\nc. Vrai : il existe une infinité de nombres premiers (propriété du cours).\nd. Faux : $1$ n'admet qu'un seul diviseur, lui-même.\ne. Vrai : pour tout entier $n$, $n = 1 \\times n$.\nf. Faux : on ne peut pas diviser par $0$.",
-   "has_figure": false,
-   "crop_file": "6435aa6c-f4e6-42b3-8d30-7bdc0ffe39c9.png",
-   "figure_file": "",
-   "model": "gemini-flash-latest",
-   "prompt_version": "indigo-adapt-5-matching"
-  },
-  {
-   "id": "94adbcc6-2002-4378-8616-aed50dd46c3c",
-   "competency_code": "A1.2",
-   "grade_level": "3e",
-   "source_number": "48",
-   "badge_type": "exercice",
-   "difficulty": 3,
-   "calculator": "autorisee",
-   "title": "",
-   "tags": [],
-   "statement": "Parmi les nombres suivants, coche ceux qui sont des nombres premiers.",
-   "response_type": "qcm_multiple",
-   "expected": {
-    "type": "choice",
-    "correct": [
-     0
-    ]
-   },
-   "grading": {
-    "comparator": "qcm",
-    "max_score": 1,
-    "negative": 0,
-    "choices": [
-     "23",
-     "27",
-     "51",
-     "108",
-     "123",
-     "456"
-    ],
-    "bareme_points": 2.0
-   },
-   "correction_guide": "Un nombre premier n'a que deux diviseurs : $1$ et lui-même. Teste la divisibilité par $2$, $3$, $5$, $7$... Attention : un nombre pair (sauf $2$) n'est jamais premier, et pense au critère de divisibilité par $3$ (somme des chiffres).",
-   "correction_solution": "$23$ n'est divisible que par $1$ et lui-même : il est premier.\n$27 = 3 \\times 9$ : non premier.\n$51 = 3 \\times 17$ : non premier.\n$108$ est pair : non premier.\n$123$ : $1+2+3=6$, multiple de $3$, donc $123$ est divisible par $3$ : non premier.\n$456$ est pair : non premier.\nSeul $23$ est premier.",
-   "has_figure": true,
-   "crop_file": "94adbcc6-2002-4378-8616-aed50dd46c3c.png",
-   "figure_file": "",
-   "model": "gemini-flash-latest",
-   "prompt_version": "indigo-adapt-5-matching"
-  },
-  {
-   "id": "f5db2cf9-9230-4ce9-aa96-87ae41e3b639",
-   "competency_code": "A1.2",
-   "grade_level": "3e",
-   "source_number": "49",
-   "badge_type": "exercice",
-   "difficulty": 3,
-   "calculator": "necessaire",
-   "title": "",
-   "tags": [],
-   "statement": "Pour savoir si un nombre entier $n$ est premier, on teste sa divisibilité par tous les nombres premiers inférieurs ou égaux à $\\sqrt{n}$.\nCoche les nombres qui sont des nombres premiers.",
-   "response_type": "qcm_multiple",
-   "expected": {
-    "type": "choice",
-    "correct": [
-     0,
-     1
-    ]
-   },
-   "grading": {
-    "comparator": "qcm",
-    "max_score": 1,
-    "negative": 0,
-    "choices": [
-     "199",
-     "271",
-     "437"
-    ],
-    "bareme_points": 2.5
-   },
-   "correction_guide": "Rappel : un nombre est premier s'il n'admet aucun diviseur autre que $1$ et lui-même parmi les entiers jusqu'à $\\sqrt{n}$.\nAttention, un nombre qui semble ne pas se diviser facilement peut avoir un diviseur \"caché\" comme $19$.",
-   "correction_solution": "$199$ : $\\sqrt{199}\\approx 14{,}1$. Aucun diviseur entre $2$ et $14$ ne convient, donc $199$ est premier.\n$271$ : $\\sqrt{271}\\approx 16{,}5$. Aucun diviseur entre $2$ et $16$ ne convient, donc $271$ est premier.\n$437$ : $\\sqrt{437}\\approx 20{,}9$. On trouve $437 = 19 \\times 23$, donc $437$ n'est pas premier.",
-   "has_figure": false,
-   "crop_file": "f5db2cf9-9230-4ce9-aa96-87ae41e3b639.png",
-   "figure_file": "",
-   "model": "gemini-flash-latest",
-   "prompt_version": "indigo-adapt-5-matching"
-  },
-  {
-   "id": "e31e254c-6c4b-42ce-856b-394e6adfeed0",
-   "competency_code": "A1.2",
-   "grade_level": "3e",
-   "source_number": "51",
-   "badge_type": "exercice",
-   "difficulty": 3,
-   "calculator": "necessaire",
-   "title": "",
-   "tags": [],
-   "statement": "Thomas cherche à savoir si $523$ est un nombre premier.\nIl commence par tester si $523$ est divisible par chacun des nombres entiers de $2$ à $10$.\na. Il n'utilise sa calculatrice qu'une seule fois au cours de cette étape. Explique pourquoi.\nb. Il ne trouve aucun diviseur de $523$ parmi ces nombres. Peut-il en conclure que $523$ est un nombre premier ? Justifie ta réponse.\nc. Termine le travail de Thomas pour déterminer si $523$ est un nombre premier.",
-   "response_type": "multiline_text",
-   "expected": {
-    "type": "rubric",
-    "steps": [
-     {
-      "description": "Justifier l'usage unique de la calculatrice",
-      "expected_text": "$523$ n'est pas divisible par $2,3,4,5,6,8,9,10$ grâce aux critères de divisibilité ; seule la division par $7$ demande un calcul.",
-      "points": 1
-     },
-     {
-      "description": "Justifier qu'on ne peut pas encore conclure",
-      "expected_text": "Comme $\\sqrt{523}\\approx 22{,}8$, il faut tester tous les diviseurs possibles jusqu'à $22$, pas seulement jusqu'à $10$.",
-      "points": 1
-     },
-     {
-      "description": "Terminer le test et conclure",
-      "expected_text": "En testant $11,13,17,19$, aucun n'est diviseur de $523$, donc $523$ est un nombre premier.",
-      "points": 2
-     }
-    ]
-   },
-   "grading": {
-    "max_score": 4,
-    "comparator": "rubric",
-    "steps": [
-     {
-      "description": "Justifier l'usage unique de la calculatrice",
-      "expected_text": "$523$ n'est pas divisible par $2,3,4,5,6,8,9,10$ grâce aux critères de divisibilité ; seule la division par $7$ demande un calcul.",
-      "points": 1
-     },
-     {
-      "description": "Justifier qu'on ne peut pas encore conclure",
-      "expected_text": "Comme $\\sqrt{523}\\approx 22{,}8$, il faut tester tous les diviseurs possibles jusqu'à $22$, pas seulement jusqu'à $10$.",
-      "points": 1
-     },
-     {
-      "description": "Terminer le test et conclure",
-      "expected_text": "En testant $11,13,17,19$, aucun n'est diviseur de $523$, donc $523$ est un nombre premier.",
-      "points": 2
-     }
-    ],
-    "rubric": [
-     {
-      "description": "Justifier l'usage unique de la calculatrice",
-      "expected_text": "$523$ n'est pas divisible par $2,3,4,5,6,8,9,10$ grâce aux critères de divisibilité ; seule la division par $7$ demande un calcul.",
-      "points": 1
-     },
-     {
-      "description": "Justifier qu'on ne peut pas encore conclure",
-      "expected_text": "Comme $\\sqrt{523}\\approx 22{,}8$, il faut tester tous les diviseurs possibles jusqu'à $22$, pas seulement jusqu'à $10$.",
-      "points": 1
-     },
-     {
-      "description": "Terminer le test et conclure",
-      "expected_text": "En testant $11,13,17,19$, aucun n'est diviseur de $523$, donc $523$ est un nombre premier.",
-      "points": 2
-     }
-    ],
-    "lines": 12,
-    "bareme_points": 3.5
-   },
-   "correction_guide": "Un nombre est premier s'il n'a aucun diviseur autre que $1$ et lui-même parmi tous les entiers jusqu'à $\\sqrt{n}$, pas seulement jusqu'à $10$.\nPense aux critères de divisibilité (par $2$, $3$, $5$, $9$, $10$...) pour éviter d'utiliser la calculatrice à chaque fois.",
-   "correction_solution": "a. $523$ est impair (non divisible par $2$, donc ni par $4$, $6$, $8$) ; $5+2+3=10$ n'est multiple ni de $3$ ni de $9$ ; le chiffre des unités n'est ni $0$ ni $5$ (non divisible par $5$ ni $10$). Seule la division par $7$ nécessite la calculatrice : $523 = 7\\times74+5$.\nb. Comme $\\sqrt{523}\\approx 22{,}8$, il faudrait avoir testé tous les entiers jusqu'à $22$ pour conclure, pas seulement jusqu'à $10$. Thomas ne peut donc pas encore conclure.\nc. En testant les nombres impairs restants : $523=11\\times47+6$ ; $523=13\\times40+3$ ; $523=17\\times30+13$ ; $523=19\\times27+10$. Aucun n'est diviseur de $523$, donc $523$ est un nombre premier.",
-   "has_figure": false,
-   "crop_file": "",
-   "figure_file": "",
-   "model": "gemini-flash-latest",
-   "prompt_version": "indigo-adapt-5-matching"
-  },
-  {
-   "id": "3aeb3210-ae7d-4aca-b1f2-59b59f0a934c",
-   "competency_code": "A1.2",
-   "grade_level": "3e",
-   "source_number": "53",
-   "badge_type": "exercice",
-   "difficulty": 3,
-   "calculator": "autorisee",
-   "title": "",
-   "tags": [],
-   "statement": "Jade affirme que la somme de deux nombres premiers est toujours un nombre premier.\nCoche la réponse correcte.",
-   "response_type": "qcm_single",
-   "expected": {
-    "type": "choice",
-    "correct": [
-     1
-    ]
-   },
-   "grading": {
-    "max_score": 1,
-    "comparator": "qcm",
-    "negative": 0,
-    "choices": [
-     "Elle a raison : la somme de deux nombres premiers est toujours un nombre premier.",
-     "Elle a tort : il existe deux nombres premiers dont la somme n'est pas un nombre premier."
-    ],
-    "bareme_points": 1.5
-   },
-   "correction_guide": "Pense à un contre-exemple avec deux petits nombres premiers : leur somme est-elle toujours premiere ? Il suffit d'un seul cas où ce n'est pas vrai pour invalider l'affirmation.",
-   "correction_solution": "Jade a tort. Contre-exemple : $3$ et $5$ sont premiers mais $3+5=8$ n'est pas premier (divisible par $2$). Donc la somme de deux nombres premiers n'est pas toujours un nombre premier.",
-   "has_figure": false,
-   "crop_file": "",
-   "figure_file": "",
-   "model": "gemini-flash-latest",
-   "prompt_version": "indigo-adapt-5-matching"
-  },
-  {
-   "id": "149cc38a-353c-4900-b703-8bdccdf3b5a7",
-   "competency_code": "A1.2",
-   "grade_level": "3e",
-   "source_number": "56",
-   "badge_type": "exercice",
-   "difficulty": 3,
-   "calculator": "autorisee",
-   "title": "",
-   "tags": [],
-   "statement": "Le mathématicien français Pierre de Fermat (1601-1660) a beaucoup étudié les propriétés des nombres premiers.\nIl pensait (à tort) que tous les nombres de la forme $F_n = 2^{2^n} + 1$ (pour $n$ entier naturel) étaient premiers.\na. Calcule $F_0$, $F_1$, $F_2$ et $F_3$, puis justifie que ce sont bien des nombres premiers.\nb. Démontre que $F_{n+1} - F_n$ est un multiple de $2^{2^n}$.",
-   "response_type": "multiline_text",
-   "expected": {
-    "type": "rubric",
-    "steps": [
-     {
-      "description": "Calcul des quatre nombres de Fermat",
-      "expected_text": "$F_0=3$, $F_1=5$, $F_2=17$, $F_3=257$",
-      "points": 2
-     },
-     {
-      "description": "Justification que ce sont des nombres premiers",
-      "expected_text": "chacun n'a que $1$ et lui-même comme diviseurs, donc ils sont premiers",
-      "points": 1
-     },
-     {
-      "description": "Transformation algébrique de $F_{n+1}-F_n$",
-      "expected_text": "$F_{n+1}-F_n = (2^{2^n})^2 - 2^{2^n} = 2^{2^n}(2^{2^n}-1)$",
-      "points": 1
-     },
-     {
-      "description": "Conclusion",
-      "expected_text": "$F_{n+1}-F_n$ est un multiple de $2^{2^n}$",
-      "points": 1
-     }
-    ]
-   },
-   "grading": {
-    "max_score": 5,
-    "comparator": "rubric",
-    "steps": [
-     {
-      "description": "Calcul des quatre nombres de Fermat",
-      "expected_text": "$F_0=3$, $F_1=5$, $F_2=17$, $F_3=257$",
-      "points": 2
-     },
-     {
-      "description": "Justification que ce sont des nombres premiers",
-      "expected_text": "chacun n'a que $1$ et lui-même comme diviseurs, donc ils sont premiers",
-      "points": 1
-     },
-     {
-      "description": "Transformation algébrique de $F_{n+1}-F_n$",
-      "expected_text": "$F_{n+1}-F_n = (2^{2^n})^2 - 2^{2^n} = 2^{2^n}(2^{2^n}-1)$",
-      "points": 1
-     },
-     {
-      "description": "Conclusion",
-      "expected_text": "$F_{n+1}-F_n$ est un multiple de $2^{2^n}$",
-      "points": 1
-     }
-    ],
-    "rubric": [
-     {
-      "description": "Calcul des quatre nombres de Fermat",
-      "expected_text": "$F_0=3$, $F_1=5$, $F_2=17$, $F_3=257$",
-      "points": 2
-     },
-     {
-      "description": "Justification que ce sont des nombres premiers",
-      "expected_text": "chacun n'a que $1$ et lui-même comme diviseurs, donc ils sont premiers",
-      "points": 1
-     },
-     {
-      "description": "Transformation algébrique de $F_{n+1}-F_n$",
-      "expected_text": "$F_{n+1}-F_n = (2^{2^n})^2 - 2^{2^n} = 2^{2^n}(2^{2^n}-1)$",
-      "points": 1
-     },
-     {
-      "description": "Conclusion",
-      "expected_text": "$F_{n+1}-F_n$ est un multiple de $2^{2^n}$",
-      "points": 1
-     }
-    ],
-    "lines": 8,
-    "bareme_points": 4.5
-   },
-   "correction_guide": "Rappel : un nombre est premier s'il n'a que deux diviseurs, $1$ et lui-même.\nPour la partie b., utilise la règle $a^{m+n} = a^m \\times a^n$ pour transformer $2^{2^{n+1}}$, puis factorise l'expression obtenue.",
-   "correction_solution": "a. $F_0 = 2^{2^0}+1 = 2^1+1 = 3$ (premier)\n$F_1 = 2^{2^1}+1 = 2^2+1 = 5$ (premier)\n$F_2 = 2^{2^2}+1 = 2^4+1 = 17$ (premier)\n$F_3 = 2^{2^3}+1 = 2^8+1 = 257$ (premier)\nb. $F_{n+1} - F_n = 2^{2^{n+1}} + 1 - (2^{2^n}+1) = 2^{2^n \\times 2} - 2^{2^n} = (2^{2^n})^2 - 2^{2^n} = 2^{2^n}(2^{2^n}-1)$\nDonc $F_{n+1}-F_n$ s'écrit sous la forme $2^{2^n} \\times k$ où $k$ est un entier : c'est bien un multiple de $2^{2^n}$.",
-   "has_figure": false,
-   "crop_file": "",
-   "figure_file": "",
-   "model": "gemini-flash-latest",
-   "prompt_version": "indigo-adapt-5-matching"
-  },
-  {
-   "id": "a57e6006-a81d-46be-bf98-5cd83a816c34",
-   "competency_code": "A1.2",
-   "grade_level": "3e",
-   "source_number": "50",
-   "badge_type": "exercice",
-   "difficulty": 3,
-   "calculator": "necessaire",
-   "title": "",
-   "tags": [],
-   "statement": "Parmi les nombres suivants, tous compris entre $100$ et $150$, certains sont premiers et d'autres non.\nCoche tous les nombres premiers.",
-   "response_type": "qcm_multiple",
-   "expected": {
-    "type": "choice",
-    "correct": [
-     0,
-     2,
-     4,
-     6
-    ]
-   },
-   "grading": {
-    "comparator": "qcm",
-    "max_score": 1,
-    "negative": 0,
-    "choices": [
-     "101",
-     "111",
-     "113",
-     "121",
-     "127",
-     "133",
-     "139",
-     "147"
-    ],
-    "bareme_points": 3.0
-   },
-   "correction_guide": "Rappel : un nombre est premier s'il n'est divisible que par $1$ et lui-même. Pour tester, essaie les diviseurs premiers jusqu'à $\\sqrt{150} \\approx 12$ (soit $2, 3, 5, 7, 11$).\nAttention aux carrés parfaits comme $121 = 11 \\times 11$, qui ne sont pas premiers.",
-   "correction_solution": "$101$ est premier.\n$111 = 3 \\times 37$ n'est pas premier.\n$113$ est premier.\n$121 = 11 \\times 11$ n'est pas premier.\n$127$ est premier.\n$133 = 7 \\times 19$ n'est pas premier.\n$139$ est premier.\n$147 = 3 \\times 49$ n'est pas premier.\nLes nombres premiers de la liste sont donc $101$, $113$, $127$ et $139$.",
-   "has_figure": false,
-   "crop_file": "a57e6006-a81d-46be-bf98-5cd83a816c34.png",
-   "figure_file": "",
-   "model": "gemini-flash-latest",
-   "prompt_version": "indigo-adapt-5-matching"
-  },
-  {
-   "id": "6f3085c2-756a-41a4-8da5-7a264ec48f32",
-   "competency_code": "A1.2",
-   "grade_level": "3e",
-   "source_number": "52",
-   "badge_type": "exercice",
-   "difficulty": 3,
-   "calculator": "autorisee",
-   "title": "",
-   "tags": [],
-   "statement": "On dit que $13$ est un nombre premier permutable car le nombre $31$, obtenu en inversant ses chiffres, est aussi un nombre premier.\nDonne la liste de tous les nombres premiers permutables inférieurs à $100$ (nombres à deux chiffres dont le nombre obtenu en inversant les chiffres est aussi premier), séparés par des virgules.",
-   "response_type": "short_text",
-   "expected": {
-    "type": "text",
-    "value": "11, 13, 17, 31, 37, 71, 73, 79, 97"
-   },
-   "grading": {
-    "max_score": 1,
-    "comparator": "text_equal",
-    "bareme_points": 3.0
-   },
-   "correction_guide": "Rappelle-toi la liste des nombres premiers inférieurs à $100$, puis vérifie pour chacun si le nombre obtenu en inversant ses chiffres est aussi premier.\nAttention à ne pas oublier certains nombres premiers de la liste.",
-   "correction_solution": "Les nombres premiers inférieurs à $100$ sont : $2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71, 73, 79, 83, 89, 97$.\nEn vérifiant lesquels restent premiers après inversion des chiffres, on obtient : $11, 13, 17, 31, 37, 71, 73, 79, 97$.",
-   "has_figure": false,
-   "crop_file": "6f3085c2-756a-41a4-8da5-7a264ec48f32.png",
-   "figure_file": "",
-   "model": "gemini-flash-latest",
-   "prompt_version": "indigo-adapt-5-matching"
-  },
-  {
-   "id": "9bd8d611-ee81-4cfc-a606-2b4e79f64a9e",
-   "competency_code": "A1.2",
-   "grade_level": "3e",
-   "source_number": "54",
-   "badge_type": "exercice",
-   "difficulty": 3,
-   "calculator": "autorisee",
-   "title": "",
-   "tags": [],
-   "statement": "La conjecture de Goldbach (1742) affirme que tout nombre pair supérieur à $3$ peut s'écrire comme la somme de deux nombres premiers.\nPour chaque nombre, écris-le comme la somme de deux nombres premiers, en choisissant le plus petit nombre premier possible pour le premier terme.\n$26 = ${{blank_right}}\n$58 = ${{blank_right}}\n$138 = ${{blank_right}}",
-   "response_type": "multi_blank",
-   "expected": {
-    "type": "table",
-    "rows": 1,
-    "cols": 3,
-    "cells": [
-     [
-      {
-       "type": "expression",
-       "value": "3+23"
-      },
-      {
-       "type": "expression",
-       "value": "5+53"
-      },
-      {
-       "type": "expression",
-       "value": "7+131"
-      }
-     ]
-    ]
-   },
-   "grading": {
-    "max_score": 3,
-    "comparator": "table_cells",
-    "cells": [
-     [
-      {
-       "type": "expression",
-       "value": "3+23"
-      },
-      {
-       "type": "expression",
-       "value": "5+53"
-      },
-      {
-       "type": "expression",
-       "value": "7+131"
-      }
-     ]
-    ],
-    "col_labels": null,
-    "row_labels": null,
-    "bareme_points": 3.0
-   },
-   "correction_guide": "Teste successivement les nombres premiers $2, 3, 5, 7, ...$ en vérifiant si la différence avec le nombre donné est aussi premier.\nAttention : il existe plusieurs décompositions possibles, on cherche celle avec le plus petit premier terme.",
-   "correction_solution": "$26 = 3 + 23$ (autres possibilités : $7+19$, $13+13$)\n$58 = 5 + 53$ (autres possibilités : $11+47$, $17+41$, $29+29$)\n$138 = 7 + 131$ (autres possibilités : $11+127$, $29+109$, $31+107$, $37+101$, $41+97$, $59+79$, $67+71$)",
-   "has_figure": false,
-   "crop_file": "9bd8d611-ee81-4cfc-a606-2b4e79f64a9e.png",
-   "figure_file": "",
-   "model": "gemini-flash-latest",
-   "prompt_version": "indigo-adapt-5-matching"
-  },
-  {
-   "id": "42e573d4-5ba0-45e3-80cb-306edf0401e8",
-   "competency_code": "A1.2",
-   "grade_level": "3e",
-   "source_number": "55",
-   "badge_type": "expert",
-   "difficulty": 5,
-   "calculator": "autorisee",
-   "title": "",
-   "tags": [],
-   "statement": "On étudie l'affirmation suivante : « Quel que soit l'entier $n$ premier, $2n-1$ est un nombre premier. »\nOn teste cette affirmation pour quelques valeurs premières de $n$.\nPour quelle valeur de $n$ obtient-on un contre-exemple, c'est-à-dire un cas où $2n-1$ n'est pas un nombre premier ?",
-   "response_type": "qcm_single",
-   "expected": {
-    "type": "choice",
-    "correct": [
-     2
-    ]
-   },
-   "grading": {
-    "comparator": "qcm",
-    "max_score": 1,
-    "negative": 0,
-    "choices": [
-     "2",
-     "3",
-     "5",
-     "7"
-    ],
-    "bareme_points": 2.0
-   },
-   "correction_guide": "Calcule $2n-1$ pour chaque valeur de $n$ proposée, puis vérifie si ce résultat possède un diviseur autre que $1$ et lui-même.\nAttention : un nombre qui se termine par un chiffre impair n'est pas forcément premier.",
-   "correction_solution": "Pour $n=2$ : $2n-1=3$, qui est premier.\nPour $n=3$ : $2n-1=5$, qui est premier.\nPour $n=5$ : $2n-1=9=3\\times 3$, qui n'est pas premier.\nDonc $n=5$ est un contre-exemple : l'affirmation est fausse.",
-   "has_figure": true,
-   "crop_file": "42e573d4-5ba0-45e3-80cb-306edf0401e8.png",
-   "figure_file": "",
-   "model": "gemini-flash-latest",
-   "prompt_version": "indigo-adapt-5-matching"
   }
  ]
 }

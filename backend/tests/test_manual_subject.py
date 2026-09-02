@@ -38,7 +38,7 @@ def _item(statement: str, correction: str = "", guides: str = pdfgen.GUIDES_OVER
           **kw) -> dict:
     return {"kind": "exercise", "item_id": kw.get("item_id", statement[:12]),
             "statement": statement, "response_type": kw.get("response_type", "short_text"),
-            "choices": [], "level5": 3, "figure": None, "correction": correction,
+            "choices": [], "level3": 3, "figure": None, "correction": correction,
             "guides": guides,
             "grading": {"max_score": 1, "comparator": "numeric"}, "inline": False}
 

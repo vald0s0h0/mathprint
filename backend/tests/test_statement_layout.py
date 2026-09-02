@@ -243,7 +243,7 @@ def test_only_a_blank_expecting_a_fraction_gains_3mm():
     case voisine qui attend un entier."""
     item = {
         "statement": "Fraction : {{blank}} puis entier : {{blank}}",
-        "response_type": "multi_blank", "choices": [], "level5": 3,
+        "response_type": "multi_blank", "choices": [], "level3": 3,
         "grading": {"max_score": 2, "comparator": "table_cells"},
         "expected": {"type": "table", "cells": [[
             {"type": "rational", "value": [3, 4]},
@@ -260,9 +260,9 @@ def test_only_a_blank_expecting_a_fraction_gains_3mm():
 def test_subquestion_gets_a_badge_coloured_by_the_exercise_level():
     from app.services.pdfgen import DIFFICULTY_COLORS
     lines = _lines("Contexte.\na. Première ?\nb. Seconde ?",
-                   sub_badge_color=DIFFICULTY_COLORS[5])
+                   sub_badge_color=DIFFICULTY_COLORS[3])
     assert [ln["badge"] for ln in lines] == [None, "a", "b"]
-    assert all(ln["badge_color"] == DIFFICULTY_COLORS[5] for ln in lines[1:])
+    assert all(ln["badge_color"] == DIFFICULTY_COLORS[3] for ln in lines[1:])
     # l'étiquette quitte le flot de texte : elle est dessinée dans la pastille
     assert _words(lines[1]) == "Première ?"
 

@@ -640,7 +640,9 @@ def test_a_retry_regrades_what_the_correcteur_missed(db, tmp_path, monkeypatch):
     for d in db.query(GradingDecision).all():
         assert d.source == "deepseek" and d.status == "auto"
         assert d.score == pytest.approx(1.0)
-    assert db.get(type(batch), batch.id).status == "graded"
+    # plus de halte « Valider » : la dernière revue résolue par le correcteur
+    # LLM enchaîne directement sur la finalisation (02/09)
+    assert db.get(type(batch), batch.id).status == "overlay_ready"
 
 
 def test_qcm_copy_never_calls_the_correcteur(db, tmp_path, monkeypatch):

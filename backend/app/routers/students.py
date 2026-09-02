@@ -6,10 +6,12 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from ..deps import current_user
 from ..models import (
-    Competency, CompetencyEvidence, SchoolClass, Student, StudentCompetencyState,
-    StudentLevel, StudentReport, User,
+    Assessment, Competency, CompetencyEvidence, CopyItemResult, SchoolClass,
+    Student, StudentCompetencyState, StudentLevel, StudentReport, User,
 )
-from ..services.forgetting import compute_student_level, due_competencies, recall_probability
+from ..services.forgetting import (
+    compute_student_level, due_competencies, priority, recall_probability, strength,
+)
 from ..services import providers
 
 router = APIRouter(prefix="/api/students", tags=["students"],
@@ -54,10 +56,70 @@ def student_detail(student_id: str, db: Session = Depends(get_db)):
             "mastery": st.mastery, "confidence": st.confidence,
             "stability_days": st.stability,
             "recall_probability": round(recall_probability(st), 3),
+            # maîtrise FRAÎCHE et priorité de travail : `mastery` seul ne
+            # vieillit pas, ce sont ces deux-là qui disent l'état d'aujourd'hui
+            # et qui pilotent le choix des exercices (services.student_history)
+            "strength": round(strength(st), 3),
+            "priority": round(priority(st), 3),
             "last_seen_at": str(st.last_seen_at), "due_at": str(st.due_at),
         } for st in states],
         "due": due,
     }
+
+
+@router.get("/{student_id}/history")
+def student_history_rows(student_id: str, limit: int = 300,
+                         db: Session = Depends(get_db)):
+    """Historique d'exercices de l'élève : un exercice fait = une ligne, avec sa
+    date, son dérivé, sa réponse et sa réussite.
+
+    C'est la lecture directe de ce que le moteur de sujets individuels utilise
+    (services.student_history) : si une ligne manque ici, elle manque au moteur.
+    Trié du plus récent au plus ancien — c'est le sens dans lequel on relit le
+    travail d'un élève."""
+    if not db.get(Student, student_id):
+        raise HTTPException(404)
+    rows = (db.query(CopyItemResult)
+            .filter(CopyItemResult.student_id == student_id)
+            .order_by(CopyItemResult.occurred_at.desc().nullslast(),
+                      CopyItemResult.sequence)
+            .limit(max(1, min(1000, limit))).all())
+    if not rows:
+        return {"items": [], "total": 0}
+    comps = {c.id: c for c in db.query(Competency).filter(
+        Competency.id.in_({r.competency_id for r in rows if r.competency_id})).all()}
+    # le sujet est retrouvé via le résultat de copie : une requête, pas une par ligne
+    result_ids = {r.copy_result_id for r in rows}
+    titles = {}
+    if result_ids:
+        from ..models import CopyResult
+        for res, title, atype in (db.query(CopyResult.id, Assessment.title,
+                                           Assessment.type)
+                                  .join(Assessment, Assessment.id == CopyResult.assessment_id)
+                                  .filter(CopyResult.id.in_(result_ids)).all()):
+            titles[res] = (title, atype)
+    out = []
+    for r in rows:
+        comp = comps.get(r.competency_id)
+        title, atype = titles.get(r.copy_result_id, ("", ""))
+        out.append({
+            "id": r.id,
+            "occurred_at": str(r.occurred_at) if r.occurred_at else "",
+            "assessment_title": title,
+            "assessment_type": atype,
+            "competency_short_id": comp.short_id if comp else "",
+            "competency_label": comp.label if comp else "Compétence supprimée",
+            "chapter": comp.chapter_name if comp else "",
+            "difficulty_level": r.difficulty_level,
+            "response_type": r.response_type,
+            "answer_text": r.answer_text or "",
+            "success_ratio": round(r.success_ratio or 0.0, 3),
+            "points_earned": r.points_earned,
+            "bareme_points": r.bareme_points,
+            # NULL sur l'historique antérieur à la traçabilité de l'exercice
+            "exercise_id": r.generated_exercise_id or "",
+        })
+    return {"items": out, "total": len(out)}
 
 
 class LevelIn(BaseModel):

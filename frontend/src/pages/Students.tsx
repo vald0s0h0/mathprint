@@ -26,8 +26,20 @@ type Detail = {
   id: string; name: string; order_index: number; dyslexic: boolean; pseudonym: string
   class_name: string | null; level: number | null; level_locked: boolean
   evidence_count: number
-  competencies: { code: string; short_id: string; label: string; domain: string; chapter: string; mastery: number; confidence: number; recall_probability: number; due_at: string }[]
-  due: { code: string; short_id: string; label: string; chapter: string; reason: string; recall_probability: number }[]
+  competencies: { code: string; short_id: string; label: string; domain: string; chapter: string; mastery: number; confidence: number; recall_probability: number; strength: number; priority: number; due_at: string }[]
+  due: { code: string; short_id: string; label: string; chapter: string; reason: string; recall_probability: number; priority: number; days_since: number | null }[]
+}
+// Une ligne d'historique = un exercice fait, tel que le moteur de sujets le lit
+type HistoryRow = {
+  id: string; occurred_at: string; assessment_title: string; assessment_type: string
+  competency_short_id: string; competency_label: string; chapter: string
+  difficulty_level: number; response_type: string; answer_text: string
+  success_ratio: number; points_earned: number; bareme_points: number
+}
+const LEVEL_LABELS: Record<number, { label: string; color: string }> = {
+  1: { label: 'Facile', color: 'teal' },
+  2: { label: 'Base', color: 'blue' },
+  3: { label: 'Difficile', color: 'grape' },
 }
 type Report = { id: string; period: string; content: string; status: string }
 type Year = { id: string; label: string; active: boolean }
@@ -42,15 +54,23 @@ function CompetencyRow({ c }: { c: Detail['competencies'][0] }) {
         {c.short_id && <Text span c="dimmed" mr={4}>{c.short_id}</Text>}
         {full}
       </Text>
-      <Progress value={c.mastery * 100} size={6} w={70} color={masteryColor(c.mastery)}
-        style={{ flexShrink: 0 }} />
+      {/* la barre pleine = maîtrise acquise, la portion foncée = ce qu'il en
+          reste aujourd'hui (maîtrise x fraîcheur) : c'est l'écart entre les deux
+          qui dit l'oubli */}
+      <Tooltip label={`Maîtrise ${(c.mastery * 100).toFixed(0)} % · encore fraîche ${(c.strength * 100).toFixed(0)} %`}>
+        <Progress.Root size={6} w={70} style={{ flexShrink: 0 }}>
+          <Progress.Section value={c.strength * 100} color={masteryColor(c.mastery)} />
+          <Progress.Section value={Math.max(0, (c.mastery - c.strength) * 100)}
+            color={masteryColor(c.mastery)} opacity={0.28} />
+        </Progress.Root>
+      </Tooltip>
       <Text size="xs" c="dimmed" w={34} ta="right" style={{ flexShrink: 0 }}>
         {(c.mastery * 100).toFixed(0)} %
       </Text>
-      <Tooltip label="Probabilité de rappel (courbe d'oubli)">
+      <Tooltip label="Priorité de travail — c'est ce score qui choisit les exercices d'un sujet individuel">
         <Badge size="xs" variant="light" w={64} style={{ flexShrink: 0 }}
-          color={c.recall_probability < 0.8 ? 'orange' : 'gray'}>
-          R {(c.recall_probability * 100).toFixed(0)} %
+          color={c.priority > 0.5 ? 'orange' : 'gray'}>
+          P {(c.priority * 100).toFixed(0)} %
         </Badge>
       </Tooltip>
     </Group>
@@ -63,6 +83,7 @@ export default function Students() {
   const [selClass, setSelClass] = useState<Cls | null>(null)
   const [students, setStudents] = useState<StudentRow[]>([])
   const [detail, setDetail] = useState<Detail | null>(null)
+  const [history, setHistory] = useState<HistoryRow[]>([])
   const [reports, setReports] = useState<Report[]>([])
   const [batchText, setBatchText] = useState('')
   const [batchOpen, setBatchOpen] = useState(false)
@@ -111,8 +132,11 @@ export default function Students() {
   }
 
   async function pickStudent(id: string) {
+    setHistory([])
     setDetail(await api.get<Detail>(`/api/students/${id}`))
     setReports(await api.get<Report[]>(`/api/students/${id}/reports`))
+    const h = await api.get<{ items: HistoryRow[] }>(`/api/students/${id}/history`)
+    setHistory(h.items)
   }
 
   const parsedCount = newStudents.split('\n').filter((l) => l.trim()).length
@@ -352,6 +376,9 @@ export default function Students() {
                   <Tabs.Tab value="oubli">
                     Oubli {detail.due.length > 0 && `(${detail.due.length})`}
                   </Tabs.Tab>
+                  <Tabs.Tab value="historique">
+                    Historique {history.length > 0 && `(${history.length})`}
+                  </Tabs.Tab>
                   <Tabs.Tab value="rapports">Comptes rendus</Tabs.Tab>
                 </Tabs.List>
                 <Tabs.Panel value="comp" pt="sm">
@@ -381,6 +408,9 @@ export default function Students() {
                   </Button>
                 </Tabs.Panel>
                 <Tabs.Panel value="oubli" pt="sm">
+                  {/* Trié par PRIORITÉ, pas par un verdict « due / pas due » :
+                      c'est ce classement-là qui décide de ce qui revient sur le
+                      prochain sujet individuel. */}
                   {detail.due.length === 0
                     ? <Text c="dimmed" size="sm">Aucune compétence à réviser.</Text>
                     : detail.due.map((d, i) => {
@@ -391,10 +421,96 @@ export default function Students() {
                             {d.short_id && <Text span c="dimmed" mr={4}>{d.short_id}</Text>}
                             {full}
                           </Text>
-                          <Badge color="orange" variant="light">{d.reason}</Badge>
+                          <Group gap={6} wrap="nowrap" style={{ flexShrink: 0 }}>
+                            {d.days_since != null && (
+                              <Tooltip label="Jours depuis le dernier devoir portant cette compétence">
+                                <Text size="xs" c="dimmed">{Math.round(d.days_since)} j</Text>
+                              </Tooltip>
+                            )}
+                            <Badge color="orange" variant="light">{d.reason}</Badge>
+                            <Tooltip label="Priorité de travail">
+                              <Badge color={d.priority > 0.7 ? 'red' : 'orange'} variant="filled">
+                                {(d.priority * 100).toFixed(0)} %
+                              </Badge>
+                            </Tooltip>
+                          </Group>
                         </Group>
                       )
                     })}
+                </Tabs.Panel>
+                <Tabs.Panel value="historique" pt="sm">
+                  {/* Le suivi rendu vérifiable : chaque exercice fait, avec sa
+                      date, son dérivé, la réponse de l'élève et sa réussite.
+                      C'est exactement ce que lit le moteur de sujets
+                      individuels — si une ligne manque ici, elle lui manque. */}
+                  {history.length === 0 ? (
+                    <Text c="dimmed" size="sm">
+                      Aucun exercice corrigé pour l'instant. L'historique se remplit
+                      à la validation de chaque correction.
+                    </Text>
+                  ) : (
+                    <ScrollArea.Autosize mah="calc(100vh - 340px)">
+                      <Table striped highlightOnHover verticalSpacing={4}>
+                        <Table.Thead>
+                          <Table.Tr>
+                            <Table.Th>Date</Table.Th>
+                            <Table.Th>Compétence</Table.Th>
+                            <Table.Th>Dérivé</Table.Th>
+                            <Table.Th>Réponse</Table.Th>
+                            <Table.Th ta="right">Résultat</Table.Th>
+                          </Table.Tr>
+                        </Table.Thead>
+                        <Table.Tbody>
+                          {history.map((h) => {
+                            const lvl = LEVEL_LABELS[h.difficulty_level] ?? LEVEL_LABELS[2]
+                            const juste = h.success_ratio >= 0.999
+                            const partiel = !juste && h.success_ratio > 0
+                            const full = h.chapter
+                              ? `${h.chapter} · ${h.competency_label}` : h.competency_label
+                            return (
+                              <Table.Tr key={h.id}>
+                                <Table.Td>
+                                  <Text size="xs" style={{ whiteSpace: 'nowrap' }}>
+                                    {h.occurred_at.slice(0, 10).split('-').reverse().join('/')}
+                                  </Text>
+                                  <Text size="xs" c="dimmed" lineClamp={1}
+                                    title={h.assessment_title}>
+                                    {h.assessment_title}
+                                  </Text>
+                                </Table.Td>
+                                <Table.Td>
+                                  <Text size="xs" lineClamp={1} title={full}>
+                                    {h.competency_short_id && (
+                                      <Text span c="dimmed" mr={4}>{h.competency_short_id}</Text>
+                                    )}
+                                    {h.competency_label}
+                                  </Text>
+                                </Table.Td>
+                                <Table.Td>
+                                  <Badge size="xs" variant="light" color={lvl.color}>
+                                    {lvl.label}
+                                  </Badge>
+                                </Table.Td>
+                                <Table.Td>
+                                  <Text size="xs" c={h.answer_text ? undefined : 'dimmed'}
+                                    lineClamp={1} title={h.answer_text}>
+                                    {h.answer_text || '(sans réponse)'}
+                                  </Text>
+                                </Table.Td>
+                                <Table.Td ta="right">
+                                  <Badge size="xs" variant="light"
+                                    color={juste ? 'teal' : partiel ? 'yellow' : 'red'}>
+                                    {juste ? 'Juste' : partiel
+                                      ? `${(h.success_ratio * 100).toFixed(0)} %` : 'Faux'}
+                                  </Badge>
+                                </Table.Td>
+                              </Table.Tr>
+                            )
+                          })}
+                        </Table.Tbody>
+                      </Table>
+                    </ScrollArea.Autosize>
+                  )}
                 </Tabs.Panel>
                 <Tabs.Panel value="rapports" pt="sm">
                   <Button size="xs" onClick={makeReport} mb="sm">Générer un compte rendu</Button>

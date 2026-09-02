@@ -342,7 +342,14 @@ def grade_stored_responses(db: Session, batch: ScanBatch) -> int:
     _set_status(db, batch, "graded")
     if n_review:
         _set_status(db, batch, "review_pending", pending=n_review)
-    db.commit()
+        db.commit()
+    else:
+        # Aucune revue à trancher : la halte « Valider la correction » ne
+        # faisait alors que confirmer des notes déjà closes, sans offrir au
+        # professeur la moindre action réelle. On enchaîne directement sur
+        # la finalisation (résultats, preuves de compétence) et les copies
+        # corrigées, cf. demande du 02/09.
+        finalize_batch(db, batch)
     return n_review
 
 
@@ -859,7 +866,9 @@ def process_batch(db: Session, batch: ScanBatch):
         _set_status(db, batch, "graded")
         if n_review:
             _set_status(db, batch, "review_pending", pending=n_review)
-        db.commit()
+            db.commit()
+        else:
+            finalize_batch(db, batch)
         return
 
     # Halte explicite entre LECTURE et CORRECTION. Le professeur réécrit ici la
@@ -924,10 +933,15 @@ def finalize_batch(db: Session, batch: ScanBatch) -> dict:
             if not decision or decision.status == "review_pending":
                 continue
             ratio = decision.score / decision.max_score if decision.max_score else 0
+            # Preuve datée du JOUR DU DEVOIR, jamais du jour de la correction :
+            # c'est cette date que la courbe de l'oubli mesure, et un lot corrigé
+            # dix jours plus tard repousserait sinon la date due d'autant.
+            observed_at = scoring.assessment_date(assessment, copy)
             for ec in db.query(ExerciseCompetency).filter_by(exercise_id=item.catalog_id):
                 ev = CompetencyEvidence(
                     student_id=copy.student_id, competency_id=ec.competency_id,
                     item_id=item.id, mode=assessment.type, score_ratio=ratio,
+                    observed_at=observed_at,
                     difficulty=item.difficulty, weight=ec.weight * ec.evidence_strength)
                 db.add(ev)
                 db.flush()

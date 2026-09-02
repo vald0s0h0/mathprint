@@ -244,7 +244,7 @@ def test_prompt_asks_for_a_reflection_bareme_not_a_difficulty(db_session):
 @needs_manual
 def test_every_created_exercise_carries_a_half_point_bareme(db_session):
     comp = _seed_domain(db_session)
-    rows = gemini_gen.ensure_bank(db_session, comp, level=3)
+    rows = gemini_gen.ensure_bank(db_session, comp, level=gemini_gen.GENERATED_LEVEL)
 
     assert rows
     for r in rows:
@@ -426,6 +426,34 @@ def test_finalization_stores_note_and_per_exercise_results_for_each_student(db_s
 
 
 @needs_manual
+def test_finalization_records_the_history_the_selection_engine_reads(db_session):
+    """L'autre moitié du suivi : POUR CHAQUE exercice, lequel c'était, à quel
+    dérivé, ce que l'élève a répondu et quel jour.
+
+    Sans ces colonnes, services.student_history compose un sujet individuel à
+    l'aveugle — il ne peut ni éviter de resservir un exercice, ni savoir à quel
+    niveau l'élève a échoué, ni mesurer le temps écoulé."""
+    a = _seed_control(db_session, note_base=20, n_students=1)
+    _run_to_finalized(db_session, a)
+
+    result = db_session.query(CopyResult).filter_by(assessment_id=a.id).one()
+    items = db_session.query(CopyItemResult).filter_by(copy_result_id=result.id).all()
+    assert items
+    for i in items:
+        assert i.student_id == result.student_id
+        # l'exercice de banque réellement servi, retrouvable des mois plus tard
+        assert i.generated_exercise_id
+        assert i.difficulty_level in (1, 2, 3)
+        assert 0.0 <= i.success_ratio <= 1.0
+        assert i.occurred_at is not None
+    # la date retenue est celle du DEVOIR, pas celle de la correction
+    copy = db_session.query(Copy).filter_by(assessment_id=a.id).one()
+    assert items[0].occurred_at == scoring.assessment_date(a, copy)
+    # au moins une réponse d'élève a été capturée telle qu'elle sera relue
+    assert any(i.answer_text for i in items)
+
+
+@needs_manual
 def test_the_note_follows_the_base_chosen_at_creation(db_session):
     """La règle de trois, sur une copie RÉELLE corrigée de bout en bout : la
     même copie vaut la même PART du sujet, seule la base choisie par le
@@ -546,3 +574,18 @@ def test_overlay_prints_the_stored_note_on_the_chosen_base(db_session):
     # l'appréciation imprimée rejoint le résultat consolidé (suivi personnalisé)
     assert result.progress_json is not None
     assert result.appreciation == (page.get("synthesis") or "")
+
+
+def test_to_level3_folds_the_old_five_level_scale():
+    """Table de conversion PARTAGÉE (migration, seed des exercices publiés,
+    repli d'affichage). Écrite deux fois, elle finirait par diverger et un même
+    exercice changerait de niveau selon le chemin emprunté."""
+    assert [exercise_gen.to_level3(i) for i in (1, 2, 3, 4, 5)] == [1, 1, 2, 3, 3]
+    assert exercise_gen.to_level3("4") == 3
+    assert exercise_gen.to_level3(None) == 2          # niveau moyen par défaut
+
+
+def test_student_level_maps_onto_the_three_levels():
+    got = [exercise_gen.student_level_to_difficulty(i) for i in range(1, 11)]
+    assert got == [1, 1, 1, 1, 2, 2, 2, 3, 3, 3]
+    assert set(got) == set(exercise_gen.DIFFICULTY_LEVELS)

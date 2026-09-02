@@ -68,11 +68,11 @@ def test_ensure_bank_gemini_reaches_target_over_several_batches(db_session):
     # Cœur de la demande : une banque vide doit déclencher AUTANT d'appels que
     # nécessaire (lots de 5) pour atteindre la cible, jamais un nombre figé.
     comp = _seed_domain(db_session)
-    rows = gemini_gen.ensure_bank(db_session, comp, level=3)
+    rows = gemini_gen.ensure_bank(db_session, comp, level=gemini_gen.GENERATED_LEVEL)
 
     assert len(rows) >= settings.gemini_bank_target
     assert all(r.source == "gemini" for r in rows)
-    assert all(r.difficulty_level == 3 for r in rows)       # difficulté figée
+    assert all(r.difficulty_level == gemini_gen.GENERATED_LEVEL for r in rows)       # difficulté figée
     assert all(r.model == settings.gemini_model for r in rows)
     assert len({r.variant for r in rows}) == len(rows)
 
@@ -94,7 +94,7 @@ def _counted_gemini(monkeypatch) -> list[dict]:
 def test_ensure_bank_gemini_calls_llm_until_target_then_stops(db_session, monkeypatch):
     calls = _counted_gemini(monkeypatch)
     comp = _seed_domain(db_session)
-    gemini_gen.ensure_bank(db_session, comp, level=3)
+    gemini_gen.ensure_bank(db_session, comp, level=gemini_gen.GENERATED_LEVEL)
 
     # cible 15 / lots de 5 = 3 appels classiques (et PAS un de plus), PUIS un
     # unique appel dédié aux petites cartes de remplissage
@@ -119,13 +119,13 @@ def test_ensure_bank_gemini_full_bank_creates_nothing_and_reads_no_manual(
     # sujets » : banque pleine = aucun appel Gemini ET aucune lecture du manuel
     # (les 30 exercices resservent tels quels, gratuitement).
     comp = _seed_domain(db_session)
-    gemini_gen.ensure_bank(db_session, comp, level=3)
+    gemini_gen.ensure_bank(db_session, comp, level=gemini_gen.GENERATED_LEVEL)
 
     calls = _counted_gemini(monkeypatch)
     monkeypatch.setattr(sesamaths, "ensure_series_ocr",
                         lambda *a, **kw: pytest.fail("manuel relu alors que la "
                                                      "banque est pleine"))
-    rows = gemini_gen.ensure_bank(db_session, comp, level=3)
+    rows = gemini_gen.ensure_bank(db_session, comp, level=gemini_gen.GENERATED_LEVEL)
     assert calls == []
     assert len(rows) >= settings.gemini_bank_target
 
@@ -135,12 +135,12 @@ def test_ensure_bank_gemini_partial_bank_creates_only_the_remainder(db_session, 
     # 25 déjà en stock -> un seul lot de 5, pas 30 de plus.
     comp = _seed_domain(db_session)
     monkeypatch.setattr(settings, "gemini_bank_target", 25)
-    gemini_gen.ensure_bank(db_session, comp, level=3)
-    assert len(gemini_gen._bank_rows(db_session, comp, 3)) == 25
+    gemini_gen.ensure_bank(db_session, comp, level=gemini_gen.GENERATED_LEVEL)
+    assert len(gemini_gen._bank_rows(db_session, comp, gemini_gen.GENERATED_LEVEL)) == 25
 
     monkeypatch.setattr(settings, "gemini_bank_target", 30)
     calls = _counted_gemini(monkeypatch)
-    rows = gemini_gen.ensure_bank(db_session, comp, level=3)
+    rows = gemini_gen.ensure_bank(db_session, comp, level=gemini_gen.GENERATED_LEVEL)
     assert len(calls) == 1
     assert len(rows) == 30
     # le lot complémentaire connaît les 25 déjà en banque
@@ -149,7 +149,7 @@ def test_ensure_bank_gemini_partial_bank_creates_only_the_remainder(db_session, 
 
 def test_ensure_bank_gemini_no_duplicates_in_bank(db_session):
     comp = _seed_domain(db_session)
-    rows = gemini_gen.ensure_bank(db_session, comp, level=3)
+    rows = gemini_gen.ensure_bank(db_session, comp, level=gemini_gen.GENERATED_LEVEL)
     keys = [exercise_gen._dedup_key(r.statement, r.expected_json,
                                     (r.grading_json or {}).get("choices"))
             for r in rows]
@@ -161,14 +161,14 @@ def test_ensure_bank_also_creates_short_filler_cards(db_session):
     # des 30 classiques. Bornées aux petits formats et EXCLUES de la sélection
     # normale (elles ne servent qu'à combler les bas de page).
     comp = _seed_domain(db_session)
-    gemini_gen.ensure_bank(db_session, comp, level=3)
+    gemini_gen.ensure_bank(db_session, comp, level=gemini_gen.GENERATED_LEVEL)
 
-    filler = gemini_gen.filler_rows(db_session, comp, 3)
+    filler = gemini_gen.filler_rows(db_session, comp, gemini_gen.GENERATED_LEVEL)
     assert filler                                             # au moins une carte courte
     assert all(f.kind == gemini_gen.FILLER_KIND for f in filler)
     assert all(f.response_type in gemini_gen.FILLER_RESPONSE_TYPES for f in filler)
     # jamais mélangées aux exercices classiques
-    classic = gemini_gen._bank_rows(db_session, comp, 3)
+    classic = gemini_gen._bank_rows(db_session, comp, gemini_gen.GENERATED_LEVEL)
     assert all(c.kind != gemini_gen.FILLER_KIND for c in classic)
     assert not (set(f.id for f in filler) & set(c.id for c in classic))
 
@@ -177,14 +177,14 @@ def test_ensure_bank_generates_filler_only_once(db_session, monkeypatch):
     # Le remplissage est un bonus, pas un contenu qu'on re-paie sujet après
     # sujet : une fois qu'il existe des cartes courtes, aucun nouvel appel.
     comp = _seed_domain(db_session)
-    gemini_gen.ensure_bank(db_session, comp, level=3)
-    before = len(gemini_gen.filler_rows(db_session, comp, 3))
+    gemini_gen.ensure_bank(db_session, comp, level=gemini_gen.GENERATED_LEVEL)
+    before = len(gemini_gen.filler_rows(db_session, comp, gemini_gen.GENERATED_LEVEL))
     assert before
 
     calls = _counted_gemini(monkeypatch)
-    gemini_gen.ensure_bank(db_session, comp, level=3)         # banque pleine
+    gemini_gen.ensure_bank(db_session, comp, level=gemini_gen.GENERATED_LEVEL)         # banque pleine
     assert calls == []                                       # ni classique ni filler
-    assert len(gemini_gen.filler_rows(db_session, comp, 3)) == before
+    assert len(gemini_gen.filler_rows(db_session, comp, gemini_gen.GENERATED_LEVEL)) == before
 
 
 def test_filler_bank_rows_empty_for_sesamaths_source(db_session):
@@ -199,7 +199,7 @@ def test_ensure_bank_gemini_batch_mix_has_qcm_and_written_and_problem(db_session
     # ce qui remplit une page proprement : distribution.pick_balanced_exercise
     # ne peut équilibrer une copie que si la banque contient les trois.
     comp = _seed_domain(db_session)
-    rows = gemini_gen.ensure_bank(db_session, comp, level=3)
+    rows = gemini_gen.ensure_bank(db_session, comp, level=gemini_gen.GENERATED_LEVEL)
     types_ = {r.response_type for r in rows}
     assert "qcm_single" in types_
     assert "short_text" in types_
@@ -240,7 +240,7 @@ def test_gemini_rejects_exercise_that_needs_a_figure(db_session):
 def test_gemini_geometry_refused_with_clear_message(db_session):
     comp = _seed_domain(db_session, domain_code="EG")
     with pytest.raises(gemini_gen.GeminiGenerationError) as exc:
-        gemini_gen.ensure_bank(db_session, comp, level=3)
+        gemini_gen.ensure_bank(db_session, comp, level=gemini_gen.GENERATED_LEVEL)
     assert "géométrie" in str(exc.value).lower()
     assert db_session.query(GeneratedExercise).count() == 0
 
@@ -255,7 +255,7 @@ def test_gemini_refuses_to_create_without_the_manual_context(db_session, monkeyp
     comp = _seed_domain(db_session)
 
     with pytest.raises(gemini_gen.GeminiGenerationError) as exc:
-        gemini_gen.ensure_bank(db_session, comp, level=3)
+        gemini_gen.ensure_bank(db_session, comp, level=gemini_gen.GENERATED_LEVEL)
     assert "manuel" in str(exc.value).lower()
     assert calls == []                                   # rien n'a été payé
     assert db_session.query(GeneratedExercise).count() == 0
@@ -274,7 +274,7 @@ def test_gemini_refuses_to_create_when_ocr_returns_no_usable_text(db_session, mo
     comp = _seed_domain(db_session)
 
     with pytest.raises(gemini_gen.GeminiGenerationError) as exc:
-        gemini_gen.ensure_bank(db_session, comp, level=3)
+        gemini_gen.ensure_bank(db_session, comp, level=gemini_gen.GENERATED_LEVEL)
     assert "aucun texte" in str(exc.value).lower()
     assert calls == []
 
@@ -291,7 +291,7 @@ def test_gemini_grounds_every_batch_in_the_manual_ocr_text(db_session, monkeypat
 
     monkeypatch.setattr(providers, "gemini_json", capture)
     comp = _seed_domain(db_session)
-    gemini_gen.ensure_bank(db_session, comp, level=3)
+    gemini_gen.ensure_bank(db_session, comp, level=gemini_gen.GENERATED_LEVEL)
 
     ocr = gemini_gen._manual_context(sesamaths.ensure_series_ocr(db_session, comp))
     # 3 lots classiques + 1 lot de remplissage : le contexte manuel ancre CHACUN
@@ -316,7 +316,7 @@ def test_gemini_reads_the_manual_via_ocr_only_never_the_paid_adapter(db_session,
                         lambda *a, **kw: pytest.fail("adaptateur Claude appelé "
                                                      "alors que Gemini ne veut que l'OCR"))
     comp = _seed_domain(db_session)
-    gemini_gen.ensure_bank(db_session, comp, level=3)
+    gemini_gen.ensure_bank(db_session, comp, level=gemini_gen.GENERATED_LEVEL)
     assert len(ocr_calls) == 1          # une Série = un appel OCR, pas un par lot
 
     # ... et la Série reste prête à être adaptée gratuitement par la pipeline
@@ -343,10 +343,10 @@ def test_manual_ocr_paid_by_gemini_is_reused_by_the_sesamaths_pipeline(db_sessio
     # servir à l'autre. Gemini extrait (phase 1) et laisse la Série prête à
     # adapter ; Sésamaths passe ensuite dessus sans repayer l'OCR.
     comp = _seed_domain(db_session)
-    gemini_gen.ensure_bank(db_session, comp, level=3)
+    gemini_gen.ensure_bank(db_session, comp, level=gemini_gen.GENERATED_LEVEL)
 
     ocr_calls = _counted_ocr(monkeypatch)
-    rows = sesamaths.ensure_bank(db_session, comp, level=3)
+    rows = sesamaths.ensure_bank(db_session, comp, level=gemini_gen.GENERATED_LEVEL)
     assert ocr_calls == []                       # OCR déjà payé par Gemini
     assert rows and all(r.source in sesamaths.SOURCE_POOL for r in rows)
 
@@ -359,11 +359,11 @@ def test_extract_version_bump_still_reextracts_a_series_left_extracted_by_gemini
     # sans contrôle de version sur cet état, elles seraient adaptées depuis un
     # raw_json périmé PUIS estampillées de la version courante.
     comp = _seed_domain(db_session)
-    gemini_gen.ensure_bank(db_session, comp, level=3)     # Série -> "extracted"
+    gemini_gen.ensure_bank(db_session, comp, level=gemini_gen.GENERATED_LEVEL)     # Série -> "extracted"
 
     ocr_calls = _counted_ocr(monkeypatch)
     monkeypatch.setattr(sesamaths, "EXTRACT_PROMPT_VERSION", "sesamaths-extract-TEST")
-    sesamaths.ensure_bank(db_session, comp, level=3)
+    sesamaths.ensure_bank(db_session, comp, level=gemini_gen.GENERATED_LEVEL)
     assert len(ocr_calls) == 1                   # ré-extraction bien déclenchée
 
 
@@ -374,43 +374,45 @@ def test_gemini_other_levels_generate_nothing(db_session, monkeypatch):
     monkeypatch.setattr(providers, "gemini_json",
                         lambda *a, **kw: calls.append(1) or {"exercises": []})
     comp = _seed_domain(db_session)
-    assert gemini_gen.ensure_bank(db_session, comp, level=5) == []
+    other = exercise_gen.DIFFICULTY_MAX      # jamais le niveau produit
+    assert other != gemini_gen.GENERATED_LEVEL
+    assert gemini_gen.ensure_bank(db_session, comp, level=other) == []
     assert calls == []
 
 
-def test_bank_rows_near_level_falls_back_to_level3(db_session):
-    # Conséquence de la difficulté figée : une demande niveau 5 doit se
-    # rabattre proprement sur la banque de niveau 3, sans erreur.
+def test_bank_rows_near_level_falls_back_to_the_generated_level(db_session):
+    # Conséquence de la difficulté figée : une demande d'un AUTRE niveau doit se
+    # rabattre proprement sur la banque du seul niveau produit, sans erreur.
     comp = _seed_domain(db_session)
-    rows, level = exercise_gen.bank_rows_near_level(db_session, comp, level=5,
-                                                    source="gemini")
-    assert level == 3
+    rows, level = exercise_gen.bank_rows_near_level(
+        db_session, comp, level=exercise_gen.DIFFICULTY_MAX, source="gemini")
+    assert level == gemini_gen.GENERATED_LEVEL
     assert rows and all(r.source == "gemini" for r in rows)
 
 
 def test_gemini_pool_never_mixed_with_sesamaths(db_session):
     comp = _seed_domain(db_session)
     db_session.add(GeneratedExercise(
-        competency_id=comp.id, difficulty_level=3, variant=0,
+        competency_id=comp.id, difficulty_level=gemini_gen.GENERATED_LEVEL, variant=0,
         statement="Exercice tiré du manuel.", correction="$1 + 1 = 2$",
         response_type="short_text", expected_json={"type": "integer", "value": 2},
         grading_json={"max_score": 1, "comparator": "numeric"}, source="sesamaths"))
     db_session.commit()
 
-    rows = gemini_gen.ensure_bank(db_session, comp, level=3)
+    rows = gemini_gen.ensure_bank(db_session, comp, level=gemini_gen.GENERATED_LEVEL)
     assert all(r.source == "gemini" for r in rows)
     assert len(rows) >= settings.gemini_bank_target   # la ligne Sésamaths ne compte pas
 
 
 def test_retired_gemini_exercise_never_recreated(db_session):
     comp = _seed_domain(db_session)
-    rows = gemini_gen.ensure_bank(db_session, comp, level=3)
+    rows = gemini_gen.ensure_bank(db_session, comp, level=gemini_gen.GENERATED_LEVEL)
     victim = rows[0]
     victim_statement = victim.statement
     victim.status = "retired"
     db_session.commit()
 
-    gemini_gen.ensure_bank(db_session, comp, level=3)
+    gemini_gen.ensure_bank(db_session, comp, level=gemini_gen.GENERATED_LEVEL)
     active = {r.statement for r in db_session.query(GeneratedExercise)
               .filter_by(competency_id=comp.id, status="active").all()}
     assert victim_statement not in active
@@ -430,7 +432,7 @@ def test_gemini_batch_failure_keeps_earlier_batches(db_session, monkeypatch):
 
     monkeypatch.setattr(providers, "gemini_json", flaky)
     comp = _seed_domain(db_session)
-    rows = gemini_gen.ensure_bank(db_session, comp, level=3)
+    rows = gemini_gen.ensure_bank(db_session, comp, level=gemini_gen.GENERATED_LEVEL)
     assert len(rows) == 5          # le 1er lot seulement
     assert all(r.source == "gemini" for r in rows)
 
@@ -440,7 +442,7 @@ def test_gemini_total_failure_raises_clear_error(db_session, monkeypatch):
                         lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("panne totale")))
     comp = _seed_domain(db_session)
     with pytest.raises(gemini_gen.GeminiGenerationError) as exc:
-        gemini_gen.ensure_bank(db_session, comp, level=3)
+        gemini_gen.ensure_bank(db_session, comp, level=gemini_gen.GENERATED_LEVEL)
     assert "panne totale" in str(exc.value)
 
 
@@ -587,7 +589,7 @@ def test_content_generate_endpoint_accepts_gemini_source(db_session):
     from app.routers import content as content_router
 
     comp = _seed_domain(db_session)
-    body = content_router.GenerateExercisesIn(competency_id=comp.id, level=3,
+    body = content_router.GenerateExercisesIn(competency_id=comp.id, level=gemini_gen.GENERATED_LEVEL,
                                               source="gemini")
     result = content_router.generate_exercises(body, db=db_session)
     assert result["count"] >= settings.gemini_bank_target

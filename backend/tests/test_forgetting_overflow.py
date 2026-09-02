@@ -43,7 +43,10 @@ def test_huge_stored_stability_does_not_overflow(db):
     ev = _ev(); db.add(ev); db.flush()
 
     state = forgetting.apply_evidence(db, ev)   # ne doit PAS lever
-    assert state.stability <= forgetting.MAX_STABILITY_DAYS
+    assert state.stability <= forgetting.S_CEIL
+    # le plafond dépend désormais de la maîtrise : il ne suffit pas de ne pas
+    # déborder, la fenêtre doit correspondre à ce que l'élève maîtrise vraiment
+    assert state.stability <= forgetting.stability_ceiling(state.mastery)
     assert state.due_at is not None and state.due_at.year < 9999
 
 
@@ -57,5 +60,6 @@ def test_repeated_success_stays_bounded(db):
     for _ in range(20):
         ev = _ev(); db.add(ev); db.flush()
         state = forgetting.apply_evidence(db, ev)
-    assert state.stability <= forgetting.MAX_STABILITY_DAYS
+    assert state.stability <= forgetting.S_CEIL
+    assert state.stability <= forgetting.stability_ceiling(state.mastery)
     assert state.due_at.year < 9999

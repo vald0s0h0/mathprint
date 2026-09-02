@@ -490,36 +490,38 @@ def test_ocr_audit_does_not_reopen_a_confident_deepseek_decision(mock_db):
     assert mock_db.query(ManualReview).filter_by(decision_id=decision.id).count() == 0
 
 
-def test_batch_summary_previews_notes(mock_db, tmp_path, monkeypatch):
-    """La modale « Valider » a de quoi tout vérifier : avant correction, les
-    réponses sont signalées et non notées ; après, chaque copie a ses points et
-    sa note prévisionnelle, sans rien persister."""
+def test_last_review_resolved_auto_finalizes_without_teacher_click(
+        mock_db, tmp_path, monkeypatch):
+    """Halte « Valider la correction » supprimée (02/09) : elle ne faisait que
+    confirmer des notes déjà closes, sans offrir au professeur la moindre
+    action réelle. Trancher la DERNIÈRE revue ouverte d'un lot enchaîne
+    directement sur la finalisation (résultats consolidés) et les copies
+    corrigées — aucun clic professeur supplémentaire n'est nécessaire."""
+    from app.models import CopyResult
+
     db = mock_db
     monkeypatch.setattr(cfg, "data_dir", tmp_path)
     a = _seed_manual(db)
     batch = scan_intake.get_or_create_batch(db, a.id, None)
     db.commit()
     pipeline.process_batch(db, batch)
-
-    before = scans_router.batch_summary(batch.id, db)
-    assert before["note_base"] == 20
-    assert before["scanned_copies"] == 2
-    assert before["pending_reviews"] == 2                 # manual_drawing → à corriger
-    assert all(c["flagged"] == 1 and c["note"] is None for c in before["copies"])
+    assert db.get(ScanBatch, batch.id).status == "review_pending"
+    assert db.query(CopyResult).count() == 0          # rien consolidé tant qu'il reste à trancher
 
     body = scans_router.ResolveIn(action="set_ratio", ratio=1.0)
-    for it in scans_router.list_items(batch.id, "all", db):
+    items = scans_router.list_items(batch.id, "all", db)
+    for it in items[:-1]:
         scans_router.resolve_response(it["response_id"], body, db, None)
-
-    after = scans_router.batch_summary(batch.id, db)
-    assert after["pending_reviews"] == 0
-    assert all(c["flagged"] == 0 for c in after["copies"])
-    for c in after["copies"]:
-        assert abs(c["points_earned"] - 1.5) < 1e-6      # plein barème 1,5
-        assert c["note"] == 20                           # sans-faute → 20/20
-    # récapitulatif purement lecteur : aucune consolidation n'a été écrite
-    from app.models import CopyResult
+    # avant-dernière revue tranchée : pas encore d'auto-finalisation
+    assert db.get(ScanBatch, batch.id).status not in ("finalized", "overlay_ready")
     assert db.query(CopyResult).count() == 0
+
+    scans_router.resolve_response(items[-1]["response_id"], body, db, None)
+
+    b = db.get(ScanBatch, batch.id)
+    assert b.status == "overlay_ready"
+    assert b.error is None
+    assert db.query(CopyResult).count() == 2          # les 2 copies, consolidées automatiquement
 
 
 def test_unreadable_scan_blocks_with_clear_error(mock_db, tmp_path, monkeypatch):

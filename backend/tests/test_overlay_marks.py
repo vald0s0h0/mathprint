@@ -32,7 +32,7 @@ def test_pages_needed_matches_render_copy_with_correction():
               "correction": ("Piège : la retenue.\nRepose l'opération en "
                              "colonnes, aligne bien les chiffres avant "
                              "d'additionner, sinon le résultat glisse d'un rang."),
-              "response_type": "short_text", "choices": [], "level5": 3,
+              "response_type": "short_text", "choices": [], "level3": 3,
               "figure": None, "grading": {"max_score": 1, "comparator": "numeric"},
               "inline": False} for i in range(9)]
     out = Path(tempfile.mkdtemp()) / "copy.pdf"
@@ -91,7 +91,7 @@ def test_cell_marks_unreadable_and_missing_count_as_wrong():
 def _render_qcm_zone() -> dict:
     items = [{"kind": "exercise", "item_id": "q", "statement": "Coche.",
               "correction": "Piège : signe.", "response_type": "qcm_single",
-              "choices": ["un", "deux", "trois"], "level5": 2, "figure": None,
+              "choices": ["un", "deux", "trois"], "level3": 2, "figure": None,
               "grading": {"comparator": "qcm", "max_score": 1}, "inline": False}]
     out = Path(tempfile.mkdtemp()) / "c.pdf"
     c = canvas.Canvas(str(out), pagesize=A4)

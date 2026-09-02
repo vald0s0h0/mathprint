@@ -88,7 +88,7 @@ def _render(dyslexic: bool) -> tuple[list[dict], bytes]:
         "kind": "exercise", "item_id": f"e{i}",
         "statement": "Calcule le quotient puis justifie ton résultat avec une phrase complète.",
         "correction": "Il faut diviser puis vérifier le résultat.",
-        "response_type": "short_text", "choices": [], "level5": 3,
+        "response_type": "short_text", "choices": [], "level3": 3,
         "figure": None, "grading": {"max_score": 1, "comparator": "numeric"},
         "inline": False,
     } for i in range(5)]

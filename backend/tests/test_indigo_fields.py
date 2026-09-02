@@ -411,13 +411,13 @@ def test_full_copy_renders_with_mini_and_blank_right():
         {"kind": "exercise", "item_id": "m1",
          "statement": "Complète : $60 =${{mini}} $\\times${{mini}}",
          "correction": "Rappelle-toi la décomposition en facteurs.",
-         "response_type": "multi_blank", "choices": [], "level5": 3, "figure": None,
+         "response_type": "multi_blank", "choices": [], "level3": 3, "figure": None,
          "grading": {"max_score": 2, "comparator": "table_cells",
                      "cells": [[_int(2), _int(30)]]}, "inline": True},
         {"kind": "exercise", "item_id": "w1",
          "statement": "Développe et réduis : {{blank_right}}",
          "correction": "Distributivité simple.",
-         "response_type": "short_text", "choices": [], "level5": 3, "figure": None,
+         "response_type": "short_text", "choices": [], "level3": 3, "figure": None,
          "grading": {"max_score": 2, "comparator": "symbolic_equiv"}, "inline": True},
     ]
     out = Path(tempfile.mkdtemp()) / "copy.pdf"

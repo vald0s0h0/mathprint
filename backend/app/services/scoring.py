@@ -142,6 +142,64 @@ def fallback_bareme(response_type: str, grading: dict) -> float:
     return 1.0         # réponse courte, tracé : l'unité de référence
 
 
+# ------------------------------------------------------ barème CODÉ des QCM
+#
+# Pipeline « QCM only » (services.indigo_qcm) : le barème n'est PLUS demandé au
+# modèle, il est CALCULÉ ici. Un LLM à qui l'on demande d'estimer ce que vaut un
+# exercice répond au jugé, et deux QCM identiques repartaient avec des barèmes
+# différents. La règle tient en deux nombres, et elle est la même pour l'élève
+# que pour le professeur :
+#
+#   - QCM à réponse UNIQUE : l'élève prend UNE décision (quelle case cocher),
+#     elle vaut 1 point, tout ou rien.
+#   - QCM à choix MULTIPLES et grille à cocher : chaque case est une décision, et
+#     chaque décision juste vaut un demi-point — cocher une case qu'il fallait
+#     cocher COMME laisser vide une case qu'il ne fallait pas cocher.
+#
+# L'unité d'une GRILLE est la LIGNE, pas la cellule : c'est ce que le moteur de
+# correction sait mesurer (comparator "grid" compte les lignes dont la colonne
+# cochée est la bonne, cf. services.grading). Compter les cellules ferait diverger
+# le barème affiché des points réellement attribués.
+QCM_SINGLE_POINTS = 1.0
+QCM_BOX_POINTS = 0.5
+# Bornes qui garantissent que le barème calculé reste sous BAREME_MAX (un seul
+# exercice ne peut pas peser un quart d'un sujet noté sur 20) : 8 propositions
+# -> 4 points, 10 lignes -> 5 points. Elles sont FAITES RESPECTER en amont
+# (services.indigo_check), pour qu'un dépassement soit un refus explicite et non
+# un écrêtage silencieux de snap_bareme.
+QCM_MAX_CHOICES = 8
+QCM_MAX_GRID_ROWS = 10
+
+
+def qcm_bareme(response_type: str, grading: dict) -> float:
+    """Barème CODÉ d'un QCM, en points professeur. Lève ValueError si la
+    structure dépasse les bornes : mieux vaut refuser l'exercice que publier un
+    barème écrêté qui ne correspondrait plus à la notation."""
+    g = grading or {}
+    if response_type == "qcm_single":
+        return QCM_SINGLE_POINTS
+    if response_type == "qcm_multiple":
+        n = len(g.get("choices") or [])
+        if not 2 <= n <= QCM_MAX_CHOICES:
+            raise ValueError(f"QCM multiple : {n} proposition(s), attendu 2 à "
+                             f"{QCM_MAX_CHOICES}")
+        return QCM_BOX_POINTS * n
+    if response_type == "checkbox_grid":
+        n = len(g.get("rows") or [])
+        if not 2 <= n <= QCM_MAX_GRID_ROWS:
+            raise ValueError(f"Grille à cocher : {n} ligne(s), attendu 2 à "
+                             f"{QCM_MAX_GRID_ROWS}")
+        return QCM_BOX_POINTS * n
+    raise ValueError(f"Barème QCM demandé pour un format non-QCM : {response_type!r}")
+
+
+def with_qcm_bareme(grading: dict, response_type: str) -> dict:
+    """Copie de `grading` dont `bareme_points` est le barème CODÉ (§ qcm_bareme).
+    Écrase toute valeur qui viendrait du modèle."""
+    return {**(grading or {}),
+            "bareme_points": qcm_bareme(response_type, grading or {})}
+
+
 def item_bareme(grading: dict, response_type: str) -> float:
     """Barème d'un exercice, en points professeur. Source de vérité unique :
     tout ce qui a besoin du barème passe ici, jamais par grading_json en
@@ -203,18 +261,67 @@ def assessment_note_base(assessment: Assessment) -> int:
 
 # ------------------------------------------------------- consolidation d'une copie
 
-def _latest_decision(db: Session, item: CopyItem) -> GradingDecision | None:
+def _latest_response_and_decision(
+        db: Session, item: CopyItem) -> tuple[StudentResponse | None, GradingDecision | None]:
+    """Réponse de l'élève et DERNIÈRE décision la concernant (les décisions sont
+    append-only : c'est la plus récente qui fait foi)."""
     resp = db.query(StudentResponse).filter_by(copy_item_id=item.id).first()
     if not resp:
-        return None
-    return (db.query(GradingDecision).filter_by(response_id=resp.id)
-            .order_by(GradingDecision.created_at.desc()).first())
+        return None, None
+    return resp, (db.query(GradingDecision).filter_by(response_id=resp.id)
+                  .order_by(GradingDecision.created_at.desc()).first())
+
+
+def assessment_date(assessment: Assessment, copy: Copy | None = None):
+    """Jour où l'élève a FAIT le sujet — la date que mesure la courbe de l'oubli.
+
+    Surtout pas la date de finalisation : un lot corrigé dix jours après le
+    contrôle offrirait sinon dix jours de fraîcheur en cadeau. On prend la date
+    programmée par le professeur, à défaut celle de génération de la copie."""
+    return (assessment.scheduled_at
+            or (copy.generated_at if copy is not None else None)
+            or now())
 
 
 def _item_competency_id(db: Session, item: CopyItem) -> str | None:
     row = (db.query(ExerciseCompetency)
            .filter_by(exercise_id=item.catalog_id).first())
     return row.competency_id if row else None
+
+
+def student_answer_text(db: Session, resp: StudentResponse | None) -> str:
+    """Réponse de l'élève aplatie en une chaîne lisible, pour l'historique de
+    suivi (CopyItemResult.answer_text).
+
+    C'est un INSTANTANÉ d'affichage : student_responses et ocr_attempts restent
+    la source de vérité (choix cochés, paires reliées, cellules lues) ; celle-ci
+    sert à relire d'un coup d'œil ce que l'élève avait écrit, des mois plus
+    tard, sans rejoindre quatre tables.
+
+    Les cellules d'un tableau ne sont PAS dans student_responses (final_text y
+    reste vide, cf. services.pipeline) mais dans la lecture effective de la
+    zone — d'où le passage par `effective_reading`, la même que celle affichée
+    au professeur dans la modale de correction : l'historique doit montrer la
+    réponse RETENUE, correction manuelle comprise, pas la première lecture."""
+    if resp is None:
+        return ""
+    if (resp.final_text or "").strip():
+        return resp.final_text.strip()
+    if resp.selected_choices:
+        return ", ".join(str(c) for c in resp.selected_choices)
+    if resp.selected_pairs:
+        return " ; ".join(
+            f"{p[0]}→{p[1]}" if isinstance(p, (list, tuple)) and len(p) >= 2 else str(p)
+            for p in resp.selected_pairs)
+    # import local : pipeline importe scoring au chargement (l'inverse en
+    # module ferait un cycle), mais on ne veut pas dupliquer ici la règle de
+    # choix de la lecture effective — deux règles finiraient par diverger.
+    from .pipeline import effective_reading
+    reading = effective_reading(db, resp.zone_id)
+    cells = (reading.raw_json or {}).get("cells") if reading else None
+    if isinstance(cells, list):
+        return " | ".join("" if c is None else str(c) for c in cells)
+    return (reading.text or "").strip() if reading else ""
 
 
 def compute_copy_result(db: Session, copy: Copy,
@@ -228,6 +335,10 @@ def compute_copy_result(db: Session, copy: Copy,
     (copy_items → student_responses → grading_decisions → manual_reviews) et de
     reconstituer le barème à chaque lecture.
 
+    C'est aussi l'HISTORIQUE que lit le moteur de sujets individuels : chaque
+    CopyItemResult retient l'exercice de banque servi, son dérivé, la réponse de
+    l'élève et le JOUR DU DEVOIR (cf. modèle CopyItemResult).
+
     IDEMPOTENT : re-finaliser un lot recalcule au lieu d'empiler.
 
     Ne comptent QUE les exercices réellement corrigés : une copie non scannée,
@@ -237,16 +348,16 @@ def compute_copy_result(db: Session, copy: Copy,
     items = (db.query(CopyItem).filter_by(copy_id=copy.id)
              .order_by(CopyItem.sequence).all())
 
-    graded: list[tuple[CopyItem, GradingDecision, float, float]] = []
+    graded: list[tuple[CopyItem, GradingDecision, float, float, StudentResponse | None]] = []
     for item in items:
-        decision = _latest_decision(db, item)
+        resp, decision = _latest_response_and_decision(db, item)
         if not decision or decision.status == "review_pending":
             continue
         if not decision.max_score:
             continue  # question annulée par le professeur : hors barème
         bareme = item_bareme(item.grading_json, item.response_type)
         earned = earned_points(decision.score, decision.max_score, bareme)
-        graded.append((item, decision, bareme, earned))
+        graded.append((item, decision, bareme, earned, resp))
 
     if not graded:
         return None  # copie non scannée / non corrigée : rien à consolider
@@ -271,12 +382,22 @@ def compute_copy_result(db: Session, copy: Copy,
     db.flush()
 
     db.query(CopyItemResult).filter_by(copy_result_id=result.id).delete()
-    for item, decision, bareme, earned in graded:
+    occurred_at = assessment_date(assessment, copy)
+    for item, decision, bareme, earned, resp in graded:
         db.add(CopyItemResult(
             copy_result_id=result.id, copy_item_id=item.id,
             competency_id=_item_competency_id(db, item),
+            student_id=copy.student_id,
+            generated_exercise_id=item.generated_exercise_id,
             sequence=item.sequence, response_type=item.response_type,
-            difficulty=item.difficulty, score=decision.score,
+            difficulty=item.difficulty,
+            # dérivé 1-3 : CopyItem.difficulty porte l'échelle 3/6/9
+            difficulty_level=max(1, min(3, round(item.difficulty / 3))),
+            answer_text=student_answer_text(db, resp),
+            success_ratio=(max(0.0, min(1.0, decision.score / decision.max_score))
+                           if decision.max_score else 0.0),
+            occurred_at=occurred_at,
+            score=decision.score,
             max_score=decision.max_score, bareme_points=bareme,
             points_earned=earned))
     db.flush()

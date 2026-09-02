@@ -2,30 +2,27 @@
 de compétences depuis ce sujet, jamais de rouge) + courte synthèse Claude
 Haiku, calées sur la zone Appréciation de l'en-tête (pdfgen.header_geometry).
 
-Le même appel Claude produit aussi, en JSON structuré, un plan de travail
-prévisionnel (compétences à revoir, difficulté et rythme), persisté sur
-Student.next_plan_json et réutilisé lors de la création du sujet suivant.
+Cet appel produisait aussi une « trame » d'exercices pour le sujet suivant.
+Elle a été supprimée : écrite à la correction, elle pariait sur une date de
+sujet suivant que personne ne connaissait, alors que c'est exactement le délai
+écoulé qui décide de ce qu'il faut retravailler. La trame est désormais
+calculée sans LLM au moment de composer le sujet, sur l'historique réel
+(services.student_history).
 """
-from datetime import datetime, timezone
-
 from sqlalchemy.orm import Session
 
 from ..models import Competency, CompetencyEvidence, CompetencyStateHistory, Copy, CopyItem, Student
 from . import forgetting, providers
+from .runtime_settings import appreciation_synthesis_enabled
 
 MAX_COMPETENCIES = 3
 
 _SYSTEM = (
-    "Tu produis, pour une copie de mathématiques corrigée, un JSON strict à "
-    "deux champs. \"synthesis\" : une phrase courte et encourageante (1 "
+    "Tu produis, pour une copie de mathématiques corrigée, un JSON strict à un "
+    "seul champ. \"synthesis\" : une phrase courte et encourageante (1 "
     "phrase, 25 mots maximum), fondée uniquement sur les progrès de "
     "compétences fournis, jamais de ton négatif, jamais de comparaison avec "
-    "d'autres élèves, pas de nom propre (chaîne vide si aucun progrès). "
-    "\"next_plan\" : un plan de travail prévisionnel pour les prochains "
-    "exercices de cet élève, fondé sur les compétences dues (courbe "
-    "d'oubli) fournies — {\"competency_ids\": [str,...] (3 maximum), "
-    "\"difficulty_level\": entier 1-5, \"quantity\": entier 2-6, "
-    "\"pacing_days\": entier}."
+    "d'autres élèves, pas de nom propre (chaîne vide si aucun progrès)."
 )
 
 
@@ -74,12 +71,18 @@ def compute_competency_progress(db: Session, assessment_id: str, student_id: str
     return out[:MAX_COMPETENCIES]
 
 
-def _build_synthesis_and_plan(db: Session, student: Student, progress: list[dict],
-                              due: list[dict]) -> dict:
-    """Un seul appel Claude Haiku (JSON) : synthèse de la zone Appréciation +
-    plan de travail prévisionnel (jamais un second appel LLM à ce stade)."""
+def _build_synthesis(db: Session, student: Student, progress: list[dict],
+                     due: list[dict]) -> str:
+    """Un seul appel Claude Haiku (JSON) : la phrase de la zone Appréciation.
+
+    Les compétences dues restent transmises : ce sont elles qui permettent
+    d'encourager sur ce qui vient, pas seulement sur ce qui est acquis.
+    Désactivée par défaut (Paramètres > Pédagogie) : la partie déterministe
+    de l'appréciation (progrès de compétences) reste affichée sans elle."""
+    if not appreciation_synthesis_enabled(db):
+        return ""
     if not progress and not due:
-        return {"synthesis": "", "next_plan": None}
+        return ""
     payload = {"pseudonym": student.llm_pseudonym, "progress": progress,
               "due_competencies": due[:5]}
     try:
@@ -87,16 +90,13 @@ def _build_synthesis_and_plan(db: Session, student: Student, progress: list[dict
             db, "appreciation_synthesis", _SYSTEM, payload,
             max_tokens=250, correlation_id=student.llm_pseudonym)
     except Exception:
-        return {"synthesis": "", "next_plan": None}
-    return {"synthesis": result.get("synthesis") or "", "next_plan": result.get("next_plan")}
+        return ""
+    return result.get("synthesis") or ""
 
 
 def build_appreciation(db: Session, assessment_id: str, student: Student) -> dict:
-    """Payload complet {progress, synthesis} pour l'overlay et le cache Copy.
-    Persiste en plus, en aparté, le plan de travail prévisionnel de l'élève."""
+    """Payload complet {progress, synthesis} pour l'overlay et le cache Copy."""
     progress = compute_competency_progress(db, assessment_id, student.id)
     due = forgetting.due_competencies(db, student.id)
-    result = _build_synthesis_and_plan(db, student, progress, due)
-    student.next_plan_json = result.get("next_plan")
-    student.next_plan_updated_at = datetime.now(timezone.utc)
-    return {"progress": progress, "synthesis": result.get("synthesis", "")}
+    return {"progress": progress,
+            "synthesis": _build_synthesis(db, student, progress, due)}

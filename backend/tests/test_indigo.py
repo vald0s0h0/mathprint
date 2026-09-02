@@ -42,11 +42,11 @@ def test_cv_probleme_difficulty_from_title_color():
         img = np.full((120, 300, 3), 255, np.uint8)
         cv2.putText(img, "Titre", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 1.4, bgr, 4)
         return img
-    # vert -> moyen (diff 3), orange -> facile (diff 2)
-    assert indigo_cv.analyze(title((58, 198, 118)), True)["difficulty"] == 3
-    assert indigo_cv.analyze(title((42, 133, 244)), True)["difficulty"] == 2
-    # gris/noir (peu saturé) -> difficile (diff 4)
-    assert indigo_cv.analyze(title((32, 31, 35)), True)["difficulty"] == 4
+    # trois niveaux (§ exercise_gen.DIFFICULTY_LEVELS) : orange -> facile,
+    # vert -> moyen, gris/noir (peu saturé) -> difficile
+    assert indigo_cv.analyze(title((42, 133, 244)), True)["difficulty"] == 1
+    assert indigo_cv.analyze(title((58, 198, 118)), True)["difficulty"] == 2
+    assert indigo_cv.analyze(title((32, 31, 35)), True)["difficulty"] == 3
 
 
 def test_cv_expert_from_mint_background():
@@ -56,7 +56,7 @@ def test_cv_expert_from_mint_background():
     mint = np.full((160, 240, 3), (243, 243, 225), np.uint8)   # BGR de (225,243,243)
     cv2.circle(mint, (28, 28), 16, (185, 180, 40), -1)          # badge teal
     assert indigo_cv.analyze(mint, False, number_box=nb)["badge_type"] == "expert"
-    assert indigo_cv.analyze(mint, False, number_box=nb)["difficulty"] == 5
+    assert indigo_cv.analyze(mint, False, number_box=nb)["difficulty"] == 3
     # même badge sur fond BLANC -> reste exercice (le blanc est hors tolérance)
     white = _badge_crop((185, 180, 40))
     assert indigo_cv.analyze(white, False, number_box=nb)["badge_type"] == "exercice"
@@ -441,7 +441,7 @@ def test_composite_card_renders_one_zone_per_part():
          "expected": {"type": "integer", "value": 6}}]
     item = {"kind": "exercise", "response_type": "composite", "item_id": "i0",
             "part_item_ids": ["i0", "i1"], "statement": "Contexte de l'exercice composite.",
-            "correction": "Guide.", "grading": {"parts": parts}, "level5": 3,
+            "correction": "Guide.", "grading": {"parts": parts}, "level3": 3,
             "calc": "autorisee", "is_probleme": False, "figure": None}
     c = canvas.Canvas(io.BytesIO())
     zones = pdfgen.render_copy(c, student_name="T", class_name="3e", title="T",
@@ -1013,7 +1013,7 @@ def test_publish_seed_and_bank_source(db, tmp_path):
     cv2.imwrite(str(tmp_path / "indigo" / "drafts" / "x_fig.png"), np.full((30, 30, 3), 180, np.uint8))
     db.add(IndigoExercise(
         id="x", competency_id=c.id, grade_level="3e", source_number="12",
-        badge_type="probleme", difficulty=4, calculator="interdite", title="Le partage",
+        badge_type="probleme", difficulty=3, calculator="interdite", title="Le partage",
         statement="Combien de parts ?", response_type="short_text",
         expected_json={"type": "integer", "value": 4}, grading_json={"comparator": "numeric", "max_score": 1},
         correction_guide="Attention aux unités.", correction_solution="4 parts.",
@@ -1031,8 +1031,10 @@ def test_publish_seed_and_bank_source(db, tmp_path):
     assert ge.figure_json["type"] == "image"                    # figure = crop image
     assert (ge.raw_extract_json["indigo"]["calculator"]) == "interdite"
 
+    # publié sur l'échelle à 3 niveaux, sans repli de conversion (fichier v2)
+    assert ge.difficulty_level == 3
     # sélectionnable comme source de sujet
-    pool = exercise_gen.ensure_bank(db, c, 4, source="indigo")
+    pool = exercise_gen.ensure_bank(db, c, 3, source="indigo")
     assert len(pool) == 1 and pool[0].id == "x"
 
 

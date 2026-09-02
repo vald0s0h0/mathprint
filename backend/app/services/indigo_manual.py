@@ -76,6 +76,40 @@ def raster_page(doc: "fitz.Document", idx: int, dpi: int = RASTER_DPI) -> np.nda
     return _pixmap_to_bgr(doc[idx].get_pixmap(dpi=dpi))
 
 
+def text_blocks(doc: "fitz.Document", idx: int, dpi: int = RASTER_DPI) -> list[dict]:
+    """Blocs de la COUCHE TEXTE d'une page, au format des blocs Mistral.
+
+    Le manuel du PROFESSEUR est un PDF texte (contrairement au manuel élève, qui
+    n'est qu'une suite d'images) : ses corrigés se lisent GRATUITEMENT avec
+    PyMuPDF, sans passer par l'OCR payant. On rend donc les blocs dans le
+    vocabulaire de Mistral (`type`, `content`, `top_left_x/y`,
+    `bottom_right_x/y`), à l'échelle du raster de travail, pour que tout l'aval
+    — `_order_blocks`, `_leading_num`, `_segment_corrections_by_numbers` —
+    fonctionne sans savoir d'où viennent les blocs.
+
+    Rend [] sur une page sans texte : l'appelant repasse alors par l'OCR (cf.
+    services.indigo_index), au lieu de croire la page vide."""
+    page = doc[idx]
+    scale = dpi / 72.0                       # PyMuPDF travaille en points (72 dpi)
+    out: list[dict] = []
+    for x0, y0, x1, y1, content, _no, _type in page.get_text("blocks"):
+        text = str(content or "").strip()
+        if not text:
+            continue
+        out.append({"type": "text", "content": text,
+                    "top_left_x": x0 * scale, "top_left_y": y0 * scale,
+                    "bottom_right_x": x1 * scale, "bottom_right_y": y1 * scale})
+    return out
+
+
+def page_dims(doc: "fitz.Document", idx: int, dpi: int = RASTER_DPI) -> dict:
+    """Dimensions de la page dans le repère du raster (mêmes unités que les
+    bbox rendues par `text_blocks`)."""
+    rect = doc[idx].rect
+    scale = dpi / 72.0
+    return {"width": rect.width * scale, "height": rect.height * scale}
+
+
 def build_mini_pdf(doc: "fitz.Document", page_indices: list[int]) -> bytes:
     """Mini-PDF ne contenant QUE les pages demandées (indices 0-based, dans
     l'ordre donné) — envoyé tel quel à l'OCR Mistral, qui renumérote à partir

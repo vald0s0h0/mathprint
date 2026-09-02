@@ -26,9 +26,9 @@ export const TEMPLATE_DEFAULTS: DocTemplates = {
 // pt (PDF) -> px (aperçu) : l'aperçu est agrandi pour rester lisible à l'écran
 const S = 1.7
 
-// Miroir de pdfgen.DIFFICULTY_COLORS (badge de numéro d'exercice, 1 -> 5)
+// Miroir de pdfgen.DIFFICULTY_COLORS (badge de numéro d'exercice, 1 -> 3)
 const DIFFICULTY_COLORS: Record<number, string> = {
-  1: '#2563EB', 2: '#16A34A', 3: '#CA8A04', 4: '#EA580C', 5: '#DC2626',
+  1: '#16A34A', 2: '#EA580C', 3: '#DC2626',
 }
 
 type Sel =

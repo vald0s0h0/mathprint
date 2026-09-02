@@ -11,7 +11,7 @@ import {
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
 import {
-  AlertTriangle, Check, ChevronLeft, ChevronRight, Eye, Inbox, RefreshCw, ScanLine,
+  AlertTriangle, ChevronLeft, ChevronRight, Eye, Inbox, RefreshCw, ScanLine,
   Trash2, Upload,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -95,15 +95,6 @@ type SandboxResult = {
   duplicates_rejected: number; blocked_pages: number; batches_created: string[]
 }
 type Scope = 'flagged' | 'all'
-// récapitulatif prévisionnel montré avant de verrouiller la correction
-type SummaryCopy = {
-  student: string; points_earned: number; points_total: number
-  note: number | null; graded_items: number; flagged: number
-}
-type BatchSummary = {
-  assessment_title: string; note_base: number | null; pending_reviews: number
-  scanned_copies: number; copies: SummaryCopy[]
-}
 
 const SEG_COLORS: Record<SegState, string> = {
   green: 'var(--mantine-color-green-6)', orange: 'var(--mantine-color-orange-6)',
@@ -118,14 +109,19 @@ const CATEGORY_LABELS: Record<string, string> = {
 
 // Étape « métier » d'un lot, dérivée de son statut technique — c'est elle qui
 // pilote le libellé de la carte et l'action proposée au professeur.
-type Stage = 'awaiting' | 'processing' | 'error' | 'ocr_review' | 'review' | 'validate' | 'done'
+type Stage = 'awaiting' | 'processing' | 'error' | 'ocr_review' | 'review' | 'done'
 function stageOf(b: Batch): Stage {
   if (b.status === 'awaiting_scan') return 'awaiting'
   if (b.error) return 'error'
   if (b.status === 'finalized' || b.status === 'overlay_ready') return 'done'
   if (b.status === 'ocr_review_pending' || b.pending_ocr > 0) return 'ocr_review'
-  if (b.status === 'graded' || b.status === 'review_pending')
-    return b.pending_reviews > 0 ? 'review' : 'validate'
+  if (b.status === 'graded' || b.status === 'review_pending') {
+    // dès la dernière revue tranchée, le serveur enchaîne seul sur la
+    // finalisation et les copies corrigées (halte « Valider » supprimée,
+    // 02/09) — un lot qui reste ici sans revue en attente est en train d'y
+    // passer (ou un lot ancien pas encore rafraîchi) : traité comme en cours.
+    return b.pending_reviews > 0 ? 'review' : 'processing'
+  }
   return 'processing'  // uploaded → split → … → ocr_complete
 }
 const STAGE_BADGE: Record<Stage, { label: string; color: string }> = {
@@ -134,7 +130,6 @@ const STAGE_BADGE: Record<Stage, { label: string; color: string }> = {
   error: { label: 'bloqué', color: 'red' },
   ocr_review: { label: 'lecture à vérifier', color: 'blue' },
   review: { label: 'à corriger', color: 'orange' },
-  validate: { label: 'corrigé — à valider', color: 'teal' },
   done: { label: 'prêt à imprimer', color: 'green' },
 }
 
@@ -420,8 +415,6 @@ export default function Corrections() {
   const [savingOcr, setSavingOcr] = useState(false)
   const ocrLatexRef = useRef<HTMLDivElement>(null)
   const [scope, setScope] = useState<Scope>('flagged')
-  const [validateBatch, setValidateBatch] = useState<Batch | null>(null)
-  const [summary, setSummary] = useState<BatchSummary | null>(null)
   const [mathpixOk, setMathpixOk] = useState(true)
   const [llmOk, setLlmOk] = useState(true)
   const [previewId, setPreviewId] = useState<string | null>(null)
@@ -764,24 +757,10 @@ export default function Corrections() {
     }
   }
 
-  // ouvre la modale de validation : récapitulatif prévisionnel (note de chaque
-  // élève, réponses encore à corriger) À VÉRIFIER avant de verrouiller
-  async function openValidate(b: Batch) {
-    setValidateBatch(b); setSummary(null)
-    try {
-      setSummary(await api.get<BatchSummary>(`/api/scans/batches/${b.id}/summary`))
-    } catch (e) {
-      notifications.show({ color: 'red', message: (e as Error).message })
-      setValidateBatch(null)
-    }
-  }
-  function closeValidate() { setValidateBatch(null); setSummary(null) }
-  async function confirmValidate() {
-    const b = validateBatch
-    closeValidate()
-    if (b) await finalize(b)
-  }
-
+  // Recalcule/régénère les copies corrigées après un ajustement manuel — la
+  // finalisation elle-même est désormais automatique dès la dernière revue
+  // tranchée (halte « Valider la correction » supprimée, 02/09) ; ce bouton
+  // ne sert plus qu'au « Recalculer » de l'étape « prêt à imprimer ».
   async function finalize(b: Batch) {
     try {
       const r = await api.post<{ evidence_created: number; overlay_error: string | null }>(
@@ -1127,27 +1106,6 @@ export default function Corrections() {
                         </>
                       )}
 
-                      {stage === 'validate' && (
-                        <>
-                          <Button size="xs" leftSection={<ScanLine size={14} />}
-                            onClick={() => openCorrection(b, 'all')}>
-                            Corriger les copies
-                          </Button>
-                          <Tooltip multiline w={250}
-                            label="Ouvre un récapitulatif (note de chaque élève, réponses restant à corriger) à vérifier avant de verrouiller et générer les copies corrigées.">
-                            <Button size="xs" color="green" leftSection={<Check size={14} />}
-                              onClick={() => openValidate(b)}>
-                              Valider la correction
-                            </Button>
-                          </Tooltip>
-                          <Tooltip label="Effacer cette correction et re-scanner depuis zéro">
-                            <ActionIcon variant="subtle" color="red" size="lg" onClick={() => setResetTarget(b)}>
-                              <Trash2 size={16} />
-                            </ActionIcon>
-                          </Tooltip>
-                        </>
-                      )}
-
                       {stage === 'done' && (
                         <>
                           {overlayReady && (
@@ -1200,80 +1158,6 @@ export default function Corrections() {
             </Button>
           </Group>
         </Stack>
-      </Modal>
-
-      <Modal opened={!!validateBatch} onClose={closeValidate} size="lg"
-        title={<Text fw={650}>Valider la correction — {validateBatch?.assessment_title}</Text>}>
-        {!summary ? (
-          <Text c="dimmed" py="md">Calcul du récapitulatif…</Text>
-        ) : (
-          <Stack>
-            {summary.pending_reviews > 0 && (
-              <Alert color="orange" variant="light" icon={<AlertTriangle size={18} />}>
-                <Group justify="space-between" wrap="nowrap">
-                  <Text size="sm">
-                    Il reste <b>{summary.pending_reviews}</b> réponse(s) à corriger.
-                    Terminez la correction avant de valider.
-                  </Text>
-                  <Button size="xs" color="orange" style={{ flexShrink: 0 }}
-                    onClick={() => { const b = validateBatch; closeValidate(); if (b) openCorrection(b, 'flagged') }}>
-                    Corriger les copies
-                  </Button>
-                </Group>
-              </Alert>
-            )}
-            <Text size="sm" c="dimmed">
-              {summary.scanned_copies} copie(s) scannée(s)
-              {summary.note_base ? ` · score ramené sur ${summary.note_base}` : ''}.
-              Vérifiez les notes ci-dessous : valider les verrouille, calcule la note
-              de chaque élève et génère les copies corrigées à imprimer.
-            </Text>
-            <div style={{ maxHeight: '46vh', overflowY: 'auto' }}>
-              <Table stickyHeader highlightOnHover>
-                <Table.Thead>
-                  <Table.Tr>
-                    <Table.Th>Élève</Table.Th>
-                    <Table.Th w={110} ta="center">À corriger</Table.Th>
-                    <Table.Th w={110} ta="right">Points</Table.Th>
-                    <Table.Th w={80} ta="right">Note</Table.Th>
-                  </Table.Tr>
-                </Table.Thead>
-                <Table.Tbody>
-                  {summary.copies.map((c) => (
-                    <Table.Tr key={c.student}>
-                      <Table.Td>{c.student}</Table.Td>
-                      <Table.Td ta="center">
-                        {c.flagged > 0
-                          ? <Badge size="sm" color="orange" variant="light">{c.flagged}</Badge>
-                          : <Text size="sm" c="dimmed">—</Text>}
-                      </Table.Td>
-                      <Table.Td ta="right" style={{ fontVariantNumeric: 'tabular-nums' }}>
-                        {fmtPts(c.points_earned)} / {fmtPts(c.points_total)}
-                      </Table.Td>
-                      <Table.Td ta="right" fw={600} style={{ fontVariantNumeric: 'tabular-nums' }}>
-                        {c.note != null && summary.note_base
-                          ? `${fmtPts(c.note)}/${summary.note_base}` : '—'}
-                      </Table.Td>
-                    </Table.Tr>
-                  ))}
-                  {summary.copies.length === 0 && (
-                    <Table.Tr><Table.Td colSpan={4}>
-                      <Text size="sm" c="dimmed">Aucune copie scannée à valider.</Text>
-                    </Table.Td></Table.Tr>
-                  )}
-                </Table.Tbody>
-              </Table>
-            </div>
-            <Group justify="flex-end">
-              <Button variant="subtle" onClick={closeValidate}>Annuler</Button>
-              <Button color="green" leftSection={<Check size={14} />}
-                disabled={summary.pending_reviews > 0 || summary.copies.length === 0}
-                onClick={confirmValidate}>
-                Valider et générer les copies corrigées
-              </Button>
-            </Group>
-          </Stack>
-        )}
       </Modal>
 
       <Modal opened={!!ocrBatch} onClose={closeOcr} size="xl"
@@ -1638,13 +1522,6 @@ export default function Corrections() {
                   : `${remaining} réponse(s) signalée(s) encore à vérifier`}
             </Text>
             <Group gap="xs">
-              {reviewBatch && remaining === 0
-                && (reviewBatch.status === 'graded' || reviewBatch.status === 'review_pending') && (
-                <Button size="xs" color="green" leftSection={<Check size={14} />}
-                  onClick={() => { const b = reviewBatch; closeCorrection(); if (b) openValidate(b) }}>
-                  Valider la correction
-                </Button>
-              )}
               <Button size="xs" variant="default" onClick={closeCorrection}>Fermer</Button>
             </Group>
           </Group>

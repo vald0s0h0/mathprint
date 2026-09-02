@@ -188,7 +188,7 @@ def test_ensure_bank_sesamaths_end_to_end_mock(db_session):
     # niveau 3 : la difficulté n'est plus évaluée par le LLM (17/07), le pool
     # mock entier est donc toujours au niveau 3 par défaut (cf. _to_candidate)
     comp = _seed_competency(db_session, "A1", "Opérations", "Effectuer une division euclidienne")
-    rows = sesamaths.ensure_bank(db_session, comp, level=3)
+    rows = sesamaths.ensure_bank(db_session, comp, level=sesamaths.SESAMATHS_LEVEL)
     assert len(rows) >= 1
     assert all(r.source in sesamaths.SOURCE_POOL for r in rows)
     stored = db_session.query(GeneratedExercise).filter_by(competency_id=comp.id).all()
@@ -221,7 +221,7 @@ def test_ensure_bank_stores_whole_series_pool_not_a_fixed_quota(db_session, monk
     comp.code = "A1.1"
     db_session.commit()
 
-    rows = sesamaths.ensure_bank(db_session, comp, level=3)
+    rows = sesamaths.ensure_bank(db_session, comp, level=sesamaths.SESAMATHS_LEVEL)
     assert len(rows) == 7
     stored = db_session.query(GeneratedExercise).filter_by(
         competency_id=comp.id, source="sesamaths").all()
@@ -233,7 +233,7 @@ def test_raw_extract_json_populated_by_mock_pipeline(db_session):
     # BRUTS dont elle provient, pour l'affichage "avant/après" de la page
     # Banque (cf. content.py::_exercise_out).
     comp = _seed_competency(db_session, "A1", "Opérations", "Effectuer une division euclidienne")
-    sesamaths.ensure_bank(db_session, comp, level=3)
+    sesamaths.ensure_bank(db_session, comp, level=sesamaths.SESAMATHS_LEVEL)
     stored = (db_session.query(GeneratedExercise)
               .filter_by(competency_id=comp.id, source="sesamaths").all())
     assert stored
@@ -288,7 +288,7 @@ def test_retired_exercise_not_reinserted(db_session):
     # jamais redevenir piochable dans le pool caché de la Série au prochain
     # ensure_bank — cause identifiée de "les mêmes exercices reviennent".
     comp = _seed_competency(db_session, "A1", "Opérations", "Effectuer une division euclidienne")
-    rows1 = sesamaths.ensure_bank(db_session, comp, level=3)
+    rows1 = sesamaths.ensure_bank(db_session, comp, level=sesamaths.SESAMATHS_LEVEL)
     victim = next(r for r in rows1 if r.source == "sesamaths")
     victim_statement = victim.statement
     victim.status = "retired"
@@ -298,7 +298,7 @@ def test_retired_exercise_not_reinserted(db_session):
     # lève PAS ici (rows non vide), même si le pool caché n'a rien de neuf à
     # offrir pour remplacer le retiré — ce qui est vérifié est que le retiré
     # ne réapparaît jamais, pas que le quota soit reconstitué.
-    sesamaths.ensure_bank(db_session, comp, level=3)
+    sesamaths.ensure_bank(db_session, comp, level=sesamaths.SESAMATHS_LEVEL)
     active_statements = {r.statement for r in
                          db_session.query(GeneratedExercise)
                          .filter_by(competency_id=comp.id, status="active").all()}
@@ -418,7 +418,7 @@ def test_to_candidate_crops_figure_from_bbox(db_session, manual_doc):
     assert cand["raw_extract_json"]["blocks"][0]["type"] == "image"
     # le niveau n'est plus évalué par le LLM (mis de côté le 17/07) : toujours
     # 3/5 par défaut, quelle que soit la valeur envoyée par l'adaptateur
-    assert cand["difficulty"] == 3
+    assert cand["difficulty"] == sesamaths.SESAMATHS_LEVEL
 
 
 def test_multi_field_exercise_stays_one_table_fill(db_session):
@@ -479,7 +479,7 @@ def test_ensure_bank_sesamaths_missing_manual_raises_clear_error(db_session, mon
     # PDF introuvable -> erreur CLAIRE, JAMAIS d'invention DeepSeek à la place
     # d'exercices qu'on n'a pas su extraire (exigence explicite).
     with pytest.raises(sesamaths.SesamathsExtractionError) as exc:
-        sesamaths.ensure_bank(db_session, comp, level=3)
+        sesamaths.ensure_bank(db_session, comp, level=sesamaths.SESAMATHS_LEVEL)
     assert "introuvable" in str(exc.value).lower()
     # aucune ligne inventée n'a été stockée
     assert db_session.query(GeneratedExercise).filter_by(competency_id=comp.id).count() == 0
@@ -493,7 +493,8 @@ def test_bank_rows_near_level_propagates_missing_manual(db_session, monkeypatch)
     monkeypatch.setattr(settings, "sesamaths_manuals", {})
     comp = _seed_competency(db_session, "A1", "Opérations", "Effectuer un calcul")
     with pytest.raises(sesamaths.SesamathsExtractionError):
-        exercise_gen.bank_rows_near_level(db_session, comp, level=3, source="sesamaths")
+        exercise_gen.bank_rows_near_level(db_session, comp, level=sesamaths.SESAMATHS_LEVEL,
+                                     source="sesamaths")
 
 
 def test_extraction_state_not_extracted_then_reports_pages(db_session):
@@ -551,7 +552,7 @@ def test_purge_bank_clears_exercises_and_extraction_state(db_session):
     from app.routers import content as content_router
 
     comp = _seed_competency(db_session, "A1", "Opérations", "Effectuer une division euclidienne")
-    sesamaths.ensure_bank(db_session, comp, level=3)
+    sesamaths.ensure_bank(db_session, comp, level=sesamaths.SESAMATHS_LEVEL)
     assert db_session.query(GeneratedExercise).count() > 0
     assert db_session.query(SesamathsChapterExtraction).count() > 0
     assert db_session.query(SesamathsLlmCache).count() > 0

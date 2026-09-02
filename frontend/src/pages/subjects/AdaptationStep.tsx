@@ -6,7 +6,12 @@ export const MODES = [
   { value: 'common', label: 'Commun', desc: 'Le même sujet pour toute la classe' },
   { value: 'common_variants', label: 'Variantes communes',
     desc: '3 variantes maximum pour toute la classe, distribuées au hasard (anti-copie)' },
-  { value: 'individual', label: 'Individuel', desc: 'Difficulté adaptée et copie unique par élève' },
+  {
+    value: 'individual',
+    label: 'Individuel',
+    desc: "Exercices choisis pour chaque élève d'après son historique : "
+      + 'lacunes à renforcer, courbe de l\'oubli, mix de dérivés selon son niveau',
+  },
 ]
 
 export default function AdaptationStep({

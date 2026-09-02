@@ -541,13 +541,8 @@ def claude_json(db: Session, operation: str, system: str, payload: dict,
                     "problemes": [], "reparable": False,
                     "raison": "Mock : verdict favorable en mode test"}
         if operation == "appreciation_synthesis":
-            due = payload.get("due_competencies") or []
             return {"synthesis": ("Bon travail sur ce sujet : les progrès mesurés sont "
-                                  "nets, continue sur cette lancée pour la suite."),
-                    "next_plan": {
-                        "competency_ids": [d.get("competency_id") for d in due[:3]],
-                        "difficulty_level": 3, "quantity": 4,
-                        "pacing_days": 7}}
+                                  "nets, continue sur cette lancée pour la suite.")}
         if operation == "sesamaths_adapt":
             return _sesamaths_adapt_mock(correlation_id or "")
         return {}

@@ -35,9 +35,12 @@ REF_RGB = {
     "difficile": (35, 31, 32),    # gris   — 0.137 0.122 0.125  (titre problème)
 }
 
-# type de badge -> difficulté normalisée 1-5
-DIFFICULTY_BY_TYPE = {"flash": 2, "exercice": 3, "expert": 5, "enigme": 4}
-DIFFICULTY_BY_LEVEL = {"facile": 2, "moyen": 3, "difficile": 4}
+# type de badge -> difficulté normalisée 1-3 (facile / moyen / difficile, cf.
+# exercise_gen.DIFFICULTY_LEVELS). Le manuel n'encode pas davantage de nuances :
+# un flash est une application directe, un expert et une énigme sont tous deux
+# la marche haute.
+DIFFICULTY_BY_TYPE = {"flash": 1, "exercice": 2, "expert": 3, "enigme": 3}
+DIFFICULTY_BY_LEVEL = {"facile": 1, "moyen": 2, "difficile": 3}
 
 # garde-fous : en dessous, on considère qu'il n'y a pas de couleur exploitable
 MIN_SAT = 0.28          # saturation minimale d'un badge coloré
@@ -133,7 +136,7 @@ def is_enigme_color(color: dict) -> bool:
 
 
 def classify(color: dict, is_probleme: bool, from_badge: bool = True) -> tuple[str, int]:
-    """→ (badge_type, difficulty 1-5). `badge_type` ∈ {exercice, flash, enigme,
+    """→ (badge_type, difficulty 1-3). `badge_type` ∈ {exercice, flash, enigme,
     probleme}. Un badge ROUGE l'emporte sur tout (énigme, seul indicateur =
     couleur du badge), à condition que la couleur vienne bien du badge
     (`from_badge`). Sinon : problème (difficulté = couleur du titre) ou badge
@@ -142,9 +145,9 @@ def classify(color: dict, is_probleme: bool, from_badge: bool = True) -> tuple[s
         return "enigme", DIFFICULTY_BY_TYPE["enigme"]
     if is_probleme:
         level = _classify_title(color)
-        return "probleme", DIFFICULTY_BY_LEVEL.get(level, 3)
+        return "probleme", DIFFICULTY_BY_LEVEL.get(level, 2)
     btype = _classify_badge(color)
-    return btype, DIFFICULTY_BY_TYPE.get(btype, 3)
+    return btype, DIFFICULTY_BY_TYPE.get(btype, 2)
 
 
 def _classify_badge(color: dict) -> str:

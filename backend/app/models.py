@@ -9,7 +9,9 @@ Conventions :
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    JSON, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -78,11 +80,13 @@ class Student(Base):
     llm_pseudonym: Mapped[str] = mapped_column(String, unique=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     level_locked: Mapped[bool] = mapped_column(Boolean, default=False)
-    # Trame prévisionnelle issue du dernier compte rendu de correction
-    # (compétences visées, difficulté, quantité, mix de types, rythme) —
-    # réutilisée à la création d'un sujet individuel pour éviter un 2e appel LLM.
-    next_plan_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    next_plan_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Il y avait ici une « trame » d'exercices écrite par le LLM à la fin de
+    # chaque correction. Elle a été supprimée : au moment où elle était écrite,
+    # rien ne disait QUAND le sujet suivant serait lancé, alors que c'est
+    # exactement le délai écoulé qui décide de ce qu'il faut retravailler. Le
+    # suivi est désormais factuel (copy_item_results) et la trame est calculée
+    # au moment de composer le sujet, avec la vraie date (services
+    # .student_history).
     school_class: Mapped["SchoolClass | None"] = relationship(back_populates="students")
 
 
@@ -147,11 +151,12 @@ class ExerciseCatalog(Base):
 
 class GeneratedExercise(Base):
     """Banque d'exercices créés par DeepSeek : un exercice concret et validé
-    par couple compétence × niveau de difficulté (1-5), stocké pour réutilisation."""
+    par couple compétence × niveau de difficulté (1-3 : facile/moyen/difficile),
+    stocké pour réutilisation."""
     __tablename__ = "generated_exercises"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
     competency_id: Mapped[str] = mapped_column(ForeignKey("competencies.id"))
-    difficulty_level: Mapped[int] = mapped_column(Integer)  # 1-5
+    difficulty_level: Mapped[int] = mapped_column(Integer)  # 1-3 (cf. exercise_gen.DIFFICULTY_LEVELS)
     variant: Mapped[int] = mapped_column(Integer, default=0)
     statement: Mapped[str] = mapped_column(Text)
     correction: Mapped[str] = mapped_column(Text, default="")
@@ -240,6 +245,15 @@ class CopyItem(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
     copy_id: Mapped[str] = mapped_column(ForeignKey("copies.id"))
     catalog_id: Mapped[str] = mapped_column(ForeignKey("exercise_catalog.id"))
+    # Ligne de banque RÉELLEMENT servie (generated_exercises.id). Sans elle,
+    # `catalog_id` ne désigne qu'une COMPÉTENCE (une seule entrée catalogue par
+    # compétence, cf. exercise_gen.ensure_catalog_ref) : impossible de savoir
+    # ensuite quel exercice l'élève a déjà vu, donc impossible de ne pas le lui
+    # resservir. Volontairement SANS ForeignKey, comme CopyItemResult
+    # .competency_id : la purge de la banque Indigo supprime des
+    # generated_exercises, et une FK ferait soit échouer la purge, soit
+    # détruire l'historique en cascade.
+    generated_exercise_id: Mapped[str | None] = mapped_column(String, nullable=True)
     sequence: Mapped[int] = mapped_column(Integer)
     difficulty: Mapped[int] = mapped_column(Integer, default=5)
     response_type: Mapped[str] = mapped_column(String)
@@ -398,7 +412,7 @@ class IndigoExercise(Base):
     # --- métadonnées lues par CV (badge/titre) ---
     badge_type: Mapped[str] = mapped_column(String, default="exercice")
     # exercice | flash | expert | enigme | probleme
-    difficulty: Mapped[int] = mapped_column(Integer, default=3)        # 1-5
+    difficulty: Mapped[int] = mapped_column(Integer, default=2)        # 1-3 (facile/moyen/difficile)
     badge_color_json: Mapped[dict] = mapped_column(JSON, default=dict) # {rgb, category, confidence} recalibrable
     title: Mapped[str] = mapped_column(String, default="")             # titre (problème/énigme)
     tags_json: Mapped[list] = mapped_column(JSON, default=list)        # ["Raisonner","Calculer"] (problèmes)
@@ -416,6 +430,14 @@ class IndigoExercise(Base):
     # contrat app complet (statement/response_type/answer/choices/…), prêt pour rendu/publication
     payload_json: Mapped[dict] = mapped_column(JSON, default=dict)
     raw_ocr_json: Mapped[dict] = mapped_column(JSON, default=dict)     # blocs OCR bruts (affichage avant/après)
+    # --- trio de variantes (mode « QCM only », cf. services.indigo_qcm) ---
+    # Un exercice du manuel donne TROIS lignes : la version de base et deux
+    # DÉRIVÉS (un plus facile, un plus difficile), pour que le même exercice
+    # existe aux trois niveaux de la plateforme. « Dérivé » et pas « variante » :
+    # les VARIANTES d'un sujet sont autre chose (anti-copie entre voisins).
+    # `derived_from_id` pointe la ligne de BASE (NULL sur la base elle-même).
+    variant_kind: Mapped[str] = mapped_column(String, default="base")   # base|facile|difficile
+    derived_from_id: Mapped[str | None] = mapped_column(String, nullable=True)
     # --- cycle de vie ---
     status: Mapped[str] = mapped_column(String, default="draft")       # draft | validated
     validated_by: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -581,19 +603,54 @@ class CopyItemResult(Base):
     `score`/`max_score` sont à l'échelle INTERNE du moteur de correction (1 par
     cellule de tableau, etc.), `bareme_points`/`points_earned` à l'échelle
     professeur — les deux sont conservées : la première dit ce qui était juste,
-    la seconde ce que ça valait (cf. en-tête de services.scoring)."""
+    la seconde ce que ça valait (cf. en-tête de services.scoring).
+
+    C'est aussi l'HISTORIQUE que lit le moteur de sujets individuels
+    (services.student_history) : quel exercice, quel dérivé, quelle réponse,
+    quel jour. D'où `student_id` et `occurred_at` dénormalisés — la sélection
+    interroge cette table pour chaque élève × compétence à chaque génération de
+    sujet, et remonter au sujet à chaque ligne coûterait deux jointures."""
     __tablename__ = "copy_item_results"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
     copy_result_id: Mapped[str] = mapped_column(ForeignKey("copy_results.id"))
     copy_item_id: Mapped[str] = mapped_column(ForeignKey("copy_items.id"))
     competency_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    # dénormalisé depuis CopyResult : cf. docstring (index ci-dessous)
+    student_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    # ligne de banque servie, recopiée de CopyItem — NULL sur l'historique
+    # antérieur à cette colonne (l'information n'a jamais été écrite : elle
+    # n'est pas reconstructible, cf. migration)
+    generated_exercise_id: Mapped[str | None] = mapped_column(String, nullable=True)
     sequence: Mapped[int] = mapped_column(Integer, default=0)
     response_type: Mapped[str] = mapped_column(String, default="")
     difficulty: Mapped[int] = mapped_column(Integer, default=5)
+    # dérivé 1-3 (facile/base/difficile). `difficulty` garde l'échelle 3/6/9
+    # attendue par le reste de la chaîne ; celui-ci porte le niveau tel que la
+    # banque et le professeur le connaissent.
+    difficulty_level: Mapped[int] = mapped_column(Integer, default=0)
+    # réponse de l'élève, aplatie en texte lisible (cf. scoring.student_answer_text).
+    # La ligne student_responses reste la source de vérité ; ceci est l'index.
+    answer_text: Mapped[str] = mapped_column(Text, default="")
+    # réussite 0-1. On stocke le RATIO et pas un booléen « juste » : le seuil à
+    # partir duquel un exercice compte comme réussi appartient au moteur qui
+    # lit, pas à la donnée écrite.
+    success_ratio: Mapped[float] = mapped_column(Float, default=0.0)
+    # JOUR DU DEVOIR (et non de la correction) : c'est cette date que la courbe
+    # de l'oubli mesure. Un lot corrigé dix jours plus tard ne doit pas offrir
+    # dix jours de fraîcheur en cadeau.
+    occurred_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     score: Mapped[float] = mapped_column(Float, default=0.0)
     max_score: Mapped[float] = mapped_column(Float, default=0.0)
     bareme_points: Mapped[float] = mapped_column(Float, default=0.0)
     points_earned: Mapped[float] = mapped_column(Float, default=0.0)
+    # Index de l'historique : le moteur de sujets interroge cette table pour
+    # chaque élève × compétence à chaque génération. Colonne de gauche =
+    # student_id, si bien qu'il sert aussi les lectures « tout l'élève »
+    # (onglet Historique). Déclaré ici ET recréé par la migration : `create_all`
+    # ne pose les index que sur une base NEUVE, jamais sur une table existante.
+    __table_args__ = (
+        Index("ix_copy_item_results_student_comp", "student_id", "competency_id"),
+    )
 
 
 # ------------------------------------------------------ progression & mémorisation
@@ -814,3 +871,34 @@ class SystemSetting(Base):
     value_json: Mapped[dict] = mapped_column(JSON, default=dict)
     version: Mapped[int] = mapped_column(Integer, default=1)
     updated_by: Mapped[str | None] = mapped_column(String, nullable=True)
+
+
+class MailIntakeConfig(Base):
+    """Réception automatique des scans par mail (ADF réseau de
+    l'établissement qui envoie les copies scannées par mail) : ligne unique
+    ("default"), relevée périodiquement en IMAP par services.mail_intake.
+    Le mot de passe n'est jamais renvoyé en clair par l'API (même convention
+    que ProviderConfig.encrypted_secret : stocké tel quel, masqué à la
+    lecture — cf. routers.misc)."""
+    __tablename__ = "mail_intake_config"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: "default")
+    host: Mapped[str] = mapped_column(String, default="")
+    port: Mapped[int] = mapped_column(Integer, default=993)
+    username: Mapped[str] = mapped_column(String, default="")
+    encrypted_password: Mapped[str] = mapped_column(String, default="")
+    folder: Mapped[str] = mapped_column(String, default="INBOX")
+    poll_interval_s: Mapped[int] = mapped_column(Integer, default=120)
+    # vide = tout expéditeur accepté ; sinon adresses autorisées (comparaison
+    # insensible à la casse sur l'en-tête From)
+    sender_allowlist_json: Mapped[list] = mapped_column(JSON, default=list)
+    # dernier UID IMAP traité (watermark) — pas le flag \Seen, pour rester
+    # robuste à un autre client qui lirait la même boîte
+    last_uid: Mapped[int] = mapped_column(Integer, default=0)
+    active: Mapped[bool] = mapped_column(Boolean, default=False)
+    # supprime (IMAP \Deleted + EXPUNGE) chaque mail dès que son import est
+    # commité en base, pour que la boîte dédiée ne s'accumule pas ; sur
+    # Gmail ceci déplace vers la Corbeille (purge définitive à 30 j), jamais
+    # une suppression irréversible immédiate
+    delete_after_import: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_error: Mapped[str | None] = mapped_column(String, nullable=True)

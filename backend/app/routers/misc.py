@@ -12,10 +12,11 @@ from ..db import get_db
 from ..deps import current_user, require_role
 from ..version import __version__
 from ..models import (
-    ApiUsageEvent, Assessment, Competency, CompetencyFramework, ManualReview,
-    ProviderConfig, ScanBatch, SchoolClass, Student, StudentCompetencyState,
-    SystemSetting, User,
+    ApiUsageEvent, Assessment, Competency, CompetencyFramework, MailIntakeConfig,
+    ManualReview, ProviderConfig, ScanBatch, SchoolClass, Student,
+    StudentCompetencyState, SystemSetting, User,
 )
+from ..services import mail_intake
 from ..services.forgetting import recall_probability
 
 router = APIRouter(prefix="/api", tags=["misc"], dependencies=[Depends(current_user)])
@@ -108,6 +109,81 @@ def set_provider(body: ProviderIn, db: Session = Depends(get_db)):
     return {"ok": True}
 
 
+class MailIntakeIn(BaseModel):
+    host: str = ""
+    port: int = 993
+    username: str = ""
+    password: str = ""
+    folder: str = "INBOX"
+    poll_interval_s: int = 120
+    sender_allowlist: list[str] = []
+    active: bool = False
+    delete_after_import: bool = True
+
+
+class MailIntakeTestIn(BaseModel):
+    host: str = ""
+    port: int = 993
+    username: str = ""
+    password: str = ""
+    folder: str = "INBOX"
+
+
+@router.get("/settings/mail-intake")
+def get_mail_intake(db: Session = Depends(get_db)):
+    """Config de relève automatique des scans par mail (§ scanner réseau
+    ADF). Le mot de passe n'est jamais renvoyé intégralement, même
+    convention que /settings/providers."""
+    cfg = db.get(MailIntakeConfig, "default")
+    if not cfg:
+        return {"host": "", "port": 993, "username": "", "password_preview": "",
+                "folder": "INBOX", "poll_interval_s": 120, "sender_allowlist": [],
+                "active": False, "delete_after_import": True,
+                "last_checked_at": None, "last_error": None}
+    masked = (cfg.encrypted_password[:2] + "…") if cfg.encrypted_password else ""
+    return {"host": cfg.host, "port": cfg.port, "username": cfg.username,
+            "password_preview": masked, "folder": cfg.folder,
+            "poll_interval_s": cfg.poll_interval_s,
+            "sender_allowlist": cfg.sender_allowlist_json or [],
+            "active": cfg.active, "delete_after_import": cfg.delete_after_import,
+            "last_checked_at": cfg.last_checked_at, "last_error": cfg.last_error}
+
+
+@router.post("/settings/mail-intake", dependencies=[Depends(require_role("admin"))])
+def set_mail_intake(body: MailIntakeIn, db: Session = Depends(get_db)):
+    cfg = db.get(MailIntakeConfig, "default")
+    if not cfg:
+        cfg = MailIntakeConfig(id="default")
+        db.add(cfg)
+    cfg.host = body.host.strip()
+    cfg.port = body.port
+    cfg.username = body.username.strip()
+    if body.password:  # vide = on conserve le mot de passe déjà enregistré
+        cfg.encrypted_password = body.password
+    cfg.folder = body.folder.strip() or "INBOX"
+    cfg.poll_interval_s = max(30, body.poll_interval_s)
+    cfg.sender_allowlist_json = [a.strip() for a in body.sender_allowlist if a.strip()]
+    cfg.active = body.active
+    cfg.delete_after_import = body.delete_after_import
+    db.commit()
+    if cfg.active:
+        # ne pas attendre l'intervalle courant pour la première relève après activation
+        mail_intake.wake()
+    return {"ok": True}
+
+
+@router.post("/settings/mail-intake/test", dependencies=[Depends(require_role("admin"))])
+def test_mail_intake(body: MailIntakeTestIn, db: Session = Depends(get_db)):
+    """Connexion+login+SELECT synchrones, sans toucher la config ni le
+    watermark — pour vérifier les identifiants avant d'activer la relève."""
+    cfg = db.get(MailIntakeConfig, "default")
+    password = body.password or (cfg.encrypted_password if cfg else "")
+    error = mail_intake.test_connection(
+        body.host.strip(), body.port, body.username.strip(), password,
+        body.folder.strip() or "INBOX")
+    return {"ok": error is None, "error": error}
+
+
 @router.get("/settings/system")
 def get_system_settings(db: Session = Depends(get_db)):
     rows = {r.key: r.value_json for r in db.query(SystemSetting).all()}
@@ -117,6 +193,7 @@ def get_system_settings(db: Session = Depends(get_db)):
     rows.setdefault("ocr_confidence_threshold", {"value": 0.90})
     rows.setdefault("llm_confidence_threshold",
                     {"value": settings.correction_confidence_min})
+    rows.setdefault("appreciation_synthesis_enabled", {"value": False})
     return rows
 
 
@@ -169,14 +246,14 @@ def templates_preview(body: TemplatesPreviewIn):
     items = [
         {"kind": "exercise", "item_id": "demo-1",
          "statement": "Calculer : 3/4 + 5/6 = ?",
-         "response_type": "short_text", "choices": [], "level5": 2},
+         "response_type": "short_text", "choices": [], "level3": 2},
         {"kind": "exercise", "item_id": "demo-2",
          "statement": "Développer puis réduire : 3(x + 5)",
-         "response_type": "short_text", "choices": [], "level5": 4},
+         "response_type": "short_text", "choices": [], "level3": 4},
         {"kind": "exercise", "item_id": "demo-3",
          "statement": "Que vaut 7 × 8 ?",
          "response_type": "qcm_single",
-         "choices": ["54", "56", "63", "48"], "level5": 1},
+         "choices": ["54", "56", "63", "48"], "level3": 1},
     ]
     pdfgen.render_copy(
         c, student_name="Durand Camille", class_name="5eA",
