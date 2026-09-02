@@ -252,18 +252,38 @@ def summary(grade_level: str = "3e", db: Session = Depends(get_db)):
 
 
 @router.post("/publish")
-def publish(db: Session = Depends(get_db)):
-    """Bake les exercices validés vers les fichiers versionnés du repo (à
-    committer ensuite) + rafraîchit la banque. Admin only."""
-    return indigo.publish(db)
+def publish(force: bool = False, db: Session = Depends(get_db)):
+    """Bake les exercices validés sur le volume persistant + rafraîchit la
+    banque. Admin only. `force` autorise une publication vide (remise à zéro
+    explicite) — refusée par défaut, elle effacerait le contenu déjà publié."""
+    try:
+        return indigo.publish(db, force=force)
+    except indigo.PublishRefused as e:
+        raise HTTPException(409, str(e))
 
 
 @router.get("/published")
 def published_count(db: Session = Depends(get_db)):
-    """Nombre d'exercices actuellement publiés (fichier versionné) + en banque."""
-    data = indigo.load_published()
+    """Exercices publiés + en banque, et surtout D'OÙ ils viennent : volume
+    (publication de cette instance, persistante) ou image (contenu livré)."""
+    status = indigo.published_status()
     seeded = db.query(GeneratedExercise).filter_by(source="indigo").count()
-    return {"published": len(data.get("exercises", [])), "seeded": seeded}
+    return {"published": status["count"], "seeded": seeded,
+            "source": status["source"], "on_volume": status["on_volume"],
+            "generated_at": status["generated_at"]}
+
+
+@router.get("/export")
+def export_published():
+    """Archive ZIP du contenu publié, à décompresser dans
+    `backend/app/data/indigo/` du dépôt puis à commiter : c'est ce qui livre
+    ces exercices à TOUS les déploiements au build suivant."""
+    blob, filename = indigo.export_bundle()
+    if not blob:
+        raise HTTPException(404, "Aucun exercice publié à exporter")
+    return StreamingResponse(
+        io.BytesIO(blob), media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 
 @router.get("/exercises")

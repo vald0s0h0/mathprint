@@ -148,6 +148,56 @@ commande suivante depuis Container Manager le fait en une étape, sans SSH :
    ```
 3. Se reconnecter sur l'application avec le nouveau mot de passe.
 
+## 6 bis. Manuels Indigo et publication des exercices
+
+Cette section ne concerne que l'instance sur laquelle un professeur **crée**
+les exercices depuis l'onglet Exercices. Les autres déploiements reçoivent les
+exercices déjà publiés, sans manuel ni onglet.
+
+### Déposer les manuels
+
+Les manuels scolaires sont **sous droits** et bien trop volumineux pour le
+dépôt GitHub (limite de 100 Mo par fichier) : ils ne sont jamais livrés dans
+l'image, il faut les déposer sur le NAS.
+
+Dans File Station, sous `/docker/mathprint/volumes/data/`, créer un dossier
+**`manuals`** et y déposer les deux PDF :
+
+```
+/docker/mathprint/volumes/data/manuals/3_indigo.pdf         (manuel élève)
+/docker/mathprint/volumes/data/manuals/3_indigo_prof.pdf    (corrigés)
+```
+
+Les **noms de fichiers comptent** : la résolution se fait sur le nom, pas sur
+le chemin. Rien à redémarrer, les PDF sont ouverts à la demande. L'onglet
+Exercices affiche un bandeau orange tant qu'il ne les trouve pas.
+
+`volumes/data` est le volume monté sur `/data` dans le conteneur : son contenu
+survit aux mises à jour, contrairement à l'image.
+
+### Publier, puis livrer aux autres
+
+Le bouton **Publier** fige les exercices validés **sur le volume** de cette
+instance et les sème dans sa banque : ils survivent donc aux mises à jour du
+conteneur. Ils ne sont pour autant visibles que sur cette instance.
+
+Pour les livrer à **tous** les déploiements :
+
+1. Onglet Exercices → **Exporter pour le dépôt** → une archive ZIP est
+   téléchargée.
+2. La décompresser dans `backend/app/data/indigo/` du dépôt (elle a exactement
+   cette arborescence : `exercises.json`, `crops/`, `figures/`).
+3. Commiter et pousser. Le build suivant embarque ces exercices dans l'image,
+   et chaque déploiement les sème en banque à son démarrage.
+
+L'export est volontairement manuel : aucun jeton d'écriture GitHub ne vit sur
+le NAS, et vous voyez ce qui entre dans le dépôt à partir duquel vos images
+sont construites.
+
+> Publier alors qu'aucun exercice n'est validé sur l'instance est **refusé**
+> (message explicite) : cela effacerait le contenu déjà publié, que le
+> redémarrage suivant retirerait de la banque.
+
 ## 7. Mises à jour automatiques (tâche planifiée DSM)
 
 Côté développement, **chaque `git push` sur `main` publie automatiquement**
@@ -211,8 +261,9 @@ Deux niveaux complémentaires :
 - **Applicatif** : dans MathPrint, Paramètres → Système → **Sauvegarder
   maintenant** (dump de la base dans `/data/backups`, rétention 30 fichiers).
 - **NAS** : pour survivre à une panne de disque, sauvegarder le dossier
-  `/docker/mathprint/volumes` en entier (contient la base Postgres, Redis et
-  les documents générés) avec **Hyper Backup** (Centre de paquets → installer
+  `/docker/mathprint/volumes` en entier (contient la base Postgres, Redis, les
+  documents générés, les manuels déposés et les exercices publiés depuis cette
+  instance) avec **Hyper Backup** (Centre de paquets → installer
   Hyper Backup → nouvelle tâche → sélectionner le dossier partagé
   `docker/mathprint`).
 

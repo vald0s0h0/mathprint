@@ -52,6 +52,33 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
   return res.json()
 }
 
+// Téléchargement d'un fichier servi par une route PROTÉGÉE. Un simple
+// <a href> ou window.open ne porte pas l'en-tête Authorization et se prend un
+// 401 (même raison que components/AuthImg) : on récupère les octets en fetch
+// authentifié, puis on déclenche l'enregistrement via une URL d'objet.
+export async function download(url: string, fallbackName: string): Promise<void> {
+  const token = getToken()
+  const res = await fetch(url, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  })
+  if (!res.ok) {
+    let msg = ''
+    try { msg = (await res.json())?.detail || '' } catch { /* corps non-JSON */ }
+    throw new ApiError(res.status, msg || res.statusText || `Erreur ${res.status}`)
+  }
+  // le serveur nomme le fichier (Content-Disposition) ; on ne devine qu'à défaut
+  const disposition = res.headers.get('Content-Disposition') || ''
+  const match = /filename="?([^";]+)"?/.exec(disposition)
+  const blobUrl = URL.createObjectURL(await res.blob())
+  const a = document.createElement('a')
+  a.href = blobUrl
+  a.download = match?.[1] || fallbackName
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(blobUrl)
+}
+
 export const api = {
   get: <T>(url: string) => request<T>('GET', url),
   post: <T>(url: string, body?: unknown) => request<T>('POST', url, body),

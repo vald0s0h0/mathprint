@@ -894,8 +894,11 @@ def test_list_exercises_orders_by_numeric_exercise_number(db):
 
 @pytest.fixture
 def db(tmp_path, monkeypatch):
+    # data_dir = le volume : c'est là que publish écrit désormais (cf.
+    # services.indigo, deux couches volume/image). _IMAGE_PUB_DIR est détourné
+    # pour qu'aucun test n'écrive ni ne lise le contenu versionné du dépôt.
     monkeypatch.setattr(settings, "data_dir", tmp_path)
-    monkeypatch.setattr(indigo, "_PUB_DIR", tmp_path / "pub")   # pas d'écriture dans le repo
+    monkeypatch.setattr(indigo, "_IMAGE_PUB_DIR", tmp_path / "image")
     eng = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(eng)
     s = sessionmaker(bind=eng)()
@@ -1024,7 +1027,9 @@ def test_publish_seed_and_bank_source(db, tmp_path):
     res = indigo.publish(db)
     assert res == {"published": 1, "seeded": 1}
     assert indigo._pub_paths()[3].exists()                      # exercises.json
-    assert (indigo._PUB_DIR / "figures" / "x.png").exists()     # figure copiée
+    # la publication atterrit sur le VOLUME (persistant), jamais dans l'image
+    assert (indigo._volume_pub_dir() / "figures" / "x.png").exists()
+    assert not (indigo._IMAGE_PUB_DIR / "exercises.json").exists()
 
     ge = db.query(GeneratedExercise).filter_by(source="indigo").one()
     assert ge.kind == "probleme"

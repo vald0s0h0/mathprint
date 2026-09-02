@@ -12,11 +12,11 @@ import {
 import { notifications } from '@mantine/notifications'
 import {
   AlertTriangle, BookOpen, Calculator, Check, CheckSquare, ChevronLeft,
-  ImageOff, ImagePlus, Minus, Pencil, Plus, RefreshCw, RotateCcw, Slash, Sparkles,
-  Trash2, UploadCloud, Wand2,
+  Download, ImageOff, ImagePlus, Minus, Pencil, Plus, RefreshCw, RotateCcw, Slash,
+  Sparkles, Trash2, UploadCloud, Wand2,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { api } from '../api'
+import { api, download } from '../api'
 import AuthImg from '../components/AuthImg'
 import CompetencyHierarchy, { type CompetencyHierarchyColumn } from '../components/CompetencyHierarchy'
 import ExercisePrintPreview from '../components/ExercisePrintPreview'
@@ -29,6 +29,12 @@ import GradeSelectionRequired from '../components/GradeSelectionRequired'
 type Comp = {
   id: string; code: string; short_id: string; label: string
   domain_code: string; domain_name: string; chapter_code: string; chapter_name: string
+}
+// `source` dit D'OÙ vient le contenu publié que lit cette instance : "volume"
+// (publié ici, persiste aux mises à jour) ou "image" (livré avec le code).
+type PublishState = {
+  published: number; seeded: number
+  source: 'volume' | 'image'; on_volume: boolean; generated_at: string
 }
 type Manuals = { grade_level: string; manuals: { eleve: ManualInfo; prof: ManualInfo } }
 type ManualInfo = { available: boolean; pages: number }
@@ -1061,8 +1067,9 @@ export default function Exercices() {
   const [extractions, setExtractions] = useState<Extraction[]>([])
   const [assistant, setAssistant] = useState(false)
   const [editing, setEditing] = useState<Exercise | null>(null)
-  const [pub, setPub] = useState<{ published: number; seeded: number } | null>(null)
+  const [pub, setPub] = useState<PublishState | null>(null)
   const [publishing, setPublishing] = useState(false)
+  const [exporting, setExporting] = useState(false)
   const [confirmDeleteAll, setConfirmDeleteAll] = useState(false)   // modale « Tout supprimer »
   const [deletingAll, setDeletingAll] = useState(false)
   const [provider, setProvider] = useState('anthropic')            // fournisseur LLM / mode de génération
@@ -1080,7 +1087,7 @@ export default function Exercices() {
   }, [grade, isAll])
   const loadPub = useCallback(() => {
     if (isAll) return
-    api.get<{ published: number; seeded: number }>('/api/indigo/published').then(setPub)
+    api.get<PublishState>('/api/indigo/published').then(setPub)
   }, [isAll])
   const loadExtractions = useCallback(() => {
     api.get<Extraction[]>('/api/indigo/extractions').then(setExtractions)
@@ -1208,11 +1215,30 @@ export default function Exercices() {
   const publish = async () => {
     setPublishing(true)
     try {
-      const r = await api.post<{ published: number; seeded: number }>('/api/indigo/publish')
+      const r = await api.post<PublishState>('/api/indigo/publish')
       setPub(r); loadSummary()
-      notifications.show({ color: 'green', message: `${r.published} exercice(s) publié(s) — pense à committer backend/app/data/indigo/` })
+      notifications.show({
+        color: 'green', autoClose: 8000,
+        message: `${r.published} exercice(s) publié(s) sur cette instance. `
+          + 'Pour les livrer aux autres utilisateurs : « Exporter pour le dépôt ».',
+      })
     } catch (e: any) { notifications.show({ color: 'red', message: e.message }) }
     finally { setPublishing(false) }
+  }
+  // Le volume de cette instance ne sort pas tout seul de la machine : l'archive
+  // se décompresse dans backend/app/data/indigo/ du dépôt, se commite, et repart
+  // dans l'image au build suivant — d'où elle est semée en banque pour TOUS.
+  const exportBundle = async () => {
+    setExporting(true)
+    try {
+      await download('/api/indigo/export', 'indigo-publication.zip')
+      notifications.show({
+        color: 'blue', autoClose: 10000,
+        message: 'Archive téléchargée. Décompresse-la dans backend/app/data/indigo/ '
+          + 'du dépôt, puis commite : les exercices partiront dans l\'image suivante.',
+      })
+    } catch (e: any) { notifications.show({ color: 'red', message: e.message }) }
+    finally { setExporting(false) }
   }
 
   if (isAll) {
@@ -1230,7 +1256,17 @@ export default function Exercices() {
         </Group>
         <Group>
           {pub && pub.seeded === pub.published && (
-            <Text size="xs" c="dimmed">{pub.seeded} en banque · {validatedCount} validé(s)</Text>
+            <Tooltip label={pub.on_volume
+              ? 'Publié depuis cette instance, sur le volume persistant : survit aux mises à '
+                + 'jour du conteneur. Utilise « Exporter pour le dépôt » pour le livrer aux autres.'
+              : 'Contenu livré avec l\'image (dépôt). Cette instance n\'a encore rien publié.'}>
+              <Text size="xs" c="dimmed">
+                {pub.seeded} en banque · {validatedCount} validé(s)
+                <Text span c={pub.on_volume ? 'teal' : 'dimmed'} ml={6}>
+                  {pub.on_volume ? '· volume' : '· image'}
+                </Text>
+              </Text>
+            </Tooltip>
           )}
           {pub && pub.seeded !== pub.published && (
             <Tooltip label={`${pub.seeded} exercice(s) Indigo actif(s) en banque, mais ${pub.published} figé(s) dans le fichier versionné (backend/app/data/indigo/) — la banque a été modifiée hors de cet onglet (purge, redémarrage...). Republie pour refiger le fichier sur l'état actuel des brouillons.`}>
@@ -1265,9 +1301,18 @@ export default function Exercices() {
                 : ''}
             </Button>
           </Tooltip>
-          <Tooltip label="Fige les exercices validés dans des fichiers versionnés (à committer)">
+          <Tooltip label={"Fige les exercices validés sur cette instance (volume persistant : "
+            + 'ils survivent aux mises à jour) et les sème en banque.'}>
             <Button variant="light" color="teal" leftSection={<UploadCloud size={16} />}
               loading={publishing} disabled={validatedCount === 0} onClick={publish}>Publier</Button>
+          </Tooltip>
+          <Tooltip label={"Archive du contenu publié, à décompresser dans "
+            + 'backend/app/data/indigo/ du dépôt puis à committer : c\'est ce qui livre '
+            + 'ces exercices à TOUS les déploiements au build suivant.'}>
+            <Button variant="light" color="gray" leftSection={<Download size={16} />}
+              loading={exporting} disabled={!pub?.published} onClick={exportBundle}>
+              Exporter pour le dépôt
+            </Button>
           </Tooltip>
           <Button leftSection={<Wand2 size={16} />} disabled={!eleveOk} onClick={() => setAssistant(true)}>Nouvelle extraction</Button>
         </Group>
@@ -1275,7 +1320,13 @@ export default function Exercices() {
 
       {manuals && !eleveOk && (
         <Alert color="orange" icon={<AlertTriangle size={16} />}>
-          Manuel élève {grade} introuvable sur cette instance. Les PDF restent locaux (dossier <code>context/</code>) et ne sont pas livrés dans l'image — dépose-les pour extraire.
+          Manuel élève {grade} introuvable sur cette instance. Les manuels sont sous
+          droits et trop volumineux pour le dépôt : ils ne sont jamais livrés dans l'image,
+          il faut les déposer sur la machine. Sur un NAS (Docker), dans le volume :{' '}
+          <code>volumes/data/manuals/</code> à côté du <code>docker-compose.yml</code>.
+          En développement, dans <code>context/</code>. Les noms de fichiers doivent être
+          exactement ceux attendus (<code>{grade === '3e' ? '3_indigo.pdf' : `${grade[0]}_indigo.pdf`}</code>{' '}
+          et la variante <code>_prof</code>).
         </Alert>
       )}
 

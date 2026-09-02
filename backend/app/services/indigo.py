@@ -18,12 +18,14 @@ versionnés — non couvert par cette tranche (cf. `publish`).
 """
 from __future__ import annotations
 
+import io
 import json
 import logging
 import re
 import shutil
 import threading
 import unicodedata
+import zipfile
 from datetime import datetime, timezone
 
 import numpy as np
@@ -1630,11 +1632,75 @@ def delete_exercises_for_competency(db, competency_id: str) -> int:
 # "indigo") : les exercices Indigo transitent alors par la banque et les sujets
 # comme n'importe quelle autre source, SANS que l'onglet Exercices soit présent.
 
-_PUB_DIR = _APP_DIR / "data" / "indigo"
+# DEUX COUCHES, et c'est la clé du déploiement NAS.
+#
+# `_IMAGE_PUB_DIR` est livré DANS l'image (versionné dans le repo) : c'est le
+# socle commun de tous les déploiements, en lecture seule. Le conteneur est
+# recréé à chaque `docker compose pull && up -d`, donc tout ce qu'on y écrit
+# disparaît en silence — et `seed_published`, appelé au démarrage, remettrait
+# la banque à l'état du repo sans le moindre message.
+#
+# `_VOLUME_PUB_DIR` vit sur le VOLUME persistant (/data). C'est là que
+# `publish` écrit, pour que le professeur puisse extraire, corriger et publier
+# depuis le NAS sans perdre son travail à la mise à jour suivante.
+#
+# La lecture prend le volume s'il existe, l'image sinon : une instance qui n'a
+# jamais publié (tous les autres déploiements) lit le contenu livré, et
+# l'instance qui publie lit le sien. Pour diffuser à tout le monde, on exporte
+# le volume en archive (`export_bundle`) que l'on commite dans le repo — d'où
+# elle repart dans l'image au build suivant.
+_IMAGE_PUB_DIR = _APP_DIR / "data" / "indigo"
+
+
+def _volume_pub_dir():
+    return settings.data_dir / "indigo" / "published"
+
+
+def _read_dir():
+    """Couche qui fait autorité en LECTURE : le volume dès qu'il a été publié."""
+    vol = _volume_pub_dir()
+    return vol if (vol / "exercises.json").exists() else _IMAGE_PUB_DIR
+
+
+def _write_dir():
+    """Couche d'ÉCRITURE : toujours le volume — jamais l'image, qui est
+    reconstruite à chaque mise à jour."""
+    d = _volume_pub_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _layout(base):
+    return base, base / "crops", base / "figures", base / "exercises.json"
 
 
 def _pub_paths():
-    return _PUB_DIR, _PUB_DIR / "crops", _PUB_DIR / "figures", _PUB_DIR / "exercises.json"
+    """Chemins de LECTURE du contenu publié (cf. _read_dir)."""
+    return _layout(_read_dir())
+
+
+def _promote_to_volume() -> None:
+    """Recopie le contenu livré dans l'image vers le volume, une seule fois.
+
+    Nécessaire avant toute écriture PARTIELLE (retrait d'un exercice) : sans
+    ça on modifierait l'image — c'est-à-dire rien du tout, la modification
+    partant avec le conteneur. `publish`, lui, réécrit tout et n'en a pas
+    besoin."""
+    vol = _volume_pub_dir()
+    if (vol / "exercises.json").exists():
+        return
+    src_base, src_crops, src_figs, src_json = _layout(_IMAGE_PUB_DIR)
+    if not src_json.exists():
+        return
+    _, crops, figs, jf = _layout(_write_dir())
+    crops.mkdir(parents=True, exist_ok=True)
+    figs.mkdir(parents=True, exist_ok=True)
+    for folder, dest in ((src_crops, crops), (src_figs, figs)):
+        if folder.is_dir():
+            for f in folder.glob("*.png"):
+                shutil.copyfile(f, dest / f.name)
+    shutil.copyfile(src_json, jf)
+    logger.info("Indigo : contenu publié promu de l'image vers le volume (%s)", jf)
 
 
 def _resolve_competency(db, code: str, grade: str):
@@ -1646,11 +1712,23 @@ def _resolve_competency(db, code: str, grade: str):
     return db.query(Competency).filter_by(framework_id=fw.id, code=code).first()
 
 
-def publish(db) -> dict:
-    """Bake les exercices VALIDÉS vers les fichiers versionnés + rafraîchit la
-    banque en base. À lancer sur l'instance admin, puis committer les fichiers
-    (backend/app/data/indigo/) pour les livrer à tous."""
-    base, crops, figs, jf = _pub_paths()
+class PublishRefused(RuntimeError):
+    """Publication refusée pour ne pas détruire du contenu déjà en place."""
+
+
+def publish(db, force: bool = False) -> dict:
+    """Bake les exercices VALIDÉS sur le VOLUME persistant + rafraîchit la
+    banque en base. À lancer sur l'instance qui porte les manuels (le NAS du
+    professeur) ; `export_bundle` produit ensuite l'archive à commiter dans le
+    repo pour livrer ces exercices à tous les déploiements.
+
+    Refuse de publier un ensemble VIDE tant que du contenu est déjà publié :
+    `publish` réécrit tout à partir des brouillons validés de CETTE instance,
+    et une base de brouillons vide (instance neuve, purge, restauration
+    partielle) effacerait donc silencieusement les exercices livrés — que
+    `seed_published` retirerait de la banque dans la foulée. `force` lève le
+    garde-fou quand la mise à zéro est réellement voulue."""
+    _, crops, figs, jf = _layout(_write_dir())
     crops.mkdir(parents=True, exist_ok=True)
     figs.mkdir(parents=True, exist_ok=True)
     rows = (db.query(IndigoExercise).filter_by(status="validated")
@@ -1681,6 +1759,12 @@ def publish(db) -> dict:
             "has_figure": ex.has_figure, "crop_file": crop_file, "figure_file": fig_file,
             "model": ex.model, "prompt_version": ex.prompt_version,
         })
+    already = len(load_published().get("exercises", []))
+    if not records and already and not force:
+        raise PublishRefused(
+            f"Aucun exercice validé sur cette instance, alors que {already} "
+            f"exercice(s) sont publiés : publier maintenant les effacerait. "
+            f"Validez des exercices, ou forcez explicitement la remise à zéro.")
     payload = {"version": settings.indigo_schema_version, "grade_level": "3e",
                "generated_at": datetime.now(timezone.utc).isoformat(),
                "exercises": records}
@@ -1697,7 +1781,12 @@ def _unpublish(ex_id: str) -> bool:
     resème depuis le fichier tel quel, et un exercice supprimé depuis l'onglet
     Exercices réapparaîtrait dans la banque après le prochain redémarrage.
     No-op silencieux si l'exercice n'a jamais été publié."""
-    _, crops, figs, jf = _pub_paths()
+    if not (_read_dir() / "exercises.json").exists():
+        return False
+    # écriture partielle : on bascule d'abord sur le volume, sinon on
+    # modifierait l'image (donc rien, cf. _promote_to_volume)
+    _promote_to_volume()
+    _, crops, figs, jf = _layout(_write_dir())
     if not jf.exists():
         return False
     try:
@@ -1719,6 +1808,48 @@ def _unpublish(ex_id: str) -> bool:
     data["generated_at"] = datetime.now(timezone.utc).isoformat()
     jf.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
     return True
+
+
+def export_bundle() -> tuple[bytes, str]:
+    """Archive ZIP du contenu publié, arrangée EXACTEMENT comme
+    `backend/app/data/indigo/` — (octets, nom de fichier).
+
+    C'est le pont vers les autres déploiements. Le NAS écrit sur son volume,
+    qui ne sort jamais tout seul de la machine ; cette archive se décompresse
+    par-dessus `backend/app/data/indigo/` dans le dépôt, se commite, et repart
+    dans l'image au build suivant — où `seed_published` la sème en banque pour
+    tout le monde. Aucun secret ne vit sur le NAS : c'est vous qui décidez ce
+    qui entre dans le dépôt à partir duquel vos images sont construites."""
+    base, crops, figs, jf = _pub_paths()
+    data = load_published()
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        if jf.exists():
+            z.write(jf, "exercises.json")
+        # Seuls les fichiers RÉFÉRENCÉS par le JSON : une image orpheline
+        # (exercice retiré depuis) n'a rien à faire dans le dépôt.
+        for rec in data.get("exercises", []):
+            for key, folder, prefix in (("crop_file", crops, "crops"),
+                                        ("figure_file", figs, "figures")):
+                name = rec.get(key)
+                if name and (folder / name).exists():
+                    z.write(folder / name, f"{prefix}/{name}")
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M")
+    return buf.getvalue(), f"indigo-publication-{stamp}.zip"
+
+
+def published_status() -> dict:
+    """D'où vient le contenu publié que lit CETTE instance, et combien il pèse.
+    Sert à ce que le professeur voie noir sur blanc si sa publication est sur
+    le volume (persistante) ou s'il lit encore le contenu livré dans l'image."""
+    read_dir = _read_dir()
+    on_volume = read_dir != _IMAGE_PUB_DIR
+    data = load_published()
+    return {"count": len(data.get("exercises", [])),
+            "on_volume": on_volume,
+            "source": "volume" if on_volume else "image",
+            "path": str(read_dir),
+            "generated_at": data.get("generated_at", "")}
 
 
 def load_published() -> dict:
