@@ -49,7 +49,6 @@ export default function CompetencyMatrixStep({
                 en CRÉER d'autres — pas de géométrie pour l'instant. */}
             <SegmentedControl size="xs" value={source} onChange={onSourceChange} data={[
               { value: 'auto', label: 'Automatique' },
-              { value: 'mathalea', label: 'MathALÉA' },
               { value: 'sesamaths', label: 'Sésamaths (5e)' },
               { value: 'gemini', label: 'Gemini' },
               // exercices repris du manuel Indigo 3e, publiés en dur (onglet Exercices)

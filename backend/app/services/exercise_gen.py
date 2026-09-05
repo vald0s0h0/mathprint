@@ -505,7 +505,11 @@ def _validate_exercise(raw: dict, competency: Competency, db: Session,
     # sous-partie de composite (part_mode) porte une sous-question courte.
     statement_min = 3 if rtype in ("table_fill", "checkbox_grid") else 15
     if part_mode:
-        statement_min = 1
+        # Une GRILLE en sous-question n'a même pas de consigne commune à porter :
+        # ses colonnes disent quoi cocher et ses lignes ce qu'il faut juger. Lui
+        # imposer une phrase, c'est réclamer le « Vrai ou faux ? » qu'on cherche
+        # justement à supprimer (§ indigo_multipass, passe de mise en page).
+        statement_min = 0 if rtype == "checkbox_grid" else 1
     if not _check_text(statement, statement_min, 1200):
         return None
     if not part_mode and not _check_text(correction, 5, 1500):
@@ -1420,9 +1424,8 @@ def ensure_bank(db: Session, competency: Competency, level: int,
     - `source="gemini"` (services.gemini_gen) : création par LLM. Le pool est
       infini : on appelle par lots jusqu'à `settings.gemini_bank_target`.
 
-    La génération MathALÉA/DeepSeek (`source` "auto"/"mathalea") a été retirée
-    (16/07) : plus aucun repli silencieux sur du contenu inventé sans pipeline
-    assumée."""
+    La génération DeepSeek (`source` "auto") a été retirée (16/07) : plus
+    aucun repli silencieux sur du contenu inventé sans pipeline assumée."""
     if source == "sesamaths":
         from . import sesamaths
         return sesamaths.ensure_bank(db, competency, level)

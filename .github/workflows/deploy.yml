@@ -5,7 +5,10 @@
 # précis (MATHPRINT_VERSION=sha-XXXXXXX dans .env).
 #
 # Chaque image n'est reconstruite que si son code a changé (filtre par
-# chemins) ; le cache GitHub Actions rend les rebuilds rapides.
+# chemins) ; le cache GitHub Actions rend les rebuilds rapides. Les images
+# NON reconstruites sont quand même ré-étiquetées "sha-XXXXXXX" (job "retag")
+# : le `docker compose pull` du NAS porte sur tout le projet, donc un seul
+# manifeste manquant ferait échouer la mise à jour ENTIÈRE.
 name: Deploy latest images
 
 on:
@@ -24,9 +27,6 @@ concurrency:
 env:
   REGISTRY: ghcr.io
   IMAGE_OWNER: ${{ github.repository_owner }}
-  # MathALÉA n'est pas versionné dans ce dépôt (trop volumineux) : commit
-  # épinglé de https://github.com/mathalea/mathalea correspondant à la v2.8.2.
-  MATHALEA_PIN: 3c6092ef38154b802c063ad500b27f12fdf03df8
 
 jobs:
   changes:
@@ -34,7 +34,6 @@ jobs:
     outputs:
       api: ${{ steps.filter.outputs.api }}
       web: ${{ steps.filter.outputs.web }}
-      mathalea: ${{ steps.filter.outputs.mathalea }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -43,10 +42,12 @@ jobs:
           filters: |
             api:
               - 'backend/**'
+              # les prompts LLM sont embarqués dans l'image (cf. job api) :
+              # les éditer doit donc reconstruire l'API, sinon la modification
+              # ne quitte jamais la machine de développement
+              - 'prompts/**'
             web:
               - 'frontend/**'
-            mathalea:
-              - 'mathalea-service/**'
 
   test:
     runs-on: ubuntu-latest
@@ -79,6 +80,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Les prompts LLM vivent à la RACINE du dépôt (édition à chaud en dev),
+      # hors du contexte de build `./backend`. On les y recopie pour qu'ils
+      # partent dans l'image : sans eux, une instance déployée ne peut fabriquer
+      # aucun exercice (PromptNotFound au premier appel LLM). Le dossier
+      # éditable reste prioritaire à l'exécution, cf. services/prompts.py.
+      - name: Embarquer les prompts dans le contexte de build
+        run: cp -R prompts backend/app/data/prompts
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -123,29 +131,40 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/mathprint-web:latest
             ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/mathprint-web:sha-${{ needs.meta.outputs.sha }}
 
-  mathalea:
-    needs: [changes, test, meta]
-    if: needs.changes.outputs.mathalea == 'true' || github.event_name == 'workflow_dispatch'
+  # Recopie le manifeste "latest" sous le tag sha-XXXXXXX pour les images que
+  # les filtres de chemins n'ont pas reconstruites, afin que les DEUX images
+  # répondent toujours au même sha (retour arrière du NAS, §7 du guide NAS).
+  # `imagetools create` travaille côté registre : aucun build, aucun pull.
+  retag:
+    needs: [test, meta, api, web]
+    if: always() && needs.test.result == 'success' && needs.meta.result == 'success'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Cloner MathALÉA (épinglé)
-        run: |
-          git clone --quiet https://github.com/mathalea/mathalea.git mathalea
-          git -C mathalea checkout --quiet "$MATHALEA_PIN"
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: mathalea-service/Dockerfile
-          push: true
-          cache-from: type=gha,scope=mathalea
-          cache-to: type=gha,scope=mathalea,mode=max
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/mathprint-mathalea:latest
-            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/mathprint-mathalea:sha-${{ needs.meta.outputs.sha }}
+      - name: Étiqueter sha-XXXXXXX les images non reconstruites
+        env:
+          SHA: ${{ needs.meta.outputs.sha }}
+          API: ${{ needs.api.result }}
+          WEB: ${{ needs.web.result }}
+        run: |
+          set -euo pipefail
+          base="${REGISTRY}/${IMAGE_OWNER}"
+          for svc in api web; do
+            case "$svc" in
+              api) result="$API" ;;
+              web) result="$WEB" ;;
+            esac
+            if [ "$result" != "skipped" ]; then
+              echo "$svc : reconstruite ($result), déjà étiquetée sha-$SHA"
+              continue
+            fi
+            echo "$svc : inchangée, latest -> sha-$SHA"
+            docker buildx imagetools create \
+              --tag "$base/mathprint-$svc:sha-$SHA" \
+              "$base/mathprint-$svc:latest"
+          done

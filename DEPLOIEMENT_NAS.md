@@ -52,8 +52,10 @@ administrateur, eux, n'ont **rien à préparer ici** — voir §6.
      réponses simulées — à mettre à `true` uniquement pour tester l'appli
      sans données réelles.
    - `MATHPRINT_VERSION=latest` : le NAS suit automatiquement chaque nouvelle
-     publication (voir §7). Remplacer par ex. `v1.2.0` pour figer une version
-     précise et couper la mise à jour automatique.
+     publication (voir §7). Remplacer par ex. `1.2.0` pour figer une version
+     précise et couper la mise à jour automatique — **sans le `v`** : le tag
+     git est `v1.2.0`, le tag d'image est `1.2.0`. Un `v` de trop rend le
+     manifeste introuvable et bloque toutes les mises à jour (§10).
 3. Enregistrer.
 
 ## 3. Créer le projet Docker Compose (Container Manager)
@@ -76,16 +78,15 @@ administrateur, eux, n'ont **rien à préparer ici** — voir §6.
    modifier ici le port hôte.
 6. Cliquer **Suivant** puis **Terminer** (ou **Exécuter** selon la version).
    Container Manager télécharge les images depuis `ghcr.io` (elles sont
-   publiques, aucune authentification requise) puis démarre les 6 conteneurs
+   publiques, aucune authentification requise) puis démarre les 4 conteneurs
    dans l'ordre (`db` doit être « healthy » avant `api`, `api` avant `web`).
 
-Premier démarrage : compter 1 à 2 minutes, principalement pour l'image
-`mathprint-mathalea` (plus volumineuse).
+Premier démarrage : compter 1 à 2 minutes.
 
 ## 4. Vérifier que tout tourne
 
-Dans Container Manager → **Projet** → `mathprint`, les 5 conteneurs
-(`db`, `queue`, `mathalea`, `api`, `web`) doivent passer au vert
+Dans Container Manager → **Projet** → `mathprint`, les 4 conteneurs
+(`db`, `queue`, `api`, `web`) doivent passer au vert
 (« En cours d'exécution »). En cas de souci, clic sur un conteneur →
 **Détails** → onglet **Journal** affiche ses logs sans passer par SSH.
 
@@ -154,11 +155,35 @@ Cette section ne concerne que l'instance sur laquelle un professeur **crée**
 les exercices depuis l'onglet Exercices. Les autres déploiements reçoivent les
 exercices déjà publiés, sans manuel ni onglet.
 
-### Déposer les manuels
+Deux façons d'équiper l'instance qui fabrique. **La première ne demande aucun
+PDF** et suffit dans la quasi-totalité des cas.
 
-Les manuels scolaires sont **sous droits** et bien trop volumineux pour le
-dépôt GitHub (limite de 100 Mo par fichier) : ils ne sont jamais livrés dans
-l'image, il faut les déposer sur le NAS.
+### A. Importer le pack de travail (recommandé)
+
+Les manuels sont **sous droits** et trop volumineux pour le dépôt GitHub
+(203 Mo pour le manuel élève, limite de 100 Mo par fichier) : ils ne sont
+livrés dans **aucune** image. Plutôt que de les copier sur le NAS, on y porte
+un **pack de travail** : l'index du manuel (le texte, dont l'OCR est déjà payé)
+et toutes les pages du manuel élève rendues en image. C'est tout ce dont la
+fabrication a besoin — découpe des exercices, lecture de la couleur des badges,
+extraction des figures, recadrage : tout fonctionne à l'identique, sans PDF.
+
+1. Sur la machine qui possède les manuels : onglet **Exercices** →
+   **Indexer le manuel** (une seule fois, ~0,65 € d'OCR), puis
+   **Exporter le pack** → une archive d'environ **90 Mo** est téléchargée.
+2. Sur le NAS : onglet **Exercices** → **Importer le pack**, choisir l'archive.
+
+Si l'envoi par le navigateur échoue (connexion lente, archive trop grosse),
+déposez le fichier dans File Station sous
+`/docker/mathprint/volumes/data/indigo-pack.zip`, puis cliquez sur la **petite
+icône de disque** à droite du bouton *Importer le pack* : l'application ira
+chercher l'archive à cet emplacement.
+
+Le pack ne se refait que si le manuel change. L'instance qui l'a reçu ne peut
+pas indexer (le bouton reste grisé, c'est normal : le pack porte déjà l'index)
+et ne peut pas exporter de pack à son tour.
+
+### B. Déposer les manuels (si vous avez les PDF et voulez pouvoir indexer)
 
 Dans File Station, sous `/docker/mathprint/volumes/data/`, créer un dossier
 **`manuals`** et y déposer les deux PDF :
@@ -173,7 +198,29 @@ le chemin. Rien à redémarrer, les PDF sont ouverts à la demande. L'onglet
 Exercices affiche un bandeau orange tant qu'il ne les trouve pas.
 
 `volumes/data` est le volume monté sur `/data` dans le conteneur : son contenu
-survit aux mises à jour, contrairement à l'image.
+survit aux mises à jour, contrairement à l'image. C'est aussi là que vit le
+pack importé — il survit donc aux mises à jour, lui aussi.
+
+### Fabriquer, corriger, publier
+
+Une fois l'instance équipée (pack **ou** manuels), le trajet complet se fait
+depuis l'onglet Exercices :
+
+1. **Nouvelle extraction** → cocher des compétences → **Lancer**. Aucune plage
+   de pages ni numéro d'exercice à saisir : l'index les déduit. Chaque
+   compétence affiche ce que l'index a trouvé, et celles qu'il ne couvre pas
+   sont refusées par leur nom plutôt que lancées à vide.
+2. Les exercices arrivent en **brouillon**. Les relire un par un : l'extrait du
+   manuel est affiché à côté de l'énoncé produit. **Modifier** ouvre l'édition
+   complète (énoncé, réponses, barème, guide, corrigé, figure) ;
+   **Régénérer** rejoue la génération sans jamais dégrader ce qui existe.
+3. **Valider** chaque exercice jugé bon. Un brouillon non validé n'est jamais
+   publié.
+4. **Publier** — voir ci-dessous.
+
+La génération appelle un modèle : renseignez la clé du fournisseur choisi dans
+**Paramètres → Fournisseurs**. Sans clé, l'onglet le dit avant de lancer et les
+exercices seraient de simples reprises brutes de l'OCR.
 
 ### Publier, puis livrer aux autres
 
@@ -240,6 +287,14 @@ jamais touchés, et le projet reste géré par Container Manager.
 - Sur le NAS : `/docker/mathprint/update.log` (File Station) journalise
   chaque exécution (« déjà à jour » ou liste des conteneurs recréés).
 
+**Laisser le temps à la chaîne** : rien n'est instantané entre le `git push`
+et le NAS. Compter la CI (tests + build des images, ~5 à 15 min selon le
+cache), puis l'attente de la prochaine exécution de la tâche planifiée
+(jusqu'à 1 h avec la fréquence conseillée), puis le `pull` des images sur la
+liaison du NAS. Un build qui n'a pas encore changé une demi-heure après un
+push est donc normal — ne chercher une panne qu'au-delà, ou lancer la tâche
+à la main (clic droit → **Exécuter**) pour ne pas attendre.
+
 ⚠️ Comme avant, la tâche met à jour **les images**, pas le
 `docker-compose.yml` lui-même. S'il évolue (nouveau service, nouveau port,
 nouvelle variable `.env`), recoller le fichier à jour dans Container
@@ -249,10 +304,17 @@ version le signalent quand c'est nécessaire.
 ### Figer ou revenir en arrière
 
 Rouvrir `.env` (File Station) et remplacer `MATHPRINT_VERSION=latest` par
-un tag précis — `v1.2.0` (release) ou `sha-abc1234` (n'importe quel commit
-publié) — puis Container Manager → Projet `mathprint` → **Action** →
-**Redéployer**. La tâche planifiée peut rester active : elle ne trouvera
-jamais rien de plus récent qu'un tag figé.
+un tag précis — `1.2.0` (release, **sans le `v`** du tag git) ou
+`sha-abc1234` (n'importe quel commit publié) — puis Container Manager →
+Projet `mathprint` → **Action** → **Redéployer**. La tâche planifiée peut
+rester active : elle ne trouvera jamais rien de plus récent qu'un tag figé.
+
+> Le tag doit exister pour **les deux** images (`mathprint-api`,
+> `mathprint-web`) : le `pull` porte sur tout le
+> projet, et un seul manifeste manquant fait échouer la mise à jour. C'est
+> garanti pour `X.Y.Z` comme pour `sha-XXXXXXX` (les images inchangées sont
+> re-étiquetées par la CI). En cas de doute, la liste des tags publiés est
+> dans GitHub → onglet **Packages**.
 
 ## 8. Sauvegardes
 
@@ -286,5 +348,6 @@ file CUPS locale.
 | Le projet ne veut plus s'arrêter (bouton bloqué) | Arrêter `api` individuellement plutôt que tout le projet d'un coup. Toujours bloqué après ~1 min : Centre de paquets → Container Manager → **Arrêter** puis **Démarrer** le paquet (reset léger). En dernier recours, redémarrer le NAS — tous les conteneurs s'arrêtent proprement au reboot quel que soit leur état. |
 | Page inaccessible sur le port publié | Conflit de port avec un autre service DSM — changer le port hôte dans le projet |
 | `docker compose pull` échoue avec 401/403 | Les images `ghcr.io/vald0s0h0/mathprint-*` sont publiques par défaut ; si elles ont été rendues privées entre-temps, ajouter un `docker login ghcr.io` (jeton `read:packages`) — voir README |
-| Les mises à jour ne semblent jamais s'appliquer | Dans l'ordre : ① Paramètres → Système : noter le build affiché. ② GitHub → onglet Actions : le workflow « Deploy latest images » du dernier push est-il vert ? (sinon rien n'a été publié). ③ File Station → `update.log` : la tâche tourne-t-elle, et dit-elle « déjà à jour » ou liste-t-elle des conteneurs ? ④ `.env` : `MATHPRINT_VERSION` est-il bien `latest` (un tag figé bloque tout) ? ⑤ Navigateur : forcer le rechargement (Ctrl+Maj+R) — les anciennes versions pouvaient rester en cache, corrigé depuis (nginx no-cache). |
-| Après une mise à jour, comportement inattendu | Revenir en arrière en fixant `MATHPRINT_VERSION` sur un tag précédent (`vX.Y.Z` ou `sha-abc1234`) dans `.env` (§7) |
+| `manifest unknown` / `not found` au `pull` | Le tag demandé n'existe pas : `MATHPRINT_VERSION` avec un `v` (`v2.4.0` au lieu de `2.4.0`), ou une faute de frappe dans le sha. La liste des tags réellement publiés est dans GitHub → **Packages** |
+| Les mises à jour ne semblent jamais s'appliquer | ⓪ **D'abord attendre** : entre le push et le NAS il y a la CI puis le prochain passage de la tâche planifiée — une demi-heure sans changement est normale (§7). Ensuite, dans l'ordre : ① Paramètres → Système : noter le build affiché. ② GitHub → onglet Actions : le workflow « Deploy latest images » du dernier push est-il vert ? (sinon rien n'a été publié). ③ File Station → `update.log` : la tâche tourne-t-elle, et dit-elle « déjà à jour » ou liste-t-elle des conteneurs ? `update.log` absent = la tâche ne s'exécute pas, ou le `PROJECT_DIR` du script ne pointe pas sur le bon volume (le journal vit dans ce dossier : chemin faux = zéro trace) — le détail est alors dans Planificateur de tâches → clic droit → **Afficher le résultat**. ④ `.env` : `MATHPRINT_VERSION` est-il bien `latest` (un tag figé bloque tout — et un tag avec un `v` n'existe pas, voir la ligne `manifest unknown`) ? ⑤ Navigateur : forcer le rechargement (Ctrl+Maj+R) — les anciennes versions pouvaient rester en cache, corrigé depuis (nginx no-cache). |
+| Après une mise à jour, comportement inattendu | Revenir en arrière en fixant `MATHPRINT_VERSION` sur un tag précédent (`X.Y.Z` — sans le `v` — ou `sha-abc1234`) dans `.env` (§7) |

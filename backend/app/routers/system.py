@@ -25,10 +25,7 @@ BACKUP_DIR_KEY = "backups"
 
 @router.get("/status")
 def status(db: Session = Depends(get_db)):
-    from ..services import mathalea_client
-
     disk = shutil.disk_usage(settings.data_dir)
-    mathalea = mathalea_client.health()
     try:
         db.execute(__import__("sqlalchemy").text("SELECT 1"))
         db_ok = True
@@ -40,7 +37,6 @@ def status(db: Session = Depends(get_db)):
         "version": __version__,
         "build": {"sha": settings.build_sha, "time": settings.build_time},
         "database": {"ok": db_ok, "url_scheme": settings.database_url.split(":")[0]},
-        "mathalea": mathalea or {"status": "unreachable"},
         "disk": {"total_gb": round(disk.total / 1e9, 1),
                  "free_gb": round(disk.free / 1e9, 1),
                  "alert": disk.free / disk.total < 0.1},

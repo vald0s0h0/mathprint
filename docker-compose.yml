@@ -5,7 +5,7 @@
 # lors de la phase 4 (durcissement) si la charge le nécessite.
 #
 # Images pré-construites (GitHub Actions) :
-# - chaque push sur main publie mathalea/api/web en ":latest" + ":sha-XXXXXXX"
+# - chaque push sur main publie api/web en ":latest" + ":sha-XXXXXXX"
 #   sur ghcr.io/vald0s0h0/mathprint-* (.github/workflows/deploy.yml) ;
 # - un tag git "vX.Y.Z" publie en plus une version épinglable (release.yml).
 #
@@ -38,22 +38,14 @@ services:
     volumes:
       - ./volumes/redis:/data
 
-  mathalea:
-    image: ghcr.io/vald0s0h0/mathprint-mathalea:${MATHPRINT_VERSION:-latest}
-    # génération MathALÉA versionnée et épinglée (§11.1)
-    restart: unless-stopped
-
   api:
     image: ghcr.io/vald0s0h0/mathprint-api:${MATHPRINT_VERSION:-latest}
     depends_on:
       db:
         condition: service_healthy
-      mathalea:
-        condition: service_started
     environment:
       MATHPRINT_DATABASE_URL: postgresql+psycopg2://mathprint:${DB_PASSWORD}@db/mathprint
       MATHPRINT_MOCK_MODE: ${MOCK_MODE:-true}
-      MATHPRINT_MATHALEA_URL: http://mathalea:8123
       # SECRET_KEY/HMAC_KEY : générés automatiquement au 1er démarrage et
       # persistés dans /data/runtime_secrets.env (services/bootstrap.py) —
       # rien à fournir ici. Le tout premier compte se crée depuis l'écran de

@@ -76,8 +76,10 @@ class Settings(BaseSettings):
     claude_adapt_model: str = "claude-sonnet-5"
     # Pipeline Indigo (onglet Exercices) : les TROIS étapes LLM (découpage,
     # génération, vérification) passent par UN fournisseur choisi à l'exécution
-    # depuis l'onglet (toggle, persisté dans SystemSetting 'indigo_llm_provider',
-    # cf. services.indigo_llm). Défaut = Anthropic. Deux câblages :
+    # (persisté dans SystemSetting 'indigo_llm_provider', cf. services.indigo_llm).
+    # Défaut = multipass : c'est le SEUL mode que l'onglet Exercices propose
+    # depuis le 05/09 (plus de sélecteur) — anthropic/deepseek/qcm restent
+    # câblés et testés, mais ne sont plus atteignables depuis l'interface.
     #   • anthropic : découpage + génération = Sonnet, vérification = Opus ;
     #   • deepseek  : les trois étapes = DeepSeek pro v4 (clé « deepseek-pro ») ;
     #   • qcm       : pipeline « QCM only » (services.indigo_qcm) — DeepSeek pro,
@@ -86,9 +88,20 @@ class Settings(BaseSettings):
     #     MODE de génération, pas seulement un fournisseur : il remplace
     #     l'adaptation + la relecture par un seul appel qui produit, pour chaque
     #     exercice du manuel, un trio base + dérivé facile + dérivé difficile.
+    #   • multipass : pipeline « QCM multipass » (services.indigo_multipass) —
+    #     DeepSeek FLASH, cinq passes (rattachement et checklist, génération,
+    #     résolution indépendante, mise en page, retouche) et un duo
+    #     Base/Facile écrit en brouillon. Un exercice « expert » du manuel
+    #     (badge CV) tient lieu de dérivé Difficile (§ services.indigo,
+    #     _persist_multipass_family) — il n'existe plus de troisième variante
+    #     générée. La génération se partage entre deux sources d'un même lot
+    #     (indigo_multipass_batch_size) quand elles se rattachent à la même
+    #     compétence ; les quatre autres passes restent une source à la fois.
+    #     Le corrigé du manuel professeur, quand il est déjà indexé, informe
+    #     SEULEMENT la génération.
     # Sans la clé du fournisseur choisi, les trois étapes tournent hors-ligne
     # (replis OCR bruts). Indigo n'utilise plus Gemini.
-    indigo_llm_provider_default: str = "anthropic"
+    indigo_llm_provider_default: str = "multipass"
     indigo_anthropic_segment_model: str = "claude-sonnet-5"
     indigo_anthropic_adapt_model: str = "claude-sonnet-5"
     indigo_anthropic_review_model: str = "claude-opus-5"
@@ -113,6 +126,69 @@ class Settings(BaseSettings):
     # facile, difficile) : 2 sources ≈ le volume de sortie d'un lot classique de
     # 4 à 6, donc sous le plafond de 8 k tokens de DeepSeek (incident A1.3).
     indigo_qcm_batch_size: int = 2
+    # --- mode « QCM multipass » (services.indigo_multipass) ---
+    # DeepSeek FLASH simple sur les CINQ passes : la qualité ne vient pas de la
+    # puissance d'un appel mais de cinq passes qui se relisent (rattachement
+    # /nettoyage, génération, résolution indépendante, mise en page, retouche).
+    # Chaque passe traite une source à la fois, SAUF la génération, partagée
+    # entre deux sources d'un même lot quand c'est possible (§ ci-dessous,
+    # indigo_multipass_batch_size).
+    # Un seul modèle pour les cinq — aucune variante raisonneuse, aucun réglage
+    # par passe : ce qui distingue les passes, c'est ce qu'on leur MONTRE (le
+    # solveur ne voit pas les réponses), pas le modèle qui les traite.
+    indigo_multipass_model: str = "deepseek-v4-flash"
+    # Extraction VISUELLE du manuel élève, propre au mode multipass. Ce modèle
+    # partage la clé « deepseek-flash » avec le modèle texte ci-dessus ; seul son
+    # identifiant change. Une seule demi-page physique est envoyée par appel :
+    # la double page entière faisait fusionner des badges et décaler les numéros.
+    indigo_multipass_vision_model: str = "deepseek-v4-flash-vision-exp"
+    indigo_multipass_vision_max_output_tokens: int = 8192
+    # DÉCOUPAGE DE LA PAGE. Le manuel est un PDF de captures d'un lecteur en
+    # plein écran : chaque raster porte une double page ENTOURÉE du décor du
+    # lecteur (flèches, boutons, vignette). Le contenu occupe donc une fraction
+    # constante de la largeur, mesurée ici sur le manuel 3e — 123 px à 1592 px
+    # sur 1755. Ces bornes sont RÉGLABLES et jamais recalculées page par page :
+    # un détecteur de gouttières se laisse prendre par la première figure grise
+    # venue, alors que la mise en page, elle, ne bouge pas d'un pixel.
+    indigo_multipass_page_x0: float = 0.070
+    indigo_multipass_page_x1: float = 0.907
+    # Colonnes d'exercices dans cette boîte (2 pages × 2 colonnes). Découper la
+    # LARGEUR TOTALE en quatre coupait au travers des colonnes 1 et 4 : sur les
+    # pages 86-87, trois exercices perdus et trois lus deux fois.
+    indigo_multipass_columns: int = 4
+    # Reprises des passes 2 à 5 après un INCIDENT DE TRANSPORT (délai dépassé,
+    # sortie tronquée, 5xx). Ce n'est plus une boucle de qualité : depuis le
+    # 04/09, un défaut d'exercice se répare sur place (passe 5) ou se signale, il
+    # ne relance jamais la génération. Mesuré sur les pages 67-68, relancer
+    # quatre fois coûtait 63 générations pour 8 sources et faisait passer les
+    # défauts de 85 à 81 — le même exercice, avec les mêmes défauts.
+    indigo_multipass_max_attempts: int = 4
+    # Tours de RETOUCHE (passe 5) sur le même exercice. Le deuxième tour ne
+    # tourne QUE s'il reste des défauts après le premier, et il coûte un appel
+    # là où l'ancienne relance en coûtait quatre (génération + résolution +
+    # mise en page + audit). Réparer deux fois de suite le même texte reste
+    # réparer sur place : à aucun moment l'exercice ne repart de zéro.
+    indigo_multipass_repair_rounds: int = 2
+    # Exercices SOURCE par appel de GÉNÉRATION (passe 2 seule — les passes 1, 3,
+    # 4, 5 restent une famille à la fois). Un appel ne produit que deux
+    # variantes par source (Base, Facile) : deux sources à la fois ramènent le
+    # volume de sortie près de l'ancien niveau à trois variantes, comme
+    # `indigo_qcm_batch_size` le fait déjà pour le mode
+    # « QCM only ».
+    indigo_multipass_batch_size: int = 2
+    # Budget de sortie du PREMIER appel (l'échelle d'indigo_llm essaie ensuite le
+    # double puis le quadruple). Plus large que le défaut DeepSeek de 8192 : la
+    # passe 2 doit écrire TROIS exercices complets d'un coup. C'est un PLAFOND,
+    # pas une réservation — on ne paie que les tokens réellement produits, donc
+    # la marge ne coûte rien alors qu'un budget trop court coûte un appel perdu
+    # par exercice (extraction A1.2 du 03/09 : 25 appels de génération à 8092
+    # tokens de sortie en moyenne, soit tous au plafond, pour zéro exercice —
+    # le raisonnement est désactivé depuis, cf. indigo_llm.call).
+    indigo_multipass_max_output_tokens: int = 16384
+    # « Cheap and Wait » (services.indigo_offpeak) : heures creuses DeepSeek
+    # codées en dur (grille tarifaire du fournisseur, ne se règle pas) —
+    # seule la case (activée/désactivée) est persistée depuis l'onglet
+    # Exercices, cf. indigo_offpeak.PEAK_WINDOWS_UTC.
     # vérification désactivable seule (appel payant par cible), quel que soit le
     # fournisseur (cf. exercise_gen.format_contract, contrat partagé).
     indigo_review_enabled: bool = True
@@ -200,13 +276,6 @@ class Settings(BaseSettings):
     # Au-dessus, un exercice compte comme réussi (donc à ne resservir qu'en
     # dernier recours, banque épuisée).
     history_success_threshold: float = 0.5
-    # --- MathALÉA (service Node headless, conteneur "mathalea" §11.1) ---
-    mathalea_url: str = "http://localhost:8123"
-    # délai TOTAL maximal d'un appel MathALÉA (cold start possible du service
-    # Node à la première requête) — même logique que llm_call_timeout_s :
-    # le timeout httpx est par lecture socket, pas global (RM- incident worker
-    # bloqué indéfiniment sur un service qui répond au compte-gouttes/tarde)
-    mathalea_call_timeout_s: int = 30
 
     # --- Sésamaths (extraction de manuels PDF Sésamath, à la demande) ---
     # niveau -> chemin du manuel ; seule la 5e est couverte pour l'instant,

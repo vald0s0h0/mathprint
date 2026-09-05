@@ -45,7 +45,6 @@ type DeleteKind = 'classes' | 'students' | 'assessments' | 'corrections'
 type SystemStatus = {
   version: string; build?: Build
   database: { ok: boolean; url_scheme: string }
-  mathalea: { status?: string; mathaleaVersion?: string; exercises?: number }
   disk: { total_gb: number; free_gb: number; alert: boolean }
   last_backup: string | null
 }
@@ -261,19 +260,6 @@ export default function SettingsPage() {
       notifications.show({ color: 'red', message: (e as Error).message })
     } finally {
       setSavingLlmThreshold(false)
-    }
-  }
-
-  async function syncMathalea() {
-    try {
-      const r = await api.post<{ created: number; updated: number; competency_mapped: number }>(
-        '/api/assessments/exercises/sync-mathalea')
-      notifications.show({
-        color: 'green',
-        message: `MathALÉA : ${r.created} créés, ${r.updated} mis à jour, ${r.competency_mapped} rattachés aux compétences`,
-      })
-    } catch (e) {
-      notifications.show({ color: 'red', message: (e as Error).message })
     }
   }
 
@@ -580,19 +566,9 @@ export default function SettingsPage() {
                   <Badge variant="light" color={status.database.ok ? 'green' : 'red'}>
                     Base {status.database.url_scheme} {status.database.ok ? 'OK' : 'KO'}
                   </Badge>
-                  <Badge variant="light" color={status.mathalea.status === 'ok' ? 'green' : 'red'}>
-                    MathALÉA {status.mathalea.status === 'ok'
-                      ? `v${status.mathalea.mathaleaVersion} (${status.mathalea.exercises} exos)`
-                      : 'injoignable'}
-                  </Badge>
                   <Badge variant="light" color={status.disk.alert ? 'red' : 'green'}>
                     Disque {status.disk.free_gb} / {status.disk.total_gb} Go libres
                   </Badge>
-                </Group>
-                <Group mt="sm">
-                  <Button size="xs" variant="light" onClick={syncMathalea}>
-                    Synchroniser le catalogue MathALÉA
-                  </Button>
                 </Group>
                 <Text size="xs" c="dimmed" mt="sm">
                   Version {status.version}

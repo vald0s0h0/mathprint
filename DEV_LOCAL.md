@@ -7,11 +7,10 @@ chaud du backend et du frontend. La prod (NAS) reste en Docker + Postgres — vo
 ## Topologie
 
 ```
-Vite :5173  ──(proxy /api)──►  API :8787 (uvicorn --reload)  ──►  MathALÉA :8123
+Vite :5173  ──(proxy /api)──►  API :8787 (uvicorn --reload)
    HMR                          SQLite backend/mathprint.db
 ```
 
-- **MathALÉA** (`mathalea-service`, Node) : génération déterministe, port **8123**.
 - **API** (`backend`, FastAPI) : **8787**, hot-reload scopé sur `backend/app`.
 - **Interface** (`frontend`, Vite) : **5173** avec HMR, proxy `/api` → 8787.
 - **Base** : **SQLite** `backend/mathprint.db` (créée et migrée automatiquement au
@@ -25,15 +24,15 @@ Vite :5173  ──(proxy /api)──►  API :8787 (uvicorn --reload)  ──►
 
 1. Ouvre le dossier dans VS Code, installe les extensions proposées (Python).
 2. Appuie sur **`Cmd+Shift+B`** — lance la tâche par défaut **« Dev ▶ »** :
-   les **3 services** (MathALÉA, API hot-reload, Vite) dans **un seul terminal**.
+   les **2 services** (API hot-reload, Vite) dans **un seul terminal**.
    (Équivaut à *Terminal → Run Build Task…*.)
 3. Ouvre **http://localhost:5173**.
 
 **Arrêter : `Ctrl+C` dans ce terminal → tout s'arrête d'un coup** (le script tue
 l'arbre de processus complet : worker uvicorn, node, etc. — aucun orphelin).
 
-> Variante « 3 terminaux séparés » (logs isolés) : *Run Task… → « Dev: tout
-> lancer (3 terminaux séparés) »*. Là, il faut `Ctrl+C` dans chacun.
+> Variante « 2 terminaux séparés » (logs isolés) : *Run Task… → « Dev: tout
+> lancer (2 terminaux séparés) »*. Là, il faut `Ctrl+C` dans chacun.
 
 ### Option B — script (hors VS Code)
 
@@ -41,15 +40,15 @@ l'arbre de processus complet : worker uvicorn, node, etc. — aucun orphelin).
 ./scripts/dev.sh        # bootstrap auto (venv + npm) si nécessaire, puis lance tout
 ```
 
-Ouvre **http://localhost:5173**. `Ctrl+C` coupe les trois services d'un coup.
+Ouvre **http://localhost:5173**. `Ctrl+C` coupe les deux services d'un coup.
 
 ## Débogage Python (breakpoints)
 
 `.vscode/launch.json` fournit le débogueur (debugpy, livré avec l'extension
 Python — rien à installer) :
 
-- **« Débogue tout (API + MathALÉA + Vite) »** (onglet *Run and Debug*, ▶) :
-  lance MathALÉA + Vite comme tâches puis l'API sous le débogueur. Pose des
+- **« Débogue tout (API + Vite) »** (onglet *Run and Debug*, ▶) :
+  lance Vite comme tâche puis l'API sous le débogueur. Pose des
   breakpoints dans `backend/app/**`.
 - Si un breakpoint ne s'active pas après un reload, utilise **« Débogue l'API
   (sans reload — breakpoints fiables) »**.
@@ -63,8 +62,8 @@ administrateur** (e-mail / prénom / mot de passe + clés API facultatives).
 basculent sur le repli *offline* simulé (`services/providers.offline()`), ce qui
 permet de faire tourner toute l'interface. Pour de la vraie génération
 (DeepSeek / Gemini / Mistral OCR) ou correction (Mathpix), saisis les clés dans
-l'écran de démarrage ou **Paramètres**. MathALÉA et la vision QCM (OpenCV)
-fonctionnent en local sans clé.
+l'écran de démarrage ou **Paramètres**. La vision QCM (OpenCV) fonctionne en
+local sans clé.
 
 ## Réinitialiser la base
 
@@ -92,6 +91,5 @@ cd backend && bash e2e_test.sh                      # E2E mock
   migrations passent en SQLite mais cassent en Postgres (types de colonnes, cf.
   `backend/app/db.py`). Les incompatibilités se rattrapent en CI, pas ici.
 - Ports occupés ? Change-les de façon cohérente : API `--port`, `MATHPRINT_API`
-  pour le proxy Vite (`MATHPRINT_API=http://localhost:8899 npm run dev`),
-  `PORT`/`MATHPRINT_MATHALEA_URL` pour MathALÉA.
+  pour le proxy Vite (`MATHPRINT_API=http://localhost:8899 npm run dev`).
 ```

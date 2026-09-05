@@ -34,8 +34,8 @@ type Exercise = {
   // extraction brute dont provient cette ligne : shape variable selon la
   // source. Seule source="sesamaths" porte des blocs OCR Mistral affichables
   // (title/text/table/list/equation/image/...) ; les autres sources (indigo,
-  // gemini, mathalea) stockent ici des métadonnées de forme différente ou
-  // rien — ne JAMAIS supposer `.blocks` présent sans vérifier.
+  // gemini) stockent ici des métadonnées de forme différente ou rien — ne
+  // JAMAIS supposer `.blocks` présent sans vérifier.
   raw: Record<string, any> | null
 }
 

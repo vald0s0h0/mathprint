@@ -59,7 +59,7 @@ Ce cahier des charges constitue la référence fonctionnelle et technique de la 
 | **Sujet**     | **Choix retenu**                                                                    |
 |---------------|-------------------------------------------------------------------------------------|
 | Application   | Interface web React ; API FastAPI ; services Docker Compose sur le NAS.             |
-| Exercices     | MathALÉA auto-hébergé et versionné ; instantané de chaque énoncé et correction.     |
+| Exercices     | Moteur déterministe interne auto-hébergé ; instantané de chaque énoncé et correction. |
 | Documents     | PDF A4 personnalisés par élève ; manifeste de zones associé à chaque page.          |
 | Repérage      | 1 QR principal + 3 mini QR/fiduciels noirs aux quatre angles.                       |
 | Zones papier  | Cadres rouge-orangé très clair supprimables ; original couleur conservé.            |
@@ -176,11 +176,9 @@ Limiter les données envoyées aux services externes et suivre tous les coûts d
 </tbody>
 </table>
 
-## 3.3 Génération MathALÉA
+## 3.3 Génération d'exercices
 
-MathALÉA est exécuté dans un conteneur Node.js local, à une version épinglée.
-
-Un adaptateur interne reçoit l’exercice, les paramètres et une seed déterministe.
+Un générateur interne reçoit le type d'exercice, les paramètres et une seed déterministe.
 
 Le système stocke l’énoncé, la correction, les réponses attendues, la seed et la version exacte.
 
@@ -210,7 +208,7 @@ désactivé par défaut et peut être activé dans les aperçus et la mise en pa
 | **Champ**           | **Rôle**                                                                              |
 |---------------------|---------------------------------------------------------------------------------------|
 | item_id             | Identifiant immuable de la question dans la copie.                                    |
-| exercise_catalog_id | Référence au type MathALÉA et à son adaptateur.                                       |
+| exercise_catalog_id | Référence au type d'exercice et à son générateur.                                     |
 | response_type       | qcm_single, qcm_multiple, short_text, multiline_text.                                 |
 | expected_schema     | Type mathématique attendu : entier, rationnel, expression, intervalle, texte, étapes. |
 | grading_policy      | Comparateur, tolérance, barème partiel, unités et règles de présentation.             |
@@ -648,7 +646,7 @@ Les clés primaires sont des UUID ; les dates sont stockées en UTC avec afficha
 | competency_frameworks    | id, grade_level, name, version, status, source                                             | Une version publiée est immuable.               |
 | competencies             | id, framework_id, code, label, description, parent_id, order_index                         | Arbre ou grille ; code stable dans une version. |
 | competency_prerequisites | competency_id, prerequisite_id, weight                                                     | Graphe sans cycle validé à l’import.            |
-| exercise_catalog         | id, provider, provider_ref, title, grade_level, difficulty, response_type, automation_tier | Référence MathALÉA et capacité technique.       |
+| exercise_catalog         | id, provider, provider_ref, title, grade_level, difficulty, response_type, automation_tier | Référence l'exercice et sa capacité technique.  |
 | exercise_competencies    | exercise_id, competency_id, weight, evidence_strength                                      | Somme des poids contrôlée.                      |
 | exercise_configs         | id, exercise_id, schema_json, response_schema_json, active                                 | Paramètres autorisés et comparateur.            |
 
@@ -717,7 +715,6 @@ Les clés primaires sont des UUID ; les dates sont stockées en UTC avec afficha
 | queue         | Redis           | File rapide et verrous temporaires ; aucune donnée métier unique. |
 | worker-cv     | Python/OpenCV   | PDF raster, QR, homographie, couleurs, crops et QCM.              |
 | worker-doc    | Python + LaTeX  | PDF sujets, corrections, overlays et fusion.                      |
-| mathalea      | Node.js         | Génération MathALÉA versionnée.                                   |
 | scheduler     | Python          | Courbe d’oubli, rapports périodiques, sauvegardes et maintenance. |
 
 ## 11.2 Dimensionnement DS224+
@@ -740,7 +737,7 @@ Volumes Docker et base sur stockage Btrfs ; surveillance de l’espace et rotati
 | /data/assessments/{id}/scans/original | Scans couleur immuables.                                      |
 | /data/assessments/{id}/scans/derived  | Pages recalées, crops et filtres reproductibles.              |
 | /data/assessments/{id}/overlays       | Overlays et archives fusionnées.                              |
-| /data/catalog                         | Exercices, assets, modèles LaTeX et versions MathALÉA.      |
+| /data/catalog                         | Exercices, assets, modèles LaTeX et versions.               |
 | /data/backups                         | Exports chiffrés et journaux de sauvegarde.                   |
 
 ## 11.4 Sécurité et confidentialité
@@ -834,7 +831,7 @@ Sorties LLM valides, invalides, vides, tronquées et contradictoires.
 |----------------|-------------------------------------------------------------------------------------|
 | Unitaires      | QR/HMAC, coordonnées, comparateurs, score QCM, oubli, budgets et schémas JSON.      |
 | Golden files   | PDF et manifestes de référence ; diff visuelle tolérancée.                          |
-| Intégration    | MathALÉA → PDF → scan simulé → CV → OCR mock → correction → overlay.                |
+| Intégration    | Génération → PDF → scan simulé → CV → OCR mock → correction → overlay.              |
 | Contract tests | Mathpix, DeepSeek et Anthropic avec réponses enregistrées et sandbox si disponible. |
 | End-to-end     | Lot réel de 30 copies, imprimé, rempli, scanné, corrigé et réimprimé.               |
 | Récupération   | Coupure réseau/API/NAS à chaque phase ; reprise sans doublon.                       |
@@ -858,7 +855,7 @@ Export diagnostic anonymisé ne contenant ni copie ni secret.
 | **Phase**          | **Livrables**                                                                      | **Critère de sortie**                               |
 |--------------------|------------------------------------------------------------------------------------|-----------------------------------------------------|
 | 0 — POC papier     | Gabarit, 4 QR, filtre couleur, 3 types de réponse, 10 copies.                      | Recadrage et overlay validés sur imprimante réelle. |
-| 1 — MVP correction | Classes, sujets MathALÉA, 30 copies, scans, Mathpix, QCM, revue et PDF correction. | Lot complet sans intervention technique.            |
+| 1 — MVP correction | Classes, sujets, 30 copies, scans, Mathpix, QCM, revue et PDF correction.          | Lot complet sans intervention technique.            |
 | 2 — Suivi          | Compétences, niveaux, historique, courbe d’oubli et dashboard élève.               | Agrégats recalculables et preuves traçables.        |
 | 3 — IA adaptative  | DeepSeek pour sélection/arbitrage ; Claude Haiku pour rapports ; budgets.          | Évaluations de qualité et coût validées.            |
 | 4 — Durcissement   | Impression directe, calibrages multiples, sauvegardes, sécurité et monitoring.     | Recette de 30 copies et restauration réussies.      |
@@ -875,7 +872,7 @@ Nombre moyen de pages et de zones par copie ; volume mensuel attendu.
 
 Politique RGPD : durée de conservation, droits d’accès, information des familles et contrat API.
 
-Liste MathALÉA initiale et qualification de chaque exercice pour l’OCR automatique.
+Liste initiale des exercices et qualification de chacun pour l’OCR automatique.
 
 Seuils de confiance acceptables après constitution d’un corpus réel.
 
@@ -896,8 +893,6 @@ Impression directe CUPS/IPP ou téléchargement PDF dans la première version.
 </table>
 
 # Références techniques vérifiées
-
-**\[S1\]** MathALÉA — générateur JavaScript avec sorties HTML, LaTeX et PDF ; projet AGPL. https://github.com/mathalea/mathalea
 
 **\[S2\]** Mathpix — endpoint image \`/v3/text\`, formats, confiance et reconnaissance manuscrite STEM. https://docs.mathpix.com/reference/post-v3-text
 
@@ -936,7 +931,7 @@ Impression directe CUPS/IPP ou téléchargement PDF dans la première version.
 | RM-011 | Les prompts et modèles sont versionnés et configurables.                               |
 | RM-012 | La correction imprimée utilise un overlay transparent calibré.                         |
 | RM-013 | Un contrôle personnalisé doit signaler sa difficulté et préserver un blueprint commun. |
-| RM-014 | Toute copie générée conserve son instantané MathALÉA complet.                          |
+| RM-014 | Toute copie générée conserve son instantané d'exercice complet.                        |
 | RM-015 | Les budgets API peuvent suspendre les appels sans bloquer l’accès aux données.         |
 
 # Infos complémentaires

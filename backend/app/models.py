@@ -138,7 +138,7 @@ class Competency(Base):
 class ExerciseCatalog(Base):
     __tablename__ = "exercise_catalog"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
-    provider: Mapped[str] = mapped_column(String, default="builtin")  # builtin | mathalea
+    provider: Mapped[str] = mapped_column(String, default="builtin")  # builtin
     provider_ref: Mapped[str] = mapped_column(String)
     title: Mapped[str] = mapped_column(String)
     grade_level: Mapped[str] = mapped_column(String)
@@ -173,7 +173,7 @@ class GeneratedExercise(Base):
     verifier_verdict_json: Mapped[dict] = mapped_column(JSON, default=dict)
     # Figure illustrative optionnelle
     figure_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    # Provenance (deepseek | mathalea) et nature (application | probleme)
+    # Provenance (deepseek) et nature (application | probleme)
     source: Mapped[str] = mapped_column(String, default="deepseek")
     kind: Mapped[str] = mapped_column(String, default="application")
     # Scores qualité du vérificateur (justesse, adéquation compétence/niveau, clarté)
@@ -478,6 +478,15 @@ class ScannedPage(Base):
     original_file_id: Mapped[str | None] = mapped_column(String, nullable=True)
     status: Mapped[str] = mapped_column(String, default="pending")  # pending|identified|registered|blocked
     quality_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    # identité posée à la main par le professeur (QR/fiduciels illisibles mais
+    # élève reconnu à l'œil sur l'aperçu, cf. résolution des scans bloqués) :
+    # id de DocumentPage, jamais un page_id QR — process_batch la force au
+    # prochain passage au lieu de retenter la lecture QR (services.worker_cv).
+    manual_page_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    # confirmé par le professeur comme n'étant PAS une copie réelle (mauvais
+    # feuillet, page blanche happée par l'ADF...) : exclue du flux d'overlay,
+    # ne bloque plus l'invariant de position (cf. services.pipeline.build_overlays)
+    dismissed: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class SandboxUpload(Base):

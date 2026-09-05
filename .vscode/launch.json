@@ -2,8 +2,8 @@
   // Débogage Python de l'API (breakpoints dans backend/app/**).
   // debugpy est fourni par l'extension VS Code « Python » — rien à installer.
   //
-  //   • « Débogue tout (API + MathALÉA + Vite) » : lance MathALÉA + Vite comme
-  //     tâches, puis démarre l'API sous le débogueur. C'est l'entrée par défaut.
+  //   • « Débogue tout (API + Vite) » : lance Vite comme tâche, puis démarre
+  //     l'API sous le débogueur. C'est l'entrée par défaut.
   //   • « Débogue l'API (hot-reload) » : reload actif ; breakpoints généralement
   //     OK, mais si l'un ne s'active pas après un reload, utilise la variante
   //     « sans reload » ci-dessous (attache 100% fiable).
@@ -35,9 +35,9 @@
   ],
   "compounds": [
     {
-      "name": "Débogue tout (API + MathALÉA + Vite)",
+      "name": "Débogue tout (API + Vite)",
       "configurations": ["Débogue l'API (hot-reload)"],
-      "preLaunchTask": "dev: mathalea + web",
+      "preLaunchTask": "dev: web",
       "stopAll": true
     }
   ]

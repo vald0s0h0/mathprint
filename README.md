@@ -7,9 +7,6 @@ mathématiques (collège). Implémentation du cahier des charges
 ## Démarrage rapide (développement)
 
 ```bash
-# Service MathALÉA (port 8123) — nécessite le clone ./mathalea (déjà présent)
-cd mathalea-service && npm install && npm start
-
 # API (port 8787)
 cd backend
 python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
@@ -38,7 +35,7 @@ Le NAS ne construit rien localement : il tire les images depuis GHCR.
 **Publier une mise à jour = `git push` sur `main`, c'est tout.**
 `.github/workflows/deploy.yml` lance les tests puis publie sur
 `ghcr.io/vald0s0h0/` les images qui ont changé (`mathprint-api`,
-`mathprint-web`, `mathprint-mathalea`) sous deux tags : `latest` et
+`mathprint-web`) sous deux tags : `latest` et
 `sha-XXXXXXX` (retour arrière précis). Le NAS se met ensuite à jour tout
 seul via une tâche planifiée DSM qui exécute `scripts/nas-update.sh`
 (`docker compose pull && up -d` — plus de Watchtower, peu fiable avec
@@ -51,7 +48,7 @@ Résumé en ligne de commande pour un déploiement Docker Compose classique :
 ```bash
 cp .env.example .env   # DB_PASSWORD (seul secret requis), MATHPRINT_VERSION
 docker compose up -d
-# services : db (PostgreSQL), queue (Redis), mathalea/api/web (ghcr.io/vald0s0h0/mathprint-*)
+# services : db (PostgreSQL), queue (Redis), api/web (ghcr.io/vald0s0h0/mathprint-*)
 # mise à jour : cron/tâche planifiée → scripts/nas-update.sh
 ```
 
@@ -65,12 +62,14 @@ le build (sha du commit + date) de l'API et du web.
 ```
 
 Crée le tag git ; `.github/workflows/release.yml` publie les images
-`v1.2.0` + met à jour `latest`, et crée la release GitHub.
+`1.2.0` + met à jour `latest`, et crée la release GitHub.
 
 Pour figer le NAS sur une version précise plutôt que de suivre `latest`,
-définir `MATHPRINT_VERSION=v1.2.0` (ou `sha-abc1234`) dans `.env` puis
+définir `MATHPRINT_VERSION=1.2.0` (ou `sha-abc1234`) dans `.env` puis
 `docker compose up -d` — la tâche de mise à jour ne trouvera plus rien de
-plus récent.
+plus récent. **Le tag d'image n'a pas le `v` du tag git** (`v1.2.0` côté git,
+`ghcr.io/…/mathprint-api:1.2.0` côté registre) : un `v` de trop rend le
+manifeste introuvable et bloque *toutes* les mises à jour du NAS.
 
 **Première publication** : les paquets GHCR créés par la CI héritent parfois
 d'une visibilité privée par défaut — si `docker compose pull` échoue sur le
@@ -87,7 +86,6 @@ jeton `read:packages`.
   voisins), déclinés en **5 niveaux de difficulté**, validés par le moteur
   déterministe puis **stockés en banque** (`generated_exercises`) et réutilisés
   sans nouvel appel ; le niveau servi suit le niveau 1-10 de l'élève ;
-- 534 exercices MathALÉA v2.8.2 (service Node headless, seedé) ;
 - 7 générateurs intégrés.
 
 **Design des copies** : cartes d'exercices à coins arrondis avec ombre et
@@ -128,19 +126,16 @@ Boutons d'impression dans Sujets (lot, overlay) et Corrections.
 
 **Phase 4** — assistant de calibration (page test 4 marqueurs + trait 100 mm ;
 mesure offsets/échelle/rotation depuis le scan), sauvegardes base (SQLite
-backup API / pg_dump, rétention 30), statut système (base, MathALÉA, disque),
+backup API / pg_dump, rétention 30), statut système (base, disque),
 audit des impressions.
 
 ## Structure
 
 ```
-mathalea/               # clone MathALÉA v2.8.2 épinglé (AGPL)
-mathalea-service/       # runner Node headless : /catalog, /generate (seedé)
 backend/app/
   data/competencies_fr.json   # grilles officielles extraites
   services/
     worker_cv.py        # raster, QR, homographie, dropout, QCM, vide
-    mathalea_client.py  # adaptateur MathALÉA -> contrat interne
     grading.py          # comparateurs déterministes (tiers A-E)
     forgetting.py       # courbe d'oubli sans LLM
     pdfgen.py           # gabarits A4, marqueurs, overlay

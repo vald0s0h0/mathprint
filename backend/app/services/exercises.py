@@ -1,9 +1,8 @@
-"""Générateur d'exercices déterministe (adaptateur type MathALÉA, §3.3).
+"""Générateur d'exercices déterministe intégré (§3.3).
 
 Chaque générateur reçoit une seed et une difficulté 1-10, et retourne un
 instantané complet : énoncé, correction, réponses attendues et barème.
-En production, le provider "mathalea" appelle le conteneur Node.js épinglé ;
-le provider "builtin" fournit un catalogue local autonome du même contrat.
+Le provider "builtin" fournit un catalogue local autonome.
 """
 import random
 from dataclasses import dataclass, field
@@ -153,13 +152,6 @@ GENERATORS = {
 
 
 def generate(provider_ref: str, seed: int, difficulty: int) -> GeneratedItem:
-    if provider_ref.startswith("mathalea:"):
-        from . import mathalea_client
-        data = mathalea_client.generate(provider_ref.split(":", 1)[1], seed)
-        return GeneratedItem(
-            statement=data["statement"], correction=data["correction"],
-            response_type=data["response_type"], expected=data["expected"],
-            grading=data["grading"])
     if provider_ref not in GENERATORS:
         raise ValueError(f"Exercice inconnu : {provider_ref}")
     _, fn, _, _ = GENERATORS[provider_ref]

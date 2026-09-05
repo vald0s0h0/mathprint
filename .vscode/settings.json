@@ -13,14 +13,12 @@
   "files.watcherExclude": {
     "**/data/**": true,
     "**/volumes/**": true,
-    "**/mathalea/node_modules/**": true,
     "**/node_modules/**": true,
     "**/.venv/**": true,
     "**/__pycache__/**": true,
     "**/*.db": true
   },
   "search.exclude": {
-    "**/mathalea/**": true,
     "**/data/**": true,
     "**/volumes/**": true,
     "**/dist/**": true

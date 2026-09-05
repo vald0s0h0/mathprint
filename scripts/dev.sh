@@ -2,10 +2,10 @@
 # Environnement de dev local (hot-reload) SANS VS Code — même topologie que
 # .vscode/tasks.json. Voir DEV_LOCAL.md.
 #
-#   MathALÉA :8123  →  API :8787 (uvicorn --reload)  →  Vite :5173 (proxy /api)
+#   API :8787 (uvicorn --reload)  →  Vite :5173 (proxy /api)
 #
 # Usage : ./scripts/dev.sh        (bootstrap auto si venv / node_modules absents)
-# Arrêt : Ctrl+C (coupe les trois services proprement).
+# Arrêt : Ctrl+C (coupe les deux services proprement).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -18,7 +18,6 @@ die() { printf '\033[1;31m[dev] %s\033[0m\n' "$*" >&2; exit 1; }
 command -v python3 >/dev/null || die "python3 introuvable"
 command -v node    >/dev/null || die "node introuvable"
 command -v npm     >/dev/null || die "npm introuvable"
-[ -d "$ROOT/mathalea/src" ] || die "clone MathALÉA absent (dossier ./mathalea) — voir README §Démarrage rapide"
 
 # --- bootstrap backend (venv) -------------------------------------------------
 if [ ! -x "$ROOT/backend/.venv/bin/uvicorn" ]; then
@@ -29,8 +28,7 @@ if [ ! -x "$ROOT/backend/.venv/bin/uvicorn" ]; then
 fi
 
 # --- bootstrap node -----------------------------------------------------------
-[ -d "$ROOT/mathalea-service/node_modules" ] || { log "npm install (mathalea-service)…"; (cd "$ROOT/mathalea-service" && npm install --no-audit --no-fund); }
-[ -d "$ROOT/frontend/node_modules" ]         || { log "npm install (frontend)…";         (cd "$ROOT/frontend" && npm install --no-audit --no-fund); }
+[ -d "$ROOT/frontend/node_modules" ] || { log "npm install (frontend)…"; (cd "$ROOT/frontend" && npm install --no-audit --no-fund); }
 
 # --- arrêt propre au Ctrl+C ---------------------------------------------------
 # On tue l'ARBRE complet : uvicorn --reload lance un sous-processus worker, npm
@@ -54,9 +52,6 @@ cleanup() {
 trap cleanup INT TERM EXIT
 
 # --- lancement ----------------------------------------------------------------
-log "MathALÉA  → http://localhost:8123"
-( cd "$ROOT/mathalea-service" && exec npm start ) & pids+=($!)
-
 log "API       → http://localhost:8787  (hot-reload)"
 # reload scopé sur le package app (sinon reload en boucle sur mathprint.db/.venv)
 ( cd "$ROOT/backend" && exec .venv/bin/uvicorn app.main:app --reload --reload-dir app --port 8787 ) & pids+=($!)
@@ -64,5 +59,5 @@ log "API       → http://localhost:8787  (hot-reload)"
 log "Interface → http://localhost:5173  (ouvre cette URL)"
 ( cd "$ROOT/frontend" && exec npm run dev ) & pids+=($!)
 
-log "les 3 services tournent. Ctrl+C pour tout arrêter."
+log "les 2 services tournent. Ctrl+C pour tout arrêter."
 wait

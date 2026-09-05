@@ -1,14 +1,14 @@
 {
   // Environnement de dev natif (hot-reload) — voir DEV_LOCAL.md.
-  //   MathALÉA :8123  →  API :8787 (uvicorn --reload)  →  Vite :5173 (proxy /api)
+  //   API :8787 (uvicorn --reload)  →  Vite :5173 (proxy /api)
   //
   // ►►► LE PLUS SIMPLE : Cmd+Shift+B  (= tâche « Dev ▶ » ci-dessous) ◄◄◄
-  //     Un seul terminal, les 3 services, Ctrl+C arrête TOUT d'un coup.
+  //     Un seul terminal, les 2 services, Ctrl+C arrête TOUT d'un coup.
   "version": "2.0.0",
   "tasks": [
     {
       "label": "Dev ▶ (tout, 1 terminal)",
-      "detail": "Lance MathALÉA + API (hot-reload) + Vite dans UN terminal. Ctrl+C arrête tout.",
+      "detail": "Lance API (hot-reload) + Vite dans UN terminal. Ctrl+C arrête tout.",
       "type": "shell",
       "command": "./scripts/dev.sh",
       "options": { "cwd": "${workspaceFolder}" },
@@ -18,29 +18,12 @@
         "background": {
           "activeOnStart": true,
           "beginsPattern": "\\[dev\\]",
-          "endsPattern": "les 3 services tournent"
+          "endsPattern": "les 2 services tournent"
         }
       },
       "presentation": { "reveal": "always", "panel": "dedicated", "focus": true },
       // Cmd+Shift+B lance cette tâche.
       "group": { "kind": "build", "isDefault": true }
-    },
-    {
-      "label": "dev: mathalea",
-      "detail": "Service MathALÉA headless (génération déterministe) sur :8123",
-      "type": "shell",
-      "command": "npm start",
-      "options": { "cwd": "${workspaceFolder}/mathalea-service" },
-      "isBackground": true,
-      "problemMatcher": {
-        "pattern": { "regexp": "^\\s*$", "file": 1, "location": 2, "message": 3 },
-        "background": {
-          "activeOnStart": true,
-          "beginsPattern": "mathalea-service",
-          "endsPattern": "sur :\\d+"
-        }
-      },
-      "presentation": { "group": "dev", "reveal": "always", "panel": "dedicated" }
     },
     {
       "label": "dev: api",
@@ -63,7 +46,7 @@
     },
     {
       "label": "dev: web",
-      "detail": "Interface Vite (HMR) sur :5173, proxy /api → :8787",
+      "detail": "Interface Vite (HMR) sur :5173, proxy /api → 8787",
       "type": "shell",
       "command": "npm run dev",
       "options": { "cwd": "${workspaceFolder}/frontend" },
@@ -79,16 +62,9 @@
       "presentation": { "group": "dev", "reveal": "always", "panel": "dedicated" }
     },
     {
-      "label": "Dev: tout lancer (3 terminaux séparés)",
-      "detail": "Alternative : MathALÉA + API + Vite dans 3 terminaux dédiés (logs séparés)",
-      "dependsOn": ["dev: mathalea", "dev: api", "dev: web"],
-      "dependsOrder": "parallel",
-      "problemMatcher": []
-    },
-    {
-      "label": "dev: mathalea + web",
-      "detail": "MathALÉA + Vite seuls — l'API est lancée par le débogueur (voir launch.json)",
-      "dependsOn": ["dev: mathalea", "dev: web"],
+      "label": "Dev: tout lancer (2 terminaux séparés)",
+      "detail": "Alternative : API + Vite dans 2 terminaux dédiés (logs séparés)",
+      "dependsOn": ["dev: api", "dev: web"],
       "dependsOrder": "parallel",
       "problemMatcher": []
     }

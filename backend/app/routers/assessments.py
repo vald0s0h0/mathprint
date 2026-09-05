@@ -14,7 +14,7 @@ from ..db import get_db
 from ..deps import current_user
 from ..models import (
     Assessment, Competency, CompetencyFramework, Copy, ExerciseCatalog,
-    ExerciseCompetency, GeneratedExercise, ScanBatch, SchoolClass, Student,
+    GeneratedExercise, ScanBatch, SchoolClass, Student,
     StudentCompetencyState,
 )
 from ..services import job_worker, manual_subject, scoring
@@ -42,9 +42,9 @@ class AssessmentPatch(BaseModel):
     competency_ids: list[str] | None = None
     # source des exercices : "sesamaths" = extraction du manuel, "gemini" =
     # création par LLM (services.gemini_gen), "indigo" = manuel 3e publié en
-    # dur (services.indigo). "auto"/"mathalea" sont des valeurs héritées, sans
-    # pipeline derrière depuis le 16/07.
-    exercise_source: Literal["auto", "mathalea", "sesamaths", "gemini", "indigo"] | None = None
+    # dur (services.indigo). "auto" est une valeur héritée, sans pipeline
+    # derrière depuis le 16/07.
+    exercise_source: Literal["auto", "sesamaths", "gemini", "indigo"] | None = None
 
 
 class GenerateIn(BaseModel):
@@ -202,65 +202,6 @@ def ai_bank_status(competency_id: str, db: Session = Depends(get_db)):
     for r in rows:
         by_level[r.difficulty_level] = by_level.get(r.difficulty_level, 0) + 1
     return {"competency_id": competency_id, "by_level": by_level, "total": len(rows)}
-
-
-@router.post("/exercises/sync-mathalea")
-def sync_mathalea(db: Session = Depends(get_db)):
-    """Importe/actualise le catalogue MathALÉA depuis le service Node (§3.3).
-    Les exercices avec réponse structurée (AMCNum/mathLive) sont automatisables ;
-    les autres passent en validation obligatoire."""
-    from ..services import mathalea_client
-
-    try:
-        entries = mathalea_client.catalog()
-    except mathalea_client.MathaleaUnavailable as e:
-        raise HTTPException(503, str(e))
-
-    # compétences par grade pour un rattachement heuristique par similarité de titre
-    comps_by_grade: dict[str, list] = {}
-    for fw in db.query(CompetencyFramework).all():
-        comps_by_grade[fw.grade_level] = db.query(Competency).filter_by(
-            framework_id=fw.id).all()
-
-    def match_competency(grade: str, title: str):
-        tokens = {w for w in title.lower().split() if len(w) > 4}
-        best, best_score = None, 0.0
-        for c in comps_by_grade.get(grade, []):
-            ltokens = {w for w in c.label.lower().split() if len(w) > 4}
-            if not tokens or not ltokens:
-                continue
-            score = len(tokens & ltokens) / len(tokens | ltokens)
-            if score > best_score:
-                best, best_score = c, score
-        return best if best_score >= 0.2 else None
-
-    existing = {e.provider_ref: e for e in db.query(ExerciseCatalog)
-                .filter_by(provider="mathalea").all()}
-    created = updated = mapped = 0
-    for entry in entries:
-        ref = f"mathalea:{entry['ref']}"
-        auto = entry.get("amcType") == "AMCNum" or entry.get("interactifType") == "mathLive"
-        row = existing.get(ref)
-        if row:
-            row.title = entry["title"]
-            updated += 1
-        else:
-            row = ExerciseCatalog(
-                provider="mathalea", provider_ref=ref, title=entry["title"],
-                grade_level=entry["grade"], difficulty=5,
-                response_type="short_text" if auto else "multiline_text",
-                automation_tier="auto" if auto else "review_required")
-            db.add(row)
-            db.flush()
-            comp = match_competency(entry["grade"], entry["title"])
-            if comp:
-                db.add(ExerciseCompetency(exercise_id=row.id, competency_id=comp.id,
-                                          weight=1.0, evidence_strength=0.5))
-                mapped += 1
-            created += 1
-    db.commit()
-    return {"created": created, "updated": updated, "competency_mapped": mapped,
-            "total": len(entries)}
 
 
 @router.get("/manual/pool")
