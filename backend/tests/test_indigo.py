@@ -237,11 +237,21 @@ def test_review_item_carries_source_for_independent_check(db):
     assert item["statement"] == valid["statement"]
 
 
+def test_indigo_llm_provider_defaults_to_multipass(db):
+    """Depuis le 05/09, l'onglet Exercices ne propose plus que QCM multipass
+    (plus de sélecteur) : une instance sans réglage persisté doit donc démarrer
+    sur ce mode, pas sur l'ancien défaut Anthropic."""
+    from app.services import indigo_llm
+    assert indigo_llm.get_provider(db) == "multipass"
+    assert indigo_llm.mode(db) == indigo_llm.MODE_MULTIPASS
+
+
 def test_indigo_llm_provider_default_and_models(db):
-    """Défaut = Anthropic (Sonnet découpage+génération, Opus vérification) ; le
+    """Anthropic câble Sonnet (découpage+génération) et Opus (vérification) ; le
     câblage DeepSeek met les trois étapes sur DeepSeek pro v4."""
     from app.services import indigo_llm
-    assert indigo_llm.get_provider(db) == "anthropic"        # défaut demandé
+    indigo_llm.set_provider(db, "anthropic")
+    assert indigo_llm.get_provider(db) == "anthropic"
     assert "sonnet" in indigo_llm.model_for(db, "segment")
     assert "sonnet" in indigo_llm.model_for(db, "adapt")
     assert "opus" in indigo_llm.model_for(db, "review")
@@ -269,7 +279,8 @@ def test_indigo_llm_call_routes_to_chosen_provider(db, monkeypatch):
     monkeypatch.setattr(providers, "claude_json", cap_claude)
     monkeypatch.setattr(providers, "deepseek_json", cap_deepseek)
 
-    indigo_llm.call(db, "review", "sys", {}, "cid")           # défaut anthropic
+    indigo_llm.set_provider(db, "anthropic")
+    indigo_llm.call(db, "review", "sys", {}, "cid")
     assert seen["fn"] == "claude" and seen["op"] == "indigo_review"
     assert "opus" in seen["model"]
 
@@ -1008,6 +1019,85 @@ def test_add_figure_uses_pdf_even_without_crop_file(db, tmp_path, monkeypatch):
     assert "{{figure}}" in row.statement
 
 
+def test_a_figure_change_reaches_the_whole_family(db, tmp_path, monkeypatch):
+    """Un exercice source donne un TRIO qui partage la même situation, donc la
+    même figure. Recadrer l'image sur la base et laisser les deux dérivés avec
+    l'ancienne n'a aucun sens — et rien à l'écran ne dit que les trois cartes
+    montrent trois fichiers différents. Chaque ligne garde son PROPRE fichier :
+    supprimer un dérivé ne doit pas vider l'image de ses soeurs."""
+    c = _comp(db)
+    raster = np.full((60, 90, 3), 170, np.uint8)
+
+    class Doc:
+        page_count = 1
+
+    monkeypatch.setattr(indigo.indigo_manual, "open_doc", lambda *_: Doc())
+    monkeypatch.setattr(indigo.indigo_manual, "raster_page", lambda *_: raster.copy())
+    base = IndigoExercise(id="fam-base", competency_id=c.id, grade_level="3e",
+                          source_page=0, statement="Observe.", variant_kind="base",
+                          has_figure=False, crop_path="", crop_box_json={})
+    kids = [IndigoExercise(id=f"fam-{kind}", competency_id=c.id, grade_level="3e",
+                           source_page=0, statement="Observe.", variant_kind=kind,
+                           derived_from_id="fam-base", has_figure=False,
+                           crop_path="", crop_box_json={})
+            for kind in ("facile", "difficile")]
+    db.add_all([base] + kids); db.commit()
+
+    indigo.add_figure(db, base)
+    for kid in kids:
+        db.refresh(kid)
+        assert kid.has_figure is True
+        assert "{{figure}}" in kid.statement
+        assert kid.figure_path != base.figure_path        # chacun son fichier
+        assert (tmp_path / kid.figure_path).exists()
+
+    # un recadrage part aussi aux dérivés, cadre ET caches
+    indigo.edit_figure(db, base, {"x0": 10, "y0": 10, "x1": 70, "y1": 50},
+                       [{"x0": 20, "y0": 20, "x1": 30, "y1": 30}])
+    for kid in kids:
+        db.refresh(kid)
+        assert kid.figure_box_json == base.figure_box_json
+        assert cv2.imread(str(tmp_path / kid.figure_path)).shape[:2] == (40, 60)
+
+    # et la suppression aussi : le trio perd l'image ensemble
+    indigo.remove_figure(db, base)
+    for kid in kids:
+        db.refresh(kid)
+        assert kid.has_figure is False and not kid.figure_path
+        assert "{{figure}}" not in kid.statement
+
+
+def test_a_figure_change_on_a_lone_exercise_touches_nothing_else(db, tmp_path, monkeypatch):
+    """Un exercice du pipeline classique n'a pas de famille : la propagation ne
+    doit pas partir à la pêche chez les voisins de la même compétence."""
+    c = _comp(db)
+    raster = np.full((60, 90, 3), 170, np.uint8)
+
+    class Doc:
+        page_count = 1
+
+    monkeypatch.setattr(indigo.indigo_manual, "open_doc", lambda *_: Doc())
+    monkeypatch.setattr(indigo.indigo_manual, "raster_page", lambda *_: raster.copy())
+    alone = IndigoExercise(id="solo-1", competency_id=c.id, grade_level="3e",
+                           source_page=0, statement="Calcule.", has_figure=False,
+                           crop_path="", crop_box_json={})
+    other = IndigoExercise(id="solo-2", competency_id=c.id, grade_level="3e",
+                           source_page=0, statement="Calcule aussi.", has_figure=False,
+                           crop_path="", crop_box_json={})
+    db.add_all([alone, other]); db.commit()
+
+    indigo.add_figure(db, alone)
+    db.refresh(other)
+    assert other.has_figure is False and not other.figure_path
+
+    # « Supprimer l'image » vide le chemin avec une CHAÎNE VIDE : la colonne est
+    # NOT NULL, et le None qu'on y écrivait levait une IntegrityError au commit
+    # — le bouton répondait 500 sans jamais retirer l'image.
+    indigo.remove_figure(db, alone)
+    assert alone.has_figure is False and not alone.figure_path
+    assert indigo.exercise_out(db, alone)["figure_url"] is None
+
+
 def test_publish_seed_and_bank_source(db, tmp_path):
     c = _comp(db)
     # crop + figure sur disque (comme le pipeline les produit)
@@ -1255,6 +1345,18 @@ def test_mathtext_accepts_short_inequality_commands():
     assert mathrender.sanitize_latex(r"0 \le r < b") is not None
     assert mathrender.sanitize_latex(r"x \ge 5") is not None
     assert mathrender.sanitize_latex(r"a \leq b") is not None   # forme longue inchangée
+
+
+def test_mathtext_accepts_the_function_arrow_of_the_syllabus():
+    """« $f : x \\mapsto 3x^2 - 5$ » est LE vocabulaire du chapitre sur les
+    fonctions. Absente de la liste blanche, la flèche faisait refuser des
+    énoncés parfaitement corrects — une variante perdue par exercice sur les
+    pages 67-68 du manuel."""
+    from app.services import mathrender
+    assert mathrender.sanitize_latex(r"f : x \mapsto 3x^2 - 5") is not None
+    assert mathrender.sanitize_latex(r"x \to 3x") is not None
+    # la liste blanche n'est qu'un premier filtre : le rendu d'essai tranche
+    assert mathrender.sanitize_latex(r"x \inventedcommand y") is None
 
 
 def test_normalize_keeps_blank_between_two_formulas():

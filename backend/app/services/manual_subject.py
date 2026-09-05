@@ -175,7 +175,7 @@ def pool(db: Session, competency_ids: list[str], pages: int = 1) -> dict:
     """
     tpl = doc_templates(db)
     font_size = int(tpl["exercise"].get("font_size", 9))
-    math_fs = int(tpl["exercise"].get("math_size", 12))
+    math_fs = int(tpl["exercise"].get("math_size", 9))
 
     by_chapter = chapter_competency_ids(db, competency_ids)
     all_ids = set(competency_ids) | {cid for ids in by_chapter.values() for cid in ids}

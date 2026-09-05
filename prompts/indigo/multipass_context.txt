@@ -1,0 +1,37 @@
+# PASSE CONTEXTE — SOURCE SEULE, CORRIGÉ, OU INVENTION ?
+
+Avant toute génération, pour §GRADE§ / §COMPETENCY§ : l'énoncé SEUL suffit-il à
+écrire un exercice juste ? C'est le cas LE PLUS FRÉQUENT — ne cherche pas midi
+à quatorze heures.
+
+1. `source.statement` (+ `source.figure`, si `source.has_figure`) porte-t-il
+   TOUT le nécessaire, sans qu'il manque une donnée qu'une figure emporterait
+   seule (mesures, valeurs d'un graphique, position d'un point) ?
+   → OUI : `"mode":"source"`.
+2. Sinon, `source.corriges_candidats` (0, 1 ou plusieurs extraits du manuel du
+   PROFESSEUR pour ce même numéro — le chapitre peut contenir plusieurs lots
+   d'exercices qui repartent au même numéro : certains candidats sont donc de
+   MAUVAIS exercices, à ignorer) en contient-il un qui parle authentiquement du
+   MÊME exercice (mêmes nombres, même situation que `source.statement`) et
+   comble ce qui manque ?
+   → OUI : `"mode":"source_corrige"`, et `corrige` porte SEULEMENT ce qui sert
+   à répondre (recopié ou résumé), jamais un candidat entier hors sujet.
+3. Sinon (aucun candidat ne convient, aucun n'existe, ou l'énoncé lui-même est
+   trop dégradé pour servir tel quel) : la compétence, le chapitre et ce qui
+   RESTE lisible de l'énoncé suffisent-ils à situer PRÉCISÉMENT le type de
+   problème et son niveau, pour en écrire un NOUVEAU fidèle à cet esprit — sans
+   prétendre reproduire une figure ou des valeurs que tu ignores ?
+   → OUI : `"mode":"invent"`, et `contexte_pedagogique` décrit à quoi le nouvel
+   exercice doit rester fidèle (type de problème, données déjà sûres, ce qu'il
+   ne doit PAS copier faute de le connaître).
+   → NON, rien de fiable où s'ancrer : `"mode":"reject"`, `raison` concrète
+   (jamais « information manquante »).
+
+La FIABILITÉ prime sur la fidélité littérale : un exercice inventé mais juste
+vaut mieux qu'une copie qui invente une figure qu'elle ne voit pas. `invent`
+n'est permis QUE lorsque la source ET le corrigé manquent vraiment — jamais par
+confort, quand `source` seul suffisait déjà.
+
+JSON uniquement :
+{"mode":"source"|"source_corrige"|"invent"|"reject",
+"corrige":str,"contexte_pedagogique":str,"raison":str}

@@ -77,14 +77,21 @@ def strip_figure_marker(text: str) -> str:
     return "\n".join(p for p in (before, after) if p)
 
 
-def place_figure_marker(text: str, has_figure: bool) -> str:
+def place_figure_marker(text: str, has_figure: bool, *, at_end: bool = False) -> str:
     """Garde-fou déterministe de PLACEMENT de l'image (règle Indigo) : le marqueur
     « {{figure}} » doit être AU DÉBUT de l'énoncé ou ENTRE le contexte et les
     questions, JAMAIS après les questions. On retire le marqueur existant (où que
     le modèle l'ait mis) puis on le repose sur sa propre ligne JUSTE AVANT la 1re
     sous-question ; à défaut de sous-question, après la 1re ligne de contexte (ou
     au tout début s'il n'y a qu'une ligne). Sans figure disponible, un marqueur
-    parasite est retiré. Idempotent."""
+    parasite est retiré. Idempotent.
+
+    `at_end` : ce texte est le CONTEXTE d'un exercice composite. Ses questions
+    n'y sont pas — elles vivent dans `answer.parts` et s'impriment sous lui — donc
+    aucune étiquette « a. » n'y marque le début des questions, et se rabattre sur
+    « après la 1re ligne » planterait la figure AU MILIEU du contexte. Elle va
+    donc à la fin : à l'impression, c'est bien entre le contexte et la première
+    sous-question."""
     text = text or ""
     if not has_figure:
         return strip_figure_marker(text)
@@ -94,7 +101,7 @@ def place_figure_marker(text: str, has_figure: bool) -> str:
     lines = body.split("\n")
     first_q = next((i for i, ln in enumerate(lines) if subquestion_label(ln)), None)
     if first_q is None:
-        first_q = 1 if len(lines) > 1 else 0
+        first_q = len(lines) if at_end else (1 if len(lines) > 1 else 0)
     lines.insert(first_q, FIGURE_TOKEN)
     return "\n".join(lines)
 
@@ -111,6 +118,22 @@ def _bulletize(text: str) -> str:
     """Remplace une puce en tiret de tête de ligne par « • » (l'espace éventuel
     après le tiret est géré ensuite par `_pad_delimiters`). Idempotent."""
     return _DASH_BULLET.sub(BULLET, text or "")
+
+
+# Étiquette de sous-question MISE EN GRAS par le modèle (« **a.** 17 élèves »).
+# Le gras est un balisage de caractère légitime (cf. services/blocks), mais une
+# ÉTIQUETTE ne s'imprime pas en texte : elle devient une pastille colorée. Tant
+# qu'elle porte ses `**`, SUBQUESTION_RE ne la reconnaît pas — la ligne perd sa
+# pastille, ne se détache pas des précédentes, et « **a.** » s'imprime tel quel.
+# On la démaquille donc au plus tôt, en tête de ligne comme au fil du texte (où
+# c'est _break_subquestions qui la remettra sur sa propre ligne).
+_BOLD_LABEL = re.compile(
+    r"(?:(?<=^)|(?<=\s))\*\*\s*([a-h]|\d{1,2})\s*(?:([.)])\s*\*\*|\*\*\s*([.)]))(?=\s)")
+
+
+def _unbold_labels(text: str) -> str:
+    """« **a.** » / « **a**. » -> « a. ». Idempotent."""
+    return _BOLD_LABEL.sub(lambda m: f"{m.group(1)}{m.group(2) or m.group(3)}", text or "")
 
 
 _LEADING_NUM = re.compile(r"^\s*(\d{1,3})\s*[.)]?\s+")
@@ -361,12 +384,15 @@ def normalize(text: str) -> str:
       numérotées (1., 2.) (cf. `_break_subquestions`, `_break_numbered`) ;
     - cases de réponse mal notées rétablies en `{{blank}}` (cf.
       `repair_blank_marker`) : le LLM glisse parfois le mot « blank » dans une
-      formule au lieu du marqueur, la case ne s'imprimait alors pas.
+      formule au lieu du marqueur, la case ne s'imprimait alors pas ;
+    - étiquettes de sous-question démaquillées de leur gras (« **a.** » ->
+      « a. ») : une étiquette devient une pastille, jamais du texte gras.
     """
     text = text or ""
     text = repair_latex_control_chars(text)     # \times cassé en tabulation -> \times
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = repair_blank_marker(text)
+    text = _unbold_labels(text)                  # « **a.** » -> « a. » (pastille)
     text = _bulletize(text)                      # « - » de tête de ligne -> « • »
     text = _break_subquestions(text)             # a. b. c. chacune sur sa ligne
     text = _break_numbered(text)                 # 1. 2. 3. chacune sur sa ligne

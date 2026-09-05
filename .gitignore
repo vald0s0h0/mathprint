@@ -21,6 +21,7 @@ connector/src-tauri/binaries/SumatraPDF.exe
 /data/
 backend/mathprint.db
 backend/*.db
+/mathprint.db
 volumes/
 
 # Manuels scolaires Indigo (élève + prof) : sous droits, et bien au-delà de la

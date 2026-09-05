@@ -137,37 +137,48 @@ def detect_fiducials(img: np.ndarray) -> dict[str, np.ndarray]:
     return found
 
 
-def analyze_page(img: np.ndarray) -> PageAnalysis:
-    """Identifie la page par ses marqueurs et la recale sur le gabarit A4."""
+def analyze_page(img: np.ndarray, forced_page_id: str | None = None) -> PageAnalysis:
+    """Identifie la page par ses marqueurs et la recale sur le gabarit A4.
+
+    `forced_page_id` : identité posée à la main par le professeur sur une page
+    jusqu'ici bloquée (QR illisible mais élève reconnu à l'œil sur l'aperçu,
+    cf. résolution des scans bloqués) — saute la lecture QR mais retente quand
+    même le recalage aux 3 fiduciels de coin, seuls capables de dire si la page
+    se laisse recaler malgré tout (elle reste `identified`, pas `registered`,
+    si le recalage échoue : pas d'OCR possible sans zones fiables)."""
     res = PageAnalysis()
     res.blur = float(cv2.Laplacian(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY),
                                    cv2.CV_64F).var())
 
-    detections = _detect_qrcodes(img)
     centers_px: dict[str, np.ndarray] = {}
-    for text, quad in detections:
-        # Le vérificateur HMAC est l'unique autorité de format (MP1 historique,
-        # M2 compact et futures versions). Un filtre de préfixe local avait
-        # précisément laissé la vision bloquée sur MP1 après l'arrivée de M2.
-        page_id = verify_page_payload(text)
-        if page_id is None:
-            if text.startswith(("MP", "M2:")):
-                res.warnings.append("qr_hmac_invalid")
-            continue
-        res.page_id = page_id
-        centers_px["MAIN"] = quad.mean(axis=0)
-
-    # seconde lecture du QR principal sur ROI haut-droit sur-échantillonnée
-    if res.page_id is None:
-        h, w = img.shape[:2]
-        roi = img[0:int(h * 0.20), int(w * 0.65):w]
-        big = cv2.resize(roi, None, fx=2.5, fy=2.5, interpolation=cv2.INTER_CUBIC)
-        text, quad, _ = cv2.QRCodeDetector().detectAndDecode(big)
-        page_id = verify_page_payload(text)
-        if page_id:
+    if forced_page_id:
+        res.page_id = forced_page_id
+    else:
+        detections = _detect_qrcodes(img)
+        for text, quad in detections:
+            # Le vérificateur HMAC est l'unique autorité de format (MP1
+            # historique, M2 compact et futures versions). Un filtre de
+            # préfixe local avait précisément laissé la vision bloquée sur
+            # MP1 après l'arrivée de M2.
+            page_id = verify_page_payload(text)
+            if page_id is None:
+                if text.startswith(("MP", "M2:")):
+                    res.warnings.append("qr_hmac_invalid")
+                continue
             res.page_id = page_id
-            center = quad.reshape(-1, 2).mean(axis=0) / 2.5
-            centers_px["MAIN"] = center + np.array([w * 0.65, 0], dtype=np.float32)
+            centers_px["MAIN"] = quad.mean(axis=0)
+
+        # seconde lecture du QR principal sur ROI haut-droit sur-échantillonnée
+        if res.page_id is None:
+            h, w = img.shape[:2]
+            roi = img[0:int(h * 0.20), int(w * 0.65):w]
+            big = cv2.resize(roi, None, fx=2.5, fy=2.5, interpolation=cv2.INTER_CUBIC)
+            text, quad, _ = cv2.QRCodeDetector().detectAndDecode(big)
+            page_id = verify_page_payload(text)
+            if page_id:
+                res.page_id = page_id
+                center = quad.reshape(-1, 2).mean(axis=0) / 2.5
+                centers_px["MAIN"] = center + np.array([w * 0.65, 0], dtype=np.float32)
 
     # fiduciels de coin : purement géométriques (§5.4)
     for role, center in detect_fiducials(img).items():

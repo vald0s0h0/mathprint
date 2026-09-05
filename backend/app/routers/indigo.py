@@ -6,17 +6,21 @@ Réservé au rôle admin (comme l'onglet Données) : absent des builds
 utilisateur/correcteur. Les manuels PDF restent locaux à l'instance admin.
 """
 import io
+import zipfile
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
+from starlette.background import BackgroundTask
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from ..config import settings
 from ..db import get_db
 from ..deps import require_role
 from ..models import (Competency, CompetencyFramework, GeneratedExercise,
-                      IndigoExercise, IndigoExtraction, User)
-from ..services import indigo, indigo_index, indigo_llm, indigo_manual
+                      IndigoExercise, IndigoExtraction, User, uid)
+from ..services import (indigo, indigo_index, indigo_llm, indigo_manual,
+                        indigo_offpeak, indigo_pack)
 
 router = APIRouter(prefix="/api/indigo", tags=["indigo"],
                    dependencies=[Depends(require_role("admin"))])
@@ -26,12 +30,21 @@ router = APIRouter(prefix="/api/indigo", tags=["indigo"],
 
 @router.get("/manuals")
 def manuals(grade_level: str = "3e", db: Session = Depends(get_db)):
+    """Sources disponibles pour fabriquer des exercices sur CETTE instance.
+
+    `available` dit si l'on peut travailler, pas si le PDF est là : une instance
+    sans manuel mais équipée d'un pack de travail (pages rendues d'avance +
+    index) fabrique tout aussi bien. `source` tranche entre les deux, et c'est
+    ce que l'onglet affiche."""
     out = {}
     for which in ("eleve", "prof"):
         path = indigo_manual.manual_path(grade_level, which)
-        out[which] = {"available": path is not None,
-                      "pages": indigo_manual.page_count(grade_level, which) if path else 0}
-    return {"grade_level": grade_level, "manuals": out}
+        doc = indigo_manual.open_doc(grade_level, which)
+        out[which] = {"available": doc is not None,
+                      "pdf": path is not None,
+                      "pages": doc.page_count if doc is not None else 0}
+    return {"grade_level": grade_level, "manuals": out,
+            "pack": indigo_pack.status(grade_level)}
 
 
 @router.get("/manual/page.png")
@@ -82,12 +95,38 @@ def get_llm_provider(db: Session = Depends(get_db)):
 @router.post("/llm-provider")
 def set_llm_provider(body: LlmProviderIn, db: Session = Depends(get_db),
                      user: User = Depends(require_role("admin"))):
-    """Bascule Anthropic ⇄ DeepSeek pour découpage + génération + vérification."""
+    """Choisit le fournisseur ET le mode de génération (§ services.indigo_llm)."""
     try:
         prov = indigo_llm.set_provider(db, body.provider, updated_by=user.id)
     except ValueError as e:
         raise HTTPException(422, str(e))
     return {"provider": prov, "offline": indigo_llm.offline(db)}
+
+
+# -------------------------------------------------------------- Cheap and Wait
+
+class OffPeakIn(BaseModel):
+    """Case « Cheap and Wait » — la plage des heures creuses DeepSeek est
+    codée en dur (cf. services.indigo_offpeak), seule la case se règle."""
+    enabled: bool | None = None
+
+
+@router.get("/offpeak")
+def get_offpeak(db: Session = Depends(get_db)):
+    """Réglage courant + si le tarif est creux en ce moment (l'onglet le dit à
+    l'admin avant qu'il ne lance une extraction qui resterait en attente),
+    et le prochain instant creux."""
+    cfg = indigo_offpeak.get_config(db)
+    return {**cfg, "open_now": indigo_offpeak.is_open(cfg),
+            "next_open": indigo_offpeak.next_open(cfg).isoformat()}
+
+
+@router.post("/offpeak")
+def set_offpeak(body: OffPeakIn, db: Session = Depends(get_db),
+                user: User = Depends(require_role("admin"))):
+    cfg = indigo_offpeak.set_config(db, enabled=body.enabled, updated_by=user.id)
+    return {**cfg, "open_now": indigo_offpeak.is_open(cfg),
+            "next_open": indigo_offpeak.next_open(cfg).isoformat()}
 
 
 # ------------------------------------------------------------------ index manuel
@@ -108,6 +147,68 @@ def build_index(grade_level: str = "3e", db: Session = Depends(get_db),
     """Lance (ou reprend) l'indexation du manuel dans la file de fond."""
     ext = indigo.create_index_run(db, grade_level, created_by=user.id)
     return indigo.extraction_out(ext)
+
+
+# --------------------------------------------------------- pack de travail
+
+@router.get("/pack")
+def pack_status(grade_level: str = "3e"):
+    """Ce que cette instance possède : les manuels (elle peut EXPORTER), un pack
+    de travail (elle peut FABRIQUER), ou rien du tout."""
+    return indigo_pack.status(grade_level)
+
+
+@router.get("/pack/export")
+def pack_export(grade_level: str = "3e"):
+    """Archive à porter sur l'instance qui fabrique : l'index déjà payé + toutes
+    les pages du manuel élève rendues au DPI de travail.
+
+    Réservée à une machine qui a les PDF. L'archive est écrite dans un fichier
+    temporaire puis servie et supprimée : elle pèse ~90 Mo, la garder en mémoire
+    ferait tomber le conteneur."""
+    tmp = settings.data_dir / "tmp" / indigo_pack.export_name(grade_level)
+    try:
+        indigo_pack.export_zip(grade_level, tmp)
+    except RuntimeError as e:
+        tmp.unlink(missing_ok=True)
+        raise HTTPException(409, str(e))
+    return FileResponse(
+        tmp, media_type="application/zip", filename=tmp.name,
+        background=BackgroundTask(lambda: tmp.unlink(missing_ok=True)))
+
+
+@router.post("/pack/import")
+async def pack_import(file: UploadFile | None = None, grade_level: str = "3e"):
+    """Installe un pack de travail sur cette instance.
+
+    Deux voies, parce qu'une archive de ~90 Mo ne passe pas toujours
+    confortablement par un navigateur : le fichier envoyé ici, ou — sans
+    fichier — l'archive déposée à la main sur le volume sous le nom
+    `indigo-pack.zip` (File Station du NAS)."""
+    if file is not None:
+        dest = settings.data_dir / "tmp" / f"upload-{uid()}.zip"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with dest.open("wb") as out:
+                while chunk := await file.read(4 << 20):
+                    out.write(chunk)
+            return _import_pack_file(dest, grade_level)
+        finally:
+            dest.unlink(missing_ok=True)
+    drop = indigo_pack.drop_path()
+    if not drop.exists():
+        raise HTTPException(
+            404, f"Aucun fichier envoyé et aucune archive déposée sur le volume "
+                 f"({drop}). Envoie le pack depuis l'onglet, ou dépose-le à cet "
+                 f"emplacement sous le nom « {indigo_pack.DROP_NAME} ».")
+    return _import_pack_file(drop, grade_level)
+
+
+def _import_pack_file(path, grade_level: str) -> dict:
+    try:
+        return indigo_pack.import_zip(path, grade_level)
+    except (RuntimeError, zipfile.BadZipFile, ValueError) as e:
+        raise HTTPException(422, str(e))
 
 
 # ------------------------------------------------------------------ extractions
@@ -132,6 +233,13 @@ class ExtractionIn(BaseModel):
     targets: list[TargetIn]
 
 
+class VisionExtractionIn(BaseModel):
+    grade_level: str = "3e"
+    # Champs texte côté UI, convertis ici en pages 1-based inclusives.
+    page_start: int = Field(ge=1)
+    page_end: int = Field(ge=1)
+
+
 @router.post("/extractions")
 def create_extraction(body: ExtractionIn, db: Session = Depends(get_db),
                       user: User = Depends(require_role("admin"))):
@@ -139,6 +247,26 @@ def create_extraction(body: ExtractionIn, db: Session = Depends(get_db),
     if not targets:
         raise HTTPException(422, "Renseigne au moins une compétence avec une plage de pages élève")
     ext = indigo.create_extraction(db, body.grade_level, targets, created_by=user.id)
+    return indigo.extraction_out(ext)
+
+
+@router.post("/extractions/vision")
+def create_vision_extraction(body: VisionExtractionIn,
+                             db: Session = Depends(get_db),
+                             user: User = Depends(require_role("admin"))):
+    """Extraction propre au mode QCM multipass : deux bornes de pages suffisent."""
+    if indigo_llm.mode(db) != indigo_llm.MODE_MULTIPASS:
+        raise HTTPException(409, "Sélectionne d'abord le mode QCM multipass")
+    if indigo_llm.offline(db):
+        raise HTTPException(
+            422, "Clé DeepSeek Flash absente : l'extraction Vision ne peut pas "
+                 "lire le manuel. Configure-la dans Paramètres → Fournisseurs.")
+    try:
+        ext = indigo.create_vision_extraction(
+            db, body.grade_level, body.page_start, body.page_end,
+            created_by=user.id)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     return indigo.extraction_out(ext)
 
 
@@ -180,6 +308,27 @@ def get_extraction(extraction_id: str, db: Session = Depends(get_db)):
     ext = db.get(IndigoExtraction, extraction_id)
     if ext is None:
         raise HTTPException(404, "Extraction introuvable")
+    return indigo.extraction_out(ext)
+
+
+@router.post("/extractions/{extraction_id}/cancel")
+def cancel_extraction(extraction_id: str, db: Session = Depends(get_db)):
+    """Bouton Stop de l'onglet Exercices. `pending` : n'a jamais démarré, on
+    l'arrête net. `running` : demande relue par `progress()` entre deux
+    cibles/pages (cf. services.indigo._ExtractionCancelled) — pas immédiat,
+    mais aucun appel LLM supplémentaire n'est déclenché après la lecture."""
+    ext = db.get(IndigoExtraction, extraction_id)
+    if ext is None:
+        raise HTTPException(404, "Extraction introuvable")
+    if ext.status == "pending":
+        ext.status = "cancelled"
+        ext.error_message = "Extraction arrêtée par l'utilisateur"
+        ext.progress_message = "Arrêtée"
+    elif ext.status == "running":
+        ext.status = "cancelling"
+    else:
+        raise HTTPException(409, f"Extraction déjà {ext.status}")
+    db.commit()
     return indigo.extraction_out(ext)
 
 
@@ -323,6 +472,8 @@ class ExercisePatch(BaseModel):
     title: str | None = None
     tags: list[str] | None = None
     bareme_points: float | None = None
+    # rattachement manuel d'un exercice dont la compétence n'a pas été confirmée
+    competency_id: str | None = None
 
 
 @router.patch("/exercises/{exercise_id}")
@@ -331,7 +482,10 @@ def patch_exercise(exercise_id: str, body: ExercisePatch, db: Session = Depends(
     if ex is None:
         raise HTTPException(404, "Exercice introuvable")
     patch = {k: v for k, v in body.model_dump().items() if v is not None}
-    indigo.update_exercise(db, ex, patch)
+    try:
+        indigo.update_exercise(db, ex, patch)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
     return indigo.exercise_out(db, ex)
 
 

@@ -20,7 +20,7 @@ export type DocTemplates = {
 
 export const TEMPLATE_DEFAULTS: DocTemplates = {
   header: { name_size: 14, title_size: 8, accent: '#37474F', show_date: true },
-  exercise: { font_size: 9, math_size: 12, border: '#C7CDD4', radius: 2.2, shadow: true },
+  exercise: { font_size: 9, math_size: 9, border: '#C7CDD4', radius: 2.2, shadow: true },
 }
 
 // pt (PDF) -> px (aperçu) : l'aperçu est agrandi pour rester lisible à l'écran

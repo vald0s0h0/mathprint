@@ -1,0 +1,93 @@
+# PASSE 4 — METTRE EN PAGE
+
+Tu ne reçois AUCUNE réponse et tu n'en cherches aucune : tu ne juges ni les
+mathématiques, ni les propositions, ni la difficulté. Tu réécris seulement la
+PRÉSENTATION de deux exercices §GRADE§ (§COMPETENCY§), pour qu'ils tiennent en
+peu de lignes et se lisent d'un coup d'œil.
+
+Quatre gestes, dans cet ordre.
+
+1. RETIRE les consignes qui n'apprennent rien. La feuille imprimée montre déjà
+   les cases : « Réponds aux questions suivantes », « Vrai ou faux ? », « Coche
+   la bonne réponse », « Pour chaque affirmation, choisis… », « Peut-on en
+   déduire les affirmations suivantes ? » disparaissent. Une consigne qui dit ce
+   qu'il faut CHERCHER reste (« Calcule la moyenne de chaque série. »), et elle
+   ne se dit qu'UNE fois, dans le contexte.
+
+2. COMPACTE les répétitions. Une question ne redit pas le contexte : quand le
+   contexte porte les données et que la question demande « Quelle est la moyenne
+   de la série a ? », la question devient la série elle-même. Retire les
+   étiquettes et les décorations inutiles (« Affirmation a : », guillemets,
+   « Cette affirmation est-elle vraie ou fausse ? » répété à chaque ligne).
+
+3. MUTUALISE les cases. Deux cas, selon ce que les questions partagent — dans
+   les deux, le nombre de cases n'est JAMAIS ce qu'on cherche à minimiser : une
+   grille de dix lignes qui se lit d'un coup d'œil vaut mieux que quatre
+   questions qui répètent la même consigne, même si elle a plus de cases à
+   cocher au total.
+   a. Plusieurs questions « une seule case à cocher » dont les `propositions`
+      sont EXACTEMENT les mêmes, dans le même ordre (Vrai/Faux, Oui/Non, valeurs
+      communes), deviennent UNE question à une case par ligne : `sources` liste
+      leurs numéros `n` dans l'ordre et `lignes` donne l'affirmation courte de
+      chacune, dans ce même ordre.
+   b. Plusieurs questions « plusieurs cases possibles » (plusieurs bonnes
+      réponses cochées) dont les `propositions` sont EXACTEMENT les mêmes se
+      mutualisent AUSSI, mais une grille ne coche qu'UNE case par ligne : chaque
+      PROPOSITION de chaque question devient sa propre ligne (Vrai/Faux), avec
+      son numéro `n` dans `sources`. Trois questions de trois propositions
+      chacune (a, b, c) donnent une grille de NEUF lignes, une par proposition
+      de chaque question — c'est voulu, pas un débordement. DIX lignes au
+      total, jamais plus (une grille plus grande est refusée) : si le calcul
+      dépasse dix (quatre questions de trois propositions, par exemple), mutualise
+      par groupes plus petits — deux tableaux de deux questions plutôt qu'un
+      seul de quatre — au lieu de tout tenter dans une seule grille refusée.
+   Dans les deux cas, l'élève coche alors dans un tableau, sans relire quatre
+   fois la même consigne. Ne mutualise jamais des questions dont les
+   propositions diffèrent, même d'un caractère, ni un mélange des deux formats
+   dans le même tableau.
+
+4. RÉPARE le LaTeX, PARTOUT — contexte, question, tableau, ligne de grille.
+   Une formule mal fermée (`$3x+1` sans `$` de fin), une commande cassée par
+   l'OCR, une fraction écrite en texte alors que l'énoncé voisin utilise
+   `\dfrac`, ou un passage mathématique resté hors de tout `$...$` doivent être
+   remis en `$...$` correct. Tu ne CHANGES jamais la formule elle-même — ni sa
+   valeur, ni sa forme (un `\dfrac{3}{4}` déjà correct ne devient pas `3/4`) —
+   tu répares seulement sa syntaxe pour qu'elle s'affiche.
+
+Interdits : modifier, réordonner, traduire ou compléter les `propositions`, les
+`colonnes` ou les `lignes` reçues (hors syntaxe LaTeX, geste 4) ; supprimer une
+question ; en ajouter une ; répéter les propositions dans le texte ; perdre une
+donnée (nombre, unité, ligne de tableau « | … | », formule `$...$`) ou le
+marqueur `{{figure}}`. Un contexte ne pose aucune question, une question ne
+porte aucune case écrite à la main.
+
+Dans chaque variante, chaque `n` reçu apparaît exactement une fois dans un
+`sources`. Ne renvoie `contexte` que si tu en as reçu un. `lignes` n'existe que
+pour une mutualisation, et compte TOUJOURS un élément PAR SOURCE (pas par
+proposition) : une courte description de sa situation, jamais ses propositions
+elles-mêmes. Dans le cas 3b, c'est ensuite le report qui recopie chaque
+proposition sous cette description — tu ne les répètes pas toi-même. Un
+`enonce` de ligne mutualisée reste VIDE : les colonnes disent déjà quoi cocher.
+Si une variante est déjà compacte, renvoie-la telle quelle.
+
+Exemple (3a — choix unique). Reçu : contexte « **Vrai ou faux ?** / On donne les
+tailles… / | … | / Peut-on en déduire les affirmations suivantes ? » et quatre
+questions « **Affirmation a :** « 17 élèves mesurent au moins 150 cm. » », b.,
+c., d., toutes de propositions « Vrai », « Faux ». Rendu :
+{"niveau":"Base","contexte":"On donne les tailles…\n| … |","questions":[
+{"sources":[0,1,2,3],"enonce":"","lignes":["17 élèves mesurent au moins 150 cm.",
+"10 élèves mesurent moins de 150 cm.","3 élèves mesurent 165 cm.",
+"L'amplitude de chacune des classes est 10 cm."]}]}
+
+Exemple (3b — choix multiples). Reçu quatre questions « Coche les affirmations
+vraies parmi : a) …, b) …, c) … » portant sur les situations 1, 2, 3, 4, toutes
+des MÊMES trois propositions a), b), c). Rendu (une ligne par SOURCE, pas par
+proposition — c'est Python qui éclate ensuite chaque situation en trois lignes
+« situation — proposition ») :
+{"niveau":"Base","contexte":"","questions":[
+{"sources":[0,1,2,3],"enonce":"","lignes":["Situation 1","Situation 2",
+"Situation 3","Situation 4"]}]}
+
+JSON uniquement :
+{"variantes":[{"niveau":"Facile"|"Base","contexte":str,
+"questions":[{"sources":[int],"enonce":str,"lignes":[str]}]}]}

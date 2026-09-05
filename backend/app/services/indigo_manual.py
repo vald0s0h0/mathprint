@@ -43,13 +43,34 @@ def manual_path(grade_level: str, which: str):
     return _resolve_manual_path(path_str)
 
 
-def open_doc(grade_level: str, which: str) -> "fitz.Document | None":
-    """Ouvre (avec cache par (chemin, mtime)) le manuel demandé, ou None."""
+def open_pdf(grade_level: str, which: str) -> "fitz.Document | None":
+    """Ouvre (avec cache par (chemin, mtime)) le PDF du manuel, ou None.
+
+    Strictement le PDF : sert à ce qui ne peut PAS se faire sans lui (construire
+    l'index, exporter un pack de travail)."""
     path = manual_path(grade_level, which)
     if path is None:
         return None
     _sha, doc = _open_cached(path)
     return doc
+
+
+def open_doc(grade_level: str, which: str):
+    """Source de pages du manuel : le PDF s'il est là, sinon le PACK DE TRAVAIL.
+
+    Les manuels ne sont livrés à aucune instance (trop gros, sous droits) : sur
+    un déploiement, la fabrication travaille sur les pages rendues d'avance et
+    importées via `services.indigo_pack`. Les deux objets répondent aux mêmes
+    besoins (`page_count`, `raster_page`), si bien que ni la découpe, ni la CV,
+    ni l'éditeur de figure ne savent lequel des deux ils manipulent.
+
+    Le pack ne concerne que le manuel ÉLÈVE (le seul dont on rend des pixels) :
+    les corrigés du prof voyagent en TEXTE dans l'index."""
+    doc = open_pdf(grade_level, which)
+    if doc is not None or which != "eleve":
+        return doc
+    from . import indigo_pack
+    return indigo_pack.load(grade_level)
 
 
 def page_count(grade_level: str, which: str) -> int:
@@ -66,13 +87,22 @@ def _pixmap_to_bgr(pix: "fitz.Pixmap") -> np.ndarray:
     return cv2.cvtColor(arr, cv2.COLOR_GRAY2BGR)
 
 
-def render_preview_png(doc: "fitz.Document", idx: int, dpi: int = PREVIEW_DPI) -> bytes:
-    """Vignette PNG d'une page (assistant de sélection)."""
+def render_preview_png(doc, idx: int, dpi: int = PREVIEW_DPI) -> bytes:
+    """Vignette PNG d'une page (assistant de sélection), depuis le PDF ou le pack."""
+    if getattr(doc, "raster_page", None) is not None:
+        return encode_png(raster_page(doc, idx, dpi))
     return doc[idx].get_pixmap(dpi=dpi).tobytes("png")
 
 
-def raster_page(doc: "fitz.Document", idx: int, dpi: int = RASTER_DPI) -> np.ndarray:
-    """Raster BGR d'une page à `dpi` — repère commun crop + CV."""
+def raster_page(doc, idx: int, dpi: int = RASTER_DPI) -> np.ndarray:
+    """Raster BGR d'une page à `dpi` — repère commun crop + CV.
+
+    `doc` est le PDF du manuel, ou un pack de pages déjà rendues (cf.
+    `open_doc`) : celui-ci se reconnaît à sa méthode `raster_page`, qu'un
+    `fitz.Document` n'a pas."""
+    from_pack = getattr(doc, "raster_page", None)
+    if from_pack is not None:
+        return from_pack(idx, dpi)
     return _pixmap_to_bgr(doc[idx].get_pixmap(dpi=dpi))
 
 

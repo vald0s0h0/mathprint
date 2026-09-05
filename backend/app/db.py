@@ -5,7 +5,13 @@ from .config import settings
 
 engine = create_engine(
     settings.database_url,
-    connect_args={"check_same_thread": False} if settings.database_url.startswith("sqlite") else {},
+    # `timeout` (secondes) : SQLite attend un verrou libéré au lieu de renvoyer
+    # aussitôt "database is locked" — deux workers de fond (génération de
+    # sujet + extraction Indigo) écrivent en concurrence sur le même fichier,
+    # et un échec de commit non protégé y laissait un job bloqué en
+    # "running"/"pending" pour toujours (cf. job_worker._run_job, indigo._drain).
+    connect_args={"check_same_thread": False, "timeout": 15}
+    if settings.database_url.startswith("sqlite") else {},
 )
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
@@ -31,6 +37,7 @@ def get_db():
 _ADDED_COLUMNS: dict[str, list[tuple[str, ...]]] = {
     "users": [("subscription_plan", "TEXT")],
     "scan_batches": [("overlay_printed", "BOOLEAN"), ("overlay_distributed", "BOOLEAN")],
+    "scanned_pages": [("manual_page_id", "TEXT"), ("dismissed", "BOOLEAN")],
     "copies": [("appreciation_json", "JSON"), ("variant_key", "TEXT")],
     "generated_exercises": [
         ("verifier_model", "TEXT"),

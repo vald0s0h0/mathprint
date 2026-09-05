@@ -10,6 +10,7 @@ import { Box } from '@mantine/core'
 import katex from 'katex'
 import 'katex/dist/katex.min.css'
 import React, { useMemo } from 'react'
+import { splitBold } from '../utils/richblocks'
 
 /** Découpe les syntaxes usuelles de notre banque et de Mathpix : `$...$`,
  * `$$...$$`, `\(...\)` et `\[...\]`. */
@@ -122,14 +123,22 @@ function TextSpan({ content }: { content: string }) {
   )
 }
 
-/** Rendu d'un span LaTeX, fallback texte brut si erreur (ne devrait jamais arriver). */
+/** Rendu d'un span LaTeX, fallback texte brut si erreur (ne devrait jamais arriver).
+ *
+ * `white-space: nowrap` rend la formule INSÉCABLE : le navigateur ne choisit
+ * plus un point de coupure À L'INTÉRIEUR (ce qui coupait « (3x+1)(-2x+5)=0 »
+ * en deux morceaux illisibles), mais avant ou après le span entier. Ce n'est
+ * PAS une règle dure — une formule seule, trop longue pour tenir même sur une
+ * ligne pleine largeur, déborde plutôt que d'être charcutée : c'est le compromis
+ * demandé (jamais coupée au milieu, sauf si vraiment impossible de faire
+ * autrement). */
 function MathSpan({ latex }: { latex: string }) {
   try {
     const html = katex.renderToString(latex, { throwOnError: false })
-    return <span dangerouslySetInnerHTML={{ __html: html }} />
+    return <span style={{ whiteSpace: 'nowrap' }} dangerouslySetInnerHTML={{ __html: html }} />
   } catch (_) {
     // Fallback : afficher le LaTeX brut ou texte sûr
-    return <span>{latex}</span>
+    return <span style={{ whiteSpace: 'nowrap' }}>{latex}</span>
   }
 }
 
@@ -198,10 +207,20 @@ const FIGURE_LINE_RE = /^[ \t]*\{\{figure\}\}[ \t]*\n?/gm
 export default function MathText({ text, centered = false, size }: {
   text: string; centered?: boolean; size?: string | number
 }) {
-  const spans = useMemo(() => splitMathSpans((text || '').replace(FIGURE_LINE_RE, '')), [text])
-  const elements = spans.map(([content, isMath], i) =>
-    isMath ? <MathSpan key={i} latex={content} /> : <TextSpan key={i} content={content} />
-  )
+  // Le GRAS se résout AVANT les formules (comme à l'impression, cf. backend
+  // services/blocks et pdfgen._paragraph_segs) : « **Prix : $3$ €** » a ses deux
+  // marques de part et d'autre d'un span, et les chercher après le découpage
+  // mathématique les laisserait orphelines — donc affichées telles quelles.
+  const chunks = useMemo(
+    () => splitBold((text || '').replace(FIGURE_LINE_RE, '')), [text])
+  const elements = chunks.flatMap(([chunk, bold], c) => {
+    const inner = splitMathSpans(chunk).map(([content, isMath], i) =>
+      isMath ? <MathSpan key={`${c}-${i}`} latex={content} />
+        : <TextSpan key={`${c}-${i}`} content={content} />)
+    return bold
+      ? [<strong key={`b${c}`} style={{ fontWeight: 700 }}>{inner}</strong>]
+      : inner
+  })
   if (centered)
     return <Box fz={size} ta="center" style={{ whiteSpace: 'pre-wrap' }}>{elements}</Box>
   return <Box component="span" fz={size} style={{ whiteSpace: 'pre-wrap' }}>{elements}</Box>

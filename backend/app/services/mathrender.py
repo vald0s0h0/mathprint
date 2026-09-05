@@ -42,6 +42,12 @@ ALLOWED_COMMANDS = {
     # symboles
     "pi", "infty", "circ", "degree", "euro", "%", "ldots", "cdots", "dots",
     "angle", "triangle", "Rightarrow", "rightarrow", "leftrightarrow",
+    # notation FONCTIONNELLE du cycle 4 : « $f : x \\mapsto 3x^2 - 5$ ». Elle est
+    # LE vocabulaire du chapitre sur les fonctions, et son absence de la liste
+    # faisait refuser des énoncés parfaitement corrects (pages 67-68 du manuel,
+    # une variante perdue par exercice). KaTeX et mathtext les rendent tous les
+    # quatre — le rendu d'essai plus bas reste le juge de paix.
+    "mapsto", "longmapsto", "to", "longrightarrow", "Leftrightarrow",
     # espacement (normalisé/retiré pour mathtext)
     ",", ";", "!", ":", "quad", "qquad",
     # accolades littérales
@@ -149,6 +155,12 @@ def strip_math(text: str) -> str:
         s = re.sub(r"\\text(?:bf)?\{([^{}]*)\}", r"\1", s)
         s = s.replace(r"\times", "×").replace(r"\div", "÷").replace(r"\cdot", "·")
         s = s.replace(r"\pi", "π").replace(r"\%", "%").replace("^\\circ", "°")
+        # ESPACEMENTS LaTeX : « \, » est le séparateur de milliers idiomatique en
+        # français ($294\,183{,}33$). Il n'est pas fait de lettres, il survivait
+        # donc à la ligne suivante et laissait un « \ » dans le texte aplati :
+        # le nombre devenait illisible pour sympy, et un QCM parfaitement juste
+        # se voyait reprocher « ne porte aucune valeur calculable ».
+        s = re.sub(r"\\[,;:!] ?| \\ ", " ", s)
         s = re.sub(r"\\[a-zA-Z]+", " ", s)
         s = s.replace("{,}", ",").replace("{", "").replace("}", "")
         out.append(s)

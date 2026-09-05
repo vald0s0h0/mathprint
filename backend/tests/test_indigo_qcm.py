@@ -151,6 +151,35 @@ def test_verify_catches_a_mathematically_wrong_answer():
     assert problems and "ne vaut pas" in problems[0]
 
 
+def test_verify_computes_medians_and_means_from_explicit_series():
+    median = _single(
+        statement="Calcule la médiane de la série proposée.",
+        choices=["$1{,}84$", "$1{,}89$", "$1{,}92$"], correct=[1],
+        check={"kind": "value",
+               "expr": "median([1.78,1.81,1.84,1.89,1.92,1.93,2.02])",
+               "choice": 1})
+    assert indigo_check.verify(median, has_figure=False) == []
+    mean = _single(
+        statement="Calcule la moyenne de la série proposée.",
+        choices=["$3$", "$4$", "$5$"], correct=[1],
+        check={"kind": "value", "expr": "statistics.mean([2,4,6])", "choice": 1})
+    assert indigo_check.verify(mean, has_figure=False) == []
+    assert indigo_check._truth("Eq(mean([2,4,6]),4)") is True
+
+
+def test_verify_compares_numeric_choices_that_carry_units():
+    speed = _single(
+        statement="Calcule la vitesse moyenne obtenue.",
+        choices=["156 km/h", "168 km/h", "180 km/h"], correct=[1],
+        check={"kind": "value", "expr": "168", "choice": 1})
+    assert indigo_check.verify(speed, has_figure=False) == []
+    price = _single(
+        statement="Calcule le prix moyen des produits.",
+        choices=["$3{,}00$ €", "$3{,}15$ €", "$3{,}50$ €"], correct=[1],
+        check={"kind": "value", "expr": "3.15", "choice": 1})
+    assert indigo_check.verify(price, has_figure=False) == []
+
+
 def test_verify_catches_a_wrong_truth_value_in_a_multiple_qcm():
     problems = indigo_check.verify(_multiple(correct=[0, 1, 2]), has_figure=False)
     assert problems and "21" in problems[0]
@@ -171,10 +200,26 @@ def test_verify_refuses_a_statement_that_points_outside_the_sheet():
     assert problems and "hors de la feuille" in problems[0]
 
 
-def test_verify_refuses_a_figure_mentioned_without_a_figure():
+def test_a_figure_mentioned_without_a_figure_is_a_note_not_a_refusal():
+    """Le manque d'image ne casse pas l'exercice : il donne du travail au
+    relecteur, qui a la page sous les yeux et ajoute la figure au brouillon.
+
+    Le refuser était en plus une impasse : on demandait au modèle de
+    « reformuler sans visuel » un énoncé dont les données SONT un tableau, et il
+    repartait pour quatre tentatives identiques avant que la source ne soit
+    jetée (pages 86-87 : 9 sources sur 33)."""
     stmt = "Lis la figure ci-contre et donne le PGCD de 1925 et 4125."
     assert indigo_check.verify(_single(statement=stmt), has_figure=True) == []
-    assert indigo_check.verify(_single(statement=stmt), has_figure=False)
+    assert indigo_check.verify(_single(statement=stmt), has_figure=False) == []
+    assert indigo_check.figure_note(stmt, has_figure=False)
+    assert indigo_check.figure_note(stmt, has_figure=True) == ""
+
+
+def test_table_and_histogram_are_recognized_as_visual_references():
+    for word in ("tableau", "histogramme", "image"):
+        statement = f"Lis le {word} ci-dessous et choisis la bonne valeur."
+        assert indigo_check.verify(_single(statement=statement), has_figure=True) == []
+        assert indigo_check.figure_note(statement, has_figure=False)
 
 
 def test_verify_refuses_an_answer_field_marker_in_a_qcm():
@@ -380,7 +425,8 @@ def test_no_usable_variant_falls_back_to_raw_ocr_never_to_nothing(db):
 # ------------------------------------------------------------------ aiguillage
 
 def test_qcm_mode_selects_deepseek_pro_and_the_qcm_pipeline(db):
-    assert indigo_llm.mode(db) == indigo_llm.MODE_CLASSIC     # défaut : Anthropic
+    indigo_llm.set_provider(db, "anthropic")
+    assert indigo_llm.mode(db) == indigo_llm.MODE_CLASSIC
     indigo_llm.set_provider(db, "qcm")
     assert indigo_llm.mode(db) == indigo_llm.MODE_QCM
     assert indigo_llm.model_for(db, "qcm") == settings.indigo_qcm_model
@@ -439,3 +485,37 @@ def test_regenerating_a_derivative_keeps_it_a_derivative(db, monkeypatch):
     assert again.response_type in indigo_check.QCM_TYPES
     # c'est bien la variante FACILE qui a été reprise, pas la base
     assert "12 et 18" in again.statement
+
+
+# ------------------------------------------- tolérance numérique du filet sympy
+
+def test_float_noise_never_makes_a_right_answer_wrong():
+    """« 8.4 - 3.1 » vaut 5.300000000000001 en binaire. Comparé à 5,3 par une
+    égalité exacte, il déclarait FAUSSE une réponse juste — et renvoyait la
+    famille en génération, où le modèle ne trouvait évidemment rien à corriger."""
+    noisy = _single(choices=["$5{,}1$", "$5{,}3$", "$5{,}9$"], correct=[1],
+                    check={"kind": "value", "expr": "8.4-3.1", "choice": 1})
+    assert indigo_check.verify(noisy, has_figure=False) == []
+
+
+def test_a_correctly_rounded_answer_is_accepted_but_a_wrong_one_is_not():
+    """Une bonne réponse écrite « 294 183,33 € » pour 1765100/6 est ce qu'un
+    élève écrit et ce qu'un professeur attend. Elle n'est acceptée qu'à la
+    décimale près de ce qui est ÉCRIT : la tolérance ne couvre pas une erreur."""
+    rounded = _single(choices=["$294\\,183{,}33$ €", "$294\\,000$ €", "$300\\,000$ €"],
+                      correct=[0],
+                      check={"kind": "value", "expr": "1765100/6", "choice": 0})
+    assert indigo_check.verify(rounded, has_figure=False) == []
+    # 172/11 = 15,63… : « 15,9 » n'en est pas l'arrondi, il reste refusé
+    wrong = _single(choices=["$15{,}9$", "$16{,}4$", "$17{,}1$"], correct=[0],
+                    check={"kind": "value", "expr": "172/11", "choice": 0})
+    assert any("ne vaut pas" in p for p in indigo_check.verify(wrong, has_figure=False))
+
+
+def test_the_rounding_tolerance_reads_the_written_precision_not_the_value():
+    """« 3,00 € » est écrit à deux décimales même si sa VALEUR est l'entier 3.
+    Lire la précision sur le rationnel aurait arrondi la bonne réponse 3,15 à
+    l'unité — et déclaré le distracteur « 3,00 € » également juste."""
+    price = _single(choices=["$3{,}00$ €", "$3{,}15$ €", "$3{,}50$ €"], correct=[1],
+                    check={"kind": "value", "expr": "3.15", "choice": 1})
+    assert indigo_check.verify(price, has_figure=False) == []

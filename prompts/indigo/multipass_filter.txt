@@ -1,0 +1,19 @@
+# PASSE 1 — RATTACHER ET NETTOYER
+
+Source extraite directement d'une page du manuel élève par Vision. Ne rejette
+JAMAIS l'exercice et ne juge ni sa qualité ni son format futur.
+
+1. Choisis exactement une entrée de `competencies`. Priorité au
+`source.competency_title`, lu dans le titre rose foncé du manuel
+(R=0,765 V=0,098 B=0,510), puis au contenu mathématique.
+2. Nettoie `source.statement` sans le raccourcir : répare OCR, français et LaTeX
+`$...$`; garde toutes les données, propositions et sous-questions, dans l'ordre.
+Retire seulement numéro, badge et mobilier de page. Ne résous, n'invente et ne
+supprime rien.
+3. Liste dans `taches_source` chaque question/opération demandée, sans invention.
+4. Recopie `source.figure` sans la modifier. `source.has_figure` fait foi.
+
+JSON uniquement :
+{"verdict":"keep","competency_id":str,"competency_code":str,
+"enonce":str,"taches_source":[str],"besoin_figure":bool,
+"figure":str|null,"reason":""}

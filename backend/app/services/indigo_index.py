@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from pathlib import Path
 
 from ..config import settings
 from ..models import Competency, CompetencyFramework
@@ -81,17 +82,32 @@ def _fingerprint(grade: str, which: str) -> str:
     return sha
 
 
+# Cache { chemin -> (mtime_ns, taille, index) }. L'index pèse 2 à 3 Mo de JSON
+# et se relit BEAUCOUP : une fois par page à OCRiser, et une fois par compétence
+# dans `coverage` (42 relectures du fichier prof pour un seul affichage).
+# Invalidé par (mtime, taille), et explicitement à l'écriture — la résolution du
+# mtime peut valoir la seconde, ce qui masquerait un lot tout juste enregistré.
+_cache: dict[Path, tuple[int, int, dict]] = {}
+
+
 def load(grade: str, which: str) -> dict | None:
     """Index sur disque, ou None s'il manque, est illisible, ou ne correspond
     plus au PDF présent."""
     path = index_path(grade, which)
-    if not path.exists():
-        return None
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        logger.exception("Indigo/index : %s illisible — index ignoré", path)
+        st = path.stat()
+    except OSError:
         return None
+    hit = _cache.get(path)
+    if hit is not None and hit[0] == st.st_mtime_ns and hit[1] == st.st_size:
+        data = hit[2]
+    else:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            logger.exception("Indigo/index : %s illisible — index ignoré", path)
+            return None
+        _cache[path] = (st.st_mtime_ns, st.st_size, data)
     if data.get("version") != INDEX_VERSION:
         return None
     fp = _fingerprint(grade, which)
@@ -102,8 +118,9 @@ def load(grade: str, which: str) -> dict | None:
 
 
 def _save(grade: str, which: str, data: dict) -> None:
-    index_path(grade, which).write_text(
-        json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    path = index_path(grade, which)
+    path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    _cache.pop(path, None)
 
 
 def _empty(grade: str, which: str, page_count: int) -> dict:
@@ -206,27 +223,38 @@ def build(db, grade: str, progress_cb) -> dict:
     interrompue (réseau, plafond de dépense, redémarrage) reprend aux pages
     manquantes, sans repayer celles qui sont déjà là."""
     stats = {}
-    prof = indigo_manual.open_doc(grade, "prof")
+    # `open_pdf` et non `open_doc` : indexer, c'est LIRE LE PDF (couche texte du
+    # prof, OCR des images de l'élève). Un pack de pages ne s'indexe pas — il
+    # transporte déjà l'index, c'est tout son intérêt.
+    prof = indigo_manual.open_pdf(grade, "prof")
     if prof is not None:
         stats["prof"] = _build_prof(grade, prof, progress_cb)
     else:
         progress_cb("⚠ Manuel prof introuvable : les corrigés manqueront.")
         stats["prof"] = 0
 
-    eleve = indigo_manual.open_doc(grade, "eleve")
+    eleve = indigo_manual.open_pdf(grade, "eleve")
     if eleve is None:
         raise RuntimeError(
-            f"Manuel élève {grade} introuvable — vérifie settings.indigo_manuals "
-            f"(le PDF reste local à l'instance admin, non livré dans l'image).")
+            f"Manuel élève {grade} introuvable : cette instance ne peut pas indexer. "
+            f"Les PDF sont sous droits et trop volumineux pour le dépôt — ils ne "
+            f"sont livrés dans aucune image. Deux voies : déposer les PDF sur cette "
+            f"machine (volume : <data>/manuals/), ou IMPORTER LE PACK DE TRAVAIL "
+            f"exporté depuis l'instance qui les porte (onglet Exercices → Pack) — "
+            f"le pack contient déjà l'index, il n'y a alors rien à indexer.")
     stats["eleve"] = _build_eleve(db, grade, eleve, progress_cb)
     return stats
 
 
 def _build_prof(grade: str, doc, progress_cb) -> int:
     """Index du manuel PROF — GRATUIT (couche texte, aucun appel OCR)."""
-    data = load(grade, "prof") or _empty(grade, "prof", doc.page_count)
+    # copies de surface : `load` sert un objet MIS EN CACHE, qu'il ne faut pas
+    # modifier en place — une construction interrompue laisserait le cache en
+    # avance sur le fichier.
+    data = dict(load(grade, "prof") or _empty(grade, "prof", doc.page_count))
     data["page_count"] = doc.page_count
-    pages = data.setdefault("pages", {})
+    pages = dict(data.get("pages") or {})
+    data["pages"] = pages
     todo = [i for i in range(doc.page_count) if str(i) not in pages]
     if not todo:
         progress_cb(f"Index prof déjà complet ({len(pages)} pages).")
@@ -247,9 +275,13 @@ def _build_eleve(db, grade: str, doc, progress_cb) -> int:
     """Index du manuel ÉLÈVE — OCR Mistral par lots, repris s'il s'interrompt."""
     from .indigo import _ocr_pages         # import tardif : cycle indigo <-> index
 
-    data = load(grade, "eleve") or _empty(grade, "eleve", doc.page_count)
+    # copies de surface : `load` sert un objet MIS EN CACHE, qu'il ne faut pas
+    # modifier en place — une construction interrompue laisserait le cache en
+    # avance sur le fichier.
+    data = dict(load(grade, "eleve") or _empty(grade, "eleve", doc.page_count))
     data["page_count"] = doc.page_count
-    pages = data.setdefault("pages", {})
+    pages = dict(data.get("pages") or {})
+    data["pages"] = pages
     todo = [i for i in range(doc.page_count) if str(i) not in pages]
     if not todo:
         progress_cb(f"Index élève déjà complet ({len(pages)} pages) — "
@@ -346,6 +378,30 @@ def _eleve_sections(db, grade: str) -> dict[str, dict]:
     return out
 
 
+def _prof_chapters(data: dict) -> dict[int, str]:
+    """{index de page -> chapitre}, en REPORTANT l'en-tête courant.
+
+    Le livre du professeur n'imprime son en-tête que sur UNE PAGE SUR DEUX (un
+    seul côté de chaque double page) : 133 pages sur 216 n'en portent aucun.
+    Les lire telles quelles rendait le filtre par chapitre inopérant sur la
+    moitié du livre — une compétence se voyait alors attribuer 25 pages de
+    corrigés au lieu de 3, et surtout des corrigés d'AUTRES chapitres, dont les
+    numéros d'exercices repartent à 1 et entrent donc en collision. Un « n°12 »
+    du chapitre Équations pouvait ainsi devenir le corrigé du « n°12 » des
+    Nombres entiers, en silence.
+
+    Les pages qui précèdent le premier en-tête (les pages liminaires) restent
+    sans chapitre : elles ne portent aucun corrigé d'exercice."""
+    chapters: dict[int, str] = {}
+    current = ""
+    for key in sorted((int(k) for k in (data.get("pages") or {}))):
+        chapter = str((data["pages"][str(key)].get("chapter") or "")).strip()
+        if chapter:
+            current = chapter
+        chapters[key] = current
+    return chapters
+
+
 def _prof_pages_for(grade: str, chapter_name: str, numbers: set[int]) -> list[int]:
     """Pages du manuel prof portant les corrigés de `numbers`, restreintes au
     CHAPITRE (les numéros repartent à 1 d'un chapitre à l'autre)."""
@@ -353,14 +409,26 @@ def _prof_pages_for(grade: str, chapter_name: str, numbers: set[int]) -> list[in
     if not data or not numbers:
         return []
     wanted = _fold(chapter_name)
-    pages = []
+    chapters = _prof_chapters(data)
+    pages, hors_chapitre = [], []
     for key, page in (data.get("pages") or {}).items():
-        chapter = _fold(page.get("chapter") or "")
-        if wanted and chapter and wanted not in chapter and chapter not in wanted:
+        if not set(page.get("numbers") or []) & numbers:
             continue
-        if set(page.get("numbers") or []) & numbers:
-            pages.append(int(key))
-    return sorted(pages)
+        idx = int(key)
+        chapter = _fold(chapters.get(idx, ""))
+        if not wanted or (chapter and (wanted in chapter or chapter in wanted)):
+            pages.append(idx)
+        else:
+            hors_chapitre.append(idx)
+    if pages or not hors_chapitre:
+        return sorted(pages)
+    # Aucun chapitre du livre du professeur ne correspond au libellé de la
+    # compétence : plutôt que de laisser l'exercice SANS corrigé, on repart des
+    # numéros seuls — c'est l'ancien comportement, désormais réduit à ce cas.
+    logger.info("Indigo/index : chapitre « %s » absent du livre du professeur — "
+                "corrigés retenus sur les seuls numéros (%s page(s))",
+                chapter_name, len(hors_chapitre))
+    return sorted(hors_chapitre)
 
 
 def _fold(s: str) -> str:

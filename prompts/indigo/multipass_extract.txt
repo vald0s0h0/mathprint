@@ -1,0 +1,42 @@
+L'image `current` est UNE COLONNE d'exercices (`column_index` sur
+`column_count`, de gauche à droite sur la double page). Balaye-la de haut en bas
+et extrais TOUS les exercices. Chacun commence par un nombre dans un badge rond
+coloré. Ignore `1.`, `2.`, `a.`, etc. des sous-questions.
+
+Les numéros se suivent d'une colonne à l'autre sans trou. `previous_number` est
+le dernier numéro déjà extrait : le premier badge de cette colonne le suit
+normalement. Si le haut de la colonne montre la fin d'un exercice sans badge, il
+appartient à la colonne précédente — ne l'extrais pas. Un exercice coupé en bas
+de colonne s'arrête là où l'image s'arrête : recopie ce qui est visible.
+
+LIS LES BANDEAUX. `banners` te donne la position `y` (0–1000) de chaque bandeau
+de compétence DÉJÀ REPÉRÉ dans cette image — pastille arrondie rose foncé à
+texte blanc. Rends `banners` avec, dans le MÊME ORDRE et en même nombre, le
+`title` lu sur chacun, mot pour mot. Si la liste reçue est vide, rends `[]` :
+il n'y a pas de bandeau ici, c'est le cas le plus fréquent.
+
+N'ajoute jamais un bandeau qu'on ne t'a pas signalé, et ne lis à sa place ni le
+pied de page, ni l'en-tête, ni le nom du domaine ou du chapitre (« Organisation
+et gestion de données, fonctions », « Chapitre 8 Statistiques »), ni un encart
+« QUESTIONS FLASH » ou « MODE EXPERT ». Tu n'as pas à décider quel exercice
+relève de quelle compétence : c'est calculé à partir des `y`.
+
+Pour chaque badge : lis le numéro DANS le badge et recopie le contenu COMPLET,
+sans résumer ni résoudre : contexte, données, consignes, sous-questions et
+propositions. Un tableau de données se recopie EN ENTIER dans `statement`, en
+Markdown. Ne fusionne jamais deux badges. Répare seulement l'OCR; LaTeX
+`$...$`.
+`has_figure` vaut true pour tout schéma, graphique ou image NÉCESSAIRE pour
+résoudre et que le texte ne peut pas porter seul. Un tableau de données que tu
+as recopié dans `statement` vaut false : il est déjà dans le texte. Une photo
+décorative, un portrait ou un logo vaut false. Si true, décris fidèlement toutes
+ses données (axes, graduations, valeurs, légendes) et rends son crop serré.
+Les boîtes `[x0,y0,x1,y1]` sont des coordonnées entières 0–1000 relatives à
+l'image nommée, donc à CETTE colonne.
+
+JSON uniquement :
+{"banners":[{"title":str}],"exercises":[{"number":str,
+"statement":str,"has_figure":bool,
+"figure_description":str|null,"exercise_bbox":[int,int,int,int],
+"number_bbox":[int,int,int,int],"figure_crop":{"page":"current",
+"bbox":[int,int,int,int]}|null}]}

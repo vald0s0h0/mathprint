@@ -286,6 +286,61 @@ def test_deepseek_empty_json_retries_as_text_without_thinking(db, monkeypatch):
     assert "contenu DeepSeek vide" in sent[1]["messages"][-1]["content"]
 
 
+def test_a_deepseek_answer_cut_by_max_tokens_is_named_truncated(db, monkeypatch):
+    """DeepSeek V4 raisonne par défaut : le budget de sortie part en réflexion et
+    le JSON n'arrive jamais. C'est une TRONCATURE, et elle doit se nommer comme
+    chez Claude et Gemini — c'est ce mot que `is_truncated` cherche pour relancer
+    l'appel avec un budget plus large (§ indigo_llm._output_budgets). Sans lui,
+    l'échelle de budgets ne se déclenchait jamais côté DeepSeek."""
+    db.add(ProviderConfig(provider="deepseek-flash", model="deepseek-v4-flash",
+                          encrypted_secret="test", active=True))
+    db.commit()
+    sent = []
+
+    class Cut:
+        def raise_for_status(self): return None
+        def json(self):
+            return {"choices": [{"message": {"content": "",
+                                             "reasoning_content": "je réfléchis…"},
+                                 "finish_reason": "length"}],
+                    "usage": {"completion_tokens": 8192}}
+
+    def fake_post(_url, **kwargs):
+        sent.append(kwargs["json_body"]["max_tokens"])
+        return Cut()
+
+    monkeypatch.setattr(providers, "_post_with_deadline", fake_post)
+    with pytest.raises(ValueError) as err:
+        providers.deepseek_json(db, "answer_grading", "system", {},
+                                max_tokens=cfg.deepseek_max_output_tokens)
+    assert providers.is_truncated(err.value)
+    # et la relance interne demande RÉELLEMENT plus que le budget par défaut :
+    # elle était plafonnée à ce budget-là, donc rejouait le même échec
+    assert sent == [cfg.deepseek_max_output_tokens, cfg.deepseek_max_output_tokens * 2]
+
+
+def test_the_read_timeout_is_never_shorter_than_the_total_deadline(db, monkeypatch):
+    """La réponse n'est pas streamée : elle n'arrive qu'une fois le modèle
+    terminé, donc la phase de LECTURE dure aussi longtemps que la réflexion.
+    Avec 60 s de lecture sous un délai total de 600 s, tout appel de plus d'une
+    minute mourait en ReadTimeout et le délai généreux ne servait à rien."""
+    seen = {}
+
+    class Ok:
+        def raise_for_status(self): return None
+        def json(self): return {}
+
+    def fake_httpx_post(_url, **kwargs):
+        seen["timeout"] = kwargs["timeout"]
+        return Ok()
+
+    monkeypatch.setattr(providers.httpx, "post", fake_httpx_post)
+    providers._post_with_deadline("https://example.test", headers={}, json_body={},
+                                  timeout=60, provider="DeepSeek", total_timeout=600)
+    assert seen["timeout"].read == 600          # la lecture couvre tout le délai
+    assert seen["timeout"].connect == 60        # la connexion garde le délai court
+
+
 # ------------------------------------------------------- tableaux à ordre libre
 
 def test_unordered_table_credits_a_shuffled_list():

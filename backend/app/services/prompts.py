@@ -15,11 +15,14 @@ schéma JSON strict du contrat reste ajouté par le code (exercise_gen.format_co
 — l'éditer casserait le validateur.
 
 DEUX propriétés importantes :
+- DEUX EMPLACEMENTS, dans cet ordre : le dossier ÉDITABLE (`settings.prompts_dir`,
+  par défaut `prompts/` à la racine du dépôt) puis la copie EMBARQUÉE dans l'image
+  (`app/data/prompts`, remplie au build). Le premier permet d'affiner un prompt à
+  chaud en développement ; le second fait qu'une instance déployée — qui n'a pas
+  la racine du dépôt — peut fabriquer des exercices. Sans lui, toute génération
+  échouait sur PromptNotFound hors de la machine de développement.
 - CHARGEMENT PARESSEUX : `load()` n'est appelé qu'au moment où une extraction
-  tourne, jamais à l'import des modules. L'app démarre donc normalement même si le
-  dossier `prompts/` est absent (cas de l'image Docker slim, qui ne copie que
-  `app/` — comme les manuels Indigo dans `context/`, ce dossier reste local à
-  l'instance qui construit les exercices). Un prompt manquant lève une erreur
+  tourne, jamais à l'import des modules. Un prompt manquant lève une erreur
   CLAIRE au moment de l'utiliser, pas un plantage silencieux.
 - RELECTURE À CHAUD : le contenu est mis en cache par (chemin, mtime) — éditer un
   fichier prend effet au prochain appel, sans redémarrer l'application.
@@ -28,7 +31,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ..config import settings
+from ..config import _APP_DIR, settings
+
+# Copie EMBARQUÉE dans l'image (le Dockerfile la reçoit dans le contexte de
+# build, cf. .github/workflows/deploy.yml). Sans elle, une instance déployée ne
+# peut pas fabriquer d'exercices : le dossier `prompts/` de la racine du dépôt
+# n'est pas dans l'image, et le premier appel LLM échouerait sur PromptNotFound.
+# Le dossier ÉDITABLE (settings.prompts_dir) reste prioritaire : sur la machine
+# de développement, on continue d'éditer prompts/ à la racine, à chaud.
+_BUNDLED_DIR = _APP_DIR / "data" / "prompts"
 
 
 class PromptNotFound(RuntimeError):
@@ -40,7 +51,16 @@ _cache: dict[Path, tuple[float, str]] = {}
 
 
 def prompt_path(pipeline: str, name: str) -> Path:
-    return settings.prompts_dir / pipeline / f"{name}.txt"
+    """Chemin du prompt : dossier éditable d'abord, copie embarquée ensuite.
+
+    Le chemin rendu quand AUCUN des deux n'existe est celui du dossier éditable
+    — c'est lui qu'il faut nommer dans le message d'erreur."""
+    rel = Path(pipeline) / f"{name}.txt"
+    editable = settings.prompts_dir / rel
+    if editable.exists():
+        return editable
+    bundled = _BUNDLED_DIR / rel
+    return bundled if bundled.exists() else editable
 
 
 def load(pipeline: str, name: str) -> str:
@@ -52,10 +72,11 @@ def load(pipeline: str, name: str) -> str:
     except OSError as e:
         raise PromptNotFound(
             f"Prompt « {pipeline}/{name} » introuvable : {path}\n"
-            "Les prompts éditables vivent dans le dossier `prompts/` à la racine du "
-            "repo (rangés par pipeline), comme les manuels dans `context/`. Vérifie "
-            "que le dossier existe là où tourne la construction, ou surcharge "
-            "MATHPRINT_PROMPTS_DIR.") from e
+            f"Ni dans le dossier éditable ({settings.prompts_dir}), ni dans la copie "
+            f"embarquée ({_BUNDLED_DIR}). En développement, les prompts vivent dans "
+            f"`prompts/` à la racine du dépôt ; dans l'image, ils sont copiés au "
+            f"build. Une image qui n'en a aucun est mal construite — mets-la à jour, "
+            f"ou surcharge MATHPRINT_PROMPTS_DIR.") from e
     cached = _cache.get(path)
     if cached is not None and cached[0] == mtime:
         return cached[1]

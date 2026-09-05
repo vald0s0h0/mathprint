@@ -2,8 +2,9 @@
 # Publie une version JALONNÉE vX.Y.Z (optionnel : le déploiement continu
 # publie déjà "latest" à chaque push sur main via deploy.yml). La CI
 # (.github/workflows/release.yml) construit les 3 images, les publie sur
-# ghcr.io (vX.Y.Z + "latest") et crée la release GitHub. Utile pour épingler
-# un état stable (MATHPRINT_VERSION=vX.Y.Z sur le NAS).
+# ghcr.io (X.Y.Z + "latest") et crée la release GitHub. Utile pour épingler
+# un état stable (MATHPRINT_VERSION=X.Y.Z sur le NAS — le tag d'image n'a PAS
+# le « v » du tag git : « v2.4.0 » ici, « …-api:2.4.0 » sur ghcr.io).
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
@@ -26,3 +27,4 @@ fi
 git tag -a "$VERSION" -m "MathPrint $VERSION"
 git push origin "$VERSION"
 echo "Tag $VERSION poussé — suivre la build sur l'onglet Actions du dépôt GitHub."
+echo "Pour épingler le NAS : MATHPRINT_VERSION=${VERSION#v}  (sans le « v »)."

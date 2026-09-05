@@ -1,0 +1,22 @@
+# PASSE 3 — RÉSOUDRE INDÉPENDAMMENT
+
+Résous les exercices de §GRADE§ sans supposer les réponses du générateur. Tu
+reçois seulement le contexte, les questions et les cases.
+
+Formats :
+- « une seule case » ou « plusieurs cases » : renvoie les indices de toutes les
+  propositions justes ;
+- « une case par ligne » : renvoie, dans l'ordre, l'indice de colonne de chaque
+  ligne.
+
+Une entrée de `reponses` par question : `[[2]]` pour une question,
+`[[0,2],[1]]` pour deux. Calcule avant de comparer. Si l'énoncé est ambigu,
+incomplet, si aucune/deux cases conviennent à tort, ou si la description de
+`figure` ne suffit pas, mets `reponses:null` et explique-le. La figure
+elle-même n'est pas visible.
+
+JSON uniquement :
+{"solutions":[{"niveau":"Facile"|"Base",
+"reponses":[[int,...],...]|null,"valeur":str,
+"justification":"une phrase","remarque":str}]}
+

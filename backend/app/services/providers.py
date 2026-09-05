@@ -8,6 +8,7 @@ Règles appliquées ici :
 - mode mock : réponses simulées déterministes pour développement et tests.
 """
 import hashlib
+import base64
 import json
 import logging
 import re
@@ -58,9 +59,17 @@ def _post_with_deadline(url: str, *, headers: dict, json_body: dict,
     # à 180 s faisait échouer TOUS les lots, qui repartaient un par un et
     # épuisaient le budget quotidien (cf. incident A1.3 du 02/08).
     total = total_timeout or settings.llm_call_timeout_s
+    # `timeout` est un délai PAR PHASE (connexion, écriture, lecture). La
+    # réponse n'étant pas streamée, elle n'arrive qu'une fois le modèle
+    # terminé : la phase de LECTURE dure donc aussi longtemps que la réflexion.
+    # Avec 60 s de lecture sous un délai total de 600 s, tout appel de plus
+    # d'une minute mourait en ReadTimeout et le budget généreux de l'appelant
+    # ne servait à rien (mode multipass : la moitié des exercices perdus).
+    # La lecture reçoit donc le délai TOTAL ; connexion et écriture gardent le
+    # délai court, qui est celui qui détecte un serveur injoignable.
     started = time.monotonic()
-    future = _HTTP_POOL.submit(httpx.post, url, headers=headers,
-                               json=json_body, timeout=timeout)
+    future = _HTTP_POOL.submit(httpx.post, url, headers=headers, json=json_body,
+                               timeout=httpx.Timeout(timeout, read=max(timeout, total)))
     try:
         resp = future.result(timeout=total)
     except _FutureTimeout:
@@ -128,8 +137,13 @@ def retry_after_s(exc: Exception, attempt: int) -> float:
 
 
 def is_truncated(exc: Exception) -> bool:
-    """Réponse coupée par max_tokens (cf. claude_json/gemini_json) : réessayer
-    avec un budget de sortie plus élevé, pas à l'identique."""
+    """Réponse coupée par max_tokens : réessayer avec un budget de sortie plus
+    élevé, pas à l'identique.
+
+    Le mot est le contrat : les TROIS fournisseurs (claude_json, gemini_json,
+    deepseek_json) le posent dans leur message. Côté DeepSeek il manquait, et le
+    budget n'était donc jamais élargi — un modèle qui raisonne épuisait les 8192
+    tokens sans rendre de JSON, et l'appel échouait pour de bon."""
     return "TRONQUÉE" in str(exc)
 
 
@@ -271,7 +285,9 @@ def deepseek_json(db: Session, operation: str, system: str, user_payload: dict,
                   total_timeout: float | None = None,
                   validator: Callable[[Any], dict] | None = None,
                   repair_instruction: str | None = None,
-                  thinking: bool | None = None) -> dict:
+                  thinking: bool | None = None,
+                  images: list[bytes] | None = None,
+                  image_detail: str = "original") -> dict:
     """Appel DeepSeek en sortie JSON stricte. Une seule tentative corrective (§8.5).
     `model` permet d'imposer un modèle (ex : deepseek-v4-pro pour la création
     d'exercices) ; sinon registre configurable (RM-011)."""
@@ -287,12 +303,26 @@ def deepseek_json(db: Session, operation: str, system: str, user_payload: dict,
                 cost=0.0, correlation_id=correlation_id)
         return _deepseek_mock(operation, user_payload)
 
+    user_content: str | list[dict] = json.dumps(user_payload, ensure_ascii=False)
+    if images:
+        # Format multimodal OpenAI-compatible documenté par DeepSeek. Les images
+        # restent dans le message user (elles sont interdites dans system) et le
+        # texte les précède afin d'en fixer explicitement l'ordre : image 1 =
+        # page courante, image 2 = page suivante.
+        user_content = [{"type": "text", "text": user_content}]
+        user_content.extend({
+            "type": "image_url",
+            "image_url": {
+                "url": "data:image/png;base64," + base64.b64encode(raw).decode("ascii"),
+                "detail": image_detail,
+            },
+        } for raw in images)
     body = {
         "model": model,
         "messages": [
             {"role": "system", "content": system},
             # données OCR traitées comme non fiables : encadrées, pas d'outils (§8.5)
-            {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
+            {"role": "user", "content": user_content},
         ],
         "response_format": {"type": "json_object"},
         "max_tokens": max_tokens,
@@ -334,6 +364,17 @@ def deepseek_json(db: Session, operation: str, system: str, user_payload: dict,
                 if usage.get("completion_tokens") is not None:
                     details.append(f"tokens_sortie={usage['completion_tokens']}")
                 suffix = f" ({', '.join(details)})" if details else ""
+                # Budget de sortie épuisé AVANT le JSON — typiquement dévoré par
+                # le raisonnement, que DeepSeek V4 active par défaut. C'est le
+                # cas que `is_truncated` reconnaît, au MÊME mot que Claude et
+                # Gemini : sans lui, l'échelle de budgets de l'appelant
+                # (indigo_llm._output_budgets) ne se déclenchait jamais côté
+                # DeepSeek, et un appel trop court échouait définitivement.
+                if choice.get("finish_reason") == "length":
+                    raise ValueError(
+                        f"Réponse DeepSeek TRONQUÉE ({model}) : budget de sortie "
+                        f"max_tokens={body['max_tokens']} épuisé avant le JSON"
+                        f"{suffix}. Augmente max_tokens.")
                 raise ValueError(f"contenu DeepSeek vide{suffix}")
             parsed = _decode_json_content(content)
             return validator(parsed) if validator else parsed
@@ -361,7 +402,13 @@ def deepseek_json(db: Session, operation: str, system: str, user_payload: dict,
                                "Recommence entièrement et réponds uniquement avec l'objet JSON demandé.")),
             })
             if (data.get("choices") or [{}])[0].get("finish_reason") == "length":
-                body["max_tokens"] = min(settings.deepseek_max_output_tokens,
+                # Plafond RELATIF à ce que l'appelant a demandé. Il valait
+                # `settings.deepseek_max_output_tokens`, c'est-à-dire le budget
+                # par défaut lui-même : quand l'appelant demandait ce budget-là
+                # (tout Indigo), la relance repartait au MÊME plafond et
+                # rejouait le même échec.
+                ceiling = max(settings.deepseek_max_output_tokens, max_tokens) * 2
+                body["max_tokens"] = min(ceiling,
                                          max(body["max_tokens"] + 400,
                                              body["max_tokens"] * 2))
     raise ValueError("unreachable")

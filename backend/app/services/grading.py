@@ -73,7 +73,9 @@ def parse_number(s: str) -> Fraction | None:
 # Liste d'unités EXPLICITE, jamais « toutes les lettres finales » : sur une
 # réponse de type expression, « 2m » doit rester « 2m » (m est une variable).
 # C'est pourquoi le dépouillement n'est appliqué qu'aux types NUMÉRIQUES.
-_UNITS = ("cm2", "cm3", "m2", "m3", "km2", "mm2", "dm3",
+_UNITS = ("km/h", "m/s", "cm/s", "m/min",
+          "cm²", "cm³", "m²", "m³", "km²", "mm²", "dm³",
+          "cm2", "cm3", "m2", "m3", "km2", "mm2", "dm3",
           "mm", "cm", "dm", "km", "kg", "mg", "hg", "dag", "mL", "cL", "dL",
           "min", "ms", "m", "g", "t", "L", "l", "h", "s",
           "unités", "unite", "unités.", "unité", "unites",

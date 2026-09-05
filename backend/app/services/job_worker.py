@@ -102,6 +102,32 @@ def _claim(db: Session, job: Job) -> bool:
     return n == 1
 
 
+def _mark_failed(job_id: str, assessment_id: str | None, message: str) -> None:
+    """Dernier filet, avec une session NEUVE : si la session qui a échoué
+    (verrou DB, erreur inattendue) est elle-même dans un état cassé, on ne
+    doit jamais laisser un job orphelin en "running" pour toujours — c'est
+    exactement ce qui rendait une génération sur banque vide indiscernable
+    d'une boucle infinie côté écran Sujets."""
+    try:
+        db = SessionLocal()
+        try:
+            job = db.get(Job, job_id)
+            if job is None or job.status in ("done", "failed"):
+                return
+            job.status = "failed"
+            job.error_code = message[:400]
+            job.updated_at = datetime.now(timezone.utc)
+            assessment = db.get(Assessment, assessment_id) if assessment_id else None
+            if assessment is not None:
+                assessment.status = "error"
+                assessment.error_message = message[:400]
+            db.commit()
+        finally:
+            db.close()
+    except Exception:
+        logger.exception("Impossible de marquer le job %s en échec", job_id)
+
+
 def _generate_isolated(assessment_id: str, job_id: str, font_size: int) -> None:
     """Exécuté dans `_GENERATION_POOL`, avec sa PROPRE session DB : si le
     thread appelant (`_run_job`) abandonne au bout du délai global, cette
@@ -126,18 +152,11 @@ def _generate_isolated(assessment_id: str, job_id: str, font_size: int) -> None:
         db.commit()
     except Exception as e:
         logger.exception("Échec génération sujet %s", assessment_id)
-        db.rollback()
-        job = db.get(Job, job_id)
-        if job is None:
-            return  # supprimé entre-temps : la suppression a déjà tout nettoyé
-        assessment = db.get(Assessment, job.assessment_id)
-        job.status = "failed"
-        job.error_code = str(e)[:400]
-        if assessment is not None:
-            assessment.status = "error"
-            assessment.error_message = str(e)[:400]
-        job.updated_at = datetime.now(timezone.utc)
-        db.commit()
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        _mark_failed(job_id, assessment_id, str(e))
     finally:
         db.close()
 
@@ -170,21 +189,19 @@ def _run_job(db: Session, job: Job) -> None:
             "libérer l'interface (le thread abandonné termine seul en tâche de "
             "fond, son résultat éventuel sera écrasé au prochain essai)",
             assessment_id, settings.job_generation_timeout_s)
-        db.rollback()
-        stuck_job = db.get(Job, job_id)
-        if stuck_job is not None:
-            stuck_job.status = "failed"
-            stuck_job.error_code = f"délai global dépassé ({settings.job_generation_timeout_s}s)"
-            stuck_assessment = db.get(Assessment, assessment_id)
-            if stuck_assessment is not None:
-                stuck_assessment.status = "error"
-                stuck_assessment.error_message = stuck_job.error_code
-            stuck_job.updated_at = datetime.now(timezone.utc)
-            db.commit()
-    except Exception:
-        # _generate_isolated capture déjà ses propres erreurs ; ce cas ne
-        # devrait pas arriver, mais la boucle du worker ne doit jamais planter
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        _mark_failed(job_id, assessment_id,
+                     f"délai global dépassé ({settings.job_generation_timeout_s}s)")
+    except Exception as e:
+        # _generate_isolated capture déjà ses propres erreurs, mais si CETTE
+        # supervision plante (ex. `db` dans un état cassé après un verrou
+        # SQLite), le job restait "running" pour toujours — plus aucune trace
+        # d'erreur, indiscernable d'une boucle infinie côté écran Sujets.
         logger.exception("Erreur inattendue en supervisant la génération de %s", assessment_id)
+        _mark_failed(job_id, assessment_id, f"Erreur interne : {e}")
     finally:
         app_logger.removeHandler(handler)
 

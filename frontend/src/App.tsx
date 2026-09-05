@@ -22,6 +22,7 @@ import Exercices from './pages/Exercices'
 import Subjects from './pages/Subjects'
 import Grades from './pages/Grades'
 import UsersAdmin from './pages/UsersAdmin'
+import ScanProblemsModal from './components/ScanProblemsModal'
 import { CYCLES, useAppState, type Cycle } from './state/AppState'
 
 // `admin: true` => réservé au rôle admin (absent des builds utilisateur/correcteur).
@@ -79,6 +80,7 @@ export default function App() {
 
   return (
     <AppShell header={{ height: 56 }} navbar={{ width: 216, breakpoint: 'sm' }} padding="lg">
+      <ScanProblemsModal />
       <AppShell.Header>
         <Group h="100%" px="md" justify="space-between" wrap="nowrap">
           <Group gap={8} wrap="nowrap" style={{ cursor: 'pointer' }} onClick={() => navigate('/')}>

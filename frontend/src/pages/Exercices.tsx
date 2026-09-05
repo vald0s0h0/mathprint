@@ -5,15 +5,15 @@
 // demi-colonne A4) : extrait manuel → tags/badges → énoncé → guide → corrigé →
 // actions. « Modifier » ouvre une modale d'édition complète.
 import {
-  ActionIcon, Alert, Badge, Box, Button, Card, Checkbox, Group,
+  ActionIcon, Alert, Badge, Box, Button, Checkbox, FileButton, Group,
   Loader, Modal, NumberInput, Paper, Progress, ScrollArea, SegmentedControl, Select,
-  Stack, Table, TagsInput, Text, Textarea, TextInput, Title, Tooltip,
+  Stack, TagsInput, Text, Textarea, TextInput, Title, Tooltip,
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
 import {
-  AlertTriangle, BookOpen, Calculator, Check, CheckSquare, ChevronLeft,
-  Download, ImageOff, ImagePlus, Minus, Pencil, Plus, RefreshCw, RotateCcw, Slash,
-  Sparkles, Trash2, UploadCloud, Wand2,
+  AlertTriangle, BookOpen, Calculator, Check, CheckSquare, ChevronLeft, Clock,
+  Download, HardDrive, ImageOff, ImagePlus, Minus, Package, PackagePlus, Pencil, Plus,
+  RefreshCw, RotateCcw, Slash, Sparkles, Square, Trash2, UploadCloud, Wand2,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api, download } from '../api'
@@ -21,8 +21,8 @@ import AuthImg from '../components/AuthImg'
 import CompetencyHierarchy, { type CompetencyHierarchyColumn } from '../components/CompetencyHierarchy'
 import ExercisePrintPreview from '../components/ExercisePrintPreview'
 import FigureEditor, { type FigureBox, type ImageRect } from '../components/FigureEditor'
-import MathText from '../components/MathText'
 import { useAppState } from '../state/AppState'
+import { familyRows } from '../utils/families'
 import GradeSelectionRequired from '../components/GradeSelectionRequired'
 
 // ------------------------------------------------------------------- types
@@ -36,8 +36,19 @@ type PublishState = {
   published: number; seeded: number
   source: 'volume' | 'image'; on_volume: boolean; generated_at: string
 }
-type Manuals = { grade_level: string; manuals: { eleve: ManualInfo; prof: ManualInfo } }
-type ManualInfo = { available: boolean; pages: number }
+type Manuals = {
+  grade_level: string; manuals: { eleve: ManualInfo; prof: ManualInfo }; pack: PackStatus
+}
+// `available` = on peut travailler ; `pdf` = le PDF lui-même est là. Une
+// instance sans manuel mais avec un PACK DE TRAVAIL (pages rendues d'avance +
+// index) fabrique exactement pareil — cf. services/indigo_pack.py.
+type ManualInfo = { available: boolean; pdf: boolean; pages: number }
+type PackStatus = {
+  grade_level: string; has_manuals: boolean; can_export: boolean
+  pack: { page_count: number; pages_present: number; built_at: string } | null
+  index: { eleve: number; prof: number }
+  source: 'manuel' | 'pack' | 'aucune'
+}
 type SummaryRow = {
   competency_id: string; short_id: string; label: string
   domain_code: string; domain_name: string; chapter_code: string; chapter_name: string
@@ -58,6 +69,19 @@ type IndexCoverage = {
 type Extraction = {
   id: string; status: string; progress: number; progress_message: string
   error_message: string; stats: Record<string, any>; created_at: string
+  targets: { kind?: string; eleve_page_start?: number; eleve_page_end?: number }[]
+}
+// Marqueur posé par services/indigo_offpeak.wait_until_open pendant l'attente
+// du tarif creux — sert à distinguer une extraction EN FILE d'une extraction
+// qui tourne réellement (§ waitingExtractions).
+const WAITING_MARK = '⏸'
+const fmtLocalTime = (iso: string) =>
+  new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+const extractionLabel = (e: Extraction) => {
+  const t = e.targets?.[0]
+  const pages = t?.eleve_page_start && t?.eleve_page_end
+    ? `pages ${t.eleve_page_start}–${t.eleve_page_end}` : 'extraction'
+  return `${pages} — ${e.progress_message.replace(`${WAITING_MARK} `, '')}`
 }
 type Exercise = {
   id: string; ref: string; competency_id: string; competency_short_id: string
@@ -68,6 +92,15 @@ type Exercise = {
   title: string; tags: string[]; has_figure: boolean; figure_required: boolean
   statement: string; response_type: string; expected: Record<string, any>; choices: string[]
   adapted: boolean
+  // réserves de relecture posées par le mode « QCM multipass » : ce que les
+  // portes reprochent encore à l'exercice. Vide = rien à signaler.
+  review_notes: string[]
+  // sous-ensemble GRAVE : ce que la passe de retouche n'a pas su réparer.
+  // « à regarder » (jaune) et « ne l'imprime pas tel quel » (rouge) ne sont
+  // pas la même chose et ne doivent pas porter le même badge.
+  review_blocking: string[]
+  // rattachement à la compétence non confirmé : exercice à ranger avant validation
+  competency_confirmed: boolean
   row_labels: string[] | null; col_labels: string[] | null; lines: number | null
   bareme_points: number; correction_solution: string; correction_guide: string
   status: string; crop_url: string | null; figure_url: string | null
@@ -88,14 +121,14 @@ const DIFF_LABEL: Record<number, string> = { 1: 'Facile', 2: 'Moyen', 3: 'Diffic
 const DIFF_OPTS = [
   { value: '1', label: 'Facile' }, { value: '2', label: 'Moyen' }, { value: '3', label: 'Difficile' },
 ]
-// Les trois positions du sélecteur. « QCM only » n'est pas qu'un fournisseur :
-// c'est un MODE de génération (formats restreints, barème codé, vérification
-// Python, trio de dérivés) qui implique DeepSeek pro.
-const PROVIDER_NAME: Record<string, string> = {
-  anthropic: 'Anthropic (Sonnet + Opus)',
-  deepseek: 'DeepSeek pro v4',
-  qcm: 'QCM only (DeepSeek pro v4)',
-}
+// Seul le mode « QCM multipass » est proposé depuis l'onglet (les fournisseurs
+// anthropic/DeepSeek/QCM only restent codés côté serveur, cf. services/
+// indigo_llm.py, mais ne sont plus atteignables depuis cette page) : la
+// classe force ce mode au chargement plutôt que d'exposer un sélecteur.
+const MULTIPASS = 'multipass'
+// Case « Cheap and Wait » : heures creuses DeepSeek codées en dur côté serveur
+// (cf. services/indigo_offpeak.py) — seule la case se règle ici.
+type OffPeak = { enabled: boolean; open_now: boolean; next_open: string }
 const isProbleme = (ex: { badge_type: string }) => ex.badge_type === 'probleme' || ex.badge_type === 'enigme'
 const BADGE_LABEL: Record<string, string> = {
   exercice: 'Exercice', flash: 'Flash', expert: 'Expert', enigme: 'Énigme', probleme: 'Problème',
@@ -145,266 +178,11 @@ function CalcIcon({ mode, size = 18 }: { mode: string; size?: number }) {
   )
 }
 
-// ----------------------------------------------------- aperçu de l'énoncé
-function ResponseZone({ ex }: { ex: Exercise }) {
-  const rt = ex.response_type
-  const inlineBlank = (ex.statement || '').includes('{{blank}}')
-  if (rt === 'qcm_single' || rt === 'qcm_multiple') {
-    // Aperçu compact en 1 à 3 colonnes. Le PDF fait autorité et mesure les
-    // glyphes avec ReportLab ; ici, la longueur ne sert qu'à approcher ce choix.
-    const n = ex.choices.length
-    const maxLen = Math.max(0, ...ex.choices.map((c) => c.replace(/\$/g, '').length))
-    const ncols = Math.max(1, Math.min(n, maxLen > 16 ? 1 : maxLen > 8 ? 2 : 3))
-    return (
-      <Box mt={6} style={{
-        display: 'grid', gridTemplateColumns: `repeat(${ncols}, minmax(0, 1fr))`,
-        columnGap: 14, rowGap: 4,
-      }}>
-        {ex.choices.map((c, i) => (
-          <Group key={i} gap={8} wrap="nowrap" align="center">
-            <Box style={{ width: 14, height: 14, border: '1.5px solid #888', borderRadius: 3, flex: '0 0 auto' }} />
-            <MathText text={c} size="sm" />
-          </Group>
-        ))}
-      </Box>
-    )
-  }
-  if (rt === 'checkbox_grid') {
-    // grille cochée : lignes = sous-questions, colonnes = options (Vrai/Faux…),
-    // une case à cocher par option. Vue élève : les bonnes réponses sont masquées.
-    const cols: string[] = ex.expected?.cols ?? []
-    const rows: { label: string; correct: number }[] = ex.expected?.rows ?? []
-    return (
-      <Table withTableBorder withColumnBorders mt={8} styles={{ td: { padding: 4 }, th: { padding: 4 } }}>
-        <Table.Thead><Table.Tr>
-          <Table.Th />
-          {cols.map((c, i) => <Table.Th key={i} ta="center"><MathText text={c} size="xs" /></Table.Th>)}
-        </Table.Tr></Table.Thead>
-        <Table.Tbody>
-          {rows.map((r, ri) => (
-            <Table.Tr key={ri}>
-              <Table.Td><MathText text={r.label} size="sm" /></Table.Td>
-              {cols.map((_c, ci) => (
-                <Table.Td key={ci} ta="center">
-                  <Box style={{ display: 'inline-block', width: 13, height: 13, border: '1.5px solid #888', borderRadius: 3 }} />
-                </Table.Td>
-              ))}
-            </Table.Tr>
-          ))}
-        </Table.Tbody>
-      </Table>
-    )
-  }
-  if (rt === 'matching') {
-    // deux colonnes reliées par l'élève : on montre les pastilles de départ et
-    // d'arrivée, jamais les paires attendues (vue élève).
-    const left: string[] = ex.expected?.left ?? []
-    const right: string[] = ex.expected?.right ?? []
-    const dot = { width: 7, height: 7, borderRadius: 7, background: '#888', flex: '0 0 auto' }
-    return (
-      <Group mt={8} align="flex-start" justify="space-between" wrap="nowrap" gap={24}>
-        <Box style={{ flex: 1 }}>
-          {left.map((l, i) => (
-            <Group key={i} gap={8} wrap="nowrap" mb={6}>
-              <MathText text={l} size="sm" /><Box style={dot} />
-            </Group>
-          ))}
-        </Box>
-        <Box style={{ flex: 1 }}>
-          {right.map((r, i) => (
-            <Group key={i} gap={8} wrap="nowrap" mb={6}>
-              <Box style={dot} /><MathText text={r} size="sm" />
-            </Group>
-          ))}
-        </Box>
-      </Group>
-    )
-  }
-  if (rt === 'manual_drawing')
-    // cadre libre : l'élève trace/complète, la correction est manuelle
-    return (
-      <Box mt={8} style={{ height: 90, border: '1px dashed var(--mantine-color-gray-5)',
-        borderRadius: 3, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <Text size="xs" c="dimmed">Cadre de tracé (correction manuelle)</Text>
-      </Box>
-    )
-  if (rt === 'short_text' && !inlineBlank)
-    return <Box mt={8} style={{ height: 26, border: '1px solid var(--mantine-color-gray-5)', borderRadius: 3 }} />
-  if (rt === 'multiline_text') {
-    // nombre EXACT de lignes tel qu'il sera imprimé (backend grading.lines,
-    // dimensionné sur le corrigé par services.indigo_fields), un peu plus aérées
-    const n = Math.max(3, Math.min(12, ex.lines ?? 5))
-    return (
-      <Box mt={8}>
-        {Array.from({ length: n }, (_, i) => (
-          <Box key={i} style={{ height: 22, borderBottom: '1px dashed var(--mantine-color-gray-5)' }} />
-        ))}
-      </Box>
-    )
-  }
-  if (rt === 'table_fill') {
-    const cells: any[][] = ex.expected?.cells ?? []
-    return (
-      <Table withTableBorder withColumnBorders mt={8} styles={{ td: { padding: 4 } }}>
-        {ex.col_labels && (
-          <Table.Thead><Table.Tr>
-            {ex.row_labels && <Table.Th />}
-            {ex.col_labels.map((c, i) => <Table.Th key={i}><MathText text={c} size="xs" /></Table.Th>)}
-          </Table.Tr></Table.Thead>
-        )}
-        <Table.Tbody>
-          {cells.map((row, r) => (
-            <Table.Tr key={r}>
-              {ex.row_labels && <Table.Td><MathText text={ex.row_labels[r] ?? ''} size="xs" /></Table.Td>}
-              {row.map((cell, c) => (
-                <Table.Td key={c} ta="center" style={{ minWidth: 42, height: 22, background: cell?.given ? 'var(--mantine-color-gray-1)' : undefined }}>
-                  {cell?.given
-                    ? <MathText text={String(cell.value ?? '')} size="xs" />
-                    // case à cocher : « coche si vrai » (évite d'écrire oui/non → crédits Mathpix)
-                    : (cell?.check !== undefined || cell?.type === 'check')
-                      ? <Box style={{ display: 'inline-block', width: 13, height: 13, border: '1.5px solid #888', borderRadius: 3 }} />
-                      : null}
-                </Table.Td>
-              ))}
-            </Table.Tr>
-          ))}
-        </Table.Tbody>
-      </Table>
-    )
-  }
-  return null
-}
-
-// Étiquette de sous-question en tête de ligne : lettre a-h OU nombre 1-2 chiffres,
-// suivie d'un point/parenthèse (cf. backend statement.subquestion_label).
-const SUBLABEL_RE = /^([a-h]|\d{1,2})[.)]\s+/
-const BULLET_RE = /^[•–—-]\s+/
-
-/** Corps d'un texte mis en lignes : chaque « a. »/« 1. » en tête de ligne
- *  devient une PASTILLE colorée (couleur de l'exercice), chaque puce « • » un
- *  point coloré — jamais un « - » (confusion signe moins). Le reste passe par
- *  MathText (formules + espaces insécables). Sert à l'énoncé, au guide et au
- *  corrigé pour une mise en page cohérente avec l'impression. */
-function RichBody({ text, color, size }: { text: string; color: string; size?: string }) {
-  const lines = (text || '').split('\n')
-  // La taille de police n'augmente QUE pour une ligne portant une case à
-  // remplir — comme à l'impression (pdfgen blank_fs). Toutes les autres lignes
-  // gardent la taille de base : sinon l'aperçu paraît incohérent. Les TROIS
-  // variantes de case (standard, pleine largeur, mini) grandissent leur ligne
-  // de la même façon — même règle qu'à l'impression (backend has_answer_field) :
-  // une phrase ne mélange jamais deux tailles de police selon sa case.
-  const fzOf = (ln: string) => (/\{\{(blank(_right)?|mini)\}\}/.test(ln) ? '1.12em' : size)
-  return (
-    <Box fz={size}>
-      {lines.map((ln, i) => {
-        const fz = fzOf(ln)
-        const lab = ln.match(SUBLABEL_RE)
-        if (lab) {
-          return (
-            <Group key={i} gap={6} align="flex-start" wrap="nowrap" mt={i ? 4 : 0}>
-              <Badge color={color} radius="sm" size="sm" variant="filled" style={{ flex: '0 0 auto', marginTop: 2 }}>
-                {lab[1]}
-              </Badge>
-              <Box style={{ flex: 1, minWidth: 0 }}><MathText text={ln.slice(lab[0].length)} size={fz} /></Box>
-            </Group>
-          )
-        }
-        const bul = ln.match(BULLET_RE)
-        if (bul) {
-          return (
-            <Group key={i} gap={6} align="flex-start" wrap="nowrap" mt={i ? 3 : 0}>
-              <Text component="span" fw={900} style={{ flex: '0 0 auto', lineHeight: 1.35, color: `var(--mantine-color-${color}-6)` }}>•</Text>
-              <Box style={{ flex: 1, minWidth: 0 }}><MathText text={ln.slice(bul[0].length)} size={fz} /></Box>
-            </Group>
-          )
-        }
-        return <Box key={i} mt={i ? 2 : 0}><MathText text={ln} size={fz} /></Box>
-      })}
-    </Box>
-  )
-}
-
-/** Guide d'auto-correction : présenté dans un bloc enfant type
- *  « citation » (alinéa, filet coloré) avec une icône livre, taille de police
- *  par défaut (pas d'agrandissement), gras possible. Reste court (cf. prompt). */
-function GuideBlock({ text, color }: { text: string; color: string }) {
-  return (
-    <Box style={{
-      borderLeft: `3px solid var(--mantine-color-${color}-4)`,
-      background: 'var(--mantine-color-gray-0)', borderRadius: 4, padding: '6px 8px',
-    }}>
-      <Group gap={6} align="flex-start" wrap="nowrap">
-        <BookOpen size={15} color={`var(--mantine-color-${color}-6)`} style={{ flex: '0 0 auto', marginTop: 2 }} />
-        <Box style={{ flex: 1, minWidth: 0 }}><RichBody text={text} color={color} size="sm" /></Box>
-      </Group>
-    </Box>
-  )
-}
-
-// Marqueur de PLACEMENT de l'image (cf. backend statement.py) : coupe l'énoncé
-// à cet endroit pour insérer la figure EXACTEMENT là (aperçu = feuille imprimée).
-const FIGURE_TOKEN = '{{figure}}'
-const stripFigureToken = (s: string) =>
-  (s || '').replace(/^[ \t]*\{\{figure\}\}[ \t]*\n?/gm, '').replace(/\{\{figure\}\}/g, '').trim()
-
-function StatementPreview({ ex, color }: { ex: Exercise; color: string }) {
-  const figImg = ex.figure_url
-    ? <AuthImg src={ex.figure_url} alt="figure" style={{ maxWidth: '100%', marginTop: 6, marginBottom: 6, display: 'block' }} />
-    : null
-  // exercice COMPOSITE : contexte commun, puis chaque sous-question (a./b./c.)
-  // avec SON propre format de réponse — rendu comme une carte unifiée à l'impression.
-  if (ex.response_type === 'composite') {
-    const parts: any[] = ex.expected?.parts ?? []
-    return (
-      <Box>
-        <RichBody text={stripFigureToken(ex.statement)} color={color} />
-        {figImg}
-        <Stack gap={8} mt={8}>
-          {parts.map((p, i) => {
-            const g = p.grading ?? {}
-            const partEx = { ...ex, response_type: p.response_type, statement: p.statement || '',
-              expected: p.expected ?? {}, choices: g.choices ?? [],
-              col_labels: g.col_labels ?? null, row_labels: g.row_labels ?? null,
-              lines: g.lines ?? null } as Exercise
-            return (
-              <Group key={i} gap={6} align="flex-start" wrap="nowrap">
-                <Badge color={color} radius="sm" size="sm" variant="filled" style={{ flex: '0 0 auto', marginTop: 2 }}>
-                  {String.fromCharCode(97 + i)}
-                </Badge>
-                <Box style={{ flex: 1, minWidth: 0 }}>
-                  <RichBody text={p.statement || ''} color={color} />
-                  <ResponseZone ex={partEx} />
-                </Box>
-              </Group>
-            )
-          })}
-        </Stack>
-      </Box>
-    )
-  }
-  // l'image se place AU marqueur {{figure}} (comme à l'impression) ; sans
-  // marqueur (ou sans image), elle reste après l'énoncé (comportement d'avant).
-  if (figImg && (ex.statement || '').includes(FIGURE_TOKEN)) {
-    const idx = ex.statement.indexOf(FIGURE_TOKEN)
-    const before = ex.statement.slice(0, idx).replace(/\n+$/, '')
-    const after = ex.statement.slice(idx + FIGURE_TOKEN.length).replace(/^\n+/, '')
-    return (
-      <Box>
-        {before.trim() && <RichBody text={before} color={color} />}
-        {figImg}
-        {after.trim() && <RichBody text={after} color={color} />}
-        <ResponseZone ex={ex} />
-      </Box>
-    )
-  }
-  return (
-    <Box>
-      <RichBody text={stripFigureToken(ex.statement)} color={color} />
-      {figImg}
-      <ResponseZone ex={ex} />
-    </Box>
-  )
-}
+// L'aperçu d'un exercice (énoncé, figure, zone de réponse, guide, corrigé) est
+// rendu par le composant PARTAGÉ components/ExercisePrintPreview — le même que
+// la Banque et l'assistant de sujets, donc la même feuille à l'écran partout.
+// Cet écran en avait autrefois sa propre copie ; elle a été retirée pour qu'il
+// n'existe qu'un seul rendu à faire évoluer (tableaux, séries, gras…).
 
 // ----------------------------------------------------- tags + badges (item 2)
 function BadgeRow({ ex }: { ex: Exercise }) {
@@ -463,6 +241,33 @@ function BadgeRow({ ex }: { ex: Exercise }) {
           <Badge color="red" variant="light" size="xs" leftSection={<ImageOff size={11} />}>Image manquante</Badge>
         </Tooltip>
       )}
+      {/* compétence devinée par ressemblance : l'exercice est là, mais il n'est
+          pas forcément au bon endroit — à ranger avant de le valider */}
+      {ex.competency_confirmed === false && (
+        <Tooltip label="Compétence non confirmée : c'est la plus proche du bandeau lu, rien ne l'a confirmée. Ouvre l'exercice pour le rattacher à la bonne compétence.">
+          <Badge color="grape" variant="light" size="xs">Compétence à confirmer</Badge>
+        </Tooltip>
+      )}
+      {/* ce que la passe de RETOUCHE n'a pas su réparer et juge grave : réponse
+          fausse qu'elle ne sait pas refaire, consigne incompréhensible, figure
+          indispensable dont rien ne dit le contenu. À traiter AVANT de valider —
+          d'où le rouge, quand les réserves ordinaires restent en jaune. */}
+      {ex.review_blocking?.length > 0 && (
+        <Tooltip label={ex.review_blocking.slice(0, 6).join(' · ')} multiline w={420}>
+          <Badge color="red" variant="filled" size="xs" leftSection={<AlertTriangle size={11} />}>
+            À revoir
+          </Badge>
+        </Tooltip>
+      )}
+      {/* réserves de relecture : ce que la génération n'a pas su régler seule.
+          Ce ne sont pas des erreurs certaines — c'est ce qu'il faut REGARDER. */}
+      {ex.review_notes?.length > 0 && (
+        <Tooltip label={ex.review_notes.slice(0, 6).join(' · ')} multiline w={420}>
+          <Badge color="yellow" variant="light" size="xs" leftSection={<AlertTriangle size={11} />}>
+            {ex.review_notes.length} point{ex.review_notes.length > 1 ? 's' : ''} à relire
+          </Badge>
+        </Tooltip>
+      )}
       {/* les tags de compétence ne sont pas des tags de difficulté : conservés en info admin */}
       {ex.tags?.map((t) => <Badge key={t} variant="dot" color="gray" size="xs">{t}</Badge>)}
       {ex.status === 'validated'
@@ -495,19 +300,11 @@ function ExerciseCard({ ex, onEdit, onChange, onDelete, selectable, selected, on
       background: done ? 'var(--mantine-color-gray-1)' : undefined,
       opacity: done ? 0.72 : undefined,
     }}>
-      <ExercisePrintPreview exercise={ex} color={color} showGuide showCorrection
-        beforeFrame={<>
-          {selectable && (
-            <Checkbox mb={8} checked={!!selected} label={<Text size="xs" fw={600}>Sélectionner</Text>}
-              onChange={(e) => onToggleSelect?.(ex.id, e.currentTarget.checked)} />
-          )}
-          {ex.crop_url && (
-            <Box mb={8}>
-              <Text size="10px" c="dimmed" mb={2}>Extrait du manuel</Text>
-              <AuthImg src={ex.crop_url} alt="extrait" style={{ maxWidth: '100%', display: 'block', border: '1px solid var(--mantine-color-gray-3)', borderRadius: 4 }} />
-            </Box>
-          )}
-        </>}
+      <ExercisePrintPreview exercise={ex} color={color} showGuide showCorrection showAnswers
+        beforeFrame={selectable ? (
+          <Checkbox mb={8} checked={!!selected} label={<Text size="xs" fw={600}>Sélectionner</Text>}
+            onChange={(e) => onToggleSelect?.(ex.id, e.currentTarget.checked)} />
+        ) : null}
         badges={<BadgeRow ex={ex} />}
         afterFrame={<Group justify="space-between" mt={2}>
           <ActionIcon color="red" variant="subtle" onClick={() => onDelete(ex.id)}><Trash2 size={16} /></ActionIcon>
@@ -522,9 +319,13 @@ function ExerciseCard({ ex, onEdit, onChange, onDelete, selectable, selected, on
 }
 
 // ----------------------------------------------------- modale d'édition
-function EditModal({ ex, onClose, onSaved, onChange }: {
-  ex: Exercise | null; onClose: () => void; onSaved: (e: Exercise) => void
+function EditModal({ ex, comps, onClose, onSaved, onChange, onFamilyChanged }: {
+  ex: Exercise | null; comps: Comp[]; onClose: () => void; onSaved: (e: Exercise) => void
   onChange: (e: Exercise) => void   // répercute sur la carte SANS fermer la modale
+  // Une image appartient à la FAMILLE, pas à la carte : le backend la recopie
+  // sur les deux autres dérivés (cf. indigo._mirror_figure). Leurs cartes sont
+  // donc périmées à l'écran — on recharge la liste plutôt que de deviner.
+  onFamilyChanged: () => void
 }) {
   const [form, setForm] = useState<Exercise | null>(ex)
   const [figV, setFigV] = useState(0)
@@ -538,13 +339,14 @@ function EditModal({ ex, onClose, onSaved, onChange }: {
     const updated = await api.del<Exercise>(`/api/indigo/exercises/${form.id}/figure`)
     setForm(updated)
     onChange(updated)  // répercute tout de suite sur la carte (plus de « image indisponible »), modale ouverte
-    notifications.show({ color: 'gray', message: 'Image de l\'énoncé supprimée' })
+    onFamilyChanged()
+    notifications.show({ color: 'gray', message: 'Image supprimée sur les trois dérivés' })
   }
 
   const addFigure = async () => {
     try {
       const updated = await api.post<Exercise>(`/api/indigo/exercises/${form.id}/figure/add`)
-      setForm(updated); setFigV((v) => v + 1); onChange(updated)
+      setForm(updated); setFigV((v) => v + 1); onChange(updated); onFamilyChanged()
       notifications.show({ color: 'green', message: 'Image ajoutée depuis le PDF — sélectionne maintenant la zone utile' })
     } catch (e: any) { notifications.show({ color: 'red', message: e.message }) }
   }
@@ -553,20 +355,23 @@ function EditModal({ ex, onClose, onSaved, onChange }: {
     setBusy(true)
     try {
       const updated = await api.post<Exercise>(`/api/indigo/exercises/${form.id}/figure/edit`, { crop, masks })
-      setForm(updated); setFigV((v) => v + 1); onChange(updated)
+      setForm(updated); setFigV((v) => v + 1); onChange(updated); onFamilyChanged()
       notifications.show({ color: 'green', message: masks.length
-        ? 'Cadrage et caches blancs appliqués à l’image'
-        : 'Nouveau cadrage appliqué à l’image' })
+        ? 'Cadrage et caches blancs appliqués aux trois dérivés'
+        : 'Nouveau cadrage appliqué aux trois dérivés' })
     } catch (e: any) { notifications.show({ color: 'red', message: e.message }) }
     finally { setBusy(false) }
   }
 
   const buildPatch = () => {
+    // le rattachement voyage avec le reste : le professeur corrige l'énoncé ET
+    // le range au même moment, en un seul enregistrement.
     const p: any = {
       statement: form.statement, response_type: form.response_type,
       correction_solution: form.correction_solution, correction_guide: form.correction_guide,
       badge_type: form.badge_type, difficulty: form.difficulty, calculator: form.calculator,
       title: form.title, tags: form.tags, bareme_points: form.bareme_points, expected: form.expected,
+      competency_id: form.competency_id,
     }
     // le barème est REPORTÉ dans chaque grading_json réécrit : l'omettre le
     // faisait disparaître de l'exercice à la première édition, qui repartait
@@ -601,6 +406,36 @@ function EditModal({ ex, onClose, onSaved, onChange }: {
   return (
     <Modal opened={!!ex} onClose={onClose} size="xl" title={<Text fw={700}>Modifier {form.ref}</Text>}>
       <Stack gap="sm">
+        {/* Ce que la passe de retouche n'a PAS su réparer : à traiter, pas
+            seulement à regarder. En tête de la modale, avant le reste. */}
+        {form.review_blocking?.length > 0 && (
+          <Alert color="red" variant="light" icon={<AlertTriangle size={16} />}
+            title={`${form.review_blocking.length} point(s) à corriger avant de valider`}>
+            <Stack gap={2}>
+              {form.review_blocking.map((n, i) => <Text key={i} size="xs">• {n}</Text>)}
+            </Stack>
+          </Alert>
+        )}
+        {/* Ce que la génération n'a pas su régler seule. Ce ne sont pas des
+            erreurs certaines : c'est ce qu'il faut REGARDER avant de valider. */}
+        {form.review_notes?.length > 0 && (
+          <Alert color="yellow" variant="light" icon={<AlertTriangle size={16} />}
+            title={`${form.review_notes.length} point(s) à relire`}>
+            <Stack gap={2}>
+              {form.review_notes.map((n, i) => <Text key={i} size="xs">• {n}</Text>)}
+            </Stack>
+          </Alert>
+        )}
+        {/* Rattachement manuel : la sortie de secours d'un exercice mal rangé.
+            Sans elle, il ne restait qu'à le supprimer et tout réextraire. */}
+        <Select label="Compétence" searchable
+          description={form.competency_confirmed === false
+            ? 'Rattachement non confirmé : vérifie-le avant de valider.'
+            : undefined}
+          error={form.competency_confirmed === false ? ' ' : undefined}
+          data={comps.map((c) => ({ value: c.id, label: `${c.short_id || c.code} — ${c.label}` }))}
+          value={form.competency_id}
+          onChange={(v) => v && setForm({ ...form, competency_id: v, competency_confirmed: true })} />
         <Group grow>
           <Select label="Type de réponse" data={RESPONSE_TYPES} value={form.response_type}
             onChange={(v) => setForm({ ...form, response_type: v || 'short_text' })} />
@@ -1070,15 +905,21 @@ export default function Exercices() {
   const [pub, setPub] = useState<PublishState | null>(null)
   const [publishing, setPublishing] = useState(false)
   const [exporting, setExporting] = useState(false)
+  const [packBusy, setPackBusy] = useState(false)
   const [confirmDeleteAll, setConfirmDeleteAll] = useState(false)   // modale « Tout supprimer »
   const [deletingAll, setDeletingAll] = useState(false)
-  const [provider, setProvider] = useState('anthropic')            // fournisseur LLM / mode de génération
-  const [providerOffline, setProviderOffline] = useState(false)
+  const [providerOffline, setProviderOffline] = useState(false)    // clé DeepSeek Flash absente
+  const [offpeak, setOffpeak] = useState<OffPeak | null>(null)     // Cheap and Wait
   const [coverage, setCoverage] = useState<IndexCoverage | null>(null)  // index du manuel
   const [indexing, setIndexing] = useState(false)
   const [selMode, setSelMode] = useState(false)                    // mode sélection (régénérer)
   const [selIds, setSelIds] = useState<Set<string>>(new Set())
   const [regenerating, setRegenerating] = useState(false)
+  // Mode multipass : l'extraction Vision découvre elle-même numéros et
+  // compétences. Deux bornes de pages élève remplacent donc l'ancien assistant.
+  const [visionPageStart, setVisionPageStart] = useState('')
+  const [visionPageEnd, setVisionPageEnd] = useState('')
+  const [visionBusy, setVisionBusy] = useState(false)
 
   const isAll = grade === 'all'
   const loadSummary = useCallback(() => {
@@ -1104,17 +945,34 @@ export default function Exercices() {
   useEffect(() => {
     if (isAll) { setSummary(null); return }
     setSelected(null); setExercises(null)
+    setVisionPageStart(''); setVisionPageEnd('')
     api.get<Manuals>(`/api/indigo/manuals?grade_level=${grade}`).then(setManuals)
     api.get<{ competencies: Comp[] }>(`/api/indigo/competencies?grade_level=${grade}`).then((r) => setComps(r.competencies))
     loadSummary(); loadExtractions(); loadPub(); loadCoverage()
   }, [grade, isAll, loadSummary, loadExtractions, loadPub, loadCoverage])
 
   useEffect(() => {   // fournisseur LLM global (indépendant de la classe)
+    // Plus de sélecteur : cette page force le mode multipass au chargement si
+    // le réglage serveur pointait encore vers un autre fournisseur (anthropic/
+    // deepseek/qcm), sans notification — ce n'est pas un geste de l'admin.
     api.get<{ provider: string; offline: boolean }>('/api/indigo/llm-provider')
-      .then((r) => { setProvider(r.provider); setProviderOffline(r.offline) }).catch(() => { /* silencieux */ })
+      .then((r) => {
+        if (r.provider === MULTIPASS) { setProviderOffline(r.offline); return }
+        return api.post<{ provider: string; offline: boolean }>(
+          '/api/indigo/llm-provider', { provider: MULTIPASS })
+          .then((r2) => setProviderOffline(r2.offline))
+      }).catch(() => { /* silencieux */ })
+    api.get<OffPeak>('/api/indigo/offpeak').then(setOffpeak).catch(() => { /* silencieux */ })
   }, [])
 
-  const active = extractions.some((e) => e.status === 'pending' || e.status === 'running')
+  const active = extractions.some((e) => ['pending', 'running', 'cancelling'].includes(e.status))
+  // Jobs créés mais dont les appels DeepSeek patientent le tarif creux
+  // (Cheap and Wait) — repérés au marqueur posé par indigo_offpeak pendant
+  // l'attente (§ WAITING_MARK).
+  const waitingExtractions = useMemo(
+    () => extractions.filter((e) => e.status === 'running'
+      && e.progress_message.startsWith(WAITING_MARK)),
+    [extractions])
   useEffect(() => {
     if (!active) return
     const t = setInterval(() => {
@@ -1123,6 +981,9 @@ export default function Exercices() {
     }, 2500)
     return () => clearInterval(t)
   }, [active, selected, loadExtractions, loadSummary, loadExercises, loadCoverage])
+
+  // Une ligne par famille (cf. utils/families) : facile, base, difficile.
+  const exerciseRows = useMemo(() => familyRows(exercises), [exercises])
 
   const openComp = (r: SummaryRow) => {
     setSelected(r); setExercises(null); setSelMode(false); setSelIds(new Set())
@@ -1154,6 +1015,15 @@ export default function Exercices() {
     setExtractions((xs) => xs.filter((e) => e.id !== id))
     try { await api.post(`/api/indigo/extractions/${id}/dismiss`) } catch { /* déjà retiré à l'écran */ }
   }
+  const cancelExtraction = async (id: string) => {
+    // "pending" s'arrête net (statut "cancelled") ; "running" repasse par
+    // "cancelling" — le worker le relit entre deux cibles/pages (cf.
+    // services.indigo._ExtractionCancelled), donc pas instantané.
+    try {
+      const r = await api.post<Extraction>(`/api/indigo/extractions/${id}/cancel`)
+      setExtractions((xs) => xs.map((e) => e.id === id ? r : e))
+    } catch (e: any) { notifications.show({ color: 'red', message: e.message }) }
+  }
   const onDelete = async (id: string) => {
     await api.del(`/api/indigo/exercises/${id}`)
     // la suppression désenregistre aussi l'exercice de la banque publiée côté
@@ -1172,20 +1042,14 @@ export default function Exercices() {
     } catch (e: any) { notifications.show({ color: 'red', message: e.message }) }
     finally { setDeletingAll(false); setConfirmDeleteAll(false) }
   }
-  const onProviderChange = async (value: string) => {
-    const prev = provider
-    setProvider(value)   // optimiste
-    try {
-      const r = await api.post<{ provider: string; offline: boolean }>('/api/indigo/llm-provider', { provider: value })
-      setProvider(r.provider); setProviderOffline(r.offline)
-      const name = PROVIDER_NAME[r.provider] ?? r.provider
-      notifications.show({
-        color: r.offline ? 'orange' : 'green',
-        message: r.offline
-          ? `Mode : ${name} — ⚠ clé absente, les prochaines extractions seront en repli OCR brut`
-          : `Mode de génération : ${name}`,
-      })
-    } catch (e: any) { setProvider(prev); notifications.show({ color: 'red', message: e.message }) }
+  // Le réglage est relu par le serveur À CHAQUE tour d'attente : décocher la
+  // case pendant qu'une extraction patiente en heures pleines la libère en
+  // moins d'une minute, sans rien redémarrer.
+  const saveOffpeak = async (patch: Partial<Omit<OffPeak, 'open_now' | 'next_open'>>) => {
+    const prev = offpeak
+    if (offpeak) setOffpeak({ ...offpeak, ...patch })   // optimiste
+    try { setOffpeak(await api.post<OffPeak>('/api/indigo/offpeak', patch)) }
+    catch (e: any) { setOffpeak(prev); notifications.show({ color: 'red', message: e.message }) }
   }
   const buildIndex = async () => {
     setIndexing(true)
@@ -1199,6 +1063,28 @@ export default function Exercices() {
       loadExtractions()
     } catch (e: any) { notifications.show({ color: 'red', message: e.message }) }
     finally { setIndexing(false) }
+  }
+  const visionPageOk = (value: string) => {
+    if (!/^\d+$/.test(value.trim())) return false
+    const page = Number(value)
+    return page >= 1 && page <= (manuals?.manuals.eleve.pages ?? 0)
+  }
+  const visionRangeOk = visionPageOk(visionPageStart) && visionPageOk(visionPageEnd)
+  const launchVision = async () => {
+    if (!visionRangeOk) return
+    setVisionBusy(true)
+    try {
+      const a = Number(visionPageStart); const b = Number(visionPageEnd)
+      await api.post('/api/indigo/extractions/vision', {
+        grade_level: grade, page_start: Math.min(a, b), page_end: Math.max(a, b),
+      })
+      notifications.show({
+        color: 'indigo',
+        message: `Extraction Vision lancée sur les pages ${Math.min(a, b)} à ${Math.max(a, b)}`,
+      })
+      loadExtractions()
+    } catch (e: any) { notifications.show({ color: 'red', message: e.message }) }
+    finally { setVisionBusy(false) }
   }
   const validatedCount = useMemo(() => {
     const rows = summary ?? []
@@ -1241,11 +1127,57 @@ export default function Exercices() {
     finally { setExporting(false) }
   }
 
+  // ---- pack de travail : le pont entre la machine qui a les manuels et
+  // l'instance qui fabrique. Les PDF (203 Mo, sous droits) ne sont livrés dans
+  // aucune image ; le pack porte l'index déjà payé + les pages rendues, tout ce
+  // dont la fabrication a besoin.
+  const loadManuals = useCallback(() => {
+    api.get<Manuals>(`/api/indigo/manuals?grade_level=${grade}`).then(setManuals)
+  }, [grade])
+  const exportPack = async () => {
+    setPackBusy(true)
+    notifications.show({
+      id: 'pack-export', loading: true, autoClose: false, withCloseButton: false,
+      message: 'Rendu des pages du manuel… (~90 Mo, une trentaine de secondes)',
+    })
+    try {
+      await download(`/api/indigo/pack/export?grade_level=${grade}`, `indigo-pack-${grade}.zip`)
+      notifications.update({
+        id: 'pack-export', loading: false, autoClose: 12000, color: 'green',
+        message: 'Pack téléchargé. Sur l\'instance qui fabrique : onglet Exercices → '
+          + '« Importer le pack ». Elle pourra alors créer des exercices sans les PDF.',
+      })
+    } catch (e: any) {
+      notifications.update({ id: 'pack-export', loading: false, color: 'red', message: e.message })
+    } finally { setPackBusy(false) }
+  }
+  // `file` absent = archive déposée à la main sur le volume (indigo-pack.zip) :
+  // le seul recours quand ~90 Mo ne passent pas par le navigateur.
+  const importPack = async (file: File | null) => {
+    setPackBusy(true)
+    let body: FormData | undefined
+    if (file) { body = new FormData(); body.append('file', file) }
+    try {
+      const r = await api.post<{ pages: number; index: { eleve: number; prof: number } }>(
+        `/api/indigo/pack/import?grade_level=${grade}`, body)
+      loadManuals(); loadCoverage()
+      notifications.show({
+        color: 'green', autoClose: 12000,
+        message: `Pack installé : ${r.pages} page(s) de manuel et l'index `
+          + `(${r.index.eleve} pages élève, ${r.index.prof} pages prof). `
+          + 'Tu peux lancer une extraction — aucune plage à saisir, aucun OCR à repayer.',
+      })
+    } catch (e: any) { notifications.show({ color: 'red', autoClose: 12000, message: e.message }) }
+    finally { setPackBusy(false) }
+  }
+
   if (isAll) {
     return <GradeSelectionRequired title="Exercices" />
   }
 
   const eleveOk = manuals?.manuals.eleve.available
+  const pack = manuals?.pack
+  const hasPdf = manuals?.manuals.eleve.pdf
 
   return (
     <Stack>
@@ -1273,34 +1205,80 @@ export default function Exercices() {
               <Text size="xs" c="orange">{pub.seeded} en banque ⚠ {pub.published} figé(s) · {validatedCount} validé(s)</Text>
             </Tooltip>
           )}
-          <Tooltip label={
-            'Mode de génération. Anthropic / DeepSeek : adaptation libre (10 formats de réponse), '
-            + 'barème estimé par le modèle, relecture LLM. QCM only : uniquement QCM à choix '
-            + 'unique, QCM multiple et grille à cocher — tous corrigés par vision par ordinateur, '
-            + 'barème CODÉ (1 pt par choix unique, 0,5 pt par case), vérification mathématique '
-            + 'Python, et un dérivé facile + un dérivé difficile par exercice.'
-            + (providerOffline ? ' ⚠ Clé du fournisseur choisi absente : repli OCR brut.' : '')}>
-            <SegmentedControl size="xs" value={provider} onChange={onProviderChange}
-              color={providerOffline ? 'orange' : 'blue'}
-              data={[{ label: 'Anthropic', value: 'anthropic' },
-                     { label: 'DeepSeek', value: 'deepseek' },
-                     { label: 'QCM only', value: 'qcm' }]} />
+          <Tooltip multiline w={420} label={
+            'Mode de génération : QCM multipass. Extraction directe des pages par '
+            + 'DeepSeek Vision, puis QCM à choix unique, QCM multiple et grille à '
+            + 'cocher — tous corrigés par vision par ordinateur — par lots de deux '
+            + 'sources et SIX passes (filtre, contexte, génération, résolution '
+            + 'indépendante, mise en page, retouche). La passe contexte juge d\'abord si '
+            + 'l\'énoncé seul suffit, sinon si le corrigé du prof (retrouvé dans l\'index) '
+            + 'comble ce qu\'une figure emporte seule, sinon si le contexte pédagogique '
+            + 'suffit encore à INVENTER un exercice fidèle à cet esprit — la source n\'est '
+            + 'écartée qu\'en dernier recours, quand rien de fiable ne s\'en dégage. '
+            + 'Un guide de 30 mots par exercice, et le duo Base/Facile part en BROUILLON. '
+            + 'Un exercice « Expert » du manuel tient lieu de dérivé Difficile. Aucun '
+            + 'exercice n\'est renvoyé en génération : la passe 5 répare sur place ce que '
+            + 'les contrôles reprochent, et signale d\'un badge rouge ce qu\'elle n\'a pas '
+            + 'su réparer.'
+            + (providerOffline ? ' ⚠ Clé DeepSeek Flash absente.' : '')}>
+            <Badge size="lg" variant="light" color={providerOffline ? 'orange' : 'blue'}>
+              QCM multipass
+            </Badge>
           </Tooltip>
           <ActionIcon variant="light" onClick={() => { loadSummary(); loadExtractions(); loadCoverage(); if (selected) loadExercises(selected.competency_id) }}><RefreshCw size={16} /></ActionIcon>
           <Tooltip label={
-            coverage
-              ? `Index du manuel : ${coverage.eleve.indexed}/${coverage.eleve.total} page(s) élève, `
-                + `${coverage.prof.indexed}/${coverage.prof.total} page(s) prof. Une fois indexé, `
-                + `l'assistant n'a plus besoin d'aucune plage — et l'OCR n'est jamais repayé.`
-              : "Lit le manuel une fois pour en déduire les pages et les numéros d'exercices "
-                + 'de chaque compétence. Reprend là où il s\'est arrêté.'}>
+            !hasPdf
+              ? 'Indexer demande les PDF des manuels, absents de cette instance. '
+                + 'Inutile ici : le pack de travail importé porte déjà l\'index.'
+              : coverage
+                ? `Index du manuel : ${coverage.eleve.indexed}/${coverage.eleve.total} page(s) élève, `
+                  + `${coverage.prof.indexed}/${coverage.prof.total} page(s) prof. Une fois indexé, `
+                  + `l'assistant n'a plus besoin d'aucune plage — et l'OCR n'est jamais repayé.`
+                : "Lit le manuel une fois pour en déduire les pages et les numéros d'exercices "
+                  + 'de chaque compétence. Reprend là où il s\'est arrêté.'}>
             <Button variant="light" color="indigo" leftSection={<BookOpen size={16} />}
-              loading={indexing} disabled={!eleveOk} onClick={buildIndex}>
+              loading={indexing} disabled={!hasPdf} onClick={buildIndex}>
               Indexer{coverage?.eleve.total
                 ? ` (${Math.round(100 * coverage.eleve.indexed / coverage.eleve.total)} %)`
                 : ''}
             </Button>
           </Tooltip>
+          {hasPdf ? (
+            <Tooltip label={"Archive à porter sur l'instance qui fabrique les exercices : "
+              + "l'index déjà payé + toutes les pages du manuel élève rendues. Elle pourra "
+              + 'alors créer, corriger et publier des exercices sans jamais avoir les PDF '
+              + '(~90 Mo). À refaire seulement si le manuel change.'}>
+              <Button variant="light" color="grape" leftSection={<Package size={16} />}
+                loading={packBusy} disabled={!coverage?.eleve.total
+                  || coverage.eleve.indexed < coverage.eleve.total}
+                onClick={exportPack}>Exporter le pack</Button>
+            </Tooltip>
+          ) : (
+            <Group gap={4}>
+              <FileButton accept="application/zip,.zip" onChange={(f) => { if (f) importPack(f) }}>
+                {(props) => (
+                  <Tooltip label={pack?.pack
+                    ? `Pack installé : ${pack.pack.pages_present} page(s) de manuel, index `
+                      + `${pack.index.eleve}/${pack.index.prof}. Réimporte pour le remplacer.`
+                    : "Installe le pack exporté depuis l'instance qui porte les manuels : "
+                      + "index + pages. C'est ce qui rend cette instance capable de fabriquer."}>
+                    <Button {...props} variant={pack?.pack ? 'subtle' : 'filled'} color="grape"
+                      leftSection={<PackagePlus size={16} />} loading={packBusy}>
+                      {pack?.pack ? 'Pack installé' : 'Importer le pack'}
+                    </Button>
+                  </Tooltip>
+                )}
+              </FileButton>
+              <Tooltip label={'Archive trop grosse pour le navigateur ? Dépose-la sur le '
+                + 'volume sous « indigo-pack.zip » (à la racine de /data, soit '
+                + 'volumes/data/ sur un NAS), puis clique ici.'}>
+                <ActionIcon variant="light" color="grape" size="lg" loading={packBusy}
+                  onClick={() => importPack(null)} aria-label="Importer depuis le volume">
+                  <HardDrive size={16} />
+                </ActionIcon>
+              </Tooltip>
+            </Group>
+          )}
           <Tooltip label={"Fige les exercices validés sur cette instance (volume persistant : "
             + 'ils survivent aux mises à jour) et les sème en banque.'}>
             <Button variant="light" color="teal" leftSection={<UploadCloud size={16} />}
@@ -1314,36 +1292,128 @@ export default function Exercices() {
               Exporter pour le dépôt
             </Button>
           </Tooltip>
-          <Button leftSection={<Wand2 size={16} />} disabled={!eleveOk} onClick={() => setAssistant(true)}>Nouvelle extraction</Button>
         </Group>
       </Group>
 
+      <Paper withBorder p="sm" radius="md">
+        <Group justify="space-between" align="flex-end">
+          <Box>
+            <Text fw={650}>Pages du manuel élève à extraire</Text>
+            <Text size="xs" c="dimmed">
+              DeepSeek Vision lit tous les exercices, leur titre de compétence rose et les crops de figures.
+            </Text>
+            {offpeak && (
+              <Group gap={6} mt={6}>
+                <Tooltip multiline w={360} label={
+                  'Coché : les extractions sont créées immédiatement et mises EN ATTENTE ; '
+                  + 'les appels DeepSeek ne partent qu\'aux heures creuses du fournisseur — '
+                  + 'jamais 01h-04h ni 06h-10h UTC en semaine (tarif plein). Un appel commencé '
+                  + 'va toujours à son terme — c\'est le suivant qui attend la prochaine '
+                  + 'fenêtre creuse. Décocher libère la file en moins d\'une minute.'}>
+                  <Checkbox size="xs" checked={offpeak.enabled} label="Cheap and Wait"
+                    onChange={(e) => saveOffpeak({ enabled: e.currentTarget.checked })} />
+                </Tooltip>
+                {offpeak.enabled && (
+                  <Badge size="xs" variant="light" color={offpeak.open_now ? 'teal' : 'orange'}
+                    leftSection={<Clock size={11} />}>
+                    {offpeak.open_now ? 'tarif creux' : `reprend à ${fmtLocalTime(offpeak.next_open)}`}
+                  </Badge>
+                )}
+              </Group>
+            )}
+          </Box>
+          <Group align="flex-start">
+            <TextInput label="Première page" placeholder="34" w={130} inputMode="numeric"
+              value={visionPageStart}
+              error={visionPageStart && !visionPageOk(visionPageStart) ? `1–${manuals?.manuals.eleve.pages ?? 0}` : undefined}
+              onChange={(e) => setVisionPageStart(e.currentTarget.value)} />
+            <TextInput label="Dernière page" placeholder="40" w={130} inputMode="numeric"
+              value={visionPageEnd}
+              error={visionPageEnd && !visionPageOk(visionPageEnd) ? `1–${manuals?.manuals.eleve.pages ?? 0}` : undefined}
+              onChange={(e) => setVisionPageEnd(e.currentTarget.value)} />
+            <Button mt={25} leftSection={<Wand2 size={16} />} loading={visionBusy}
+              disabled={!eleveOk || providerOffline || !visionRangeOk}
+              onClick={launchVision}>Extraire ces pages</Button>
+          </Group>
+        </Group>
+        {offpeak?.enabled && waitingExtractions.length > 0 && (
+          <Stack gap={4} mt="sm" pt="sm" style={{ borderTop: '1px solid var(--mantine-color-default-border)' }}>
+            <Text size="xs" fw={600} c="dimmed">
+              File d'attente Cheap and Wait — envoyée à {fmtLocalTime(offpeak.next_open)}
+            </Text>
+            {waitingExtractions.map((e) => (
+              <Group key={e.id} gap={6} wrap="nowrap">
+                <Clock size={13} color="var(--mantine-color-orange-6)" />
+                <Text size="xs" c="dimmed">{extractionLabel(e)}</Text>
+              </Group>
+            ))}
+          </Stack>
+        )}
+      </Paper>
+
       {manuals && !eleveOk && (
-        <Alert color="orange" icon={<AlertTriangle size={16} />}>
-          Manuel élève {grade} introuvable sur cette instance. Les manuels sont sous
-          droits et trop volumineux pour le dépôt : ils ne sont jamais livrés dans l'image,
-          il faut les déposer sur la machine. Sur un NAS (Docker), dans le volume :{' '}
-          <code>volumes/data/manuals/</code> à côté du <code>docker-compose.yml</code>.
-          En développement, dans <code>context/</code>. Les noms de fichiers doivent être
-          exactement ceux attendus (<code>{grade === '3e' ? '3_indigo.pdf' : `${grade[0]}_indigo.pdf`}</code>{' '}
-          et la variante <code>_prof</code>).
+        <Alert color="orange" icon={<AlertTriangle size={16} />}
+          title={`Aucune source de pages pour le manuel ${grade} sur cette instance`}>
+          <Stack gap={6}>
+            <Text size="sm">
+              Les manuels sont sous droits et trop volumineux pour le dépôt : ils ne sont
+              livrés dans <b>aucune</b> image. Deux façons d'équiper cette instance —
+              la première suffit, et ne demande aucun PDF :
+            </Text>
+            <Text size="sm">
+              <b>1. Importer le pack de travail</b> (recommandé) — sur la machine qui a les
+              manuels, onglet Exercices → <b>Exporter le pack</b> ; ici →{' '}
+              <b>Importer le pack</b>. Le pack contient l'index (OCR déjà payé) et toutes
+              les pages du manuel : extraction, découpe, couleurs des badges et figures
+              fonctionnent à l'identique. Archive trop grosse pour le navigateur ? Dépose-la
+              sur le volume sous <code>indigo-pack.zip</code>, puis clique sur Importer sans
+              choisir de fichier.
+            </Text>
+            <Text size="sm">
+              <b>2. Déposer les PDF</b> — sur un NAS (Docker), dans le volume{' '}
+              <code>volumes/data/manuals/</code> à côté du <code>docker-compose.yml</code> ;
+              en développement, dans <code>context/</code>. Noms exacts attendus :{' '}
+              <code>{grade === '3e' ? '3_indigo.pdf' : `${grade[0]}_indigo.pdf`}</code> et la
+              variante <code>_prof</code>. C'est la seule voie qui permet aussi d'indexer.
+            </Text>
+          </Stack>
         </Alert>
       )}
 
-      {extractions.filter((e) => ['pending', 'running', 'failed'].includes(e.status)).slice(0, 3).map((e) => (
-        <Alert key={e.id} color={e.status === 'failed' ? 'red' : 'indigo'}
-          icon={e.status === 'failed' ? <AlertTriangle size={16} /> : <Loader size={14} />}
-          // une extraction en échec peut être fermée (croix) : le bandeau ne
-          // revient pas au rechargement (ex. échec réseau, API hors ligne)
-          withCloseButton={e.status === 'failed'} closeButtonLabel="Masquer"
-          onClose={() => dismissExtraction(e.id)}>
-          <Group justify="space-between">
-            <Text size="sm">{e.status === 'failed' ? `Échec : ${e.error_message}` : e.progress_message || 'Extraction en cours…'}</Text>
-            {e.status !== 'failed' && <Text size="xs" c="dimmed">{e.progress}%</Text>}
-          </Group>
-          {e.status !== 'failed' && <Progress value={e.progress} size="sm" mt={4} />}
-        </Alert>
-      ))}
+      {extractions.filter((e) => ['pending', 'running', 'cancelling', 'cancelled', 'failed'].includes(e.status)).slice(0, 3).map((e) => {
+        const done = e.status === 'failed' || e.status === 'cancelled'
+        const stoppable = e.status === 'pending' || e.status === 'running'
+        // marqué par indigo_offpeak.wait_until_open : en file d'attente Cheap
+        // and Wait, aucun appel DeepSeek en cours — distinct d'un job actif.
+        const waiting = e.status === 'running' && e.progress_message.startsWith(WAITING_MARK)
+        return (
+          <Alert key={e.id} color={e.status === 'failed' ? 'red' : waiting ? 'orange' : done ? 'gray' : 'indigo'}
+            icon={e.status === 'failed' ? <AlertTriangle size={16} /> : waiting ? <Clock size={14} /> : <Loader size={14} />}
+            // une extraction terminée (échec ou arrêtée) peut être fermée (croix) :
+            // le bandeau ne revient pas au rechargement (ex. échec réseau, API hors ligne)
+            withCloseButton={done} closeButtonLabel="Masquer"
+            onClose={() => dismissExtraction(e.id)}>
+            <Group justify="space-between">
+              <Text size="sm">
+                {e.status === 'failed' ? `Échec : ${e.error_message}`
+                  : e.status === 'cancelled' ? 'Arrêtée par l\'utilisateur'
+                  : e.status === 'cancelling' ? 'Arrêt en cours…'
+                  : e.progress_message || 'Extraction en cours…'}
+              </Text>
+              <Group gap={8}>
+                {!done && <Text size="xs" c="dimmed">{e.progress}%</Text>}
+                {stoppable && (
+                  <Button size="xs" variant="subtle" color="red" leftSection={<Square size={12} />}
+                    onClick={() => cancelExtraction(e.id)}>
+                    Stopper
+                  </Button>
+                )}
+              </Group>
+            </Group>
+            {!done && <Progress value={e.progress} size="sm" mt={4} />}
+          </Alert>
+        )
+      })}
 
       {/* vue TABLE (aucune compétence sélectionnée) */}
       {!selected && summary === null && <Loader />}
@@ -1393,14 +1463,20 @@ export default function Exercices() {
           {exercises && exercises.length === 0 && (
             <Text c="dimmed" size="sm">Aucun exercice. Lance une extraction pour cette compétence.</Text>
           )}
+          {/* Une LIGNE par famille : facile à gauche, base au milieu, difficile à
+              droite. Les trois dérivés d'un même exercice source se relisent
+              alors côte à côte — c'est la comparaison qui dit si l'étayage du
+              facile et l'exigence du difficile tiennent la route. */}
           <Box style={{
             display: 'grid', gridTemplateColumns: 'repeat(3, minmax(280px, 1fr))',
             alignItems: 'start', gap: 'var(--mantine-spacing-md)',
           }}>
-            {exercises?.map((ex) => (
+            {exerciseRows.flatMap((row, r) => row.map((ex, c) => (ex ? (
               <ExerciseCard key={ex.id} ex={ex} onEdit={setEditing} onChange={onChange} onDelete={onDelete}
                 selectable={selMode} selected={selIds.has(ex.id)} onToggleSelect={toggleSel} />
-            ))}
+            ) : (
+              <Box key={`${r}-${c}`} aria-hidden />
+            ))))}
           </Box>
         </>
       )}
@@ -1409,7 +1485,8 @@ export default function Exercices() {
         <ExtractionAssistant opened={assistant} onClose={() => setAssistant(false)} comps={comps}
           manuals={manuals} grade={grade} coverage={coverage} onLaunched={loadExtractions} />
       )}
-      <EditModal ex={editing} onClose={() => setEditing(null)} onChange={onChange}
+      <EditModal ex={editing} comps={comps} onClose={() => setEditing(null)} onChange={onChange}
+        onFamilyChanged={() => { if (selected) loadExercises(selected.competency_id) }}
         onSaved={(e) => { onChange(e); setEditing(null) }} />
 
       <Modal opened={confirmDeleteAll} onClose={() => setConfirmDeleteAll(false)}

@@ -1,0 +1,49 @@
+# PASSE 2 — GÉNÉRER FIDÈLEMENT
+
+Pour une classe de collège §GRADE§ et §COMPETENCY§, convertis la `source` en QCM §NIVEAUX§. Fidélité
+prioritaire :
+- Base garde la situation, les données, la figure et CHAQUE entrée de
+  `taches_source` ; ne simplifie ni n'ajoute rien — MÊME niveau que la source,
+  transpose seulement la réponse en cases.
+- Facile étaye réellement chaque tâche, pour un élève EN DIFFICULTÉ — pas
+  seulement les mêmes nombres entourés d'indices. Ajoute une courte aide dans
+  l'énoncé pour un passage difficile (« Aide : … »), et réduis le nombre de
+  sous-questions si la source en compte plus de 4.
+- Une tâche source = une `question` de composite ou une ligne de grille.
+
+Si `source.contexte_invention` est présent, la passe CONTEXTE a jugé que ni
+l'énoncé ni le corrigé du professeur ne suffisent : INVENTE un exercice fidèle
+à ce contexte (type de problème, données déjà sûres), sans prétendre reproduire
+une figure ou des valeurs qu'aucune source fiable ne te donne. HORS de ce cas,
+ne change ni situation, ni données, ni figure — la fidélité reste la règle.
+
+Formats : `qcm_single` (3–5 choix, un juste), `qcm_multiple` (3–8, plusieurs
+justes, pas tous), `checkbox_grid` (2–10 lignes, 2–4 colonnes), ou `composite`
+(contexte + 2–8 `questions` de ces trois types). Distracteurs faux, distincts,
+plausibles.
+
+Les choix/colonnes font partie de l'énoncé : ne les recopie pas dans
+`statement`, et n'y donne jamais la bonne réponse, même autrement formulée.
+Français impératif, LaTeX `$...$`, aucun renvoi au manuel, numéro ou corrigé —
+`source.corrige_prof`, quand il est présent, t'INFORME, il ne se recopie jamais.
+
+Avec `source.has_figure`, les variantes s'appuient sur cette même figure sans
+en changer un nom, un nombre ni une position ; `source.figure` sert à
+résoudre, ses valeurs ne se recopient pas dans `statement`. Sans figure,
+l'exercice se suffit à lui-même : recopie tableau ou série DANS `statement`
+(Markdown pour un tableau), sans renvoyer à un visuel absent.
+
+Chaque variante a un `guide` exact couvrant toutes ses tâches (maximum
+§MAX_WORDS§ mots), sans réponse ni piste fausse. À chaque question, ajoute un
+`check` SymPy ASCII :
+- nombre : `{"kind":"value","expr":str,"choice":int}`, où `choice` est l'indice
+  (à partir de 0) de la bonne case et vaut EXACTEMENT l'unique entrée de
+  `correct`;
+- vérité par choix : `{"kind":"set","exprs":[str]}`;
+- vérité par ligne d'une grille binaire : `{"kind":"rows","exprs":[str]}`;
+- catégorie, nom, jour ou contrôle non calculable : `{"kind":"none"}`.
+Dans `exprs`, l'entrée i teste réellement le choix/ligne i : `Eq(6,7)` pour le
+choix « 6 » si le résultat vaut 7. Chaque chaîne est booléenne, jamais `6` seul.
+Moyenne/médiane : `mean([1,2,3])`, `median([1,2,3])`.
+
+§SCHEMA§

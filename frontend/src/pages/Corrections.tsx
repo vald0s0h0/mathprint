@@ -31,6 +31,9 @@ type Batch = {
   class_name: string; class_id: string | null; grade_level: string
   overlay_printed: boolean; overlay_distributed: boolean
   error: string | null; pending_reviews: number; pending_ocr: number; pending_llm: number
+  // élèves jamais revenus à la finalisation (jamais pénalisés, cf. services
+  // .pipeline.finalize_batch) — le prof doit savoir combien manquent sur ce sujet
+  absent_count: number
   ocr_threshold: number
   segments: Segment[]; created_at: string
 }
@@ -1011,6 +1014,13 @@ export default function Corrections() {
                         <Group gap="md">
                           <SegmentBar segments={b.segments} />
                           <Text size="xs" c="dimmed">{b.page_count} page(s)</Text>
+                          {b.absent_count > 0 && (
+                            <Tooltip label="Élève(s) sans copie à la finalisation — jamais pénalisé(s)">
+                              <Badge size="sm" variant="light" color="gray">
+                                {b.absent_count} absent{b.absent_count > 1 ? 's' : ''}
+                              </Badge>
+                            </Tooltip>
+                          )}
                         </Group>
                       )}
                       {b.error && (

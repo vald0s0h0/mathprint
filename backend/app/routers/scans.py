@@ -14,8 +14,9 @@ from ..config import settings
 from ..db import SessionLocal, get_db
 from ..deps import current_user
 from ..models import (
-    Assessment, Copy, CopyItem, GradingDecision, ManualReview, OcrAttempt,
-    ResponseZone, ScanBatch, SchoolClass, Student, StudentResponse, User,
+    Assessment, Copy, CopyItem, DocumentPage, GradingDecision, ManualReview,
+    OcrAttempt, ResponseZone, ScanBatch, ScannedPage, SchoolClass, Student,
+    StudentResponse, User,
 )
 from ..services import grading
 from ..services import providers
@@ -242,7 +243,7 @@ def _awaiting_scan_rows(db: Session) -> list[dict]:
             "class_name": cls.name if cls else "?", "class_id": cls.id if cls else None,
             "grade_level": cls.grade_level if cls else "", "page_count": 0,
             "error": None, "pending_reviews": 0, "pending_ocr": 0,
-            "pending_llm": 0,
+            "pending_llm": 0, "absent_count": 0,
             "ocr_threshold": ocr_confidence_threshold(db), "segments": [],
             "overlay_printed": False, "overlay_distributed": False,
             "created_at": str(a.created_at),
@@ -340,6 +341,13 @@ def _batch_view(db: Session, b: ScanBatch) -> dict:
                                b.error, b.overlay_printed)
     assessment = db.get(Assessment, b.assessment_id)
     cls = db.get(SchoolClass, assessment.class_id) if assessment else None
+    # Absents = copies jamais revenues à la finalisation (services.pipeline
+    # .finalize_batch les bascule en "absent", jamais pénalisées) + celles
+    # marquées à la main par le professeur avant. Le prof doit savoir combien
+    # d'élèves manquent sur CE sujet corrigé, pas seulement dans le carnet de notes.
+    absent_count = (db.query(Copy).filter_by(assessment_id=b.assessment_id,
+                                             status="absent").count()
+                    if assessment else 0)
     return {"id": b.id, "assessment_id": b.assessment_id, "status": b.status,
             "assessment_title": assessment.title if assessment else "?",
             "assessment_type": assessment.type if assessment else "training",
@@ -351,7 +359,7 @@ def _batch_view(db: Session, b: ScanBatch) -> dict:
             "grade_level": cls.grade_level if cls else "",
             "page_count": b.page_count, "error": b.error,
             "pending_reviews": pending, "pending_ocr": pending_ocr,
-            "pending_llm": pending_llm,
+            "pending_llm": pending_llm, "absent_count": absent_count,
             "ocr_threshold": ocr_confidence_threshold(db), "segments": segments,
             "overlay_printed": b.overlay_printed, "overlay_distributed": b.overlay_distributed,
             "created_at": str(b.created_at)}
@@ -1209,3 +1217,145 @@ def update_batch_flags(batch_id: str, body: BatchFlagsIn, db: Session = Depends(
         b.overlay_distributed = body.overlay_distributed
     db.commit()
     return _batch_view(db, b)
+
+
+# --------------------------------------------------- résolution des scans bloqués
+#
+# Une page dont le QR/les fiduciels sont illisibles garde sa PLACE dans le flux
+# (overlay « Non identifié », cf. services.pipeline.build_overlays) afin de ne
+# jamais décaler les copies physiques suivantes lors de la réimpression des
+# overlays — mais elle reste sans élève tant que le professeur ne la résout
+# pas. Les DOUBLONS (page déjà lue par ailleurs dans le lot) ne sont jamais
+# remontés ici : aucune information perdue, rien à décider.
+
+@router.get("/problems")
+def list_scan_problems(db: Session = Depends(get_db)):
+    """Pages scannées jamais identifiées, toujours en attente d'une décision du
+    professeur — alimente la modale globale (démarrage de l'app + dès qu'un
+    problème apparaît)."""
+    rows = (db.query(ScannedPage)
+            .filter(ScannedPage.status == "blocked", ScannedPage.dismissed.is_(False),
+                    ScannedPage.manual_page_id.is_(None))
+            .order_by(ScannedPage.batch_id, ScannedPage.source_index).all())
+    out = []
+    for sp in rows:
+        batch = db.get(ScanBatch, sp.batch_id)
+        if not batch:
+            continue
+        assessment = db.get(Assessment, batch.assessment_id)
+        cls = db.get(SchoolClass, assessment.class_id) if assessment else None
+        out.append({
+            "id": sp.id, "batch_id": batch.id, "source_index": sp.source_index,
+            "assessment_id": batch.assessment_id,
+            "assessment_title": assessment.title if assessment else "?",
+            "class_id": assessment.class_id if assessment else None,
+            "class_name": cls.name if cls else "?",
+            "warnings": (sp.quality_json or {}).get("warnings") or [],
+            "image": f"/api/scans/scanned-pages/{sp.id}/image",
+        })
+    return out
+
+
+@router.get("/scanned-pages/{scanned_page_id}/image")
+def scanned_page_image(scanned_page_id: str, db: Session = Depends(get_db)):
+    """Aperçu brut d'une page scannée (indexé par POSITION, sans identité) —
+    la SEULE façon pour le professeur de reconnaître à l'œil une page bloquée."""
+    sp = db.get(ScannedPage, scanned_page_id)
+    if not sp:
+        raise HTTPException(404)
+    batch = db.get(ScanBatch, sp.batch_id)
+    if not batch:
+        raise HTTPException(404)
+    path = (settings.data_dir / "assessments" / batch.assessment_id / "scans"
+            / "derived" / f"source-{sp.source_index}.png")
+    if not path.exists():
+        raise HTTPException(404, "Aperçu indisponible")
+    return FileResponse(path, media_type="image/png")
+
+
+class ScanProblemResolveIn(BaseModel):
+    action: str                      # link | dismiss
+    assessment_id: str | None = None
+    student_id: str | None = None
+    page_no: int = 1
+
+
+def _schedule_reprocess(tasks: BackgroundTasks, batch: ScanBatch) -> None:
+    """Reprend un lot après résolution d'une page bloquée : régénère seulement
+    les copies corrigées si le lot était déjà finalisé (résultats acquis),
+    sinon relance la pipeline complète — idempotente, elle ne refait pas ce qui
+    est déjà noté (cf. `retry_batch`)."""
+    if "finalized" in (batch.progress_json or {}):
+        tasks.add_task(_run_build_overlays, batch.id)
+    else:
+        tasks.add_task(_run_pipeline, batch.id)
+
+
+@router.post("/scanned-pages/{scanned_page_id}/resolve")
+def resolve_scan_problem(scanned_page_id: str, body: ScanProblemResolveIn,
+                         tasks: BackgroundTasks, db: Session = Depends(get_db),
+                         user: User = Depends(current_user)):
+    sp = db.get(ScannedPage, scanned_page_id)
+    if (not sp or sp.status != "blocked" or sp.dismissed or sp.manual_page_id):
+        raise HTTPException(404, "Page à résoudre introuvable (déjà traitée ?)")
+    batch = db.get(ScanBatch, sp.batch_id)
+    if not batch:
+        raise HTTPException(404)
+
+    if body.action == "dismiss":
+        # Le professeur affirme que cette page n'a jamais été une vraie copie
+        # (mauvais feuillet, page blanche happée par l'ADF...) : elle sort du
+        # flux, l'invariant de position ne l'attend plus (cf. build_overlays).
+        sp.dismissed = True
+        db.commit()
+        _schedule_reprocess(tasks, batch)
+        return {"ok": True}
+
+    if body.action != "link":
+        raise HTTPException(422, "action inconnue")
+    if not body.assessment_id or not body.student_id:
+        raise HTTPException(422, "sujet et élève requis")
+
+    copy = (db.query(Copy).filter_by(assessment_id=body.assessment_id,
+                                     student_id=body.student_id).first())
+    if not copy:
+        raise HTTPException(404, "Aucune copie pour cet élève sur ce sujet")
+    dp = (db.query(DocumentPage).filter_by(copy_id=copy.id, page_no=body.page_no or 1)
+          .order_by(DocumentPage.side).first())
+    if not dp:
+        raise HTTPException(404, "Page introuvable pour cette copie")
+
+    if body.assessment_id == batch.assessment_id:
+        # Le sujet du lot était le bon : il ne manquait que l'élève.
+        sp.manual_page_id = dp.id
+        db.commit()
+        _schedule_reprocess(tasks, batch)
+        return {"ok": True}
+
+    # Le professeur corrige aussi le SUJET : cette page a atterri dans le
+    # mauvais lot (dépôt en vrac mélangeant plusieurs sujets, cf.
+    # services.sandbox). `process_batch` n'indexe que les pages du sujet de SON
+    # propre lot : on relocalise donc l'image dans le bon lot plutôt que de
+    # forcer une identité qu'il ne pourrait jamais reconnaître, et on retire
+    # cette place du lot d'origine (elle n'y a jamais vraiment appartenu).
+    from ..services import scan_intake, worker_cv
+
+    src_path = (settings.data_dir / "assessments" / batch.assessment_id / "scans"
+                / "derived" / f"source-{sp.source_index}.png")
+    if not src_path.exists():
+        raise HTTPException(404, "Aperçu de la page indisponible")
+    import cv2
+
+    img = cv2.imread(str(src_path))
+    target_batch = scan_intake.get_or_create_batch(db, body.assessment_id, user.id)
+    target_pdf = (settings.data_dir / "assessments" / body.assessment_id / "scans"
+                  / "original" / f"{target_batch.id}.pdf")
+    new_index = len(worker_cv.raster_any(str(target_pdf))) if target_pdf.exists() else 0
+    scan_intake.append_pages(db, target_batch, body.assessment_id, [img])
+    db.add(ScannedPage(batch_id=target_batch.id, source_index=new_index,
+                       manual_page_id=dp.id, status="blocked"))
+    sp.dismissed = True
+    db.commit()
+    _schedule_reprocess(tasks, batch)
+    _schedule_reprocess(tasks, target_batch)
+    return {"ok": True}

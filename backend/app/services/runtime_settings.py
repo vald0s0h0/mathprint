@@ -68,7 +68,10 @@ DEFAULT_TEMPLATES: dict = {
     },
     "exercise": {
         "font_size": 9,         # texte de l'énoncé
-        "math_size": 12,        # expression mathématique centrée
+        "math_size": 9,         # expression mathématique (centrée ou inline) —
+                                 # même corps que le texte : une formule ne doit
+                                 # pas trancher visuellement avec l'énoncé qui
+                                 # l'entoure
         "border": "#C7CDD4",    # cadre de la carte
         "radius": 2.2,          # rayon des coins (mm)
         "shadow": True,

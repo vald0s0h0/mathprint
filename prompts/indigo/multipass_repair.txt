@@ -1,0 +1,65 @@
+# PASSE 5 — RETOUCHER
+
+Les deux exercices §GRADE§ (§COMPETENCY§) que tu reçois sont déjà écrits,
+résolus et mis en page, et la plupart sont justes. Tu les RETOUCHES : il n'y
+aura pas de nouvelle génération. Un exercice que tu ne peux pas retoucher, tu le
+SIGNALES — tu ne le remplaces pas, tu ne le vides pas, tu ne le rends pas plus
+pauvre que tu ne l'as reçu.
+
+Ne change ni la situation, ni les données, ni le nombre de questions, ni le
+nombre de lignes d'une grille : `taches_source` reste couvert entrée par entrée.
+
+Quatre retouches, dans cet ordre.
+
+1. RETIRE L'INDICE DE TROP. La bonne réponse ne s'écrit pas dans l'énoncé, ne s'y
+   calcule pas, et ne se déduit pas d'un exemple qui refait la question. « Un
+   article à 80 € baisse de 20 %, soit 16 € de remise. Quelle est la remise ? »
+   ne demande plus rien : garde la donnée nécessaire, retire le résultat. Une
+   donnée du contexte n'est PAS un indice : un tableau d'effectifs, une série,
+   une valeur lue sur un graphique restent, même quand la bonne case est l'un de
+   ces nombres. Le guide donne une piste ou rappelle la méthode, jamais le
+   résultat, et reste sous §MAX_WORDS§ mots.
+   `indices_soupconnes` liste les endroits où une proposition, ou la bonne
+   réponse, apparaît déjà dans l'énoncé. Ce ne sont que des SOUPÇONS, et c'est à
+   toi de trancher : retire ce qui donne la réponse, garde ce qui sert à la
+   calculer.
+
+2. REND LISIBLE. Une phrase par idée, la question à la fin, le vocabulaire de la
+   classe. Nomme ce que l'énoncé désignait par « ci-dessus », « le tableau
+   précédent », « cet exercice ». Répare le LaTeX `$...$`, l'orthographe et la
+   ponctuation. N'ajoute ni consigne d'habillage (« Réponds aux questions
+   suivantes ») ni titre : la mise en page vient d'en retirer. Et si le contexte
+   n'est QUE cela — aucune donnée, aucune indication de ce qu'il faut chercher —
+   vide-le : les questions se suffisent, et l'élève lit une ligne de moins.
+
+3. CORRIGE CE QUI EST SIGNALÉ. `defauts` liste ce que les contrôles automatiques
+   reprochent, exercice par exercice. Chacun se règle sur place : un distracteur
+   qui vaut la bonne réponse se remplace, deux propositions identiques se
+   distinguent, un guide trop long se raccourcit, une réponse hors des cases se
+   rattache. Corrige ces points-là et laisse le reste tel quel.
+
+4. TRANCHE LES DÉSACCORDS. `desaccords_detectes` compare la génération et
+   `resolution_independante`. Refais toi-même le calcul : change `correct` (ou
+   `rows[].correct`) seulement si TON calcul contredit la génération. Le solveur
+   se trompe aussi, et il ne voit aucune figure.
+
+SIGNALE le reste. Un exercice faux que tu ne sais pas réparer, une consigne
+incompréhensible, une figure indispensable dont la description ne dit rien :
+`gravite:"bloquant"`. Un doute, une maladresse qui reste : `gravite:"reserve"`.
+Rends quand même la variante, dans son meilleur état.
+
+Formats inchangés : `qcm_single` (3–5 choix, un juste), `qcm_multiple` (3–8,
+plusieurs justes, pas tous), `checkbox_grid` (2–10 lignes, 2–4 colonnes), ou
+`composite` (contexte + 2–8 `questions` de ces trois types). Les choix et les
+colonnes ne se recopient jamais dans l'énoncé. Français impératif, aucun renvoi
+au manuel, au numéro ni au corrigé. `{{figure}}` reste où il est. N'écris AUCUN
+champ `check` : il est reporté par la plateforme.
+
+JSON uniquement :
+{"exercices":{"facile":V,"base":V},
+"signalements":[{"niveau":"Facile"|"Base",
+"gravite":"bloquant"|"reserve","probleme":str}]}
+V simple : `response_type,statement,guide` + `choices,correct` ou
+`cols,rows:[{"label":str,"correct":int}]`.
+V composite : `response_type:"composite",statement,guide,questions`; chaque
+question est une V simple sans guide.

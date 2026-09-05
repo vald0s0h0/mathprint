@@ -139,6 +139,39 @@ def test_prof_pages_are_restricted_to_the_right_chapter(db):
     assert targets[0]["prof_pages"] == [181]
 
 
+def test_the_running_header_carries_over_to_the_pages_that_lack_it(db):
+    """Le livre du professeur n'imprime son en-tête que sur UNE PAGE SUR DEUX
+    (133 pages sur 216 n'en portent aucune) : sans report de l'en-tête courant,
+    le filtre par chapitre ne s'appliquait qu'à la moitié du livre. Une page
+    muette du chapitre « Équations » passait donc pour n'importe quel chapitre,
+    et son corrigé n°16 pouvait devenir celui du n°16 des « Nombres entiers »."""
+    _a, b = _comps(db)
+    pages = _prof_pages()
+    # page 201 : même chapitre que 200 (« Équations »), mais sans en-tête —
+    # exactement la page de droite d'une double page du livre.
+    pages["201"] = {"source_page": 201, "dims": {"width": 1240, "height": 1754},
+                    "chapter": "", "numbers": [16, 17], "blocks": [
+                        _block("16 x = 9.", 60, 60), _block("17 x = 1.", 60, 160)]}
+    _write_index("3e", "eleve", _eleve_pages())
+    _write_index("3e", "prof", pages)
+    targets, _ = indigo_index.resolve_targets(db, "3e", [b.id])
+    assert targets[0]["prof_pages"] == [181], \
+        "la page muette héritait du chapitre de la page précédente, pas de tous"
+
+
+def test_a_chapter_absent_from_the_prof_manual_still_yields_corrections(db):
+    """Resserrer le filtre ne doit pas priver de corrigé une compétence dont le
+    libellé de chapitre ne figure nulle part côté professeur : mieux vaut les
+    numéros seuls (ancien comportement) que rien du tout."""
+    _a, b = _comps(db)
+    b.chapter_name = "Chapitre qui n'existe pas côté prof"
+    db.commit()
+    _write_index("3e", "eleve", _eleve_pages())
+    _write_index("3e", "prof", _prof_pages())
+    targets, _ = indigo_index.resolve_targets(db, "3e", [b.id])
+    assert targets[0]["prof_pages"], "aucun corrigé n'aurait été proposé"
+
+
 def test_targets_feed_the_pipeline_without_being_re_expanded(db):
     """Les listes de l'index l'emportent sur les plages : ré-étaler « 12-17 »
     ferait rentrer dans A1.1 des exercices d'une autre compétence."""

@@ -1,7 +1,7 @@
 """Indigo — orchestration de l'onglet Exercices (admin).
 
-Pipeline d'un run (`IndigoExtraction`) : pour chaque cible {compétence, pages
-élève, pages prof} choisie dans l'assistant :
+Pipeline classique d'un run (`IndigoExtraction`) : pour chaque cible {compétence,
+pages élève, pages prof} choisie dans l'assistant :
   1. OCR Mistral des pages élève et prof (mini-PDF réduit aux pages voulues) ;
   2. segmentation en exercices par les blocs-titres numérotés (repère commun :
      raster de la page à indigo_manual.RASTER_DPI) ;
@@ -11,6 +11,13 @@ Pipeline d'un run (`IndigoExtraction`) : pour chaque cible {compétence, pages
   6. DeepSeek pro (indigo_gemini) : mise au propre → 1 exercice app corrigeable,
      puis vérification finale (indigo_verify) contre la source ;
   7. écriture des lignes `IndigoExercise` en statut brouillon.
+
+Le mode QCM multipass prend une voie dédiée : deux bornes de pages élève,
+extraction structurée et crops par DeepSeek Vision, rattachement de compétence
+en passe 1, puis génération, résolution indépendante, mise en page et retouche.
+Aucun exercice n'y est renvoyé en génération : ce qui cloche se répare sur place
+et ce qui résiste part en brouillon avec son badge. Il n'utilise ni OCR Mistral,
+ni prédécoupage Gemini, ni manuel professeur.
 
 Le run tourne dans une file de fond dédiée (thread), l'UI interroge le statut.
 Les exercices VALIDÉS seront ensuite PUBLIÉS (bake) vers des fichiers
@@ -34,9 +41,10 @@ from ..config import _APP_DIR, settings
 from ..db import SessionLocal
 from ..models import (Competency, CompetencyFramework, GeneratedExercise,
                       IndigoExercise, IndigoExtraction, uid)
-from . import (exercise_gen, figures, indigo_cv, indigo_fields, indigo_gemini,
-               indigo_llm, indigo_manual, indigo_qcm, indigo_segment,
-               indigo_verify, providers, scoring)
+from . import (exercise_gen, figures, indigo_check, indigo_cv, indigo_fields,
+               indigo_gemini, indigo_llm, indigo_manual, indigo_multipass,
+               indigo_offpeak, indigo_qcm, indigo_segment, indigo_verify,
+               indigo_vision, providers, scoring)
 from . import statement as statement_mod
 
 logger = logging.getLogger("app.indigo")
@@ -119,13 +127,21 @@ _MARKER_SPLIT = re.compile(r"[,/;•·]|\s+|\bet\b")
 # `_fallback_figure_from_crop` rattache l'extrait COMPLET du manuel (déjà cropé
 # pour l'aperçu admin) plutôt que de publier un énoncé borgne — l'admin garde la
 # main pour le recadrer ou le supprimer (cf. nudge_figure/remove_figure).
-_FIGURE_REF_RE = re.compile(
-    r"(?i)\b(figure|sch[ée]ma|dessin|graphique|diagramme|courbe|"
-    r"ci[- ]contre|ci[- ]dessous)\b")
+# La règle elle-même vit dans services.indigo_check, qui l'applique aussi aux
+# énoncés produits (« tu parles d'une figure, il en faut une ») : une seule
+# définition des deux côtés, sinon elles divergent.
+_mentions_figure = indigo_check.mentions_figure
 
 
-def _mentions_figure(text: str) -> bool:
-    return bool(_FIGURE_REF_RE.search(text or ""))
+def _detach_figure(row: "IndigoExercise") -> None:
+    """Détache la figure d'une ligne : l'exercice ne s'appuie pas dessus.
+
+    Le fichier reste sur le disque (l'admin peut vouloir le revoir) ; seule la
+    ligne cesse d'y renvoyer. `figure_path` est vidé avec une CHAÎNE VIDE, pas
+    None : la colonne est NOT NULL, et un None y lève à l'écriture."""
+    row.has_figure = False
+    row.figure_path = ""
+    row.figure_box_json = None
 
 
 def _fallback_figure_from_crop(row: "IndigoExercise") -> None:
@@ -225,6 +241,15 @@ def _ocr_pages(db, doc, page_indices: list[int], tag: str, *,
             fresh = {e["source_page"]: e for e in
                      _ocr_pages(db, doc, missing, tag, use_index=False)}
             return [cached[i] or fresh[i] for i in page_indices if cached[i] or i in fresh]
+    # Repli OCR : il exige le PDF. Sur une instance qui travaille au PACK (pages
+    # rendues d'avance, cf. indigo_pack), il n'y a pas de PDF à découper — une
+    # page absente de l'index est donc définitivement absente, et le dire vaut
+    # mieux que planter dans build_mini_pdf sur un objet qui n'est pas un PDF.
+    if doc is None or getattr(doc, "raster_page", None) is not None:
+        raise RuntimeError(
+            f"Pages {[i + 1 for i in page_indices]} absentes de l'index et manuel "
+            f"indisponible sur cette instance : impossible de les lire. Réimporte "
+            f"un pack de travail complet, ou dépose les PDF des manuels.")
     pdf_bytes = indigo_manual.build_mini_pdf(doc, page_indices)
     data = providers.mistral_ocr(db, f"indigo_ocr_{tag}", pdf_bytes,
                                  len(page_indices), correlation_id=f"indigo-{tag}")
@@ -515,12 +540,21 @@ def _save_crop(raster: np.ndarray, box, dest_rel: str):
 # ------------------------------------------------------------------ pipeline
 
 def _process_target(db, doc_eleve, doc_prof, grade: str, target: dict,
-                    extraction_id: str, progress_cb) -> int:
+                    extraction_id: str, progress_cb, states: list | None = None) -> int:
     comp = db.get(Competency, target.get("competency_id"))
     if comp is None:
         logger.warning("Indigo : compétence %s introuvable, cible ignorée",
                        target.get("competency_id"))
         return 0
+    mode = indigo_llm.mode(db)
+    if mode == indigo_llm.MODE_MULTIPASS:
+        # HEURES CREUSES — le portillon est franchi ICI, avant le premier appel
+        # payant de la cible (OCR compris) : la cible entière attend l'ouverture
+        # plutôt que de dépenser la moitié de son budget hors plage. Les appels
+        # suivants repassent par le même portillon, exercice par exercice
+        # (§ _run_multipass), ce qui suffit à « ne pas commencer un nouvel appel »
+        # après la fermeture sans jamais couper celui qui tourne.
+        indigo_offpeak.wait_until_open(db, progress_cb=progress_cb)
     comps = _framework_competencies(db, comp)   # pour reconnaître les titres de compétence
     eleve_pages = [int(p) for p in target.get("eleve_pages") or []]
     prof_pages = [int(p) for p in target.get("prof_pages") or []]
@@ -530,9 +564,17 @@ def _process_target(db, doc_eleve, doc_prof, grade: str, target: dict,
     progress_cb(f"OCR élève ({comp.short_id or comp.code})…")
     eleve = _ocr_pages(db, doc_eleve, eleve_pages, f"eleve-{comp.code}",
                        grade=grade, which="eleve")
-    progress_cb(f"OCR prof ({comp.short_id or comp.code})…")
-    prof = (_ocr_pages(db, doc_prof, prof_pages, f"prof-{comp.code}",
-                       grade=grade, which="prof") if doc_prof else [])
+    progress_cb(f"Corrigés prof ({comp.short_id or comp.code})…")
+    # Les corrigés sont du TEXTE : ils vivent dans l'index, et se lisent donc
+    # même sans le PDF du prof (instance équipée d'un pack). Leur absence
+    # dégrade l'exercice, elle ne doit jamais faire échouer l'extraction.
+    try:
+        prof = _ocr_pages(db, doc_prof, prof_pages, f"prof-{comp.code}",
+                          grade=grade, which="prof") if prof_pages else []
+    except RuntimeError as e:
+        progress_cb(f"⚠ Corrigés du prof indisponibles ({e}) — les exercices "
+                    f"seront créés sans corrigé de référence.")
+        prof = []
 
     corrections = _collect_corrections(db, comp, grade, prof, expected, exp_set, progress_cb)
 
@@ -560,10 +602,15 @@ def _process_target(db, doc_eleve, doc_prof, grade: str, target: dict,
     # 2-4) génération + persistance, selon le MODE choisi dans l'onglet :
     #   • classique : adaptation libre (indigo_gemini) puis relecture (indigo_verify) ;
     #   • QCM only  : conversion en QCM vérifiés (indigo_qcm), un TRIO de lignes
-    #     par exercice source (base + dérivé facile + dérivé difficile).
+    #     par exercice source (base + dérivé facile + dérivé difficile) ;
+    #   • multipass : cinq passes DeepSeek Flash par exercice (indigo_multipass),
+    #     trio publié DÈS qu'il est prêt, source douteuse écartée.
     # Les deux rendent le même quadruplet, pour que le compte rendu de fin de
     # cible (ci-dessous) reste écrit UNE seule fois.
-    if indigo_llm.mode(db) == indigo_llm.MODE_QCM:
+    if mode == indigo_llm.MODE_MULTIPASS:
+        made, adapted_ok, stopped, errors = _run_multipass(
+            db, comp, grade, prepared, progress_cb, states)
+    elif mode == indigo_llm.MODE_QCM:
         made, adapted_ok, stopped, errors = _run_qcm(
             db, comp, grade, prepared, progress_cb)
     else:
@@ -576,7 +623,14 @@ def _process_target(db, doc_eleve, doc_prof, grade: str, target: dict,
     # manque UN (pas seulement quand il n'y en a aucun) : c'est l'absence de
     # cause sur un « 1/21 adapté(s) » qui a rendu l'incident A1.3 indéchiffrable.
     fallback = made - adapted_ok
-    if fallback and made:
+    if mode == indigo_llm.MODE_MULTIPASS:
+        # Le mode multipass ne fait PAS de repli OCR brut : une source douteuse
+        # est écartée (REJECTED_SOURCE), une génération qui n'aboutit pas est
+        # abandonnée (REJECTED_GENERATION). Son compte rendu est écrit par
+        # `_run_multipass`, qui seul connaît la répartition des états — le
+        # message générique ci-dessous parlerait de replis qui n'existent pas.
+        pass
+    elif fallback and made:
         prov = indigo_llm.label(db)
         if indigo_llm.offline(db):
             cause = f"clé {prov} absente/inactive (adaptation en mode hors-ligne)"
@@ -716,6 +770,331 @@ def _run_qcm(db, comp, grade, prepared, progress_cb) -> tuple[int, int, str, lis
     return made, adapted_ok, stopped, errors
 
 
+def _run_multipass(db, comp, grade, prepared, progress_cb,
+                   states: list | None = None) -> tuple[int, int, str, list[str]]:
+    """Mode « QCM multipass » : cinq passes DeepSeek Flash PAR exercice source.
+
+    Même contrat de retour que `_run_classic`, à une différence près qui compte :
+    `made == adapted_ok`. Il n'y a pas de repli OCR brut ici — mais il n'y a plus
+    non plus de source jetée pour imperfection : ce qui subsiste après les
+    tentatives part en BROUILLON avec ses réserves (§ indigo_multipass, état
+    NEEDS_REVIEW). Seule une famille dont pas une variante n'est exploitable ne
+    laisse rien derrière elle.
+
+    Rien n'est publié ici. La publication est un geste du professeur, après
+    relecture — cf. `_persist_multipass_family`.
+    """
+    made = 0
+    errors: list[str] = []
+    stopped = ""
+    existing_norms: set[str] = set()
+    tally: dict[str, int] = {}
+    short = comp.short_id or comp.code
+
+    def gate() -> None:
+        indigo_offpeak.wait_until_open(db, progress_cb=progress_cb)
+
+    for i, (row, manual) in enumerate(prepared, 1):
+        if stopped:
+            break
+        try:
+            family = indigo_multipass.run_family(
+                db, comp, grade, manual, existing_norms, gate=gate)
+        except providers.BudgetExceeded as e:
+            stopped = str(e)
+            errors.append(str(e))
+            break
+        tally[family.state] = tally.get(family.state, 0) + 1
+        if states is not None:
+            states.append({"competency": short, **family.as_dict()})
+        if family.kept:
+            rows = _persist_multipass_family(db, row, manual, family)
+            db.commit()
+            made += len(rows)
+            detail = (f", {family.attempts} tentative(s)" if family.attempts > 1 else "")
+            reserve = (" · à relire : " + family.notes[0][:110]) if family.notes else ""
+            progress_cb(f"{short} : {i}/{len(prepared)} — n°{family.number} → "
+                        f"{len(rows)} brouillon(s){detail}{reserve}")
+        else:
+            progress_cb(f"{short} : {i}/{len(prepared)} — n°{family.number} sans "
+                        f"variante exploitable ({family.state}) : {family.reason[:180]}")
+
+    kept = sum(tally.get(state, 0) for state in indigo_multipass.KEPT_STATES)
+    ecartes = [f"{n} {state}" for state, n in sorted(tally.items())
+               if state not in indigo_multipass.KEPT_STATES]
+    progress_cb(
+        f"{short} : {kept}/{len(prepared)} source(s) retenue(s) → {made} exercice(s) "
+        f"en brouillon"
+        + (" · écartées : " + " · ".join(ecartes) if ecartes else "")
+        + (f" · ⛔ ARRÊTÉ : {stopped}" if stopped else ""))
+    if stopped:
+        spent, cap = providers.budget_state(db, indigo_llm.config_provider_key(db))
+        progress_cb(f"⛔ {short} : génération multipass ARRÊTÉE — {stopped} "
+                    f"({spent:.2f} € dépensés sur 24 h, plafond {cap:.2f} €). Les "
+                    f"exercices restants n'ont PAS été créés : relance l'extraction "
+                    f"quand le plafond est reconduit, ou augmente "
+                    f"MATHPRINT_LLM_DAILY_COST_LIMIT_EUR.")
+    return made, made, stopped, errors
+
+
+def _run_multipass_vision(db, doc_eleve, grade: str, page_indices: list[int],
+                          extraction_id: str, progress_cb,
+                          states: list[dict]) -> int:
+    """Nouveau point d'entrée : pages élève → Vision → cinq passes.
+
+    Il n'existe plus de cible compétence/numéros à deviner. Vision découvre tous
+    les badges de la plage et lit le titre rose actif ; la passe 1 choisit ensuite
+    la compétence officielle. Chaque famille prête conserve la publication
+    immédiate de la pipeline historique.
+    """
+    fw = db.query(CompetencyFramework).filter_by(grade_level=grade).first()
+    if fw is None:
+        raise RuntimeError(f"Référentiel de compétences {grade} introuvable")
+    comps = (db.query(Competency).filter_by(framework_id=fw.id)
+             .order_by(Competency.order_index).all())
+    if not comps:
+        raise RuntimeError(f"Aucune compétence disponible pour la classe {grade}")
+
+    indigo_offpeak.wait_until_open(db, progress_cb=progress_cb)
+    extracted = indigo_vision.extract_pages(
+        db, doc_eleve, grade, page_indices, progress_cb=progress_cb)
+    progress_cb(f"Vision DeepSeek : {len(extracted)} exercice(s) complet(s) lu(s), "
+                "rattachement et génération multipasse…")
+
+    made = 0
+    # Les pages peuvent traverser plusieurs sections : dédoublonnage isolé par
+    # compétence, après le rattachement de la passe 1.
+    existing_norms: dict[str, set[str]] = {}
+
+    def gate() -> None:
+        indigo_offpeak.wait_until_open(db, progress_cb=progress_cb)
+
+    # Traités par LOT (§ settings.indigo_multipass_batch_size) : la passe 2 se
+    # partage entre les sources d'un même lot qui se rattachent à la même
+    # compétence (indigo_multipass.run_family_pair), les passes 1, contexte, 3,
+    # 4, 5 restant chacune une source à la fois. Un lot d'une seule source (le
+    # reliquat final, ou le réglage à 1) retombe sur exactement le même
+    # comportement qu'avant le 04/09.
+    #
+    # Le corrigé du manuel prof n'est PLUS cherché ici, sur un chapitre deviné
+    # avant tout rattachement réel : `indigo_multipass._resolve_family`
+    # (passe contexte, § 04/09 soir) le cherche lui-même, sur la compétence
+    # RÉELLEMENT résolue par la passe 1, et reçoit TOUS les candidats quand le
+    # chapitre en porte plusieurs — jamais un seul choisi à l'aveugle ici.
+    numbered = list(enumerate(extracted))
+    batch_size = max(1, int(settings.indigo_multipass_batch_size))
+    for start in range(0, len(numbered), batch_size):
+        chunk = numbered[start:start + batch_size]
+        manuals = [{
+            "number": str(ex.get("number") or ""),
+            "statement": str(ex.get("text") or "").strip(),
+            "has_figure": bool(ex.get("has_figure")),
+            "figure_description": str(ex.get("figure_description") or "").strip(),
+            "competency_title": str(ex.get("competency_title") or "").strip(),
+            "vision_extracted": True,
+        } for _order, ex in chunk]
+        families = indigo_multipass.run_family_pair(
+            db, comps, grade, manuals, existing_norms, gate=gate)
+
+        for (order, ex), family in zip(chunk, families):
+            def traced_state(ex=ex, family=family) -> dict:
+                """Diagnostic durable, y compris quand aucune ligne n'est persistée."""
+                return {**family.as_dict(), "source": {
+                    "page": int(ex.get("source_page") or 0) + 1,
+                    "number": str(ex.get("number") or ""),
+                    "competency_title": str(ex.get("competency_title") or ""),
+                    "statement": str(ex.get("text") or ""),
+                    "has_figure": bool(ex.get("has_figure")),
+                    "figure_description": str(ex.get("figure_description") or ""),
+                    "exercise_bbox": ex.get("exercise_bbox"),
+                    "figure_bbox": ex.get("figure_bbox"),
+                }}
+
+            page = int(ex.get("source_page") or 0) + 1
+            comp = db.get(Competency, family.competency_id) if family.competency_id else None
+            if comp is None:
+                # Rattachement impossible : on prend la première compétence de la
+                # classe et on marque l'exercice « à confirmer ». Il atterrit dans la
+                # liste du professeur, qui le range ; il ne disparaît pas.
+                comp = comps[0]
+                family.competency_id, family.competency_code = comp.id, comp.code
+                family.competency_confirmed = False
+                family.notes = list(family.notes) + [
+                    "compétence non déterminée : range cet exercice avant de le valider"]
+            try:
+                row, prepared_manual = _prepare_vision_exercise(
+                    doc_eleve, grade, comp, ex, extraction_id, order)
+                if family.kept:
+                    rows = _persist_multipass_family(db, row, prepared_manual, family)
+                else:
+                    # AUCUNE variante exploitable. La lecture Vision, elle, est
+                    # bonne : on écrit le brouillon de repli (énoncé source, réponse
+                    # à rédiger) plutôt que de perdre l'exercice. Le professeur voit
+                    # la source et écrit lui-même le QCM s'il le veut — c'est ce que
+                    # les tentatives n'ont pas su faire, pas une raison de tout jeter.
+                    rows = _persist_multipass_fallback(db, row, prepared_manual, family)
+                db.commit()
+                made += len(rows)
+            except Exception as exc:
+                db.rollback()
+                family.state = indigo_multipass.REJECTED_GENERATION
+                family.reason = f"préparation du crop Vision impossible : {exc}"
+                logger.exception("Indigo/Vision : n°%s non persisté", family.number)
+                states.append(traced_state())
+                continue
+            states.append(traced_state())
+            # AUCUNE PUBLICATION AUTOMATIQUE. Les lignes sont des brouillons : le
+            # professeur les relit, les valide, puis publie depuis l'onglet. Publier
+            # ici mettait des exercices jamais relus dans la banque de toutes les
+            # classes, et la seule façon de les en retirer était de les y retrouver.
+            detail = (" · à relire : " + family.notes[0][:110]
+                      if family.notes else "")
+            kind = "brouillon(s)" if family.kept else "brouillon de repli (source brute)"
+            progress_cb(f"Page {page}, n°{family.number} → {family.competency_code} : "
+                        f"{len(rows)} {kind}{detail}")
+    return made
+
+
+def _persist_multipass_fallback(db, row: IndigoExercise, manual: dict,
+                                family) -> list[IndigoExercise]:
+    """Brouillon de REPLI : l'exercice source, tel que Vision l'a lu.
+
+    Le mode refusait tout repli, au motif qu'un exercice moyen coûte plus cher
+    qu'un exercice absent. C'est vrai d'un exercice PUBLIÉ ; ça ne l'est pas d'un
+    brouillon. Un exercice du manuel correctement lu et que les cinq passes n'ont
+    pas su mettre en cases (« recopie et complète ce tableau », « vérifie à la
+    calculatrice ») reste un exercice que le professeur peut reprendre en deux
+    minutes — s'il le voit. Le supprimer ne lui fait pas gagner ces deux minutes,
+    ça lui fait perdre l'exercice."""
+    _persist_exercise(db, row, {**manual, "correction": ""}, None,
+                      allow_figure_fallback=False)
+    row.correction_solution = ""
+    row.prompt_version = indigo_multipass.PROMPT_VERSION
+    row.status = "draft"
+    row.validated_by = None
+    row.validated_at = None
+    row.raw_ocr_json = {
+        **(row.raw_ocr_json or {}),
+        "pipeline": "deepseek-v4-flash-vision-exp",
+        "competency_title": manual.get("competency_title") or "",
+        "figure_description": manual.get("figure_description") or "",
+        "review_state": family.state,
+        "competency_confirmed": bool(getattr(family, "competency_confirmed", True)),
+        "review_blocking": ["aucune variante QCM exploitable : l'énoncé source "
+                            "est là, le QCM reste à écrire à la main"],
+        "review_notes": list(family.notes or []),
+    }
+    row.updated_at = datetime.now(timezone.utc)
+    return [row]
+
+
+# Une source « expert » (badge CV, indigo_cv.DIFFICULTY_BY_TYPE) est déjà
+# l'exercice le plus dur du manuel : sa variante Base — MÊME niveau que la
+# source — tient donc lieu de dérivé DIFFICILE de la plateforme, et son
+# dérivé Facile généré (plus simple qu'un expert, mais pas plus qu'un
+# exercice ordinaire) devient une variante BASE. Les prompts de la passe 2
+# (services.indigo_multipass) ne savent rien de ce reclassement : ils
+# continuent de rendre exactement le même duo Base/Facile qu'un exercice
+# normal, seule l'ÉTIQUETTE change au moment d'écrire les lignes.
+_EXPERT_VARIANT_REMAP = {"base": "difficile", "facile": "base"}
+_VARIANT_LEVEL = {"facile": 1, "base": 2, "difficile": 3}
+
+
+def _multipass_variant_tag(kind: str, row: IndigoExercise) -> str:
+    """Le `variant_kind` réellement écrit pour une variante GÉNÉRÉE `kind`,
+    selon que la source est un exercice « expert » ou non (§ ci-dessus)."""
+    if row.badge_type == "expert":
+        return _EXPERT_VARIANT_REMAP[kind]
+    return kind
+
+
+def _persist_multipass_family(db, row: IndigoExercise, manual: dict,
+                              family) -> list[IndigoExercise]:
+    """Écrit les lignes d'une famille conservée, en BROUILLON. Les retourne.
+
+    Deux différences avec `_persist_qcm_trio`, toutes deux voulues :
+      • chaque variante porte SON guide (30 mots) — il n'est plus commun aux trois ;
+      • `correction_solution` reste VIDE : ce mode ne lit pas le manuel du
+        professeur et n'écrit aucun corrigé. Un placeholder « à compléter »
+        annoncerait du travail humain là où il n'y en a pas.
+
+    LE STATUT EST `draft`, comme partout ailleurs dans Indigo. Le mode se
+    validait lui-même, au motif qu'aucun de ses exercices ne devait avoir besoin
+    d'une correction humaine ; c'était se donner raison d'avance. Aucune
+    pipeline ne publie sous le nom du professeur sans qu'il ait regardé : la
+    validation puis la publication sont des gestes qu'il pose, et les réserves
+    de la famille (§ Family.notes) sont là pour l'aider à les poser vite.
+
+    LA FIGURE est tranchée AVANT la génération (§ indigo_multipass.run_family) :
+    `family.figure` dit si les trois exercices s'appuient dessus. Sinon on la
+    DÉTACHE — une figure isolée mais inutilisée s'imprimerait en décor à côté
+    d'un exercice réécrit, et le repli « à défaut de figure, l'extrait complet du
+    manuel » collerait carrément l'énoncé d'origine sur la carte."""
+    made: list[IndigoExercise] = []
+    now = datetime.now(timezone.utc)
+    if not family.figure:
+        _detach_figure(row)
+    # `row` est la ligne déjà préparée (crop, figure, badge) : elle doit être
+    # occupée par une variante, sinon elle resterait en base à demi remplie et
+    # les dérivés pointeraient un parent vide. C'est normalement la BASE ; quand
+    # le sauvetage n'a pas pu la garder, le PREMIER niveau conservé prend sa
+    # place — sans changer de nom ni de difficulté, il reste ce qu'il est.
+    principal = next((kind for kind, _ in family.variants if kind == "base"),
+                     family.variants[0][0] if family.variants else "base")
+    for kind, valid in family.variants:
+        target = row if kind == principal else _clone_for_variant(row, kind)
+        tag = _multipass_variant_tag(kind, row)
+        target.variant_kind = tag
+        target.difficulty = _VARIANT_LEVEL[tag]
+        target.derived_from_id = None if kind == principal else row.id
+        # `manual` sans corrigé : le mode ignore le manuel du professeur
+        _persist_exercise(db, target, {**manual, "correction": ""}, valid,
+                          allow_figure_fallback=False)
+        target.correction_solution = ""
+        target.prompt_version = indigo_multipass.PROMPT_VERSION
+        if manual.get("vision_extracted"):
+            target.raw_ocr_json = {
+                **(target.raw_ocr_json or {}),
+                "pipeline": "deepseek-v4-flash-vision-exp",
+                "competency_title": manual.get("competency_title") or "",
+                "figure_description": manual.get("figure_description") or "",
+            }
+        # Les réserves suivent CHAQUE ligne : c'est sur la carte de l'exercice
+        # que le professeur les lit, pas dans le journal d'extraction.
+        notes = list(getattr(family, "notes", []) or [])
+        # Un badge ROUGE doit désigner LA carte qu'il concerne. Les réserves de
+        # la famille nomment leur niveau (« Difficile : … ») : coller le défaut
+        # du niveau difficile sur la carte facile ferait douter d'un exercice
+        # sain, et un badge qu'on voit partout ne signale plus rien. Ce qui ne
+        # nomme aucun niveau vaut, lui, pour les trois.
+        blocking = [b for b in (getattr(family, "blocking", []) or [])
+                    if not (other := next(
+                        (lab for lab in indigo_multipass.VARIANT_LABEL.values()
+                         if b.startswith(f"{lab} :")), ""))
+                    or other == indigo_multipass.VARIANT_LABEL[kind]]
+        target.raw_ocr_json = {**(target.raw_ocr_json or {}),
+                               "review_notes": notes,
+                               # Ce que la passe 5 n'a PAS su réparer et juge
+                               # grave : l'onglet en fait un badge rouge, pour
+                               # que « à regarder » et « ne l'imprime pas tel
+                               # quel » ne se confondent pas dans le même jaune.
+                               "review_blocking": blocking,
+                               "review_state": family.state,
+                               "competency_confirmed": bool(
+                                   getattr(family, "competency_confirmed", True))}
+        # Un visuel réclamé mais absent est le travail de relecture le plus
+        # courant : on le remonte dans la colonne prévue pour ça, que l'onglet
+        # Exercices trie déjà (« figure requise, aucune image »).
+        if not row.has_figure:
+            target.figure_required = indigo_check.mentions_figure(target.statement)
+        target.status = "draft"
+        target.validated_by = None
+        target.validated_at = None
+        target.updated_at = now
+        made.append(target)
+    return made
+
+
 def _collect_exercises(db, comp, comps, grade, eleve, eleve_pages,
                        expected, exp_set, progress_cb) -> list[dict]:
     """Liste finale des exercices d'une cible, un par NUMÉRO. Deux sources se
@@ -752,6 +1131,40 @@ def _collect_exercises(db, comp, comps, grade, eleve, eleve_pages,
             out.append(_placeholder_exercise(num, clean, eleve_pages))
         else:
             logger.info("Indigo : n°%s absent des pages fournies (%s) — ignoré", num, comp.code)
+    return out
+
+
+def _corrections_for(grade: str, chapter_name: str, number: str) -> list[str]:
+    """TOUS les corrigés CANDIDATS du manuel PROF pour cet exercice, si
+    l'INDEX (déjà construit, § indigo_index.build) en porte — jamais un appel
+    OCR déclenché ici : lire l'index est gratuit (couche texte du manuel
+    prof), un OCR de secours ne l'est pas, et ce repérage tourne pour chaque
+    exercice de la pipeline Vision. `chapter_name` n'est qu'une aide :
+    `_prof_pages_for` retombe sur les seuls numéros s'il ne correspond à rien.
+
+    Rend une LISTE (jamais un seul candidat choisi ici, § révision du 04/09
+    soir) : un même chapitre du manuel prof peut contenir plusieurs lots
+    d'exercices qui repartent chacun à 1, et un même numéro peut donc y
+    apparaître plusieurs fois pour des exercices DIFFÉRENTS (mesuré : le n°36
+    de « Fonctions affines » existait en page 107 ET 118). Choisir lequel — ou
+    aucun — parle vraiment de CET exercice revient à `indigo_multipass.
+    _pass_context`, la seule passe outillée pour comparer le contenu au
+    corrigé ; en décider ici, à l'aveugle sur le premier trouvé, avait fait
+    rejeter à tort des sources qui s'en passaient très bien avant. Une absence
+    (index non construit, numéro hors plage) rend simplement une liste vide."""
+    from . import indigo_index
+    try:
+        num = int(str(number).strip())
+    except (TypeError, ValueError):
+        return []
+    out: list[str] = []
+    for idx in indigo_index._prof_pages_for(grade, chapter_name, {num}):
+        entry = indigo_index.page_entry(grade, "prof", idx)
+        if entry is None:
+            continue
+        found = _segment_corrections_by_numbers(entry, {num}).get(str(num))
+        if found:
+            out.append(found)
     return out
 
 
@@ -860,11 +1273,91 @@ def _prepare_exercise(doc_eleve, grade, comp, ex, corrections, extraction_id, or
     return row, manual
 
 
+def _prepare_vision_exercise(doc_eleve, grade, comp, ex, extraction_id, order):
+    """Construit la ligne et les crops depuis les coordonnées DeepSeek Vision.
+
+    Contrairement au chemin OCR historique, aucune bbox de bloc n'est reconstruite
+    et aucune photographie n'est supprimée : Vision a explicitement déclaré que
+    l'image appartient à l'exercice. Le crop de figure est celui demandé au modèle,
+    serré et exprimé dans le même repère raster que l'éditeur manuel.
+    """
+    ex_id = uid()
+    page_index = int(ex["source_page"])
+    row = IndigoExercise(
+        id=ex_id, extraction_id=extraction_id, competency_id=comp.id,
+        grade_level=grade, source_page=page_index,
+        source_number=str(ex.get("number") or ""), order_index=order,
+        badge_type="exercice", difficulty=2, calculator="autorisee",
+        title="", tags_json=[])
+
+    raster = indigo_manual.raster_page(doc_eleve, page_index)
+    rh, rw = raster.shape[:2]
+    crop_box = indigo_vision.pixel_box(ex.get("exercise_bbox"), rw, rh,
+                                       pad=CROP_PAD_PX)
+    if crop_box is None:
+        raise ValueError(f"crop d'exercice Vision invalide (n°{ex.get('number')})")
+    crop_rel = f"indigo/drafts/{ex_id}.png"
+    if not _save_crop(raster, crop_box, crop_rel):
+        raise ValueError(f"crop d'exercice Vision vide (n°{ex.get('number')})")
+    row.crop_path = crop_rel
+
+    number_box = indigo_vision.pixel_box(ex.get("number_bbox"), rw, rh)
+    row.crop_box_json = {
+        "page_index": page_index, "x0": crop_box[0], "y0": crop_box[1],
+        "x1": crop_box[2], "y1": crop_box[3],
+        "raster_dpi": indigo_manual.RASTER_DPI, "img_w": rw, "img_h": rh,
+        "number_box": list(number_box) if number_box else [],
+        "pipeline": "deepseek-vision",
+    }
+    local_num = None
+    if number_box:
+        local_num = {"x0": number_box[0] - crop_box[0],
+                     "y0": number_box[1] - crop_box[1],
+                     "x1": number_box[2] - crop_box[0],
+                     "y1": number_box[3] - crop_box[1]}
+    crop_img = raster[crop_box[1]:crop_box[3], crop_box[0]:crop_box[2]]
+    cv = indigo_cv.analyze(crop_img, False, number_box=local_num)
+    row.badge_type = cv["badge_type"]
+    row.difficulty = cv["difficulty"]
+    row.calculator = cv["calculator"]
+    row.badge_color_json = cv["color"] or {}
+
+    if ex.get("has_figure"):
+        figure_page = int(ex.get("figure_page", page_index))
+        figure_raster = indigo_manual.raster_page(doc_eleve, figure_page)
+        fh, fw = figure_raster.shape[:2]
+        figure_box = indigo_vision.pixel_box(ex.get("figure_bbox"), fw, fh,
+                                             pad=CROP_PAD_PX)
+        if figure_box is None:
+            raise ValueError(f"crop de figure Vision invalide (n°{ex.get('number')})")
+        fig_rel = f"indigo/drafts/{ex_id}_fig.png"
+        if not _save_crop(figure_raster, figure_box, fig_rel):
+            raise ValueError(f"crop de figure Vision vide (n°{ex.get('number')})")
+        row.has_figure = True
+        row.figure_path = fig_rel
+        row.figure_box_json = {
+            "page_index": figure_page, "x0": figure_box[0], "y0": figure_box[1],
+            "x1": figure_box[2], "y1": figure_box[3],
+        }
+
+    manual = {
+        "number": str(ex.get("number") or ""),
+        "statement": str(ex.get("text") or "").strip(),
+        "correction": "",
+        "has_figure": row.has_figure,
+        "figure_description": str(ex.get("figure_description") or "").strip(),
+        "competency_title": str(ex.get("competency_title") or "").strip(),
+        "vision_extracted": True,
+    }
+    return row, manual
+
+
 _GUIDE_TODO = "À compléter : guide d'auto-correction (règle utile + piège), à saisir."
 _SOLUTION_TODO = "À compléter : corrigé de référence à saisir."
 
 
-def _persist_exercise(db, row: IndigoExercise, manual: dict, valid: dict | None) -> None:
+def _persist_exercise(db, row: IndigoExercise, manual: dict, valid: dict | None, *,
+                      allow_figure_fallback: bool = True) -> None:
     """Remplit la ligne avec l'exercice adapté par Gemini (ou un repli si
     l'adaptation a échoué : on garde le crop + les métadonnées CV, l'admin
     saisira l'énoncé) puis l'ajoute en base.
@@ -875,7 +1368,13 @@ def _persist_exercise(db, row: IndigoExercise, manual: dict, valid: dict | None)
       • correction_guide = un COURT guide d'auto-correction élève. Il ne doit
         JAMAIS être le corrigé complet : si Gemini ne l'a pas produit (ou l'a
         recopié depuis la solution), on met un placeholder à compléter, PAS la
-        solution (cause du bug « guide copié depuis le corrigé »)."""
+        solution (cause du bug « guide copié depuis le corrigé »).
+
+    `allow_figure_fallback` : rattacher l'extrait COMPLET du manuel faute de
+    figure isolée (§ _fallback_figure_from_crop). Le mode « QCM multipass » le
+    coupe — il a déjà tranché AVANT de générer (figure isolée ou source écartée),
+    et coller l'image de l'exercice d'origine à côté d'un exercice RÉÉCRIT
+    imprimerait deux énoncés différents sur la même carte."""
     prof = (manual.get("correction") or "").strip()
     # couche « besoin de figure » — cf. commentaire au-dessus de _mentions_figure :
     # indice textuel sur l'énoncé BRUT, combiné (ci-dessous) au jugement Claude
@@ -889,7 +1388,7 @@ def _persist_exercise(db, row: IndigoExercise, manual: dict, valid: dict | None)
         row.correction_guide = _GUIDE_TODO      # jamais la solution
         row.raw_ocr_json = {"statement": manual["statement"],
                             "correction": manual["correction"], "adapted": False}
-        if row.figure_required and not row.has_figure:
+        if row.figure_required and not row.has_figure and allow_figure_fallback:
             _fallback_figure_from_crop(row)
         db.add(row)
         return
@@ -926,11 +1425,14 @@ def _persist_exercise(db, row: IndigoExercise, manual: dict, valid: dict | None)
     # jugement Claude (après réécriture) OU indice textuel (sur l'énoncé brut,
     # déjà posé ci-dessus) : le besoin est confirmé par L'UN OU L'AUTRE.
     row.figure_required = row.figure_required or bool(valid.get("needs_figure"))
-    if row.figure_required and not row.has_figure:
+    if row.figure_required and not row.has_figure and allow_figure_fallback:
         _fallback_figure_from_crop(row)
     # garde-fou de PLACEMENT de l'image : {{figure}} au début ou avant la 1re
     # question, jamais après (règle Indigo) — cf. statement.place_figure_marker.
-    statement = statement_mod.place_figure_marker(statement, row.has_figure)
+    # Sur un composite, les questions ne sont PAS dans ce texte : la figure va
+    # à la fin du contexte, c'est-à-dire juste avant la première sous-question.
+    statement = statement_mod.place_figure_marker(
+        statement, row.has_figure, at_end=row.response_type == "composite")
     row.statement = statement
     # contrat archivé : on y reporte l'énoncé et le barème APRÈS le moteur de
     # champs (ce sont eux qui seront rendus/publiés), pas la sortie brute de Gemini.
@@ -1015,6 +1517,7 @@ def _clone_for_variant(row: IndigoExercise, kind: str) -> IndigoExercise:
 # bannière de progression dans l'UI. Elle se reconnaît à sa cible unique, ce qui
 # évite d'ajouter une colonne (et donc une migration) pour un simple aiguillage.
 INDEX_TARGET = {"kind": "index"}
+VISION_TARGET_KIND = "multipass_vision"
 
 
 def is_index_run(extraction: IndigoExtraction) -> bool:
@@ -1022,11 +1525,23 @@ def is_index_run(extraction: IndigoExtraction) -> bool:
     return len(targets) == 1 and (targets[0] or {}).get("kind") == "index"
 
 
+def is_vision_run(extraction: IndigoExtraction) -> bool:
+    targets = extraction.targets_json or []
+    return (len(targets) == 1
+            and (targets[0] or {}).get("kind") == VISION_TARGET_KIND)
+
+
 def _run_index(db, extraction: IndigoExtraction) -> None:
     grade = extraction.grade_level
     log: list[str] = []
 
     def progress(msg: str, frac: float | None = None):
+        # relu à chaque appel (pas seulement `extraction.status` en mémoire) :
+        # le bouton Stop de l'onglet Exercices écrit "cancelling" depuis une
+        # AUTRE requête/session, invisible sans requalifier la ligne.
+        current = db.query(IndigoExtraction.status).filter_by(id=extraction.id).scalar()
+        if current == "cancelling":
+            raise _ExtractionCancelled()
         extraction.progress_message = msg
         if frac is not None:
             extraction.progress = int(max(0, min(100, frac * 100)))
@@ -1046,6 +1561,12 @@ def _run_index(db, extraction: IndigoExtraction) -> None:
     db.commit()
 
 
+class _ExtractionCancelled(Exception):
+    """Levée par `progress()` quand l'utilisateur a demandé l'arrêt (bouton
+    Stop de l'onglet Exercices) — interrompt _run_extraction proprement entre
+    deux cibles/pages plutôt que de tuer le thread (impossible en Python)."""
+
+
 def _run_extraction(db, extraction: IndigoExtraction) -> None:
     if is_index_run(extraction):
         _run_index(db, extraction)
@@ -1055,14 +1576,22 @@ def _run_extraction(db, extraction: IndigoExtraction) -> None:
     doc_prof = indigo_manual.open_doc(grade, "prof")
     if doc_eleve is None:
         raise RuntimeError(
-            f"Manuel élève {grade} introuvable — vérifie settings.indigo_manuals "
-            f"(le PDF reste local à l'instance admin, non livré dans l'image).")
+            f"Aucune source de pages pour le manuel élève {grade} sur cette "
+            f"instance : ni le PDF, ni un pack de travail. Importe le pack exporté "
+            f"depuis l'instance qui porte les manuels (onglet Exercices → Pack de "
+            f"travail), ou dépose les PDF dans <data>/manuals/.")
 
     targets = extraction.targets_json or []
     total = 0
     log: list[str] = []
 
     def progress(msg: str, frac: float | None = None):
+        # relu à chaque appel (pas seulement `extraction.status` en mémoire) :
+        # le bouton Stop de l'onglet Exercices écrit "cancelling" depuis une
+        # AUTRE requête/session, invisible sans requalifier la ligne.
+        current = db.query(IndigoExtraction.status).filter_by(id=extraction.id).scalar()
+        if current == "cancelling":
+            raise _ExtractionCancelled()
         extraction.progress_message = msg
         if frac is not None:
             extraction.progress = int(max(0, min(100, frac * 100)))
@@ -1071,18 +1600,37 @@ def _run_extraction(db, extraction: IndigoExtraction) -> None:
         extraction.log_text = "\n".join(log[-200:])
         db.commit()
 
+    vision_run = is_vision_run(extraction)
+    if vision_run:
+        # Le run reste DeepSeek Flash même si le sélecteur global a changé
+        # pendant son attente en file. Aucun repli OCR ne serait acceptable :
+        # sans Vision il n'existe tout simplement aucune source exploitable.
+        vision_provider = providers.provider_for_model(
+            settings.indigo_multipass_vision_model)
+        if providers.offline(db, vision_provider):
+            raise RuntimeError(
+                "Clé DeepSeek Flash absente : extraction Vision impossible")
+        spent, cap = providers.budget_state(db, vision_provider)
+        if spent >= cap:
+            raise providers.BudgetExceeded(
+                f"Budget {vision_provider} quotidien atteint "
+                f"({spent:.2f} € / {cap:.2f} €)")
+        if spent >= 0.75 * cap:
+            progress(f"⚠ Plafond DeepSeek bientôt atteint ({spent:.2f} € sur "
+                     f"24 h pour {cap:.2f} €) : l'extraction peut s'arrêter en cours.")
+
     # garde-fou visible : sans la clé du fournisseur CHOISI, les TROIS étapes LLM
     # (découpage, adaptation, vérification) tournent en repli hors-ligne et NE
     # PRODUISENT RIEN — tous les exercices seraient des replis OCR bruts (short_text,
     # guide/corrigé « à compléter »). On l'annonce dès le départ plutôt que de
     # livrer silencieusement des exercices dégradés.
-    if indigo_llm.offline(db):
+    if not vision_run and indigo_llm.offline(db):
         prov = indigo_llm.label(db)
         progress(f"⚠ Clé {prov} absente : l'adaptation des exercices "
                  "est HORS-LIGNE — les exercices seront en repli OCR brut, non "
                  "adaptés (ni QCM, ni cases par sous-question, guides/corrigés "
                  f"« à compléter »). Configure Paramètres → Fournisseurs → {prov}.")
-    else:
+    elif not vision_run:
         # même logique pour le PLAFOND DE DÉPENSE : le dire AVANT de lancer une
         # extraction qui finirait en replis OCR bruts (incident A1.3 du 02/08 —
         # 20 exercices « non adaptés », plafond atteint, aucun message).
@@ -1097,12 +1645,44 @@ def _run_extraction(db, extraction: IndigoExtraction) -> None:
                      f"pour {cap:.2f} €) : l'adaptation peut s'arrêter en cours "
                      f"d'extraction.")
 
+    if vision_run:
+        states: list[dict] = []
+        page_indices = [int(p) for p in (targets[0].get("eleve_pages") or [])]
+        total = _run_multipass_vision(
+            db, doc_eleve, grade, page_indices, extraction.id,
+            lambda message: progress(message), states)
+        tally: dict[str, int] = {}
+        for state in states:
+            name = str(state.get("state") or "")
+            tally[name] = tally.get(name, 0) + 1
+        extraction.stats_json = {
+            "exercises": total, "pages": len(page_indices),
+            "vision": {"model": settings.indigo_multipass_vision_model,
+                       "families": states, "states": tally},
+        }
+        extraction.status = "done"
+        extraction.progress = 100
+        extraction.progress_message = (
+            f"{total} exercice(s) publié(s) depuis {len(page_indices)} page(s)")
+        extraction.updated_at = datetime.now(timezone.utc)
+        db.commit()
+        return
+
+    # États par famille du mode multipass (QUEUED → READY / REJECTED_*). Ils vont
+    # dans stats_json plutôt que dans le journal : une ligne par exercice y
+    # noierait le compte rendu, alors qu'ici l'onglet peut les relire en entier.
+    states: list[dict] = []
     for i, target in enumerate(targets):
         progress(f"Cible {i + 1}/{len(targets)}…", i / max(1, len(targets)))
         total += _process_target(db, doc_eleve, doc_prof, grade, target,
-                                 extraction.id, lambda m: progress(m))
+                                 extraction.id, lambda m: progress(m), states)
 
     extraction.stats_json = {"exercises": total, "targets": len(targets)}
+    if states:
+        tally: dict[str, int] = {}
+        for st in states:
+            tally[st["state"]] = tally.get(st["state"], 0) + 1
+        extraction.stats_json["multipass"] = {"states": tally, "families": states}
     extraction.status = "done"
     extraction.progress = 100
     extraction.progress_message = f"{total} exercice(s) extrait(s)"
@@ -1130,10 +1710,29 @@ def _drain() -> None:
         while True:
             ext = (db.query(IndigoExtraction).filter_by(status="pending")
                    .order_by(IndigoExtraction.created_at).first())
-            if not ext or not _claim(db, ext):
+            if not ext:
+                break
+            try:
+                if not _claim(db, ext):
+                    break
+            except Exception:
+                # verrou DB en concurrence avec l'autre worker de fond
+                # (génération de sujet) : on relâche cette session et on
+                # laisse `_loop` retenter au prochain réveil plutôt que de
+                # planter `_drain` en silence (l'extraction restait "pending"
+                # pour toujours, rejouée en boucle sans jamais échouer proprement).
+                logger.exception("Indigo : impossible de réserver l'extraction %s", ext.id)
+                db.rollback()
                 break
             try:
                 _run_extraction(db, ext)
+            except _ExtractionCancelled:
+                db.rollback()
+                ext.status = "cancelled"
+                ext.error_message = "Extraction arrêtée par l'utilisateur"
+                ext.progress_message = "Arrêtée"
+                ext.updated_at = datetime.now(timezone.utc)
+                db.commit()
             except Exception as e:
                 logger.exception("Indigo : extraction %s échouée", ext.id)
                 db.rollback()
@@ -1177,12 +1776,12 @@ def resume_stuck(db) -> int:
 # ------------------------------------------------------------------- API publique
 
 def dismiss_extraction(db, ext: IndigoExtraction) -> IndigoExtraction:
-    """Masque le bandeau d'une extraction TERMINÉE ou EN ÉCHEC (ex. échec réseau
-    « ConnectError » quand les API sont coupées) : on la passe en statut
-    « dismissed », filtré à l'affichage. Aucune colonne ajoutée (le statut est
-    déjà une string) → pas de migration (cf. piège SQLite/Postgres). Les
-    exercices déjà créés par ce run ne sont pas touchés."""
-    if ext.status in ("failed", "done"):
+    """Masque le bandeau d'une extraction TERMINÉE, EN ÉCHEC ou ARRÊTÉE (ex.
+    échec réseau « ConnectError » quand les API sont coupées, ou Stop manuel) :
+    on la passe en statut « dismissed », filtré à l'affichage. Aucune colonne
+    ajoutée (le statut est déjà une string) → pas de migration (cf. piège
+    SQLite/Postgres). Les exercices déjà créés par ce run ne sont pas touchés."""
+    if ext.status in ("failed", "done", "cancelled"):
         ext.status = "dismissed"
         ext.updated_at = datetime.now(timezone.utc)
         db.commit()
@@ -1212,6 +1811,27 @@ def create_extraction(db, grade_level: str, targets: list[dict],
     # listes concrètes une bonne fois pour toutes → targets_json auto-suffisant
     norm = [normalize_target(t) for t in targets]
     ext = IndigoExtraction(grade_level=grade_level, targets_json=norm,
+                           status="pending", created_by=created_by)
+    db.add(ext)
+    db.commit()
+    _wake.set()
+    return ext
+
+
+def create_vision_extraction(db, grade_level: str, page_start: int, page_end: int,
+                             created_by: str | None = None) -> IndigoExtraction:
+    """Met en file une extraction Vision sur une plage élève 1-based inclusive."""
+    doc = indigo_manual.open_doc(grade_level, "eleve")
+    if doc is None:
+        raise ValueError(f"Manuel élève {grade_level} indisponible")
+    start, end = sorted((int(page_start), int(page_end)))
+    if start < 1 or end > doc.page_count:
+        raise ValueError(
+            f"Pages hors manuel : indique une plage entre 1 et {doc.page_count}")
+    pages = list(range(start - 1, end))
+    target = {"kind": VISION_TARGET_KIND, "eleve_page_start": start,
+              "eleve_page_end": end, "eleve_pages": pages}
+    ext = IndigoExtraction(grade_level=grade_level, targets_json=[target],
                            status="pending", created_by=created_by)
     db.add(ext)
     db.commit()
@@ -1252,6 +1872,17 @@ def exercise_out(db, ex: IndigoExercise) -> dict:
         # cf. _mentions_figure) : si vrai ET has_figure faux, aucune image n'a pu
         # être rattachée (ni OCR ni repli) — à traiter en priorité par l'admin.
         "figure_required": ex.figure_required,
+        # Réserves de relecture posées par le mode « QCM multipass » : ce que les
+        # portes reprochent encore à l'exercice conservé. Une liste vide veut
+        # dire « rien à signaler », pas « pas encore contrôlé ».
+        "review_notes": list((ex.raw_ocr_json or {}).get("review_notes") or []),
+        # Sous-ensemble GRAVE des réserves : ce que la passe de retouche n'a pas
+        # su réparer (réponse fausse, consigne incompréhensible, figure
+        # indispensable et muette). À traiter avant de valider l'exercice.
+        "review_blocking": list((ex.raw_ocr_json or {}).get("review_blocking") or []),
+        # Rattachement à la compétence non confirmé : exercice à ranger.
+        "competency_confirmed": bool(
+            (ex.raw_ocr_json or {}).get("competency_confirmed", True)),
         # normalisé à l'affichage : rattrape les exercices créés avant les fixes
         # de rédaction (blank dé-wrappé, sauts de ligne a./b./c.)
         "statement": statement_mod.normalize(ex.statement),
@@ -1316,7 +1947,12 @@ def list_exercises(db, competency_id: str | None = None,
 
 _EDITABLE = {"statement", "response_type", "expected_json", "grading_json",
              "correction_solution", "correction_guide", "badge_type", "difficulty",
-             "calculator", "title", "tags_json"}
+             "calculator", "title", "tags_json",
+             # rattachement manuel : c'est la sortie de secours des exercices
+             # dont la compétence n'a pas pu être confirmée (§ indigo_multipass
+             # ._resolve_competency). Sans elle, un exercice mal rangé ne
+             # pouvait qu'être supprimé puis réextrait.
+             "competency_id"}
 
 
 def update_exercise(db, ex: IndigoExercise, patch: dict) -> IndigoExercise:
@@ -1334,6 +1970,15 @@ def update_exercise(db, ex: IndigoExercise, patch: dict) -> IndigoExercise:
             ex.tags_json = v or []
         elif k == "statement":
             ex.statement = statement_mod.normalize(str(v or ""))
+        elif k == "competency_id":
+            # Rattachement manuel : il fait AUTORITÉ. Une compétence choisie par
+            # le professeur est confirmée par définition, la réserve tombe.
+            target = db.get(Competency, str(v or ""))
+            if target is None:
+                raise ValueError(f"Compétence inconnue : {v!r}")
+            ex.competency_id = target.id
+            ex.raw_ocr_json = {**(ex.raw_ocr_json or {}),
+                               "competency_confirmed": True}
         elif k in _EDITABLE:
             setattr(ex, k, v)
     # même garantie de champ de réponse qu'à la génération (cf. indigo_fields) :
@@ -1349,6 +1994,62 @@ def update_exercise(db, ex: IndigoExercise, patch: dict) -> IndigoExercise:
     ex.updated_at = datetime.now(timezone.utc)
     db.commit()
     return ex
+
+
+# --------------------------------------------------- figure d'une FAMILLE
+# Un exercice source donne un TRIO (facile / base / difficile) qui partage la
+# même situation, donc la même figure : c'est la même image du manuel, recadrée
+# une seule fois par l'admin. Corriger le cadrage sur l'un et laisser les deux
+# autres avec l'ancien n'a aucun sens pédagogique — et c'est un piège classique,
+# puisque rien à l'écran ne dit que les trois cartes montrent trois fichiers
+# différents. Toute modification d'image se propage donc à la famille.
+#
+# Chaque ligne garde son PROPRE fichier (jamais un chemin partagé) : c'est ce
+# qui permet à `delete_exercise` de supprimer les fichiers de la ligne qu'il
+# efface sans vider les images de ses sœurs.
+
+
+def family_ids(db, ex: IndigoExercise) -> list[str]:
+    """Ids du trio auquel `ex` appartient, lui compris (la base et ses dérivés)."""
+    root = ex.derived_from_id or ex.id
+    rows = db.query(IndigoExercise.id).filter(
+        (IndigoExercise.id == root) | (IndigoExercise.derived_from_id == root)).all()
+    return [r[0] for r in rows]
+
+
+def _siblings(db, ex: IndigoExercise) -> list[IndigoExercise]:
+    """Les AUTRES exercices de la famille (le trio moins `ex`)."""
+    ids = [i for i in family_ids(db, ex) if i != ex.id]
+    if not ids:
+        return []
+    return db.query(IndigoExercise).filter(IndigoExercise.id.in_(ids)).all()
+
+
+def _mirror_figure(db, ex: IndigoExercise) -> None:
+    """Recopie l'état d'image de `ex` sur le reste de sa famille : même cadrage,
+    mêmes caches, même placement du marqueur dans l'énoncé — ou même absence."""
+    source = crop_abs_path(ex.figure_path) if ex.figure_path else None
+    payload = source.read_bytes() if source and source.exists() else None
+    for sib in _siblings(db, ex):
+        if payload is not None:
+            dest_rel = sib.figure_path or f"indigo/drafts/{sib.id}_fig.png"
+            dest = crop_abs_path(dest_rel)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(payload)
+            sib.has_figure = True
+            sib.figure_path = dest_rel
+            sib.figure_box_json = dict(ex.figure_box_json or {})
+            sib.statement = statement_mod.place_figure_marker(sib.statement, True)
+        else:
+            if sib.figure_path:
+                old = crop_abs_path(sib.figure_path)
+                if old.exists():
+                    old.unlink()
+            sib.has_figure = False
+            sib.figure_path = ""      # colonne NOT NULL (cf. _detach_figure)
+            sib.figure_box_json = None
+            sib.statement = statement_mod.strip_figure_marker(sib.statement)
+        sib.updated_at = datetime.now(timezone.utc)
 
 
 def nudge_figure(db, ex: IndigoExercise, deltas: dict) -> IndigoExercise:
@@ -1375,6 +2076,7 @@ def nudge_figure(db, ex: IndigoExercise, deltas: dict) -> IndigoExercise:
     box.update({"x0": x0, "y0": y0, "x1": x1, "y1": y1})
     ex.figure_box_json = box
     ex.updated_at = datetime.now(timezone.utc)
+    _mirror_figure(db, ex)      # même image pour tout le trio
     db.commit()
     return ex
 
@@ -1440,6 +2142,7 @@ def edit_figure(db, ex: IndigoExercise, crop: dict, masks_input: list[dict]) -> 
                           "img_w": rw, "img_h": rh, "masks": masks}
     ex.statement = statement_mod.place_figure_marker(ex.statement, True)
     ex.updated_at = datetime.now(timezone.utc)
+    _mirror_figure(db, ex)          # même image pour tout le trio
     db.commit()
     return ex
 
@@ -1453,9 +2156,15 @@ def remove_figure(db, ex: IndigoExercise) -> IndigoExercise:
         if p.exists():
             p.unlink()
     ex.has_figure = False
-    ex.figure_path = None
+    # `figure_path` est vidé avec une CHAÎNE VIDE, jamais None : la colonne est
+    # NOT NULL, et un None y levait une IntegrityError au commit — « Supprimer
+    # l'image » répondait donc 500 au lieu de retirer l'image (cf. _detach_figure,
+    # qui portait déjà la règle).
+    ex.figure_path = ""
     ex.figure_box_json = None
+    ex.statement = statement_mod.strip_figure_marker(ex.statement)
     ex.updated_at = datetime.now(timezone.utc)
+    _mirror_figure(db, ex)          # le trio perd l'image ensemble
     db.commit()
     return ex
 
@@ -1492,6 +2201,7 @@ def add_figure(db, ex: IndigoExercise) -> IndigoExercise:
                           "img_w": rw, "img_h": rh, "masks": []}
     ex.statement = statement_mod.place_figure_marker(ex.statement, True)
     ex.updated_at = datetime.now(timezone.utc)
+    _mirror_figure(db, ex)          # même image pour tout le trio
     db.commit()
     return ex
 
@@ -1524,6 +2234,31 @@ def _regen_qcm(db, comp, ex: IndigoExercise, manual: dict) -> dict | None:
     return None
 
 
+def _regen_multipass(db, comp, ex: IndigoExercise, manual: dict) -> dict | None:
+    """Régénération en mode multipass : on rejoue les cinq passes et on garde la
+    variante de CETTE ligne.
+
+    Une famille reste indivisible : si le trio ne repasse pas les cinq passes,
+    on rend None et la ligne existante est laissée INCHANGÉE — jamais dégradée,
+    jamais remplacée par un morceau de trio. Un dérivé reste un dérivé (le
+    régénérer ne le promeut pas en base).
+
+    La FIGURE suit la nouvelle décision de la passe 1 : un exercice régénéré qui
+    ne s'appuie plus sur le dessin ne doit pas continuer de l'imprimer à côté."""
+    kind = ex.variant_kind or "base"
+    family = indigo_multipass.run_family(db, comp, ex.grade_level, manual, set())
+    if not family.kept:
+        logger.info("Indigo/multipass : régénération de %s abandonnée (%s) — %s",
+                    ex.id, family.state, family.reason[:200])
+        return None
+    if not family.figure:
+        _detach_figure(ex)
+    for got_kind, valid in family.variants:
+        if got_kind == kind:
+            return valid
+    return None
+
+
 def regenerate_exercises(db, ids: list[str]) -> dict:
     """Régénère des exercices DEPUIS L'OCR déjà stocké (`raw_ocr_json` =
     {statement, correction}), avec le PROMPT et le fournisseur LLM ACTUELS —
@@ -1547,11 +2282,12 @@ def regenerate_exercises(db, ids: list[str]) -> dict:
                   "correction": (raw.get("correction") or ex.correction_solution or ""),
                   "has_figure": ex.has_figure}
         final = None
+        mode = indigo_llm.mode(db)
         if comp is not None:
             try:
-                final = (_regen_qcm(db, comp, ex, manual)
-                         if indigo_llm.mode(db) == indigo_llm.MODE_QCM
-                         else _regen_classic(db, comp, ex, manual))
+                regen = {indigo_llm.MODE_MULTIPASS: _regen_multipass,
+                         indigo_llm.MODE_QCM: _regen_qcm}.get(mode, _regen_classic)
+                final = regen(db, comp, ex, manual)
             except providers.BudgetExceeded as e:
                 stopped = str(e)
                 final = None
@@ -1561,7 +2297,10 @@ def regenerate_exercises(db, ids: list[str]) -> dict:
         if final is None:                 # jamais de dégradation : on garde l'existant
             n_fail += 1
             continue
-        _persist_exercise(db, ex, manual, final)   # met à jour la ligne existante
+        # met à jour la ligne existante ; le repli « figure = extrait complet du
+        # manuel » reste coupé en multipass (§ _persist_multipass_family)
+        _persist_exercise(db, ex, manual, final,
+                          allow_figure_fallback=mode != indigo_llm.MODE_MULTIPASS)
         ex.status = "draft"
         ex.validated_by = None
         ex.validated_at = None
@@ -1734,31 +2473,7 @@ def publish(db, force: bool = False) -> dict:
     rows = (db.query(IndigoExercise).filter_by(status="validated")
             .order_by(IndigoExercise.competency_id, IndigoExercise.source_page,
                       IndigoExercise.order_index).all())
-    records = []
-    for ex in rows:
-        comp = db.get(Competency, ex.competency_id)
-        crop_file = fig_file = ""
-        if ex.crop_path and crop_abs_path(ex.crop_path).exists():
-            crop_file = f"{ex.id}.png"
-            shutil.copyfile(crop_abs_path(ex.crop_path), crops / crop_file)
-        if ex.has_figure and ex.figure_path and crop_abs_path(ex.figure_path).exists():
-            fig_file = f"{ex.id}.png"
-            shutil.copyfile(crop_abs_path(ex.figure_path), figs / fig_file)
-        records.append({
-            "id": ex.id, "competency_code": comp.code if comp else "",
-            "grade_level": ex.grade_level, "source_number": ex.source_number,
-            "badge_type": ex.badge_type, "difficulty": ex.difficulty,
-            "variant_kind": ex.variant_kind or "base",
-            "derived_from_id": ex.derived_from_id,
-            "calculator": ex.calculator, "title": ex.title, "tags": ex.tags_json,
-            "statement": ex.statement, "response_type": ex.response_type,
-            # `grading` porte le barème (bareme_points) : rien à publier à côté
-            "expected": ex.expected_json, "grading": ex.grading_json,
-            "correction_guide": ex.correction_guide,
-            "correction_solution": ex.correction_solution,
-            "has_figure": ex.has_figure, "crop_file": crop_file, "figure_file": fig_file,
-            "model": ex.model, "prompt_version": ex.prompt_version,
-        })
+    records = [_published_record(db, ex, crops, figs) for ex in rows]
     already = len(load_published().get("exercises", []))
     if not records and already and not force:
         raise PublishRefused(
@@ -1773,6 +2488,84 @@ def publish(db, force: bool = False) -> dict:
     logger.info("Indigo : %s exercice(s) publié(s), %s semé(s) en banque",
                 len(records), seeded)
     return {"published": len(records), "seeded": seeded}
+
+
+def _published_record(db, ex: IndigoExercise, crops, figs) -> dict:
+    """Un exercice validé figé en enregistrement publiable, ses images copiées.
+
+    Extrait de `publish` pour être partagé avec `publish_rows` (publication
+    IMMÉDIATE d'une famille) : les deux voies doivent écrire exactement le même
+    enregistrement, sinon un exercice publié à chaud différerait du même exercice
+    republié en bloc — et la différence ne se verrait qu'à l'usage."""
+    comp = db.get(Competency, ex.competency_id)
+    crop_file = fig_file = ""
+    if ex.crop_path and crop_abs_path(ex.crop_path).exists():
+        crop_file = f"{ex.id}.png"
+        shutil.copyfile(crop_abs_path(ex.crop_path), crops / crop_file)
+    if ex.has_figure and ex.figure_path and crop_abs_path(ex.figure_path).exists():
+        fig_file = f"{ex.id}.png"
+        shutil.copyfile(crop_abs_path(ex.figure_path), figs / fig_file)
+    return {
+        "id": ex.id, "competency_code": comp.code if comp else "",
+        "grade_level": ex.grade_level, "source_number": ex.source_number,
+        "badge_type": ex.badge_type, "difficulty": ex.difficulty,
+        "variant_kind": ex.variant_kind or "base",
+        "derived_from_id": ex.derived_from_id,
+        "calculator": ex.calculator, "title": ex.title, "tags": ex.tags_json,
+        "statement": ex.statement, "response_type": ex.response_type,
+        # `grading` porte le barème (bareme_points) : rien à publier à côté
+        "expected": ex.expected_json, "grading": ex.grading_json,
+        "correction_guide": ex.correction_guide,
+        "correction_solution": ex.correction_solution,
+        "has_figure": ex.has_figure, "crop_file": crop_file, "figure_file": fig_file,
+        "model": ex.model, "prompt_version": ex.prompt_version,
+    }
+
+
+def publish_rows(db, rows: list[IndigoExercise]) -> int:
+    """Publie IMMÉDIATEMENT quelques exercices, sans réécrire tout le fichier.
+
+    C'est la voie du mode « QCM multipass » : dès qu'une famille atteint READY,
+    ses trois exercices partent en banque, sans attendre la fin de l'extraction
+    ni un clic sur « Publier ». Une extraction interrompue à la moitié laisse
+    donc derrière elle des exercices RÉELLEMENT utilisables, pas un tas de
+    brouillons.
+
+    Écriture PARTIELLE, donc `_promote_to_volume` d'abord — sinon on modifierait
+    l'image, c'est-à-dire rien (le conteneur est recréé à chaque mise à jour).
+    Republier un exercice déjà publié le REMPLACE (même id) : la fonction est
+    idempotente, une famille régénérée écrase proprement la précédente.
+
+    Retourne le nombre d'exercices publiés. Ne touche PAS aux autres : à la
+    différence de `publish`, elle n'a rien à effacer, donc pas de garde-fou de
+    remise à zéro à prévoir."""
+    rows = [ex for ex in rows if ex is not None]
+    if not rows:
+        return 0
+    _promote_to_volume()
+    _, crops, figs, jf = _layout(_write_dir())
+    crops.mkdir(parents=True, exist_ok=True)
+    figs.mkdir(parents=True, exist_ok=True)
+    data = load_published() if jf.exists() else {}
+    records = [r for r in data.get("exercises", [])]
+    new_records = [_published_record(db, ex, crops, figs) for ex in rows]
+    new_ids = {r["id"] for r in new_records}
+    payload = {"version": settings.indigo_schema_version,
+               "grade_level": data.get("grade_level", "3e"),
+               "generated_at": datetime.now(timezone.utc).isoformat(),
+               "exercises": [r for r in records if r.get("id") not in new_ids]
+                            + new_records}
+    jf.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
+    # la banque suit dans la foulée : sans ce semis, les exercices n'existeraient
+    # que dans le fichier et n'apparaîtraient qu'au prochain redémarrage.
+    db.query(GeneratedExercise).filter(GeneratedExercise.id.in_(list(new_ids))).delete(
+        synchronize_session=False)
+    for rec in new_records:
+        _seed_record(db, payload, rec, figs)
+    db.commit()
+    logger.info("Indigo : %s exercice(s) publié(s) à chaud (%s au total)",
+                len(new_records), len(payload["exercises"]))
+    return len(new_records)
 
 
 def _unpublish(ex_id: str) -> bool:
@@ -1892,32 +2685,39 @@ def seed_published(db) -> int:
     _, _crops, figs, _ = _pub_paths()
     data = load_published()
     db.query(GeneratedExercise).filter_by(source="indigo").delete()
-    n = 0
-    for rec in data.get("exercises", []):
-        comp = _resolve_competency(db, rec.get("competency_code", ""),
-                                   rec.get("grade_level", "3e"))
-        if comp is None:
-            continue  # compétence absente de ce déploiement : on saute proprement
-        fig_json = None
-        if rec.get("figure_file"):
-            fig_json = {"type": "image", "params": {"path": str(figs / rec["figure_file"])}}
-        db.add(GeneratedExercise(
-            id=rec["id"], competency_id=comp.id,
-            difficulty_level=_published_level(data, rec), variant=0,
-            statement=rec.get("statement", ""), correction=rec.get("correction_guide", ""),
-            response_type=rec.get("response_type", "short_text"),
-            expected_json=rec.get("expected") or {}, grading_json=rec.get("grading") or {},
-            source="indigo",
-            kind="probleme" if rec.get("badge_type") in ("probleme", "enigme") else "application",
-            status="active", figure_json=fig_json,
-            raw_extract_json={"indigo": {k: rec.get(k) for k in (
-                "badge_type", "difficulty", "calculator", "title", "tags",
-                "correction_solution", "crop_file", "source_number",
-                "variant_kind", "derived_from_id")}},
-            model=rec.get("model", ""), prompt_version=rec.get("prompt_version", "")))
-        n += 1
+    n = sum(1 for rec in data.get("exercises", []) if _seed_record(db, data, rec, figs))
     db.commit()
     return n
+
+
+def _seed_record(db, data: dict, rec: dict, figs) -> bool:
+    """Sème UN exercice publié en ligne GeneratedExercise. False = sauté.
+
+    Partagé par `seed_published` (démarrage, tout le fichier) et `publish_rows`
+    (publication à chaud d'une famille) : une seule écriture de la ligne de
+    banque, donc aucune divergence possible entre les deux chemins."""
+    comp = _resolve_competency(db, rec.get("competency_code", ""),
+                               rec.get("grade_level", "3e"))
+    if comp is None:
+        return False  # compétence absente de ce déploiement : on saute proprement
+    fig_json = None
+    if rec.get("figure_file"):
+        fig_json = {"type": "image", "params": {"path": str(figs / rec["figure_file"])}}
+    db.add(GeneratedExercise(
+        id=rec["id"], competency_id=comp.id,
+        difficulty_level=_published_level(data, rec), variant=0,
+        statement=rec.get("statement", ""), correction=rec.get("correction_guide", ""),
+        response_type=rec.get("response_type", "short_text"),
+        expected_json=rec.get("expected") or {}, grading_json=rec.get("grading") or {},
+        source="indigo",
+        kind="probleme" if rec.get("badge_type") in ("probleme", "enigme") else "application",
+        status="active", figure_json=fig_json,
+        raw_extract_json={"indigo": {k: rec.get(k) for k in (
+            "badge_type", "difficulty", "calculator", "title", "tags",
+            "correction_solution", "crop_file", "source_number",
+            "variant_kind", "derived_from_id")}},
+        model=rec.get("model", ""), prompt_version=rec.get("prompt_version", "")))
+    return True
 
 
 def published_rows(db, competency, level: int) -> list:

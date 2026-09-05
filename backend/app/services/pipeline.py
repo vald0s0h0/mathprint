@@ -409,7 +409,14 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
         sp = (db.query(ScannedPage).filter_by(batch_id=batch.id, source_index=i).first()
               or ScannedPage(batch_id=batch.id, source_index=i))
         db.add(sp)
-        res = worker_cv.analyze_page(img)
+        if sp.dismissed:
+            # confirmé par le professeur comme n'étant pas une vraie copie
+            # (résolution des scans bloqués) : hors flux, aucun overlay attendu.
+            continue
+        # `manual_page_id` : identité posée à la main sur une page jusqu'ici
+        # bloquée (QR illisible) — on ne retente pas la lecture QR, seulement
+        # le recalage géométrique sur cette identité connue.
+        res = worker_cv.analyze_page(img, forced_page_id=sp.manual_page_id)
         # Fond indexé par POSITION, y compris si QR/repères illisibles. Il sert
         # à l'aperçu de la page de sécurité sans jamais tenter de lui inventer
         # une identité.
@@ -1174,6 +1181,12 @@ def build_overlays(db: Session, batch: ScanBatch) -> str:
     path = out_dir / "correction_overlay.pdf"
     review_path = out_dir / "correction_review.pdf"
     derived_dir = settings.data_dir / "assessments" / assessment.id / "scans" / "derived"
+    # page_id -> (DocumentPage, Copy), pour nommer un placeholder « bloqué »
+    # dont l'identité EST connue (lue ou reliée à la main) même sans recalage.
+    page_index = {p.id: (p, c) for p, c in
+                  db.query(DocumentPage, Copy)
+                    .join(Copy, DocumentPage.copy_id == Copy.id)
+                    .filter(Copy.assessment_id == assessment.id).all()}
 
     copies = _copies_in_scan_order(db, batch, assessment.id)
     scan_page_positions = _scan_page_positions(db, batch)
@@ -1233,8 +1246,11 @@ def build_overlays(db: Session, batch: ScanBatch) -> str:
         # pour une même note finiraient par diverger.
         result = scoring.copy_result(db, copy, assessment)
         note = None
+        note_raw = None
         if result is not None and result.note is not None:
             note = f"{scoring.format_points(result.note)}/{result.note_base}"
+            note_raw = (f"{scoring.format_points(result.points_earned)}/"
+                        f"{scoring.format_points(result.points_total)}")
 
         if copy.appreciation_json is None:
             appreciation = build_appreciation(db, assessment.id, student)
@@ -1254,7 +1270,7 @@ def build_overlays(db: Session, batch: ScanBatch) -> str:
         if result is not None:
             comment = (f"Score {scoring.format_points(result.points_earned)}/"
                        f"{scoring.format_points(result.points_total)} points")
-        header = {"note": note, "progress": appreciation.get("progress"),
+        header = {"note": note, "note_raw": note_raw, "progress": appreciation.get("progress"),
                   "synthesis": appreciation.get("synthesis"), "comment": comment}
         student_name = student.name
         # Une page d'overlay PAR page scannée — indispensable en recto-verso et
@@ -1288,8 +1304,10 @@ def build_overlays(db: Session, batch: ScanBatch) -> str:
     # position. Tout scan bloqué, doublon dans le lot, QR illisible ou page
     # reconnue mais non corrigée reçoit une page blanche « Non identifié ».
     # Il est interdit de la supprimer : les corrections suivantes seraient alors
-    # posées sur les mauvais élèves.
-    scan_rows = (db.query(ScannedPage).filter_by(batch_id=batch.id)
+    # posées sur les mauvais élèves. Seule exception : une page que le
+    # professeur a explicitement écartée (résolution des scans bloqués, « erreur
+    # de scan ») — elle n'a jamais été une vraie copie, elle sort donc du flux.
+    scan_rows = (db.query(ScannedPage).filter_by(batch_id=batch.id, dismissed=False)
                  .order_by(ScannedPage.source_index).all())
     represented = {p.get("_scan_index") for p in pages_annotations
                    if p.get("_scan_index") is not None}
@@ -1299,8 +1317,18 @@ def build_overlays(db: Session, batch: ScanBatch) -> str:
         order_meta = {"_scan_index": scanned_page.source_index,
                       "_copy_index": scanned_page.source_index,
                       "_page_no": 0}
+        # Une identité CONNUE (lue ou reliée à la main) mais dont le recalage a
+        # échoué (page abîmée) garde son nom sur le placeholder, au lieu du
+        # « Non identifié » générique — la correction reste manuelle mais le
+        # bon élève reçoit sa feuille.
+        label = "Non identifié"
+        if scanned_page.page_id and scanned_page.page_id in page_index:
+            _, placeholder_copy = page_index[scanned_page.page_id]
+            placeholder_student = db.get(Student, placeholder_copy.student_id)
+            if placeholder_student:
+                label = f"{placeholder_student.name} — à corriger manuellement"
         placeholder = {
-            "student": "Non identifié", "unidentified": True,
+            "student": label, "unidentified": True,
             "assessment_type": assessment.type, "page_zones": [], **order_meta,
         }
         pages_annotations.append(placeholder)

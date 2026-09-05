@@ -195,6 +195,24 @@ def generate_assessment_job(db: Session, assessment: Assessment,
     manifest = {"assessment_id": assessment.id, "protocol": "MP1", "copies": []}
     warnings: list[str] = []
 
+    # Cache des échecs DÉFINITIFS de banque (compétence sans AUCUN exercice, à
+    # aucun des DIFFICULTY_LEVELS) : bank_rows_near_level les essaie tous avant
+    # de lever, donc un échec ne dépend pas du niveau demandé. Sans ce cache,
+    # une compétence à la banque vide (ou générable côté "gemini") était
+    # requêtée/régénérée À CHAQUE tentative de remplissage — jusqu'à 80 fois
+    # par élève × N élèves — un sujet sur banque vide donnait donc l'illusion
+    # d'une boucle infinie au lieu d'échouer vite avec un message clair.
+    _bank_exhausted: dict[str, Exception] = {}
+
+    def bank_rows_near_level(comp: Competency, lvl: int):
+        if comp.id in _bank_exhausted:
+            raise _bank_exhausted[comp.id]
+        try:
+            return exercise_gen.bank_rows_near_level(db, comp, lvl, source=exercise_source)
+        except Exception as e:
+            _bank_exhausted[comp.id] = e
+            raise
+
     # modulo : les 8 hex (32 bits) du hash dépassent une fois sur deux
     # l'INTEGER Postgres signé (max 2^31-1) où Copy.seed est stocké — vu en
     # prod (psycopg2.errors.NumericValueOutOfRange). Marge sous 2^31-1 pour
@@ -203,7 +221,7 @@ def generate_assessment_job(db: Session, assessment: Assessment,
     max_pages = max(1, min(6, assessment.pages_target or 1))
     assessment.duplex = max_pages >= 2
     ex_tpl_font_size = int(tpl["exercise"].get("font_size", font_size))
-    math_fs = int(tpl["exercise"].get("math_size", 12))
+    math_fs = int(tpl["exercise"].get("math_size", 9))
     # marge de pages RÉELLES (DocumentPage signées) au-delà de la cible : les
     # exercices obligatoires (une compétence cochée = un exercice, boucle
     # ci-dessous) ne sont jamais soumis au contrôle de capacité qui ne
@@ -282,8 +300,7 @@ def generate_assessment_job(db: Session, assessment: Assessment,
                     if row is None:
                         return False
                 else:
-                    bank, _ = exercise_gen.bank_rows_near_level(
-                        db, comp, want, source=exercise_source)
+                    bank, _ = bank_rows_near_level(comp, want)
                     # En individuel, on n'équilibre les types de réponse que
                     # DANS le meilleur rang de candidats (inédit > raté ancien >
                     # déjà réussi) : autrement un exercice déjà servi, mais du
@@ -452,8 +469,7 @@ def generate_assessment_job(db: Session, assessment: Assessment,
                 rows = []
                 for lvl in allowed_levels:
                     try:
-                        lvl_rows, _ = exercise_gen.bank_rows_near_level(
-                            db, comp, lvl, source=exercise_source)
+                        lvl_rows, _ = bank_rows_near_level(comp, lvl)
                     except Exception:
                         continue        # source indisponible : déjà signalée
                     rows.extend(r for r in lvl_rows if r.id not in seen_rows)
@@ -513,6 +529,17 @@ def generate_assessment_job(db: Session, assessment: Assessment,
             next_seq = _fill(n_required, filler=False)
             next_seq = _fill(next_seq, filler=True)
             _best_fit(next_seq)
+
+        if not render_items:
+            # banque totalement vide (ou source indisponible) pour TOUTES les
+            # compétences cochées : mieux vaut échouer avec un message clair
+            # que produire une copie blanche sans le dire (cf. `warnings`,
+            # déjà rempli d'un message par compétence).
+            raise ValueError(
+                "Aucun exercice disponible dans la banque pour composer ce "
+                f"sujet (compétence(s) : {', '.join(competencies[cid].code for cid in ordered_ids)}). "
+                "Générez ou publiez d'abord des exercices pour ces compétences "
+                "(onglet Exercices), ou changez la source d'exercices du sujet.")
 
         # Ordre DÉFINITIF des cartes : le remplissage colonne par colonne (FFD)
         # est figé ici, une fois toutes les cartes choisies. On renumérote alors
