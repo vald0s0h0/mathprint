@@ -159,3 +159,39 @@ def test_purge_orphans_spares_valid_rows():
     assert db.query(SchoolClass).count() == 1
     assert db.query(CompetencyFramework).count() == 1
     assert db.query(Copy).count() == 0            # seul l'orphelin est parti
+
+
+def test_delete_class_removes_connector_print_jobs(tmp_path, monkeypatch):
+    """Un sujet envoyé à un connecteur d'impression : la FK
+    connector_print_jobs.assessment_id bloquait la suppression en Postgres
+    (SQLite ne vérifie les FK qu'avec PRAGMA foreign_keys=ON, d'où ce test)."""
+    from sqlalchemy import event
+    from app.models import ConnectorPrintJob, PrintConnector, Printer, User
+
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    engine = create_engine("sqlite:///:memory:")
+    event.listen(engine, "connect", lambda conn, _: conn.execute("PRAGMA foreign_keys=ON"))
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine)()
+
+    user = User(email="prof@example.fr", password_hash="x")
+    cls = SchoolClass(name="5eF", grade_level="5e")
+    db.add_all([user, cls]); db.flush()
+    a = Assessment(class_id=cls.id, title="Sujet imprimé")
+    connector = PrintConnector(user_id=user.id, installation_id="data-admin-0001",
+                               name="PC", token_hash="t", active=True)
+    printer = Printer(name="p", protocol="connector", active=True)
+    db.add_all([a, connector, printer]); db.flush()
+    pdf = tmp_path / "connector_jobs" / "job.pdf"
+    pdf.parent.mkdir(); pdf.write_bytes(b"%PDF")
+    db.add(ConnectorPrintJob(
+        connector_id=connector.id, user_id=user.id, printer_id=printer.id,
+        assessment_id=a.id, native_printer_name="USB", status="submitted",
+        document_relpath="connector_jobs/job.pdf", document_sha256="x"))
+    db.commit()
+
+    data_admin.delete_class(db, cls)
+    db.commit()
+    assert db.query(Assessment).count() == 0
+    assert db.query(ConnectorPrintJob).count() == 0
+    assert not pdf.exists()

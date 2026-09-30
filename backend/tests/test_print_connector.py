@@ -20,7 +20,9 @@ def _db():
     return sessionmaker(bind=engine)()
 
 
-def test_login_heartbeat_registers_only_the_connectors_local_printers():
+def test_login_heartbeat_registers_only_the_connectors_local_printers(monkeypatch):
+    # Les imprimantes CUPS de la machine qui lance les tests ne doivent pas s'y mêler.
+    monkeypatch.setattr(printing, "_local_printers", lambda: [])
     db = _db()
     try:
         user = User(email="prof@example.fr", password_hash=hash_password("secret-pass"))

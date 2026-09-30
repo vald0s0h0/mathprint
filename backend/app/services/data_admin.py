@@ -11,12 +11,13 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..models import (
-    Annotation, Assessment, Competency, Copy, CopyItem, CopyItemResult,
+    Annotation, Assessment, Competency, ConnectorPrintJob, Copy, CopyItem, CopyItemResult,
     CopyResult, CompetencyEvidence, CompetencyStateHistory, DocumentPage,
     FileObject, GeneratedExercise, GradingDecision, Job, ManualReview,
     OcrAttempt, ResponseZone, SchoolClass, ScanBatch, ScannedPage, Student,
     StudentCompetencyState, StudentLevel, StudentReport, StudentResponse,
 )
+from .print_connectors import _job_document_path
 
 
 def _delete_file_objects(db: Session, owner_type: str, owner_ids: list[str]) -> int:
@@ -91,6 +92,12 @@ def delete_assessment(db: Session, assessment: Assessment) -> dict:
     db.query(ScanBatch).filter(ScanBatch.id.in_(batch_ids)).delete(synchronize_session=False)
     _delete_file_objects(db, "assessment", [assessment.id])
     db.query(Job).filter_by(assessment_id=assessment.id).delete(synchronize_session=False)
+    # tâches d'impression des connecteurs (FK vers assessments) + leur PDF
+    for pj in db.query(ConnectorPrintJob).filter_by(assessment_id=assessment.id).all():
+        path = _job_document_path(pj) if pj.document_relpath else None
+        if path:
+            path.unlink(missing_ok=True)
+    db.query(ConnectorPrintJob).filter_by(assessment_id=assessment.id).delete(synchronize_session=False)
 
     n_copies, n_batches = len(copy_ids), len(batch_ids)
     db.delete(assessment)
