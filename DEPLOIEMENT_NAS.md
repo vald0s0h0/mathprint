@@ -230,6 +230,11 @@ conteneur. Ils ne sont pour autant visibles que sur cette instance.
 
 Pour les livrer à **tous** les déploiements :
 
+- **Depuis le poste de développement** (clone git) : **Publier** écrit aussi
+  directement dans `backend/app/data/indigo/` du dépôt. Il suffit de commiter
+  et pousser — rien à exporter.
+- **Depuis le NAS** (pas de dépôt) :
+
 1. Onglet Exercices → **Exporter pour le dépôt** → une archive ZIP est
    téléchargée.
 2. La décompresser dans `backend/app/data/indigo/` du dépôt (elle a exactement
@@ -240,6 +245,11 @@ Pour les livrer à **tous** les déploiements :
 L'export est volontairement manuel : aucun jeton d'écriture GitHub ne vit sur
 le NAS, et vous voyez ce qui entre dans le dépôt à partir duquel vos images
 sont construites.
+
+> **Quelle publication un serveur affiche-t-il ?** La plus RÉCENTE entre son
+> volume et l'image livrée. Une image construite depuis un dépôt plus récent
+> remplace donc une ancienne publication faite sur le NAS ; une publication
+> faite sur le NAS après la dernière mise à jour reste affichée.
 
 > Publier alors qu'aucun exercice n'est validé sur l'instance est **refusé**
 > (message explicite) : cela effacerait le contenu déjà publié, que le

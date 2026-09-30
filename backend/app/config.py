@@ -299,6 +299,11 @@ class Settings(BaseSettings):
                "prof": str(_REPO_ROOT / "context" / "3_indigo_prof.pdf")},
     }
     indigo_schema_version: str = "2"   # 2 = difficulté sur 3 niveaux (cf. indigo._published_level)
+    # Publier écrit AUSSI dans le dépôt (backend/app/data/indigo), pour que les
+    # exercices publiés partent avec le prochain commit vers tous les serveurs.
+    # None = automatique : oui sur un clone git (poste du professeur), non dans
+    # une image Docker (où ce dossier est jetable).
+    indigo_publish_to_repo: bool | None = None
 
     # --- Prompts LLM éditables (hors code) ---
     # Les prompts des pipelines de CRÉATION d'exercices (Indigo côté API, cli-exos

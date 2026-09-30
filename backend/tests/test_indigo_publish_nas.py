@@ -235,3 +235,51 @@ def test_publishing_nothing_answers_409_not_a_silent_wipe(db):
         assert "effacerait" in r.json()["detail"]
     finally:
         app.dependency_overrides.clear()
+
+
+# ------------------------------------------- le dépôt, source de vérité livrée
+
+def test_a_newer_image_replaces_a_stale_volume(db):
+    """Serveur qui a publié une fois : une image livrée PLUS TARD (dépôt mis à
+    jour) doit l'emporter, sinon le contenu du dépôt n'y arriverait jamais."""
+    _validated(db, n=2)
+    indigo.publish(db)                                   # volume daté d'aujourd'hui
+    _seed_image(indigo._IMAGE_PUB_DIR, ids=("livre-1",))
+    img = indigo._IMAGE_PUB_DIR / "exercises.json"
+    data = json.loads(img.read_text())
+    data["generated_at"] = "2999-01-01T00:00:00+00:00"
+    img.write_text(json.dumps(data))
+    assert indigo.published_status()["source"] == "image"
+    assert indigo.seed_published(db) == 1
+
+
+def test_a_partial_write_starts_from_the_newer_image(db):
+    _validated(db, n=2)
+    indigo.publish(db)
+    _seed_image(indigo._IMAGE_PUB_DIR, ids=("garde", "retire"))
+    img = indigo._IMAGE_PUB_DIR / "exercises.json"
+    data = json.loads(img.read_text())
+    data["generated_at"] = "2999-01-01T00:00:00+00:00"
+    img.write_text(json.dumps(data))
+    assert indigo._unpublish("retire") is True
+    assert {e["id"] for e in indigo.load_published()["exercises"]} == {"garde"}
+
+
+def test_publish_mirrors_to_the_repo_when_enabled(db, monkeypatch):
+    from app.config import settings
+    monkeypatch.setattr(settings, "indigo_publish_to_repo", True)
+    (indigo._IMAGE_PUB_DIR / "crops").mkdir(parents=True, exist_ok=True)
+    (indigo._IMAGE_PUB_DIR / "crops" / "orpheline.png").write_bytes(b"x")
+    _validated(db, n=2)
+    indigo.publish(db)
+    repo = json.loads((indigo._IMAGE_PUB_DIR / "exercises.json").read_text())
+    assert len(repo["exercises"]) == 2
+    assert not (indigo._IMAGE_PUB_DIR / "crops" / "orpheline.png").exists()
+    assert indigo.published_status()["count"] == 2
+
+
+def test_no_repo_mirror_inside_a_docker_image(db):
+    # dossier d'image redirigé (comme dans un conteneur sans .git) : jamais écrit
+    _validated(db)
+    indigo.publish(db)
+    assert not (indigo._IMAGE_PUB_DIR / "exercises.json").exists()

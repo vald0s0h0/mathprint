@@ -2404,10 +2404,86 @@ def _volume_pub_dir():
     return settings.data_dir / "indigo" / "published"
 
 
+def _generated_at(jf) -> datetime | None:
+    try:
+        stamp = json.loads(jf.read_text(encoding="utf-8")).get("generated_at") or ""
+        dt = datetime.fromisoformat(str(stamp))
+    except Exception:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
 def _read_dir():
-    """Couche qui fait autorité en LECTURE : le volume dès qu'il a été publié."""
+    """Couche qui fait autorité en LECTURE : la publication la PLUS RÉCENTE.
+
+    Le volume l'emporte tant qu'il est plus récent que l'image — la publication
+    faite sur le NAS survit donc aux mises à jour. Mais une image livrée APRÈS
+    (dépôt mis à jour, cf. `_mirror_to_repo`) remplace un volume périmé : sans
+    ça, un serveur qui a publié une fois ne verrait plus jamais le contenu du
+    dépôt. Date illisible : le volume garde la main (comportement d'avant)."""
     vol = _volume_pub_dir()
-    return vol if (vol / "exercises.json").exists() else _IMAGE_PUB_DIR
+    vol_json, img_json = vol / "exercises.json", _IMAGE_PUB_DIR / "exercises.json"
+    if not vol_json.exists():
+        return _IMAGE_PUB_DIR
+    if img_json.exists():
+        v, i = _generated_at(vol_json), _generated_at(img_json)
+        if v is not None and i is not None and i > v:
+            return _IMAGE_PUB_DIR
+    return vol
+
+
+def _publish_stamp() -> str:
+    """Horodatage d'une écriture de publication : maintenant, et toujours APRÈS
+    l'image livrée — sinon une publication locale pourrait passer pour plus
+    ancienne que l'image (horloges décalées) et disparaître à la lecture."""
+    stamp = datetime.now(timezone.utc)
+    img = _generated_at(_IMAGE_PUB_DIR / "exercises.json")
+    if img is not None and img >= stamp:
+        from datetime import timedelta
+        stamp = img + timedelta(seconds=1)
+    return stamp.isoformat()
+
+
+def _repo_mirror_enabled() -> bool:
+    """Publier écrit-il aussi dans le dépôt ? Réglage explicite, sinon : oui
+    seulement sur un clone git dont le dossier d'image est le VRAI dossier du
+    dépôt (jamais dans une image Docker, jamais dans un test qui le redirige)."""
+    if settings.indigo_publish_to_repo is not None:
+        return bool(settings.indigo_publish_to_repo)
+    return (_IMAGE_PUB_DIR == _APP_DIR / "data" / "indigo"
+            and (_APP_DIR.parents[1] / ".git").exists())
+
+
+def _mirror_to_repo() -> bool:
+    """Recopie la publication du volume dans le dépôt (backend/app/data/indigo) :
+    JSON + seules images référencées, les orphelines retirées. Le prochain
+    commit livre alors ces exercices à tous les déploiements — plus d'export
+    ZIP à décompresser à la main."""
+    if not _repo_mirror_enabled():
+        return False
+    _, v_crops, v_figs, v_json = _layout(_volume_pub_dir())
+    if not v_json.exists():
+        return False
+    _, r_crops, r_figs, r_json = _layout(_IMAGE_PUB_DIR)
+    data = json.loads(v_json.read_text(encoding="utf-8"))
+    for folder in (r_crops, r_figs):
+        folder.mkdir(parents=True, exist_ok=True)
+    wanted = {"crops": set(), "figures": set()}
+    for rec in data.get("exercises", []):
+        for key, src, dest, kind in (("crop_file", v_crops, r_crops, "crops"),
+                                     ("figure_file", v_figs, r_figs, "figures")):
+            name = rec.get(key)
+            if name and (src / name).exists():
+                shutil.copyfile(src / name, dest / name)
+                wanted[kind].add(name)
+    for folder, kind in ((r_crops, "crops"), (r_figs, "figures")):
+        for f in folder.glob("*.png"):
+            if f.name not in wanted[kind]:
+                f.unlink()
+    shutil.copyfile(v_json, r_json)
+    logger.info("Indigo : publication recopiée dans le dépôt (%s exercice(s))",
+                len(data.get("exercises", [])))
+    return True
 
 
 def _write_dir():
@@ -2434,15 +2510,17 @@ def _promote_to_volume() -> None:
     ça on modifierait l'image — c'est-à-dire rien du tout, la modification
     partant avec le conteneur. `publish`, lui, réécrit tout et n'en a pas
     besoin."""
-    vol = _volume_pub_dir()
-    if (vol / "exercises.json").exists():
+    # le volume fait déjà autorité (cf. _read_dir) : rien à promouvoir. Sinon —
+    # pas de volume, ou volume PLUS ANCIEN que l'image livrée — l'image le remplace.
+    if _read_dir() != _IMAGE_PUB_DIR:
         return
     src_base, src_crops, src_figs, src_json = _layout(_IMAGE_PUB_DIR)
     if not src_json.exists():
         return
     _, crops, figs, jf = _layout(_write_dir())
-    crops.mkdir(parents=True, exist_ok=True)
-    figs.mkdir(parents=True, exist_ok=True)
+    for folder in (crops, figs):
+        shutil.rmtree(folder, ignore_errors=True)
+        folder.mkdir(parents=True, exist_ok=True)
     for folder, dest in ((src_crops, crops), (src_figs, figs)):
         if folder.is_dir():
             for f in folder.glob("*.png"):
@@ -2490,9 +2568,17 @@ def publish(db, force: bool = False) -> dict:
             f"exercice(s) sont publiés : publier maintenant les effacerait. "
             f"Validez des exercices, ou forcez explicitement la remise à zéro.")
     payload = {"version": settings.indigo_schema_version, "grade_level": "3e",
-               "generated_at": datetime.now(timezone.utc).isoformat(),
+               "generated_at": _publish_stamp(),
                "exercises": records}
     jf.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
+    # images d'exercices retirés depuis la dernière publication : plus rien ne
+    # les référence, elles ne doivent partir ni en banque ni dans le dépôt
+    kept = {r[k] for r in records for k in ("crop_file", "figure_file") if r.get(k)}
+    for folder in (crops, figs):
+        for f in folder.glob("*.png"):
+            if f.name not in kept:
+                f.unlink()
+    _mirror_to_repo()
     seeded = seed_published(db)
     logger.info("Indigo : %s exercice(s) publié(s), %s semé(s) en banque",
                 len(records), seeded)
@@ -2561,10 +2647,11 @@ def publish_rows(db, rows: list[IndigoExercise]) -> int:
     new_ids = {r["id"] for r in new_records}
     payload = {"version": settings.indigo_schema_version,
                "grade_level": data.get("grade_level", "3e"),
-               "generated_at": datetime.now(timezone.utc).isoformat(),
+               "generated_at": _publish_stamp(),
                "exercises": [r for r in records if r.get("id") not in new_ids]
                             + new_records}
     jf.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
+    _mirror_to_repo()
     # la banque suit dans la foulée : sans ce semis, les exercices n'existeraient
     # que dans le fichier et n'apparaîtraient qu'au prochain redémarrage.
     db.query(GeneratedExercise).filter(GeneratedExercise.id.in_(list(new_ids))).delete(
@@ -2607,8 +2694,9 @@ def _unpublish(ex_id: str) -> bool:
             if fname and (folder / fname).exists():
                 (folder / fname).unlink()
     data["exercises"] = kept
-    data["generated_at"] = datetime.now(timezone.utc).isoformat()
+    data["generated_at"] = _publish_stamp()
     jf.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+    _mirror_to_repo()
     return True
 
 
