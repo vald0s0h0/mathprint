@@ -46,3 +46,7 @@ env
 # copie des prompts embarquée dans l'image au build (CI) — jamais commitée :
 # la source éditable reste `prompts/` à la racine du dépôt.
 backend/app/data/prompts/
+
+# Sorties locales (PDF générés, caches matplotlib) — jamais versionnées
+/output/
+/tmp/
