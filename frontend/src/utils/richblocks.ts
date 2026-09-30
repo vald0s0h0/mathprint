@@ -8,6 +8,8 @@
 // - SÉRIE : une liste de valeurs (« 10 W 8 W 6 W 10 W … ») se recolle au fil du
 //   texte et l'élève ne voit plus où une valeur finit ; c'est une grille sans
 //   filets ;
+// - GUIDE : lignes « {{aide}} … » — encadré jaune d'aide à la démarche,
+//   intégré à l'énoncé (des lignes guide consécutives font UN encadré) ;
 // - TEXTE : tout le reste, une ligne logique par bloc.
 //
 // L'aperçu de l'écran doit montrer la feuille qui sortira de l'imprimante : ce
@@ -19,6 +21,27 @@ export type RichBlock =
   | { kind: 'text'; text: string }
   | { kind: 'table'; rows: string[][]; header: boolean }
   | { kind: 'series'; items: string[]; label: string | null }
+  | { kind: 'guide'; text: string }
+
+// ------------------------------------------------------------------ guides
+// Miroir de backend services/statement.GUIDE_TOKEN.
+export const GUIDE_TOKEN = '{{aide}}'
+export const isGuideLine = (line: string) => (line || '').trimStart().startsWith(GUIDE_TOKEN)
+export const guideBody = (line: string) =>
+  (line || '').trimStart().slice(GUIDE_TOKEN.length).trim()
+
+/** Retire les encadrés guide (sujet « Ne pas inclure les guides »). */
+export const stripGuides = (text: string) =>
+  (text || '').split('\n').filter((ln) => !isGuideLine(ln)).join('\n')
+
+/** [lignes guide de TÊTE, reste] — l'encadré en tête d'une sous-question de
+ *  composite s'affiche AVANT sa pastille « a. ». */
+export function splitLeadingGuides(text: string): [string, string] {
+  const lines = (text || '').split('\n')
+  let k = 0
+  while (k < lines.length && (isGuideLine(lines[k]) || !lines[k].trim())) k++
+  return [lines.slice(0, k).filter((ln) => ln.trim()).join('\n'), lines.slice(k).join('\n')]
+}
 
 // ------------------------------------------------------------------- gras
 // Seul balisage de CARACTÈRE admis. Non gourmand, et le contenu commence et
@@ -159,7 +182,17 @@ export function parseBlocks(text: string): RichBlock[] {
     else pending.forEach((ln) => out.push({ kind: 'text', text: ln }))
     pending = []
   }
+  let lastGuide = false
   for (const line of (text || '').split('\n')) {
+    if (isGuideLine(line)) {
+      flush()
+      const prev = out[out.length - 1]
+      if (lastGuide && prev && prev.kind === 'guide') prev.text += '\n' + guideBody(line)
+      else out.push({ kind: 'guide', text: guideBody(line) })
+      lastGuide = true
+      continue
+    }
+    lastGuide = false
     if (isTableLine(line)) { pending.push(line); continue }
     flush()
     const series = seriesBlocks(line)

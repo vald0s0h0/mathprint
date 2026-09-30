@@ -214,7 +214,10 @@ def render_math_png(latex: str, font_size_pt: float = 10.0) -> tuple[bytes, floa
     if not latex:
         raise ValueError("LaTeX vide")
 
-    key = hashlib.sha256(f"v3:{latex}:{font_size_pt}".encode()).hexdigest()
+    # Même corps pour un nombre, une puissance et une fraction. Les fractions
+    # en style display gardent leurs chiffres lisibles (pas de réduction 70 %).
+    latex = re.sub(r"\\(?:tfrac|frac)(?![A-Za-z])", lambda _: r"\dfrac", latex)
+    key = hashlib.sha256(f"v4:{latex}:{font_size_pt}:dejavusans".encode()).hexdigest()
     cache_dir = Path(settings.data_dir) / "mathcache"
     cache_dir.mkdir(parents=True, exist_ok=True)
     png_file = cache_dir / f"{key}.png"
@@ -224,7 +227,7 @@ def render_math_png(latex: str, font_size_pt: float = 10.0) -> tuple[bytes, floa
         meta = json.loads(meta_file.read_text())
         return png_file.read_bytes(), meta["w_pt"], meta["h_pt"], meta["d_pt"]
 
-    prop = FontProperties(size=font_size_pt)
+    prop = FontProperties(size=font_size_pt, math_fontfamily="dejavusans")
     buf = BytesIO()
     # math_to_image rend serré et retourne la profondeur (descente) en points
     depth_pt = mathtext.math_to_image(

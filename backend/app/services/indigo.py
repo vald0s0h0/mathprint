@@ -1042,10 +1042,13 @@ def _persist_multipass_family(db, row: IndigoExercise, manual: dict,
     principal = next((kind for kind, _ in family.variants if kind == "base"),
                      family.variants[0][0] if family.variants else "base")
     for kind, valid in family.variants:
+        problem = row.badge_type in ("probleme", "enigme")
+        if problem and kind != "base":
+            continue
         target = row if kind == principal else _clone_for_variant(row, kind)
         tag = _multipass_variant_tag(kind, row)
-        target.variant_kind = tag
-        target.difficulty = _VARIANT_LEVEL[tag]
+        target.variant_kind = "original" if problem else tag
+        target.difficulty = row.difficulty if problem else _VARIANT_LEVEL[tag]
         target.derived_from_id = None if kind == principal else row.id
         # `manual` sans corrigé : le mode ignore le manuel du professeur
         _persist_exercise(db, target, {**manual, "correction": ""}, valid,
@@ -1470,9 +1473,12 @@ def _persist_qcm_trio(db, row: IndigoExercise, manual: dict,
     # `correction_solution` (le modèle ne le réécrit plus — cf. indigo_qcm).
     made = 0
     for kind, valid in entry["variants"]:
+        problem = row.badge_type in ("probleme", "enigme")
+        if problem and kind != "base":
+            continue
         target = row if kind == "base" else _clone_for_variant(row, kind)
-        target.variant_kind = kind
-        target.difficulty = indigo_qcm.VARIANT_LEVEL[kind]
+        target.variant_kind = "original" if problem else kind
+        target.difficulty = row.difficulty if problem else indigo_qcm.VARIANT_LEVEL[kind]
         target.derived_from_id = None if kind == "base" else row.id
         _persist_exercise(db, target, manual, valid)
         target.prompt_version = indigo_qcm.PROMPT_VERSION
@@ -1851,6 +1857,8 @@ def exercise_out(db, ex: IndigoExercise) -> dict:
     comp = db.get(Competency, ex.competency_id)
     grading = ex.grading_json or {}
     short = (comp.short_id or comp.code) if comp else ""
+    if comp and ex.badge_type in ("probleme", "enigme"):
+        short = comp.chapter_code
     # ID facile à retrouver dans le manuel : compétence + numéro de badge (ex. « A1.1-29 »)
     ref = f"{short}-{ex.source_number}" if short and ex.source_number else (short or ex.source_number)
     return {
@@ -1893,7 +1901,8 @@ def exercise_out(db, ex: IndigoExercise) -> dict:
         # ÉCHEC silencieux de l'étape d'adaptation (clé DeepSeek pro absente, budget
         # atteint, erreur API). Surfacé pour ne plus le confondre avec la qualité.
         "adapted": bool((ex.raw_ocr_json or {}).get("adapted")),
-        "expected": ex.expected_json, "choices": grading.get("choices") or [],
+        "expected": ex.expected_json, "grading": grading,
+        "choices": grading.get("choices") or [],
         # libellés de tableau (table_fill) pour l'aperçu — vivent dans grading
         "row_labels": grading.get("row_labels"), "col_labels": grading.get("col_labels"),
         # nombre EXACT de lignes du champ « raisonnement rédigé » (multiline_text),
@@ -2223,7 +2232,7 @@ def _regen_qcm(db, comp, ex: IndigoExercise, manual: dict) -> dict | None:
 
     Rend None si la variante attendue n'a pas survécu à la vérification
     déterministe : l'appelant laisse alors la ligne INCHANGÉE, jamais dégradée."""
-    kind = ex.variant_kind or "base"
+    kind = "base" if ex.badge_type in ("probleme", "enigme") else ex.variant_kind or "base"
     out = indigo_qcm.generate_batch(db, comp, ex.grade_level, [manual], set())
     entry = out.get(str(ex.source_number).strip())
     if not entry:
@@ -2245,7 +2254,7 @@ def _regen_multipass(db, comp, ex: IndigoExercise, manual: dict) -> dict | None:
 
     La FIGURE suit la nouvelle décision de la passe 1 : un exercice régénéré qui
     ne s'appuie plus sur le dessin ne doit pas continuer de l'imprimer à côté."""
-    kind = ex.variant_kind or "base"
+    kind = "base" if ex.badge_type in ("probleme", "enigme") else ex.variant_kind or "base"
     family = indigo_multipass.run_family(db, comp, ex.grade_level, manual, set())
     if not family.kept:
         logger.info("Indigo/multipass : régénération de %s abandonnée (%s) — %s",

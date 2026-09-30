@@ -45,6 +45,8 @@ class AssessmentPatch(BaseModel):
     # dur (services.indigo). "auto" est une valeur héritée, sans pipeline
     # derrière depuis le 16/07.
     exercise_source: Literal["auto", "sesamaths", "gemini", "indigo"] | None = None
+    # guides (encadrés intégrés aux énoncés) : inclus ou retirés pour tout le sujet
+    guides: Literal["include", "none"] | None = None
 
 
 class GenerateIn(BaseModel):
@@ -70,7 +72,9 @@ class ManualPlanIn(BaseModel):
     """Plan complet composé à la main : ce que le professeur a posé sur ses
     pages, variante par variante. Remplace intégralement le plan précédent."""
     competency_ids: list[str] = []
-    guides: Literal["overlay", "print_fragile", "none"] = "overlay"
+    # « overlay » / « print_fragile » : valeurs d'avant la refonte des guides,
+    # encore envoyées par un onglet resté ouvert — lues « include ».
+    guides: Literal["include", "none", "overlay", "print_fragile"] = "include"
     variant_kind: Literal["none", "anticheat", "level"] = "none"
     variants: list[VariantIn] = []
 
@@ -147,6 +151,8 @@ def patch_assessment(assessment_id: str, body: AssessmentPatch, db: Session = De
         a.blueprint_json = {**(a.blueprint_json or {}), "competency_ids": body.competency_ids}
     if body.exercise_source is not None:
         a.blueprint_json = {**(a.blueprint_json or {}), "exercise_source": body.exercise_source}
+    if body.guides is not None:
+        a.blueprint_json = {**(a.blueprint_json or {}), "guides": body.guides}
     db.commit()
     return {"ok": True}
 
@@ -248,7 +254,8 @@ def save_manual_plan(assessment_id: str, body: ManualPlanIn,
 
     a.blueprint_json = {**(a.blueprint_json or {}), "mode": "manual",
                         "competency_ids": competency_ids,
-                        "guides": body.guides, "variant_kind": body.variant_kind,
+                        "guides": manual_subject.normalize_guide_mode(body.guides),
+                        "variant_kind": body.variant_kind,
                         "variants": [v.model_dump() for v in variants]}
     # pas de sujet individuel dans cet assistant : commun, avec ou sans variantes
     a.personalization_mode = "common" if len(variants) == 1 else "common_variants"

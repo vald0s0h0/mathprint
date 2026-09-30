@@ -118,8 +118,9 @@ function ItemChips({ it }: { it: PoolItem }) {
 
 // ------------------------------------------------------------------ le pool
 
-function PoolCard({ it, used, fillCandidate, onDragStart }: {
+function PoolCard({ it, used, fillCandidate, onDragStart, showGuides }: {
   it: PoolItem; used: boolean; fillCandidate: boolean; onDragStart: () => void
+  showGuides: boolean
 }) {
   // Un exercice déjà posé dans CETTE variante n'est plus attrapable : un élève
   // ne doit jamais voir deux fois le même exercice sur sa feuille (même règle
@@ -129,7 +130,7 @@ function PoolCard({ it, used, fillCandidate, onDragStart }: {
     <Box p={6} draggable={!used} onDragStart={onDragStart}
       className={fillCandidate ? 'manual-fill-pulse' : undefined}
       style={{ cursor: used ? 'default' : 'grab', opacity: used ? 0.5 : 1, borderRadius: 6 }}>
-      <ExercisePrintPreview exercise={it}
+      <ExercisePrintPreview exercise={it} guides={showGuides}
         color={it.kind === 'probleme' ? 'orange' : 'indigo'}
         beforeFrame={<Text size="xs" c="dimmed" lineClamp={1}>
           {it.source_number && <b>n°{it.source_number} · </b>}{it.competency_label}
@@ -405,7 +406,7 @@ export default function LayoutBoard({
               </Text>
             )}
             {filtered.map((it) => (
-              <PoolCard key={it.id} it={it} used={usage.has(it.id)}
+              <PoolCard key={it.id} it={it} used={usage.has(it.id)} showGuides={guides !== 'none'}
                 fillCandidate={activeFillCandidates.has(it.id)}
                 onDragStart={() => { drag.current = { from: 'pool', id: it.id } }} />
             ))}

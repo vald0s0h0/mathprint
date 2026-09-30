@@ -269,7 +269,10 @@ def _value_of(text: str):
         if number is not None:
             return sympy.Rational(number.numerator, number.denominator)
     try:
-        return sympy.simplify(parse_expr(norm, transformations=TRANSFORMS))
+        # « ^ » est une PUISSANCE dans une proposition (« $28x^2+47x+15$ ») ; laissé
+        # tel quel, sympy le lit comme un OU exclusif et la proposition perdait
+        # toute valeur calculable — un QCM de calcul littéral devenait invérifiable.
+        return sympy.simplify(parse_expr(norm.replace("^", "**"), transformations=TRANSFORMS))
     except Exception:
         return None
 

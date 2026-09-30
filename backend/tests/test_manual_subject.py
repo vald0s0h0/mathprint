@@ -4,8 +4,9 @@ l'imprimante EXACTEMENT comme le professeur l'a posé.
 Trois invariants surveillés ici :
   1. le placement — chaque carte sur la page ET la colonne demandées, et une
      page laissée vide reste une page du sujet ;
-  2. les guides — trois modes, dont un qui doit vraiment récupérer de la place
-     et un qui doit imprimer sans jamais bouger la géométrie ;
+  2. les guides — encadrés « {{aide}} » intégrés aux énoncés, inclus ou
+     retirés (et alors la place est vraiment récupérée) ; plus jamais de
+     guide sous la carte ni à l'overlay ;
   3. les variantes — un élève n'est jamais servi au hasard (niveau, tourniquet).
 """
 import sys
@@ -32,9 +33,11 @@ from app.services.pdfgen import DEFAULT_TEMPLATES
 LONG_GUIDE = ("Pense à réduire au même dénominateur avant d'additionner.\n"
               "Vérifie ensuite que la fraction obtenue est bien irréductible.\n"
               "Piège classique : additionner les dénominateurs entre eux.")
+GUIDED = ("Additionne les deux fractions.\n"
+          + "\n".join(f"{{{{aide}}}} {ln}" for ln in LONG_GUIDE.split("\n")))
 
 
-def _item(statement: str, correction: str = "", guides: str = pdfgen.GUIDES_OVERLAY,
+def _item(statement: str, correction: str = "", guides: str = pdfgen.GUIDES_INCLUDE,
           **kw) -> dict:
     return {"kind": "exercise", "item_id": kw.get("item_id", statement[:12]),
             "statement": statement, "response_type": kw.get("response_type", "short_text"),
@@ -114,31 +117,26 @@ def test_without_placement_the_greedy_layout_is_unchanged():
 
 # ---------------------------------------------------------------- guides
 
-def test_guides_none_reclaims_the_space_of_the_guide_text():
-    with_guide = _item("Additionne.", LONG_GUIDE, pdfgen.GUIDES_OVERLAY)
-    without = _item("Additionne.", LONG_GUIDE, pdfgen.GUIDES_NONE)
+def test_guides_none_reclaims_the_space_of_the_guide_boxes():
+    with_guide = _item(GUIDED, "", pdfgen.GUIDES_INCLUDE)
+    without = _item(GUIDED, "", pdfgen.GUIDES_NONE)
     saved = _height(with_guide) - _height(without)
     assert saved > 8 * pdfgen.mm, f"seulement {saved / pdfgen.mm:.1f} mm récupérés"
+    # sans guide, la carte est exactement celle de l'énoncé nu
+    assert _height(without) == _height(_item("Additionne les deux fractions."))
 
 
-def test_printed_guide_does_not_change_the_geometry():
-    # même variante = même mise en page pour tous les élèves : seul l'encre
-    # change entre un élève de niveau 1 à 4 et les autres.
-    overlay = _item("Additionne.", LONG_GUIDE, pdfgen.GUIDES_OVERLAY)
-    printed = _item("Additionne.", LONG_GUIDE, pdfgen.GUIDES_PRINT)
-    assert _height(overlay) == _height(printed)
-    zo, _ = _render([overlay], placement=[(0, 0)])
-    zp, _ = _render([printed], placement=[(0, 0)])
-    for k in ("x_pt", "y_pt", "w_pt", "h_pt"):
-        assert zo[0][k] == zp[0][k]
-    assert zo[0]["meta"]["correction_strip"]["guides"] == pdfgen.GUIDES_OVERLAY
-    assert zp[0]["meta"]["correction_strip"]["guides"] == pdfgen.GUIDES_PRINT
+def test_the_old_bottom_guide_no_longer_takes_any_room():
+    # le texte `correction` (ancien guide de bas de carte) n'est plus composé
+    assert _height(_item("Additionne.", LONG_GUIDE)) == _height(_item("Additionne."))
 
 
-def test_overlay_never_reprints_a_guide_it_should_not():
-    """L'overlay n'imprime le corrigé QUE dans le mode qui lui a réservé la
-    place. En GUIDES_NONE le texte n'a jamais été composé (il déborderait sur
-    la carte suivante) ; en GUIDES_PRINT il est déjà sur la feuille."""
+def test_a_guide_box_renders_inside_the_card():
+    zones, out = _render([_item(GUIDED)], placement=[(0, 0)])
+    assert out.stat().st_size > 0 and len(zones) == 1
+
+
+def test_overlay_never_prints_a_guide():
     drawn = []
 
     class _Spy:
@@ -154,8 +152,7 @@ def test_overlay_never_reprints_a_guide_it_should_not():
     original = pdfgen._draw_rich
     pdfgen._draw_rich = _fake_rich
     try:
-        for mode, expected in ((pdfgen.GUIDES_NONE, 0), (pdfgen.GUIDES_PRINT, 0),
-                               (pdfgen.GUIDES_OVERLAY, 1)):
+        for mode in (pdfgen.GUIDES_NONE, pdfgen.GUIDES_INCLUDE, "overlay"):
             drawn.clear()
             pdfgen._draw_correction_strip(_Spy(), {
                 "x_pt": 0, "y_pt": 0, "w_pt": 200, "h_pt": 20,
@@ -163,7 +160,7 @@ def test_overlay_never_reprints_a_guide_it_should_not():
                 "strip": {"x_pt": 0, "y_pt": 0, "w_pt": 200, "h_pt": 20,
                           "fs": 8, "guides": mode},
             }, col=None)
-            assert len(drawn) == expected, mode
+            assert drawn == [], mode
     finally:
         pdfgen._draw_rich = original
 
@@ -197,16 +194,16 @@ def test_anticheat_variants_alternate_between_neighbours():
     assert got == [0, 1, 2, 0, 1, 2]
 
 
-@pytest.mark.parametrize("mode,level,expected", [
-    ("overlay", 2, pdfgen.GUIDES_OVERLAY),
-    ("overlay", 9, pdfgen.GUIDES_OVERLAY),
-    ("print_fragile", 4, pdfgen.GUIDES_PRINT),
-    ("print_fragile", 5, pdfgen.GUIDES_OVERLAY),
-    ("none", 1, pdfgen.GUIDES_NONE),
-    ("none", 9, pdfgen.GUIDES_NONE),
+@pytest.mark.parametrize("mode,expected", [
+    ("include", pdfgen.GUIDES_INCLUDE),
+    ("none", pdfgen.GUIDES_NONE),
+    # sujets composés avant la refonte des guides
+    ("overlay", pdfgen.GUIDES_INCLUDE),
+    ("print_fragile", pdfgen.GUIDES_INCLUDE),
+    (None, pdfgen.GUIDES_INCLUDE),
 ])
-def test_guides_mode_per_student(mode, level, expected):
-    assert manual_subject.guides_for_student(mode, level) == expected
+def test_guide_mode_normalization(mode, expected):
+    assert manual_subject.normalize_guide_mode(mode) == expected
 
 
 # ------------------------------------------------------- bout en bout (DB)
@@ -281,7 +278,9 @@ def test_pool_separates_exercises_from_chapter_problems(db):
     assert all(p["kind"] == "probleme" for p in out["problems"])
     assert out["metrics"]["cols_per_page"] == 2
     assert len(out["metrics"]["column_h"]) == 2
-    assert out["exercises"][0]["height_pt"] > out["exercises"][0]["height_pt_no_guide"]
+    # le guide de bas de carte ne prend plus de place : seuls les encadrés
+    # « {{aide}} » de l'énoncé font varier la hauteur
+    assert out["exercises"][0]["height_pt"] >= out["exercises"][0]["height_pt_no_guide"]
 
 
 def _plan(rows, variants):
@@ -334,26 +333,26 @@ def test_generate_manual_places_items_and_assigns_variants(db, tmp_path, monkeyp
     assert (tmp_path / "assessments" / a.id / "generated" / "subject_batch.pdf").exists()
 
 
-def test_generate_manual_prints_the_guide_only_for_fragile_students(db, tmp_path, monkeypatch):
+def test_generate_manual_applies_the_same_guide_mode_to_every_student(db, tmp_path,
+                                                                      monkeypatch):
     from app.config import settings
     monkeypatch.setattr(settings, "data_dir", tmp_path)
     cls, _comps, rows, students = _seed(db)
     variants = [{"key": "facile", "label": "Facile", "items": [
         {"exercise_id": rows[0].id, "page": 0, "col": 0, "rank": 0}]}]
     a = Assessment(class_id=cls.id, title="Guides", pages_target=1,
-                   blueprint_json={"mode": "manual", "guides": "print_fragile",
+                   blueprint_json={"mode": "manual", "guides": "none",
                                    "variant_kind": "none", "variants": variants})
     db.add(a)
     db.commit()
     manual_subject.generate_manual_job(db, a, None, font_size=9)
 
-    modes = {}
+    modes = set()
     for copy in db.query(Copy).filter_by(assessment_id=a.id).all():
         item = db.query(CopyItem).filter_by(copy_id=copy.id).first()
         zone = db.query(ResponseZone).filter_by(item_id=item.id).first()
-        modes[copy.student_id] = zone.meta_json["correction_strip"]["guides"]
-    assert modes[students[0].id] == pdfgen.GUIDES_PRINT     # niveau 2
-    assert modes[students[1].id] == pdfgen.GUIDES_OVERLAY   # niveau 6
+        modes.add(zone.meta_json["correction_strip"]["guides"])
+    assert modes == {pdfgen.GUIDES_NONE}
 
 
 def test_generate_manual_refuses_a_plan_pointing_at_a_deleted_exercise(db, tmp_path,
@@ -487,3 +486,25 @@ def test_duplicate_manual_subject_keeps_each_students_variant(client, db, monkey
         students[0].id: "B", students[1].id: "A"}
     listed = {row["id"]: row for row in client.get("/api/assessments").json()}
     assert listed[duplicate.id]["duplicate_version"] == 2
+
+
+def test_a_composite_without_context_starts_at_its_first_subquestion():
+    """Contexte vide (ni phrase ni figure) : pas de numéro d'exercice isolé sur
+    sa propre ligne — la carte commence directement par « a. »."""
+    parts = [{"response_type": "qcm_single", "statement": f"Question {k} ?",
+              "grading": {"max_score": 2, "comparator": "qcm", "choices": ["$1$", "$2$"]},
+              "expected": {"type": "choice", "correct": [0]}} for k in (1, 2)]
+    empty = {**_item("", response_type="composite"), "grading": {"parts": parts}}
+    with_context = {**empty, "statement": "Voici deux questions de calcul."}
+    drawn = []
+    original = pdfgen._draw_badge
+    pdfgen._draw_badge = lambda c, x, y, fs, label, color: drawn.append(label)
+    try:
+        _render([empty], placement=[(0, 0)])
+        assert "1" not in drawn and {"a", "b"} <= set(drawn)
+        drawn.clear()
+        _render([with_context], placement=[(0, 0)])
+        assert "1" in drawn
+    finally:
+        pdfgen._draw_badge = original
+    assert _height(empty) < _height(with_context)

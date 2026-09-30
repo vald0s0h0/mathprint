@@ -7,6 +7,8 @@ Figures supportées :
 - angle(degrees, label)
 - number_line(min, max, points)
 - coordinate_plane(points, grid)
+- geo   : figure géométrique DÉCLARATIVE (services.geofig)
+- chart : graphique déclaratif — courbes, diagrammes, arbres (services.chartfig)
 
 Chaque figure est rasterisée en PNG et mise en cache disque.
 """
@@ -24,7 +26,36 @@ from ..config import settings
 
 
 FIGURE_TYPES = {"rectangle", "triangle", "circle", "angle", "number_line",
-                "coordinate_plane", "image"}
+                "coordinate_plane", "image", "geo", "chart"}
+# figures déclaratives : spec contrôlée par leur propre moteur, erreur LISIBLE
+DECLARATIVE_TYPES = {"geo", "chart"}
+
+
+def _engine(ftype: str):
+    from . import chartfig, geofig
+    return {"geo": geofig, "chart": chartfig}[ftype]
+
+
+def figure_error(figure_json) -> str | None:
+    """Pourquoi cette figure est refusée (None = acceptée). Pour les figures
+    déclaratives, c'est le message précis du moteur (« segments[2] : point
+    inconnu 'E' ») — destiné à l'auteur de la spec, qui doit pouvoir la
+    corriger."""
+    if not isinstance(figure_json, dict):
+        return "figure : objet {type, params} attendu"
+    ftype = figure_json.get("type")
+    if ftype not in FIGURE_TYPES:
+        return f"figure : type inconnu {ftype!r}"
+    if ftype in DECLARATIVE_TYPES:
+        from .figkit import FigureSpecError
+        try:
+            _engine(ftype).validate(figure_json.get("params"))
+        except FigureSpecError as exc:
+            return f"figure {ftype} — {exc}"
+        except Exception as exc:  # noqa: BLE001 — rendu matplotlib inattendu
+            return f"figure {ftype} — rendu impossible ({exc.__class__.__name__}: {exc})"
+        return None
+    return None if validate_figure(figure_json) is not None else f"figure {ftype} invalide"
 
 
 def _fmt(v: float) -> str:
@@ -61,6 +92,9 @@ def validate_figure(figure_json) -> dict | None:
     if ftype not in FIGURE_TYPES or not isinstance(params, (dict, type(None))):
         return None
     params = dict(params or {})
+    if ftype in DECLARATIVE_TYPES:
+        return ({"type": ftype, "params": params}
+                if figure_error({"type": ftype, "params": params}) is None else None)
     if ftype == "image":
         # figure extraite d'un manuel (Sésamaths) : chemin de fichier direct,
         # pas de rendu procédural — confiance interne (jamais fourni par un LLM)
@@ -354,8 +388,12 @@ def render_figure(figure_json: dict) -> bytes:
 
     # Clé de cache
     import json as _json
+    key_src = figure_json
+    if fig_type in DECLARATIVE_TYPES:
+        from .figkit import ENGINE_VERSION
+        key_src = {**figure_json, "_engine": ENGINE_VERSION}
     cache_key = hashlib.sha256(
-        _json.dumps(figure_json, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+        _json.dumps(key_src, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     cache_dir = Path(settings.data_dir) / "figcache"
     cache_dir.mkdir(parents=True, exist_ok=True)
     cache_file = cache_dir / f"{cache_key}.png"
@@ -365,7 +403,9 @@ def render_figure(figure_json: dict) -> bytes:
 
     # Dispatch par type
     try:
-        if fig_type == 'rectangle':
+        if fig_type in DECLARATIVE_TYPES:
+            png = _engine(fig_type).render(params)
+        elif fig_type == 'rectangle':
             png = render_rectangle(
                 length=params.get('length', 5),
                 width=params.get('width', 3),
@@ -410,5 +450,5 @@ def render_figure(figure_json: dict) -> bytes:
     return png
 
 
-__all__ = ['render_figure', 'validate_figure', 'render_rectangle', 'render_triangle',
+__all__ = ['render_figure', 'validate_figure', 'figure_error', 'render_rectangle', 'render_triangle',
            'render_circle', 'render_angle', 'render_number_line', 'render_coordinate_plane']

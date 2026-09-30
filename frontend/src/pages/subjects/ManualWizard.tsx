@@ -18,8 +18,8 @@ import {
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
 import {
-  AlertTriangle, Copy as CopyIcon, EyeOff, Layers, PencilRuler, Plus, Printer,
-  Shuffle, Trash2, Users,
+  AlertTriangle, Copy as CopyIcon, EyeOff, Layers, Lightbulb, PencilRuler, Plus,
+  Shuffle, Trash2,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../../api'
@@ -43,23 +43,18 @@ const LEVEL_LABELS: Record<string, string> = {
 }
 const MAX_VARIANTS = 6
 
-// Les trois politiques de guide. Un « guide » est l'aide courte
-// d'auto-correction attaché à chaque exercice/problème.
+// Guides = encadrés d'aide (fond jaune) intégrés aux énoncés, entre les
+// questions. Le choix vaut pour tout le sujet.
 const GUIDE_OPTIONS = [
   {
-    value: 'overlay', icon: Printer, title: '1. Overlay après correction',
-    desc: "L'espace du guide est réservé sous chaque carte ; il ne s'imprime "
-      + "sur l'overlay que si l'exercice est faux (niveaux 4 à 10).",
+    value: 'include', icon: Lightbulb, title: 'Inclure les guides',
+    desc: 'Les encadrés d\'aide s\'impriment dans les exercices, là où ils '
+      + 'accompagnent la démarche de l\'élève.',
   },
   {
-    value: 'print_fragile', icon: Users, title: '2. Imprimés pour les niveaux 1 à 4',
-    desc: 'Active aussi l\'option 1 : les élèves de niveau 1 à 4 reçoivent '
-      + 'le guide dès le sujet ; les autres le reçoivent en overlay si besoin.',
-  },
-  {
-    value: 'none', icon: EyeOff, title: 'Aucun guide',
-    desc: "L'espace réservé au guide disparaît : les cartes sont plus compactes "
-      + 'et il tient nettement plus d\'exercices par page.',
+    value: 'none', icon: EyeOff, title: 'Ne pas inclure',
+    desc: 'Les encadrés d\'aide sont retirés : les cartes sont plus compactes '
+      + 'et il tient davantage d\'exercices par page.',
   },
 ]
 
@@ -115,7 +110,7 @@ export default function ManualWizard({ opened, classes, onClose, onCreated }: {
   const [noteBase, setNoteBase] = useState('20')
   const [title, setTitle] = useState('')
   const [pages, setPages] = useState(1)
-  const [guides, setGuides] = useState('overlay')
+  const [guides, setGuides] = useState('include')
   // étape 2
   const [competencyIds, setCompetencyIds] = useState<string[]>([])
   // étape 3
@@ -132,7 +127,7 @@ export default function ManualWizard({ opened, classes, onClose, onCreated }: {
 
   const reset = useCallback(() => {
     setStep(0); setClassId(null); setType('training'); setNoteBase('20')
-    setTitle(''); setPages(1); setGuides('overlay'); setCompetencyIds([])
+    setTitle(''); setPages(1); setGuides('include'); setCompetencyIds([])
     setVariantKind('none'); setCurrent(0); setPool(null)
     setVariants([{ key: 'A', label: 'Sujet unique', layout: emptyLayout(1) }])
   }, [])
@@ -267,9 +262,7 @@ export default function ManualWizard({ opened, classes, onClose, onCreated }: {
       ? `Vous composez la ${variants[current]?.label} : elle sera distribuée à un `
         + 'élève sur ' + variants.length + '.'
       : 'Toute la classe recevra cette feuille.'
-  const guideSummary = guides === 'print_fragile'
-    ? 'Options 1 et 2 — sujet niveaux 1 à 4 + overlay si besoin'
-    : GUIDE_OPTIONS.find((o) => o.value === guides)!.title
+  const guideSummary = (GUIDE_OPTIONS.find((o) => o.value === guides) ?? GUIDE_OPTIONS[0]).title
 
   return (
     <Modal opened={opened} onClose={close} size="calc(100vw - 3rem)" centered
@@ -317,14 +310,12 @@ export default function ManualWizard({ opened, classes, onClose, onCreated }: {
               <div>
                 <Text size="sm" fw={600}>Guides</Text>
                 <Text size="xs" c="dimmed" mb="xs">
-                  Chaque exercice et chaque problème porte un guide élève court
-                  d'auto-correction. Ce choix décide de la place qu'il occupe sur
-                  la feuille — il vaut pour tout le sujet.
+                  Les exercices peuvent porter des encadrés d'aide (fond jaune)
+                  qui accompagnent la démarche. Ce choix vaut pour tout le sujet.
                 </Text>
                 <Group align="stretch" gap="xs">
                   {GUIDE_OPTIONS.map((o) => (
-                    <ChoiceCard key={o.value} selected={guides === o.value
-                      || (guides === 'print_fragile' && o.value === 'overlay')}
+                    <ChoiceCard key={o.value} selected={guides === o.value}
                       icon={o.icon} title={o.title} desc={o.desc}
                       onClick={() => setGuides(o.value)} />
                   ))}

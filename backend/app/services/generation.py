@@ -79,7 +79,7 @@ def indigo_display(row) -> tuple[str, str, bool]:
     return f"{head}\n{row.statement}", calc, True
 
 
-def render_shape(row, guides: str = pdfgen.GUIDES_OVERLAY) -> dict:
+def render_shape(row, guides: str = pdfgen.GUIDES_INCLUDE) -> dict:
     """Carte pdfgen d'une ligne de banque, SANS aucune écriture en base : tout
     ce dont dépendent la mise en page et la mesure de hauteur. `item_id` (et
     `part_item_ids` d'un composite) sont ajoutés par `build_render_item` quand
@@ -106,7 +106,8 @@ def render_shape(row, guides: str = pdfgen.GUIDES_OVERLAY) -> dict:
                      "grading": scoring.with_bareme(
                          p.get("grading") or {}, p.get("response_type", "short_text")),
                      "statement": p.get("statement", ""),
-                     "expected": p.get("expected") or {}} for p in parts]}}
+                     "expected": p.get("expected") or {},
+                     "figure": p.get("figure")} for p in parts]}}
     return {**common, "response_type": row.response_type,
             "choices": row.grading_json.get("choices", []),
             "grading": grading_json,
@@ -117,7 +118,7 @@ def render_shape(row, guides: str = pdfgen.GUIDES_OVERLAY) -> dict:
 
 
 def build_render_item(db: Session, *, row, copy_id: str, catalog_id: str, seq: int,
-                      guides: str = pdfgen.GUIDES_OVERLAY) -> dict | None:
+                      guides: str = pdfgen.GUIDES_INCLUDE) -> dict | None:
     """Crée la (ou les) CopyItem d'une ligne de banque et retourne la carte à
     rendre par pdfgen. UNE seule définition, partagée par la génération
     automatique (distribution par compétences) et par l'assistant « Créer mon
@@ -174,6 +175,10 @@ def generate_assessment_job(db: Session, assessment: Assessment,
     # préserve le comportement historique (MathALÉA + DeepSeek), inchangé
     # par défaut pour tout sujet existant sans ce champ
     exercise_source = (assessment.blueprint_json or {}).get("exercise_source", "auto")
+    # guides (encadrés « {{aide}} ») inclus ou retirés pour tout le sujet
+    guide_mode = (pdfgen.GUIDES_NONE
+                  if (assessment.blueprint_json or {}).get("guides") == pdfgen.GUIDES_NONE
+                  else pdfgen.GUIDES_INCLUDE)
     competency_ids = list(dict.fromkeys(
         (assessment.blueprint_json or {}).get("competency_ids") or []))
     competencies = {c.id: c for c in db.query(Competency).filter(
@@ -334,7 +339,7 @@ def generate_assessment_job(db: Session, assessment: Assessment,
 
             render = build_render_item(
                 db, row=row, copy_id=copy.id, catalog_id=catalog_refs[comp_id].id,
-                seq=seq)
+                seq=seq, guides=guide_mode)
             if render is None:
                 return False
             render_items.append({**render, "_identity": identity, "_bucket": bucket})
@@ -478,7 +483,7 @@ def generate_assessment_job(db: Session, assessment: Assessment,
                     rank = (student_history.candidate_rank(row, ex_log)[0]
                             if individual else 0)
                     measured.append((rank, pdfgen.estimate_item_height(
-                        render_shape(row), ex_tpl_font_size, math_fs,
+                        render_shape(row, guide_mode), ex_tpl_font_size, math_fs,
                         tpl["exercise"]), comp_id, row))
             # rang croissant d'abord (ce que l'élève n'a pas encore vu), puis
             # hauteur décroissante : à préférence égale, la plus grande carte qui

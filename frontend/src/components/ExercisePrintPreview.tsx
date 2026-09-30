@@ -4,17 +4,22 @@
 // assistant : le cadre ne contient que l'énoncé, la figure et la zone de
 // réponse, comme le PDF. Les badges de gestion sont fournis par le parent et
 // restent donc toujours à l'extérieur du cadre imprimé.
-import { Badge, Box, Group, Paper, Stack, Table, Text } from '@mantine/core'
-import { BookOpen, Calculator, Check, Slash } from 'lucide-react'
+import { Badge, Box, Group, Loader, Stack, Text } from '@mantine/core'
+import { BookOpen, Lightbulb } from 'lucide-react'
 import type { ReactNode } from 'react'
-import { useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { parseBlocks, stripBold, type RichBlock } from '../utils/richblocks'
-import AuthImg from './AuthImg'
-import FigurePreview from './FigurePreview'
+import { getToken } from '../api'
 import MathText from './MathText'
 
 export type PrintableExercise = {
   statement: string
+  title?: string
+  badge_type?: string
+  difficulty?: number
+  level?: number
+  kind?: string
+  is_problem?: boolean
   response_type: string
   expected?: Record<string, any> | null
   choices?: string[] | null
@@ -43,17 +48,30 @@ type PreviewProps = {
   // d'un coup d'œil que la réponse attendue est la bonne, jamais sur une
   // copie destinée à l'élève (Banque, mise en page d'un sujet).
   showAnswers?: boolean
+  // Encadrés guide « {{aide}} » intégrés à l'énoncé : affichés par défaut
+  // (sujet « Inclure les guides »), masqués à false.
+  guides?: boolean
   className?: string
+}
+
+/** Encadré GUIDE intégré à l'énoncé — même présentation qu'à l'impression
+ *  (pdfgen._draw_guide_block) : fond jaune clair, liseré ambre, ampoule. */
+function GuideBox({ text }: { text: string }) {
+  return (
+    <Group gap={6} align="flex-start" wrap="nowrap" my={4} style={{
+      background: '#FFF4C2', border: '1px solid #E4B42D', borderRadius: 5,
+      padding: '4px 7px', color: '#4D3B05',
+    }}>
+      <Lightbulb size={15} color="#C99A12" style={{ flex: '0 0 auto', marginTop: 1 }} />
+      <Box style={{ flex: 1, minWidth: 0, fontSize: '0.95em' }}>
+        {text.split('\n').map((ln, i) => <Box key={i}><MathText text={ln} /></Box>)}
+      </Box>
+    </Group>
+  )
 }
 
 const SUBLABEL_RE = /^([a-h]|\d{1,2})[.)]\s+/
 const BULLET_RE = /^[•–—-]\s+/
-const FIGURE_TOKEN = '{{figure}}'
-
-const stripFigureToken = (s: string) =>
-  (s || '').replace(/^[ \t]*\{\{figure\}\}[ \t]*\n?/gm, '')
-    .replace(/\{\{figure\}\}/g, '').trim()
-
 /** Tableau de données d'un énoncé (cf. backend services/blocks) : colonnes
  *  ajustées au contenu, cellules centrées horizontalement ET verticalement,
  *  en-tête en gras sur fond léger — la même présentation qu'à l'impression.
@@ -129,6 +147,7 @@ export function ExerciseRichBody({ text, color = 'indigo', size }: {
   return (
     <Box fz={size}>
       {blocks.map((block, index) => {
+        if (block.kind === 'guide') return <GuideBox key={index} text={block.text} />
         if (block.kind === 'table') return <StatementTable key={index} block={block} />
         if (block.kind === 'series') {
           const grid = <StatementSeries items={block.items} />
@@ -173,230 +192,48 @@ export function ExerciseRichBody({ text, color = 'indigo', size }: {
   )
 }
 
-function Figure({ exercise }: { exercise: PrintableExercise }) {
-  if (exercise.figure_url) {
-    return <AuthImg src={exercise.figure_url} alt="figure" style={{
-      maxWidth: '100%', maxHeight: 180, margin: '6px auto', display: 'block', objectFit: 'contain',
-    }} />
-  }
-  if (exercise.figure) {
-    return <Box my={6} style={{ display: 'flex', justifyContent: 'center' }}>
-      <FigurePreview figureJson={exercise.figure} />
-    </Box>
-  }
-  return null
-}
-
-function AnswerBox({ height = '13mm' }: { height?: string }) {
-  return <Box mt={8} style={{
-    height, border: '1px solid var(--mantine-color-orange-3)', borderRadius: 5,
-  }} />
-}
-
-function LinedAnswerBox({ lines }: { lines: number }) {
-  return <Box mt={8} p="2mm 1.5mm" style={{
-    height: `calc(${lines} * 9mm + 4mm)`,
-    border: '1px solid var(--mantine-color-orange-3)', borderRadius: 5,
-    display: 'grid', gridTemplateRows: `repeat(${lines}, minmax(0, 1fr))`,
-  }}>
-    {Array.from({ length: lines }, (_, index) => <Box key={index} style={{
-      borderBottom: '1px solid var(--mantine-color-orange-2)',
-    }} />)}
+/** Le PDF est l'autorité de mise en page, y compris dans les deux banques.
+ * Chargement à l'approche de la carte ; les réponses se superposent aux mêmes
+ * coordonnées que les zones de correction, sans modifier la géométrie. */
+function PrintedCard({ exercise, guides, showAnswers }: {
+  exercise: PrintableExercise; guides: boolean; showAnswers: boolean
+}) {
+  const ref = useRef<HTMLDivElement>(null)
+  const [visible, setVisible] = useState(false)
+  const [src, setSrc] = useState<string | null>(null)
+  const [error, setError] = useState(false)
+  const ex = Object.fromEntries([
+    'statement', 'response_type', 'expected', 'grading', 'choices', 'figure', 'figure_url',
+    'calculator', 'title', 'badge_type', 'difficulty', 'level', 'kind', 'is_problem',
+  ].map((k) => [k, (exercise as Record<string, any>)[k]]))
+  const key = JSON.stringify({ exercise: ex, guides, show_answers: showAnswers })
+  useEffect(() => {
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting) { setVisible(true); observer.disconnect() }
+    }, { rootMargin: '300px' })
+    if (ref.current) observer.observe(ref.current)
+    return () => observer.disconnect()
+  }, [])
+  useEffect(() => {
+    if (!visible) return
+    const controller = new AbortController()
+    let url: string | null = null
+    setSrc(null); setError(false)
+    const token = getToken()
+    fetch('/api/content/card-preview.png', {
+      method: 'POST', body: key, signal: controller.signal,
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    }).then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.blob() })
+      .then((blob) => { if (!controller.signal.aborted) { url = URL.createObjectURL(blob); setSrc(url) } })
+      .catch(() => { if (!controller.signal.aborted) setError(true) })
+    return () => { controller.abort(); if (url) URL.revokeObjectURL(url) }
+  }, [key, visible])
+  return <Box ref={ref} style={{ minHeight: src ? undefined : 100 }}>
+    {src ? <img src={src} alt={exercise.title || exercise.statement || 'Exercice de calcul'}
+      style={{ width: '100%', height: 'auto', display: 'block' }} />
+      : error ? <Text c="red" size="sm">Aperçu indisponible. Recharge la page pour réessayer.</Text>
+      : <Box py="lg" ta="center"><Loader size="sm" /></Box>}
   </Box>
-}
-
-// Case (QCM/grille) : creuse normalement — EXACTEMENT le rendu d'avant, une
-// copie ne s'imprime jamais pré-cochée — pleine + coche quand elle porte la
-// bonne réponse en relecture (showAnswers), même couleur que la carte, pour
-// qu'un coup d'œil suffise à confirmer que la réponse attendue est la bonne.
-function AnswerCheckbox({ checked, color, size, iconSize, radius = 2 }: {
-  checked: boolean; color: string; size: string; iconSize: number; radius?: number
-}) {
-  return (
-    <Box style={{
-      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-      width: size, height: size, borderRadius: radius, flex: '0 0 auto',
-      border: `1px solid var(--mantine-color-${checked ? color : 'orange'}-${checked ? 6 : 4})`,
-      background: checked ? `var(--mantine-color-${color}-6)` : undefined,
-    }}>
-      {checked && <Check size={iconSize} color="white" strokeWidth={3} />}
-    </Box>
-  )
-}
-
-/** Choix d'un QCM en grille de 1 à 4 colonnes. Le nombre de colonnes part d'un
- *  plafond (mesure typographique grossière sur la longueur apparente) puis est
- *  RÉDUIT si la mesure RÉELLE, une fois KaTeX rendu dans le DOM, montre qu'un
- *  libellé déborde de sa colonne (une formule rend toujours plus large que son
- *  nombre de caractères ne le laisse deviner — cf. pdfgen._qcm_layout côté PDF,
- *  qui applique exactement la même correction par mesure).
- *
- *  Pendant que columns > 1, chaque libellé est contraint en une seule ligne
- *  (nowrap) pour permettre cette mesure d'occupation ; à columns === 1 (dernier
- *  recours), la contrainte est levée et le texte peut se replier normalement —
- *  jamais au milieu d'une formule (cf. MathSpan), seulement entre mots/formules. */
-function QcmChoices({ choices, correct, showAnswers, color }: {
-  choices: string[]; correct: Set<number>; showAnswers?: boolean; color: string
-}) {
-  const containerRef = useRef<HTMLDivElement>(null)
-  const maxLength = Math.max(0, ...choices.map((c) => stripMathLength(c)))
-  const cap = Math.max(1, Math.min(choices.length,
-    maxLength > 16 ? 1 : maxLength > 8 ? 2 : maxLength > 4 ? 3 : 4))
-  const [columns, setColumns] = useState(cap)
-  const choicesKey = choices.join('')
-
-  useLayoutEffect(() => { setColumns(cap) }, [choicesKey, cap])
-
-  useLayoutEffect(() => {
-    const el = containerRef.current
-    if (!el || columns <= 1) return
-    const overflow = Array.from(el.querySelectorAll<HTMLElement>('[data-qcm-label]'))
-      .some((node) => node.scrollWidth > node.clientWidth + 1)
-    if (overflow) setColumns((n) => Math.max(1, n - 1))
-  })
-
-  return (
-    <Box ref={containerRef} mt={7} style={{
-      display: 'grid', gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
-      columnGap: 14, rowGap: 5,
-    }}>
-      {choices.map((choice, index) => (
-        <Group key={index} gap={8} wrap="nowrap" align="center" style={{ minWidth: 0 }}>
-          <AnswerCheckbox checked={!!showAnswers && correct.has(index)} color={color}
-            size="2mm" iconSize={7} radius={0} />
-          <Box data-qcm-label style={{
-            minWidth: 0, flex: '1 1 auto',
-            overflow: columns > 1 ? 'hidden' : 'visible',
-            whiteSpace: columns > 1 ? 'nowrap' : 'normal',
-          }}>
-            <MathText text={choice} size="sm" />
-          </Box>
-        </Group>
-      ))}
-    </Box>
-  )
-}
-
-function ResponseZone({ exercise, color, showAnswers }: {
-  exercise: PrintableExercise; color: string; showAnswers?: boolean
-}) {
-  const rt = exercise.response_type
-  const expected = exercise.expected || {}
-  const grading = exercise.grading || {}
-  const choices = exercise.choices || grading.choices || []
-  const inlineBlank = /\{\{(blank(_right)?|mini)\}\}/.test(exercise.statement || '')
-
-  if (rt === 'qcm_single' || rt === 'qcm_multiple') {
-    const correct = new Set<number>(expected.correct || grading.correct || [])
-    return <QcmChoices choices={choices} correct={correct} showAnswers={showAnswers} color={color} />
-  }
-  if (rt === 'checkbox_grid') {
-    const cols: string[] = expected.cols || grading.cols || []
-    const rows: { label: string; correct?: number }[] = expected.rows || grading.rows || []
-    return (
-      <Table withTableBorder withColumnBorders mt={8} styles={{ td: { padding: 4 }, th: { padding: 4 } }}>
-        <Table.Thead><Table.Tr><Table.Th />
-          {cols.map((col, i) => <Table.Th key={i} ta="center"><MathText text={col} size="xs" /></Table.Th>)}
-        </Table.Tr></Table.Thead>
-        <Table.Tbody>{rows.map((row, ri) => (
-          <Table.Tr key={ri}><Table.Td><MathText text={row.label} size="sm" /></Table.Td>
-            {cols.map((_col, ci) => <Table.Td key={ci} ta="center">
-              <AnswerCheckbox checked={!!showAnswers && row.correct === ci} color={color}
-                size="13px" iconSize={10} />
-            </Table.Td>)}
-          </Table.Tr>
-        ))}</Table.Tbody>
-      </Table>
-    )
-  }
-  if (rt === 'matching') {
-    const left: string[] = expected.left || grading.left || []
-    const right: string[] = expected.right || grading.right || []
-    const pairs: [number, number][] = expected.pairs || grading.pairs || []
-    // pas de tracé de trait dans cet aperçu compact : le n° de paire, posé sur
-    // les deux pastilles reliées, suffit à vérifier l'appariement attendu.
-    const pairOf = (side: 'left' | 'right', index: number) => {
-      const k = pairs.findIndex((p) => p[side === 'left' ? 0 : 1] === index)
-      return k >= 0 ? k + 1 : null
-    }
-    const dot = (n: number | null) => {
-      const marked = !!showAnswers && n != null
-      return (
-        <Box style={{
-          width: marked ? '4mm' : '2.2mm', height: marked ? '4mm' : '2.2mm',
-          borderRadius: '50%', flex: '0 0 auto',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontSize: '8px', fontWeight: 700, lineHeight: 1,
-          color: marked ? 'white' : undefined,
-          background: marked ? `var(--mantine-color-${color}-6)` : undefined,
-          border: `1px solid var(--mantine-color-${marked ? color : 'orange'}-${marked ? 6 : 4})`,
-        }}>{marked ? n : ''}</Box>
-      )
-    }
-    return (
-      <Group mt={8} align="flex-start" justify="space-between" wrap="nowrap" gap={24}>
-        <Box style={{ flex: 1 }}>{left.map((label, i) => <Group key={i} gap={8} wrap="nowrap" mb={6}><MathText text={label} size="sm" />{dot(pairOf('left', i))}</Group>)}</Box>
-        <Box style={{ flex: 1 }}>{right.map((label, i) => <Group key={i} gap={8} wrap="nowrap" mb={6}>{dot(pairOf('right', i))}<MathText text={label} size="sm" /></Group>)}</Box>
-      </Group>
-    )
-  }
-  if (rt === 'manual_drawing') return <AnswerBox height="60mm" />
-  if (rt === 'short_text') return inlineBlank ? null : <AnswerBox />
-  if (rt === 'multi_blank') return null
-  if (rt === 'multiline_text') {
-    const lineCount = Math.max(3, Math.min(12, Number(exercise.lines ?? grading.lines ?? 5)))
-    return <LinedAnswerBox lines={lineCount} />
-  }
-  if (rt === 'table_fill') {
-    const cells: any[][] = expected.cells || grading.cells || []
-    const colLabels = exercise.col_labels || grading.col_labels
-    const rowLabels = exercise.row_labels || grading.row_labels
-    return (
-      <Table withTableBorder withColumnBorders mt={8} styles={{ td: { padding: 4, borderColor: 'var(--mantine-color-orange-3)' } }}>
-        {colLabels && <Table.Thead><Table.Tr>{rowLabels && <Table.Th />}{colLabels.map((label: string, i: number) => <Table.Th key={i}><MathText text={label} size="xs" /></Table.Th>)}</Table.Tr></Table.Thead>}
-        <Table.Tbody>{cells.map((row, r) => <Table.Tr key={r}>
-          {rowLabels && <Table.Td><MathText text={rowLabels[r] || ''} size="xs" /></Table.Td>}
-          {row.map((cell, c) => <Table.Td key={c} ta="center" style={{ minWidth: '10mm', height: '10.4mm', background: cell?.given ? 'var(--mantine-color-gray-1)' : undefined }}>
-            {cell?.given ? <MathText text={String(cell.value ?? '')} size="xs" /> : null}
-          </Table.Td>)}
-        </Table.Tr>)}</Table.Tbody>
-      </Table>
-    )
-  }
-  return <AnswerBox />
-}
-
-function Statement({ exercise, color, showAnswers }: {
-  exercise: PrintableExercise; color: string; showAnswers?: boolean
-}) {
-  const figure = <Figure exercise={exercise} />
-  if (exercise.response_type === 'composite') {
-    const parts: any[] = exercise.expected?.parts || exercise.grading?.parts || []
-    return (
-      <Box>
-        <ExerciseRichBody text={stripFigureToken(exercise.statement)} color={color} />
-        {figure}
-        <Stack gap={9} mt={8}>{parts.map((part, index) => {
-          const partExercise: PrintableExercise = {
-            ...exercise, statement: part.statement || '', response_type: part.response_type || 'short_text',
-            expected: part.expected || {}, grading: part.grading || {},
-            choices: part.grading?.choices || [], figure: null, figure_url: null,
-          }
-          return <Group key={index} gap={6} align="flex-start" wrap="nowrap">
-            <Badge color={color} radius="sm" size="sm" variant="filled" style={{ flex: '0 0 auto', marginTop: 2 }}>{String.fromCharCode(97 + index)}</Badge>
-            <Box style={{ flex: 1, minWidth: 0 }}><ExerciseRichBody text={part.statement || ''} color={color} /><ResponseZone exercise={partExercise} color={color} showAnswers={showAnswers} /></Box>
-          </Group>
-        })}</Stack>
-      </Box>
-    )
-  }
-  if ((exercise.figure_url || exercise.figure) && exercise.statement.includes(FIGURE_TOKEN)) {
-    const index = exercise.statement.indexOf(FIGURE_TOKEN)
-    const before = exercise.statement.slice(0, index).replace(/\n+$/, '')
-    const after = exercise.statement.slice(index + FIGURE_TOKEN.length).replace(/^\n+/, '')
-    return <Box>{before.trim() && <ExerciseRichBody text={before} color={color} />}{figure}{after.trim() && <ExerciseRichBody text={after} color={color} />}<ResponseZone exercise={exercise} color={color} showAnswers={showAnswers} /></Box>
-  }
-  return <Box><ExerciseRichBody text={stripFigureToken(exercise.statement)} color={color} />{figure}<ResponseZone exercise={exercise} color={color} showAnswers={showAnswers} /></Box>
 }
 
 function DetailBlock({ label, text, color, guide }: { label: string; text: string; color: string; guide?: boolean }) {
@@ -413,30 +250,14 @@ function DetailBlock({ label, text, color, guide }: { label: string; text: strin
 
 export default function ExercisePrintPreview({ exercise, color = 'indigo', badges, actions,
   beforeFrame, afterFrame, showCorrection = false, showGuide = false, showAnswers = false,
-  className }: PreviewProps) {
+  guides = true, className }: PreviewProps) {
   return (
     <Stack gap={3} className={className} style={{ width: '100%', maxWidth: 340 }}>
       {beforeFrame}
       {(badges || actions) && <Group justify="space-between" align="flex-start" wrap="nowrap">
         <Box style={{ minWidth: 0 }}>{badges}</Box>{actions}
       </Group>}
-      <Paper withBorder p="xs" radius={8} style={{
-        position: 'relative',
-        fontSize: 12,
-        background: 'var(--mantine-color-body)',
-        borderColor: 'var(--mantine-color-gray-4)',
-        boxShadow: '1px 1px 0 rgba(0,0,0,.07)',
-      }}>
-        {exercise.calculator && exercise.calculator !== 'autorisee' && <Box style={{
-          position: 'absolute', top: 6, right: 6, width: 17, height: 17, zIndex: 2,
-        }}>
-          <Calculator size={17} color={exercise.calculator === 'necessaire'
-            ? 'var(--mantine-color-blue-6)' : 'var(--mantine-color-red-6)'} />
-          {exercise.calculator === 'interdite' && <Slash size={17}
-            color="var(--mantine-color-red-6)" style={{ position: 'absolute', inset: 0 }} />}
-        </Box>}
-        <Statement exercise={exercise} color={color} showAnswers={showAnswers} />
-      </Paper>
+      <PrintedCard exercise={exercise} guides={guides} showAnswers={showAnswers} />
       {afterFrame}
       {showGuide && exercise.correction_guide && <DetailBlock label="Guide (élève)" text={exercise.correction_guide} color={color} guide />}
       {showCorrection && exercise.correction_solution && <DetailBlock label="Corrigé (prof)" text={exercise.correction_solution} color={color} />}

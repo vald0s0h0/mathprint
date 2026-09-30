@@ -70,6 +70,8 @@ export default function Subjects() {
   const [type, setType] = useState('training')
   const [title, setTitle] = useState('')
   const [pages, setPages] = useState(1)
+  // encadrés d'aide intégrés aux énoncés : inclus ou retirés pour tout le sujet
+  const [guides, setGuides] = useState<'include' | 'none'>('include')
   const [noteBase, setNoteBase] = useState('20')
   // étape 2 : compétences cochées + source des exercices (§ Sésamaths)
   const [competencyIds, setCompetencyIds] = useState<string[]>([])
@@ -144,7 +146,7 @@ export default function Subjects() {
   async function confirmCompetencies() {
     if (!assessmentId) return
     await api.patch(`/api/assessments/${assessmentId}`,
-      { competency_ids: competencyIds, exercise_source: exerciseSource })
+      { competency_ids: competencyIds, exercise_source: exerciseSource, guides })
     setStep(2)
   }
 
@@ -201,7 +203,7 @@ export default function Subjects() {
     // Indigo par défaut, comme à l'initialisation de l'état : "auto" n'a plus
     // aucune pipeline derrière depuis le 16/07, un assistant rouvert après un
     // reset repartait donc sur une source morte.
-    setMode('common'); setType('training'); setPages(1); setExerciseSource('indigo')
+    setMode('common'); setType('training'); setPages(1); setGuides('include'); setExerciseSource('indigo')
     setNoteBase('20')
   }
 
@@ -386,6 +388,14 @@ export default function Subjects() {
               <NumberInput label="Nombre de pages" value={pages} min={1} max={6}
                 description="1 = recto seul, 2 = recto/verso, 3+ = feuilles supplémentaires"
                 onChange={(v) => setPages(Number(v) || 1)} />
+              <Radio.Group label="Guides" value={guides}
+                onChange={(v) => setGuides(v === 'none' ? 'none' : 'include')}
+                description="Encadrés d'aide (fond jaune) intégrés aux exercices, pour accompagner la démarche.">
+                <Group mt="xs">
+                  <Radio value="include" label="Inclure les guides" />
+                  <Radio value="none" label="Ne pas inclure" />
+                </Group>
+              </Radio.Group>
               <Button onClick={createDraft} disabled={!classId}>Continuer</Button>
             </Stack>
           </Stepper.Step>

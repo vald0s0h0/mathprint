@@ -93,7 +93,7 @@ def summary(grade_level: str | None = None, db: Session = Depends(get_db)):
     for cid, lvl, n in (db.query(GeneratedExercise.competency_id,
                                  GeneratedExercise.difficulty_level,
                                  func.count())
-                        .filter(GeneratedExercise.status == "active")
+                        .filter(GeneratedExercise.status == "active", GeneratedExercise.kind != "probleme")
                         .group_by(GeneratedExercise.competency_id,
                                   GeneratedExercise.difficulty_level)):
         ex_counts.setdefault(cid, {})[lvl] = n
@@ -123,20 +123,30 @@ def summary(grade_level: str | None = None, db: Session = Depends(get_db)):
 
 
 @router.get("/exercises")
-def list_exercises(competency_id: str, level: int | None = None,
-                   include_retired: bool = False,
+def list_exercises(competency_id: str | None = None, level: int | None = None,
+                   include_retired: bool = False, chapter_id: str | None = None,
+                   category: str | None = None,
                    db: Session = Depends(get_db)):
-    comp = db.get(Competency, competency_id)
+    comp = db.get(Competency, chapter_id or competency_id)
     if not comp:
         raise HTTPException(404, "Compétence inconnue")
-    q = db.query(GeneratedExercise).filter_by(competency_id=competency_id)
+    q = db.query(GeneratedExercise)
+    if chapter_id:
+        ids = [c.id for c in db.query(Competency).filter_by(
+            framework_id=comp.framework_id, chapter_code=comp.chapter_code,
+            domain_code=comp.domain_code).all()]
+        q = q.filter(GeneratedExercise.competency_id.in_(ids), GeneratedExercise.kind == "probleme")
+    else:
+        q = q.filter_by(competency_id=competency_id)
+        if category == "exercise":
+            q = q.filter(GeneratedExercise.kind != "probleme")
     if not include_retired:
         q = q.filter_by(status="active")
     if level:
         q = q.filter_by(difficulty_level=level)
     rows = q.order_by(GeneratedExercise.difficulty_level,
                       GeneratedExercise.variant).all()
-    return [_exercise_out(ex, comp) for ex in rows]
+    return [_exercise_out(ex, db.get(Competency, ex.competency_id)) for ex in rows]
 
 
 @router.get("/sesamaths/raw")
@@ -212,6 +222,56 @@ def purge_bank(db: Session = Depends(get_db)):
 
 
 # ------------------------------------------------------------------- figures
+
+class CardPreviewIn(BaseModel):
+    exercise: dict
+    guides: bool = True
+    show_answers: bool = False
+
+
+@router.post("/card-preview.png")
+def card_preview(body: CardPreviewIn, db: Session = Depends(get_db)):
+    """Même carte et mêmes mesures que le sujet, avec corrections facultatives."""
+    import json
+    import re
+    from pathlib import Path
+    from ..config import settings
+    from ..models import IndigoExercise
+    from ..services import card_preview as preview, indigo
+    ex = dict(body.exercise)
+    if len(json.dumps(ex)) > 80000 or ex.get("response_type") not in exercise_gen.VALID_RESPONSE_TYPES:
+        raise HTTPException(422, "Carte invalide")
+    url = ex.get("figure_url") or ""
+    if url:
+        match = re.fullmatch(r"/api/(indigo|content)/exercises/([\w-]+)/figure\.png(?:\?v=\d+)?", url)
+        if not match:
+            raise HTTPException(422, "Référence de figure invalide")
+        if match[1] == "indigo":
+            row = db.get(IndigoExercise, match[2])
+            ex["figure"] = ({"type": "image", "params": {"path": str(indigo.crop_abs_path(row.figure_path))}}
+                            if row and row.figure_path else None)
+        else:
+            row = db.get(GeneratedExercise, match[2])
+            ex["figure"] = row.figure_json if row else None
+
+    def check_figures(value):
+        if isinstance(value, dict):
+            if value.get("type") == "image":
+                p = Path((value.get("params") or {}).get("path", "")).resolve()
+                roots = (Path(settings.data_dir).resolve(), Path(__file__).resolve().parents[1] / "data")
+                if not any(p.is_relative_to(root) for root in roots):
+                    raise HTTPException(422, "Figure hors du dossier de données")
+            for child in value.values():
+                check_figures(child)
+        elif isinstance(value, list):
+            for child in value:
+                check_figures(child)
+    check_figures(ex)
+    try:
+        png = preview.render(ex, body.guides, body.show_answers)
+    except (ValueError, TypeError, KeyError, IndexError) as exc:
+        raise HTTPException(422, "Impossible de rendre cette carte") from exc
+    return Response(png, media_type="image/png")
 
 class FigureIn(BaseModel):
     figure_json: dict

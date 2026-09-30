@@ -1,0 +1,162 @@
+{
+ "_doc": "Chapitres du manuel élève Indigo 3e (context/3_indigo.pdf). Numéros de page PDF 1-based ; chaque page PDF est une DOUBLE page imprimée (page PDF p = pages imprimées 2p-2 et 2p-1). « lesson » = Cours + Savoir-faire, « exercises » = Exercices + Problèmes (+ Faire le point / Algorithmique quand présents). Relevé à la main sur les vignettes du manuel le 29/09/2026.",
+ "grade": "3e",
+ "chapters": [
+  {
+   "code": "A1",
+   "name": "Nombres entiers",
+   "lesson": [
+    15,
+    16
+   ],
+   "exercises": [
+    17,
+    21
+   ]
+  },
+  {
+   "code": "A2",
+   "name": "Nombres rationnels",
+   "lesson": [
+    24,
+    27
+   ],
+   "exercises": [
+    28,
+    32
+   ]
+  },
+  {
+   "code": "A3",
+   "name": "Calcul littéral",
+   "lesson": [
+    35,
+    37
+   ],
+   "exercises": [
+    38,
+    42
+   ]
+  },
+  {
+   "code": "A4",
+   "name": "Équations",
+   "lesson": [
+    45,
+    47
+   ],
+   "exercises": [
+    48,
+    52
+   ]
+  },
+  {
+   "code": "B1",
+   "name": "Grandeurs et proportionnalité",
+   "lesson": [
+    55,
+    57
+   ],
+   "exercises": [
+    58,
+    62
+   ]
+  },
+  {
+   "code": "B2",
+   "name": "Fonctions",
+   "lesson": [
+    65,
+    66
+   ],
+   "exercises": [
+    67,
+    71
+   ]
+  },
+  {
+   "code": "B3",
+   "name": "Fonctions affines",
+   "lesson": [
+    74,
+    75
+   ],
+   "exercises": [
+    76,
+    80
+   ]
+  },
+  {
+   "code": "B4",
+   "name": "Statistiques",
+   "lesson": [
+    83,
+    85
+   ],
+   "exercises": [
+    86,
+    90
+   ]
+  },
+  {
+   "code": "B5",
+   "name": "Probabilités",
+   "lesson": [
+    93,
+    95
+   ],
+   "exercises": [
+    96,
+    100
+   ]
+  },
+  {
+   "code": "C1",
+   "name": "Construction et transformation de figures",
+   "lesson": [
+    103,
+    105
+   ],
+   "exercises": [
+    106,
+    110
+   ]
+  },
+  {
+   "code": "C2",
+   "name": "Théorème de Thalès",
+   "lesson": [
+    113,
+    115
+   ],
+   "exercises": [
+    116,
+    120
+   ]
+  },
+  {
+   "code": "C3",
+   "name": "Triangles rectangles",
+   "lesson": [
+    123,
+    125
+   ],
+   "exercises": [
+    126,
+    130
+   ]
+  },
+  {
+   "code": "C4",
+   "name": "Solides de l'espace",
+   "lesson": [
+    133,
+    135
+   ],
+   "exercises": [
+    136,
+    140
+   ]
+  }
+ ]
+}

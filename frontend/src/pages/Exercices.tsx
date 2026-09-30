@@ -16,6 +16,7 @@ import {
   RefreshCw, RotateCcw, Slash, Sparkles, Square, Trash2, UploadCloud, Wand2,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { api, download } from '../api'
 import AuthImg from '../components/AuthImg'
 import CompetencyHierarchy, { type CompetencyHierarchyColumn } from '../components/CompetencyHierarchy'
@@ -88,7 +89,7 @@ type Exercise = {
   source_page: number; source_number: string; order_index: number
   badge_type: string; difficulty: number; calculator: string
   // trio produit par le mode « QCM only » : la base et ses deux dérivés
-  variant_kind: 'base' | 'facile' | 'difficile'; derived_from_id: string | null
+  variant_kind: 'base' | 'facile' | 'difficile' | 'original'; derived_from_id: string | null
   title: string; tags: string[]; has_figure: boolean; figure_required: boolean
   statement: string; response_type: string; expected: Record<string, any>; choices: string[]
   adapted: boolean
@@ -106,7 +107,8 @@ type Exercise = {
   status: string; crop_url: string | null; figure_url: string | null
   figure_box: FigureBox | null
   // provenance brute : raw_ocr.pipeline vaut "cli-exos" pour la pipeline CLI
-  // (agents/cli-exos, abonnement Claude) — sinon c'est l'extraction Indigo (API).
+  // (agents/cli-exos, abonnement Claude), "astra" pour agents/astra (Codex) —
+  // sinon c'est l'extraction Indigo (API).
   raw_ocr: Record<string, any> | null
 }
 
@@ -114,7 +116,7 @@ type Exercise = {
 const BADGE_COLOR: Record<string, string> = {
   exercice: 'indigo', flash: 'yellow', expert: 'grape', enigme: 'pink', probleme: 'orange',
 }
-const PROBLEME_COLOR: Record<number, string> = { 1: 'green', 2: 'orange', 3: 'red' }
+const PROBLEME_COLOR: Record<number, string> = { 1: 'green', 2: 'orange', 3: 'dark' }
 // difficulté = 3 niveaux (1/2/3 = facile/moyen/difficile), miroir de
 // exercise_gen.DIFFICULTY_LEVELS côté backend
 const DIFF_LABEL: Record<number, string> = { 1: 'Facile', 2: 'Moyen', 3: 'Difficile' }
@@ -155,7 +157,7 @@ const CALC_OPTS = [
 ]
 
 function badgeColor(ex: { badge_type: string; difficulty: number }) {
-  if (ex.badge_type === 'probleme') return PROBLEME_COLOR[ex.difficulty] ?? 'gray'
+  if (isProbleme(ex)) return PROBLEME_COLOR[ex.difficulty] ?? 'gray'
   return BADGE_COLOR[ex.badge_type] ?? 'gray'
 }
 const rtLabel = (v: string) => RESPONSE_TYPES.find((r) => r.value === v)?.label ?? v
@@ -198,7 +200,7 @@ function BadgeRow({ ex }: { ex: Exercise }) {
       {/* DÉRIVÉ : même exercice du manuel, repris plus simple ou plus exigeant.
           À ne pas confondre avec les VARIANTES d'un sujet (anti-copie entre
           voisins) — d'où le mot « dérivé » dans toute l'interface. */}
-      {ex.variant_kind && ex.variant_kind !== 'base' && (
+      {!isProb && ex.variant_kind && ex.variant_kind !== 'base' && (
         <Tooltip label={ex.variant_kind === 'facile'
           ? "Dérivé FACILE du même exercice : servi aux élèves en difficulté"
           : "Dérivé DIFFICILE du même exercice : servi aux élèves à l'aise"}>
@@ -222,6 +224,11 @@ function BadgeRow({ ex }: { ex: Exercise }) {
       {ex.raw_ocr?.pipeline === 'cli-exos' && (
         <Tooltip label="Produit par la pipeline cli-exos (CLI Claude, abonnement — sans API)">
           <Badge color="cyan" variant="light" size="xs">CLI</Badge>
+        </Tooltip>
+      )}
+      {ex.raw_ocr?.pipeline === 'astra' && (
+        <Tooltip label="Produit par la pipeline Astra (GPT-6 Astra via Codex, abonnement — sans API)">
+          <Badge color="violet" variant="light" size="xs">Astra</Badge>
         </Tooltip>
       )}
       {/* échec SILENCIEUX de l'adaptation LLM : l'exercice est un repli OCR brut
@@ -584,7 +591,10 @@ function EditModal({ ex, comps, onClose, onSaved, onChange, onFamilyChanged }: {
           </Paper>
         )}
 
-        <Textarea label="Guide d'auto-correction (élève)" autosize minRows={1}
+        {/* ancien guide de bas de carte : n'est plus imprimé (les guides sont des
+            encadrés « {{aide}} » de l'énoncé) — gardé éditable pour les anciens exercices */}
+        <Textarea label="Ancien guide de bas de carte (n'est plus imprimé)" autosize minRows={1}
+          description="Les guides s'écrivent désormais dans l'énoncé : une ligne commençant par {{aide}} devient un encadré jaune."
           value={form.correction_guide} onChange={(e) => setForm({ ...form, correction_guide: e.currentTarget.value })} />
         <Textarea label="Corrigé (prof)" autosize minRows={1}
           value={form.correction_solution} onChange={(e) => setForm({ ...form, correction_solution: e.currentTarget.value })} />
@@ -817,7 +827,7 @@ function ExtractionAssistant({ opened, onClose, comps, manuals, grade, coverage,
 }
 
 // ----------------------------------------------------- tableau des compétences
-function CompetencyTable({ rows, onSelect }: { rows: SummaryRow[]; onSelect: (r: SummaryRow) => void }) {
+function CompetencyTable({ rows, onSelect, onProblems }: { rows: SummaryRow[]; onSelect: (r: SummaryRow) => void; onProblems: (r: SummaryRow) => void }) {
   const domains = useMemo(() => {
     const domainMap = new Map<string, {
       code: string; name: string
@@ -871,7 +881,7 @@ function CompetencyTable({ rows, onSelect }: { rows: SummaryRow[]; onSelect: (r:
         if (!problem) return null
         return (
           <Group gap="md" wrap="wrap">
-            <Text size="xs" fw={650}>Problèmes</Text>
+            <Button variant="subtle" size="compact-sm" onClick={(event) => { event.stopPropagation(); onProblems(problem) }}>Problèmes du chapitre</Button>
             <Group gap={5} wrap="nowrap">
               <Text size="xs" c="dimmed">Brouillon</Text>
               {count(problem.problem_draft, 'orange')}
@@ -893,6 +903,7 @@ function CompetencyTable({ rows, onSelect }: { rows: SummaryRow[]; onSelect: (r:
 // ----------------------------------------------------- page principale
 export default function Exercices() {
   const { cycle } = useAppState()
+  const [params, setParams] = useSearchParams()
   const grade = cycle                    // '6e' | '5e' | '4e' | '3e' | 'all'
   const [manuals, setManuals] = useState<Manuals | null>(null)
   const [comps, setComps] = useState<Comp[]>([])
@@ -934,7 +945,9 @@ export default function Exercices() {
     api.get<Extraction[]>('/api/indigo/extractions').then(setExtractions)
   }, [])
   const loadExercises = useCallback((cid: string) => {
-    api.get<Exercise[]>(`/api/indigo/exercises?competency_id=${cid}`).then(setExercises)
+    const query = cid.startsWith('chapter:')
+      ? `chapter_id=${cid.slice(8)}` : `competency_id=${cid}&category=exercise`
+    api.get<Exercise[]>(`/api/indigo/exercises?${query}`).then(setExercises)
   }, [])
   const loadCoverage = useCallback(() => {
     if (isAll) return
@@ -985,7 +998,20 @@ export default function Exercices() {
   // Une ligne par famille (cf. utils/families) : facile, base, difficile.
   const exerciseRows = useMemo(() => familyRows(exercises), [exercises])
 
+  const problemPage = !!selected?.competency_id.startsWith('chapter:')
+  const openProblems = (r: SummaryRow) => {
+    setParams({ chapter: r.chapter_code })
+  }
+  useEffect(() => {
+    const chapter = params.get('chapter')
+    const row = summary?.find((r) => r.chapter_code === chapter)
+    if (!row || selected?.competency_id === `chapter:${row.competency_id}`) return
+    const cid = `chapter:${row.competency_id}`
+    setSelected({ ...row, competency_id: cid, short_id: row.chapter_code, label: `Problèmes — ${row.chapter_name}` })
+    setExercises(null); setSelMode(false); setSelIds(new Set()); loadExercises(cid)
+  }, [params, summary, selected, loadExercises])
   const openComp = (r: SummaryRow) => {
+    setParams({})
     setSelected(r); setExercises(null); setSelMode(false); setSelIds(new Set())
     loadExercises(r.competency_id)
   }
@@ -1183,7 +1209,7 @@ export default function Exercices() {
     <Stack>
       <Group justify="space-between">
         <Group gap={8}>
-          {selected && <ActionIcon variant="subtle" onClick={() => setSelected(null)}><ChevronLeft size={20} /></ActionIcon>}
+          {selected && <ActionIcon variant="subtle" onClick={() => { setSelected(null); setParams({}) }}><ChevronLeft size={20} /></ActionIcon>}
           <Title order={2}>Exercices <Text span c="dimmed" size="sm">· manuel Indigo {grade}</Text></Title>
         </Group>
         <Group>
@@ -1417,7 +1443,7 @@ export default function Exercices() {
 
       {/* vue TABLE (aucune compétence sélectionnée) */}
       {!selected && summary === null && <Loader />}
-      {!selected && summary && <CompetencyTable rows={summary} onSelect={openComp} />}
+      {!selected && summary && <CompetencyTable rows={summary} onSelect={openComp} onProblems={openProblems} />}
 
       {/* vue LISTE (compétence sélectionnée) */}
       {selected && (
@@ -1450,34 +1476,37 @@ export default function Exercices() {
                 </Button>
               </Tooltip>
               {/* « Tout supprimer » : désactivé si la page n'a aucun exercice, confirmation obligatoire */}
-              <Tooltip label="Supprimer TOUS les exercices de cette compétence (brouillons ET publiés)">
+              {!problemPage && <Tooltip label="Supprimer TOUS les exercices de cette compétence (brouillons ET publiés)">
                 <Button variant="light" color="red" size="xs" leftSection={<Trash2 size={16} />}
                   disabled={!exercises || exercises.length === 0}
                   onClick={() => setConfirmDeleteAll(true)}>
                   Tout supprimer{exercises && exercises.length ? ` (${exercises.length})` : ''}
                 </Button>
-              </Tooltip>
+              </Tooltip>}
             </Group>
           </Group>
           {exercises === null && <Loader />}
           {exercises && exercises.length === 0 && (
             <Text c="dimmed" size="sm">Aucun exercice. Lance une extraction pour cette compétence.</Text>
           )}
-          {/* Une LIGNE par famille : facile à gauche, base au milieu, difficile à
-              droite. Les trois dérivés d'un même exercice source se relisent
-              alors côte à côte — c'est la comparaison qui dit si l'étayage du
-              facile et l'exigence du difficile tiennent la route. */}
-          <Box style={{
+          {problemPage ? <Box style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(280px, 1fr))', gap: 16, alignItems: 'start' }}>
+            {[1, 2, 3].map((level) => <Stack key={level} gap="md">
+              <Group gap="xs"><Badge color={PROBLEME_COLOR[level]} variant="light">{DIFF_LABEL[level]}</Badge>
+                <Text size="sm" c="dimmed">{exercises?.filter((e) => e.difficulty === level).length || 0} problèmes</Text></Group>
+              {exercises?.filter((e) => e.difficulty === level).map((ex) => <ExerciseCard key={ex.id}
+                ex={ex} onEdit={setEditing} onChange={onChange} onDelete={onDelete}
+                selectable={selMode} selected={selIds.has(ex.id)} onToggleSelect={toggleSel} />)}
+            </Stack>)}
+          </Box> : <Box style={{
             display: 'grid', gridTemplateColumns: 'repeat(3, minmax(280px, 1fr))',
             alignItems: 'start', gap: 'var(--mantine-spacing-md)',
           }}>
             {exerciseRows.flatMap((row, r) => row.map((ex, c) => (ex ? (
               <ExerciseCard key={ex.id} ex={ex} onEdit={setEditing} onChange={onChange} onDelete={onDelete}
                 selectable={selMode} selected={selIds.has(ex.id)} onToggleSelect={toggleSel} />
-            ) : (
-              <Box key={`${r}-${c}`} aria-hidden />
-            ))))}
-          </Box>
+            ) : <Box key={`${r}-${c}`} aria-hidden />)))}
+          </Box>}
+
         </>
       )}
 

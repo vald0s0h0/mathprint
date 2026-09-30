@@ -53,6 +53,82 @@ BULLET = "•"
 # marqueur, la figure reste placée à la fin de l'énoncé (comportement d'avant).
 FIGURE_TOKEN = "{{figure}}"
 
+# Encadré GUIDE (aide à la démarche) INTÉGRÉ à l'énoncé : une ligne qui commence
+# par « {{aide}} » s'imprime dans un encadré jaune clair avec un pictogramme,
+# à l'endroit précis où elle est écrite — entre deux questions, avant une
+# sous-question, dans le contexte d'un composite. Des lignes « {{aide}} »
+# consécutives forment UN seul encadré. Le guide fait partie de l'exercice :
+# ce n'est plus une bande sous la carte. Le sujet peut le retirer entièrement
+# (option « Ne pas inclure les guides » → `strip_guides`).
+GUIDE_TOKEN = "{{aide}}"
+_GUIDE_INLINE = re.compile(r"[ \t]*\{\{\s*aide\s*\}\}[ \t]*", re.I)
+
+
+def is_guide_line(line: str) -> bool:
+    return (line or "").lstrip().startswith(GUIDE_TOKEN)
+
+
+def guide_body(line: str) -> str:
+    """Texte d'une ligne guide, sans son marqueur."""
+    return (line or "").lstrip()[len(GUIDE_TOKEN):].strip()
+
+
+def has_guides(text: str) -> bool:
+    return GUIDE_TOKEN in (text or "")
+
+
+def guide_texts(text: str) -> list[str]:
+    """Un texte par ENCADRÉ (lignes guide consécutives réunies par « \n »)."""
+    out: list[str] = []
+    prev_guide = False
+    for ln in (text or "").split("\n"):
+        if is_guide_line(ln):
+            if prev_guide:
+                out[-1] += "\n" + guide_body(ln)
+            else:
+                out.append(guide_body(ln))
+            prev_guide = True
+        else:
+            prev_guide = False
+    return out
+
+
+def strip_guides(text: str) -> str:
+    """Retire tous les encadrés guide (option de sujet « Ne pas inclure »)."""
+    if not has_guides(text):
+        return text or ""
+    return "\n".join(ln for ln in text.split("\n") if not is_guide_line(ln))
+
+
+def split_guides(text: str) -> tuple[str, str]:
+    """Corps et aides de cette portée. Les aides suivent sa zone de réponse.
+
+    Compatible avec les anciens marqueurs placés en tête : aucune aide n'est
+    perdue, et une aide du contexte reste attachée à l'exercice entier.
+    """
+    text = _isolate_guides(text or "")
+    return strip_guides(text).strip(), "\n".join(
+        ln.strip() for ln in text.split("\n") if is_guide_line(ln))
+
+
+def split_leading_guides(text: str) -> tuple[str, str]:
+    """(lignes guide de TÊTE, reste). Sert aux sous-questions d'un composite :
+    l'encadré écrit en tête de question s'imprime AVANT la pastille « a. »,
+    entre la question précédente et celle-ci."""
+    ls = (text or "").split("\n")
+    k = 0
+    while k < len(ls) and (is_guide_line(ls[k]) or not ls[k].strip()):
+        k += 1
+    return "\n".join(ln for ln in ls[:k] if ln.strip()), "\n".join(ls[k:])
+
+
+def _isolate_guides(text: str) -> str:
+    """Un marqueur « {{aide}} » ouvre TOUJOURS une ligne : s'il a été écrit au
+    fil du texte, on coupe devant. Forme canonique « {{aide}} texte »."""
+    if "aide" not in text.lower():
+        return text
+    return _GUIDE_INLINE.sub("\n" + GUIDE_TOKEN + " ", text)
+
 
 def has_figure_marker(text: str) -> bool:
     return FIGURE_TOKEN in (text or "")
@@ -78,23 +154,14 @@ def strip_figure_marker(text: str) -> str:
 
 
 def place_figure_marker(text: str, has_figure: bool, *, at_end: bool = False) -> str:
-    """Garde-fou déterministe de PLACEMENT de l'image (règle Indigo) : le marqueur
-    « {{figure}} » doit être AU DÉBUT de l'énoncé ou ENTRE le contexte et les
-    questions, JAMAIS après les questions. On retire le marqueur existant (où que
-    le modèle l'ait mis) puis on le repose sur sa propre ligne JUSTE AVANT la 1re
-    sous-question ; à défaut de sous-question, après la 1re ligne de contexte (ou
-    au tout début s'il n'y a qu'une ligne). Sans figure disponible, un marqueur
-    parasite est retiré. Idempotent.
-
-    `at_end` : ce texte est le CONTEXTE d'un exercice composite. Ses questions
-    n'y sont pas — elles vivent dans `answer.parts` et s'impriment sous lui — donc
-    aucune étiquette « a. » n'y marque le début des questions, et se rabattre sur
-    « après la 1re ligne » planterait la figure AU MILIEU du contexte. Elle va
-    donc à la fin : à l'impression, c'est bien entre le contexte et la première
-    sous-question."""
+    """Conserve un marqueur explicite. À défaut, place la figure avant les
+    sous-questions, ou après le contexte commun si `at_end`. Sans figure,
+    retire le marqueur parasite. L'auteur décide de l'ordre de lecture."""
     text = text or ""
     if not has_figure:
         return strip_figure_marker(text)
+    if has_figure_marker(text):
+        return text  # le placement explicite de l'auteur fait autorité
     body = strip_figure_marker(text)
     if not body:
         return FIGURE_TOKEN
@@ -392,12 +459,27 @@ def normalize(text: str) -> str:
     text = repair_latex_control_chars(text)     # \times cassé en tabulation -> \times
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = repair_blank_marker(text)
+    text = _isolate_guides(text)                 # « {{aide}} » ouvre toujours une ligne
     text = _unbold_labels(text)                  # « **a.** » -> « a. » (pastille)
     text = _bulletize(text)                      # « - » de tête de ligne -> « • »
+    # les lignes guide sont MASQUÉES pendant la mise en lignes des sous-questions :
+    # « Aide : a. fais ceci, b. puis cela » ne doit jamais être coupé en pastilles.
+    guides: list[str] = []
+
+    def _mask(ln: str) -> str:
+        if is_guide_line(ln):
+            guides.append(ln)
+            return f"\x00{len(guides) - 1}\x00"
+        return ln
+    text = "\n".join(_mask(ln) for ln in text.split("\n"))
     text = _break_subquestions(text)             # a. b. c. chacune sur sa ligne
     text = _break_numbered(text)                 # 1. 2. 3. chacune sur sa ligne
+    text = re.sub(r"\x00(\d+)\x00", lambda m: guides[int(m.group(1))], text)
     lines = [ln.strip() for ln in text.split("\n")]
-    text = "\n".join(ln for ln in lines if ln).strip()
+    lines = [f"{GUIDE_TOKEN} {guide_body(ln)}" if is_guide_line(ln) else ln
+             for ln in lines]
+    text = "\n".join(ln for ln in lines
+                     if ln and not (is_guide_line(ln) and not guide_body(ln))).strip()
     return _pad_delimiters(text)                # espaces manquants aux frontières $ / puce
 
 

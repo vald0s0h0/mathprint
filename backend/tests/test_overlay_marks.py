@@ -51,15 +51,17 @@ def test_pages_needed_matches_render_copy_with_correction():
 
 # --------------------------------------------------------- bande corrigé
 
-def test_strip_height_anticipates_correction_text():
+def test_strip_holds_only_the_score_whatever_the_old_guide_text():
+    # les guides sont des encadrés « {{aide}} » de l'énoncé : la bande sous la
+    # carte ne porte plus que la note, quelle que soit la longueur de l'ancien
+    # guide (`correction`) — il n'est plus jamais composé ni imprimé
     short = pdfgen._correction_strip_layout("Résultat court.", pdfgen.COL_W, 9)
     long = pdfgen._correction_strip_layout(
         "Attention à la retenue.\nAligne les virgules avant d'additionner "
         "$3{,}5 + 1{,}8$.\nUne seule règle à la fois, ne mélange pas les unités.",
         pdfgen.COL_W, 9)
-    assert short["height"] >= pdfgen.STRIP_MIN_H          # plancher respecté
-    assert long["height"] > short["height"]               # anticipe le texte long
-    assert short["fs"] < 9                                 # corrigé plus petit que l'énoncé
+    assert short["height"] == long["height"] == pytest.approx(pdfgen.STRIP_MIN_H)
+    assert short["fs"] < 9                                 # la note reste plus petite
 
 
 def test_empty_correction_falls_back_to_min_strip():

@@ -228,7 +228,8 @@ def _text_reject_reason(text: str, min_len: int, max_len: int) -> str | None:
     return None
 
 
-def diagnose_rejection(raw: dict, competency: Competency) -> str:
+def diagnose_rejection(raw: dict, competency: Competency, *,
+                       require_correction: bool = True) -> str:
     """Explique en clair pourquoi _validate_exercise a refusé `raw`.
 
     Rejoue les mêmes contrôles dans le même ordre et renvoie le PREMIER qui
@@ -243,10 +244,10 @@ def diagnose_rejection(raw: dict, competency: Competency) -> str:
     correction = str(raw.get("correction", "")).strip()
     # table_fill / checkbox_grid : le détail vit dans les libellés de lignes,
     # "statement" ne porte que la consigne commune (souvent très courte).
-    statement_min = 3 if rtype in ("table_fill", "checkbox_grid") else 15
+    statement_min = 0 if rtype == "composite" else (3 if rtype in ("table_fill", "checkbox_grid") else 15)
     if (r := _text_reject_reason(statement, statement_min, 1200)):
         return f"énoncé invalide : {r}"
-    if (r := _text_reject_reason(correction, 5, 1500)):
+    if (require_correction or correction) and (r := _text_reject_reason(correction, 5, 1500)):
         return f"correction invalide : {r}"
     if rtype not in VALID_RESPONSE_TYPES:
         return f"response_type inconnu : {rtype!r}"
@@ -475,7 +476,8 @@ def _diagnose_multi_blank(statement: str, answer: dict) -> str:
 def _validate_exercise(raw: dict, competency: Competency, db: Session,
                        existing_norms: set[str], *,
                        allow_geometry_text: bool = False,
-                       part_mode: bool = False) -> dict | None:
+                       part_mode: bool = False,
+                       require_correction: bool = True) -> dict | None:
     """Valide un exercice candidat. Retourne le contrat interne ou None.
 
     `allow_geometry_text` : lève le rejet des verbes de construction en domaine
@@ -487,7 +489,11 @@ def _validate_exercise(raw: dict, competency: Competency, db: Session,
     `part_mode` : valide UNE sous-partie d'un exercice `composite` (cf. la branche
     composite plus bas). Une partie porte un ÉNONCÉ court (la sous-question) et
     PAS de correction propre (le composite en a une seule) — on abaisse donc le
-    plancher de longueur d'énoncé et on n'exige pas de champ `correction`."""
+    plancher de longueur d'énoncé et on n'exige pas de champ `correction`.
+
+    `require_correction=False` : la pipeline porte ses guides DANS l'énoncé
+    (encadrés « {{aide}} », cf. statement.GUIDE_TOKEN) et n'a plus de guide de
+    bas de carte — un `correction` vide est alors accepté (Astra)."""
     if not isinstance(raw, dict):
         return None
     rtype = raw.get("response_type", "short_text")
@@ -503,7 +509,7 @@ def _validate_exercise(raw: dict, competency: Competency, db: Session,
     # table_fill / checkbox_grid : le détail vit dans les libellés de lignes,
     # "statement" ne porte que la consigne commune (souvent très courte). Une
     # sous-partie de composite (part_mode) porte une sous-question courte.
-    statement_min = 3 if rtype in ("table_fill", "checkbox_grid") else 15
+    statement_min = 0 if rtype == "composite" else (3 if rtype in ("table_fill", "checkbox_grid") else 15)
     if part_mode:
         # Une GRILLE en sous-question n'a même pas de consigne commune à porter :
         # ses colonnes disent quoi cocher et ses lignes ce qu'il faut juger. Lui
@@ -512,7 +518,8 @@ def _validate_exercise(raw: dict, competency: Competency, db: Session,
         statement_min = 0 if rtype == "checkbox_grid" else 1
     if not _check_text(statement, statement_min, 1200):
         return None
-    if not part_mode and not _check_text(correction, 5, 1500):
+    if not part_mode and (require_correction or correction) \
+            and not _check_text(correction, 5, 1500):
         return None
 
     is_geometry = competency.domain_code in GEOMETRY_DOMAINS
@@ -575,21 +582,26 @@ def _validate_exercise(raw: dict, competency: Competency, db: Session,
             if p.get("response_type") in ("composite", "multi_blank", "manual_drawing"):
                 return None
             pv = _validate_exercise(p, competency, db, set(),
-                                    allow_geometry_text=allow_geometry_text, part_mode=True)
+                                    allow_geometry_text=allow_geometry_text, part_mode=True,
+                                    require_correction=require_correction)
             if pv is None:
                 return None
-            pstmt = statement_mod.strip_figure_marker(
-                pv["statement"]).replace("{{blank}}", "").strip()
+            pstmt = pv["statement"].replace("{{blank}}", "").strip()
             # « a. » / « 1. » en tête de sous-question : RETIRÉ. C'est le rendu
             # qui numérote les parties (pdfgen._composite_layout préfixe chaque
             # partie par sa lettre) — une étiquette laissée ici s'imprimait en
             # double (« a. a. Donne la décomposition… »), de façon intermittente
-            # selon que le modèle la mettait ou non.
+            # selon que le modèle la mettait ou non. Un encadré guide de TÊTE
+            # précède la question : l'étiquette se cherche après lui.
+            lead_guides, pstmt = statement_mod.split_leading_guides(pstmt)
             pstmt = statement_mod.strip_subquestion_label(pstmt)
+            if lead_guides:
+                pstmt = f"{lead_guides}\n{pstmt}" if pstmt else lead_guides
             pexp = dict(pv["expected"] or {})
             pexp.pop("inline", None)
             validated_parts.append({"statement": pstmt, "response_type": pv["response_type"],
-                                    "expected": pexp, "grading": pv["grading"]})
+                                    "expected": pexp, "grading": pv["grading"],
+                                    **({"figure": pv["figure_json"]} if pv.get("figure_json") else {})})
             total += float(pv["grading"].get("max_score", 1))
         if total <= 0:
             return None

@@ -77,9 +77,10 @@ function ExerciseCard({ ex, showCorrection, showGuide }: {
   return (
     <Box>
       <ExercisePrintPreview exercise={ex} color={ex.kind === 'probleme' ? 'orange' : 'indigo'}
-        showCorrection={showCorrection} showGuide={showGuide}
+        showCorrection={showCorrection} showGuide={showGuide} guides={showGuide}
         badges={<Group gap={6}>
-          <Badge size="xs" variant="filled" color="indigo">Niv. {ex.level}</Badge>
+          <Badge size="xs" variant="light" color={ex.kind === 'probleme' ? ['green', 'orange', 'dark'][ex.level - 1] : 'indigo'}>
+            {['Facile', 'Moyen', 'Difficile'][ex.level - 1] || ex.level}</Badge>
           {ex.kind === 'probleme' && <Badge size="xs" variant="light" color="orange">problème</Badge>}
           <Badge size="xs" variant="light" color="gray">{RESPONSE_LABELS[ex.response_type] ?? ex.response_type}</Badge>
           {/* barème d'effort : ce que l'exercice VAUT, résolu côté API (repli
@@ -133,7 +134,7 @@ export default function Bank() {
   const [exercises, setExercises] = useState<Exercise[] | null>(null)
   const [levelFilter, setLevelFilter] = useState('all')
   const [showCorrections, setShowCorrections] = useState(false)
-  const [showGuides, setShowGuides] = useState(false)
+  const [showGuides, setShowGuides] = useState(true)
 
   const isAll = cycle === 'all'
   useEffect(() => {
@@ -158,7 +159,10 @@ export default function Bank() {
     setExercises(null)
     setShowCorrections(false)
     setShowGuides(false)
-    api.get<Exercise[]>(`/api/content/exercises?competency_id=${s.competency_id}`).then(setExercises)
+    const query = s.competency_id.startsWith('chapter:')
+      ? `chapter_id=${s.competency_id.slice(8)}` : `competency_id=${s.competency_id}&category=exercise`
+    setLevelFilter('all')
+    api.get<Exercise[]>(`/api/content/exercises?${query}`).then(setExercises)
   }, [])
 
   const rows = summary ?? []
@@ -256,7 +260,12 @@ export default function Bank() {
                   return (
                     <Tooltip label="Problèmes transverses du chapitre, comptés une seule fois">
                       <Group gap={5} wrap="nowrap">
-                        <Text size="xs" c="dimmed">Problèmes</Text>
+                        <Button size="compact-xs" variant="subtle" onClick={(event) => {
+                          event.stopPropagation()
+                          const first = chapter.rows[0]
+                          loadDetail({ ...first, competency_id: `chapter:${first.competency_id}`,
+                            short_id: first.chapter_code, label: 'Problèmes du chapitre' })
+                        }}>Problèmes</Button>
                         <Text size="xs" fw={700}>{problems || '—'}</Text>
                       </Group>
                     </Tooltip>
@@ -288,7 +297,7 @@ export default function Bank() {
               </Group>
               <SegmentedControl size="xs" value={levelFilter} onChange={setLevelFilter}
                 data={[{ value: 'all', label: 'Tous' },
-                  ...[1, 2, 3, 4, 5].map((l) => ({ value: String(l), label: `Niv. ${l}` }))]} />
+                  ...[1, 2, 3].map((l) => ({ value: String(l), label: ['Facile', 'Moyen', 'Difficile'][l - 1] }))]} />
             </Group>
                 {exercises === null ? <Loader size="sm" /> : (
                   <ScrollArea.Autosize mah="58vh">

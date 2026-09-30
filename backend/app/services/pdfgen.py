@@ -125,7 +125,7 @@ def _level3(level) -> int:
 # (facile / moyen / difficile), lue par CV sur la couleur du titre du manuel
 # (cf. indigo_cv.DIFFICULTY_BY_LEVEL).
 EXERCISE_BADGE = HexColor("#455A64")            # gris-bleu neutre (= DOT_ON)
-PROBLEME_COLORS = dict(DIFFICULTY_COLORS)
+PROBLEME_COLORS = {1: HexColor("#16803C"), 2: HexColor("#C75B12"), 3: HexColor("#20252B")}
 
 
 def _probleme_color(level: int) -> Color:
@@ -153,26 +153,19 @@ STRIP_PAD_BOT = 2.2 * mm
 STRIP_NOTE_W = 17 * mm  # réserve droite pour la note de barème (imprimée en gros/gras)
 CORR_FS_DELTA = 1.0     # le corrigé s'imprime un cran plus petit que l'énoncé
 
-# --- modes de guide (§ assistant « Créer mon sujet ») ------------------------
-# Le « guide » est l'aide d'auto-correction attachée à chaque exercice
-# (GeneratedExercise.correction, alias correction_guide côté Indigo). Trois
-# modes, portés par item["guides"] et figés dans la géométrie de la copie :
-#   GUIDES_OVERLAY : comportement historique — la bande est dimensionnée sur le
-#     texte du guide, laissée VIDE sur le sujet, et l'overlay de correction
-#     l'imprime (seulement si l'élève s'est trompé).
-#   GUIDES_PRINT   : le guide est imprimé DANS la bande dès le sujet (élèves
-#     de niveau 1 à 4). La géométrie est rigoureusement la même qu'en overlay —
-#     seule l'encre change — donc deux élèves d'une même variante gardent une
-#     mise en page identique, condition du placement manuel page/colonne.
-#   GUIDES_NONE    : aucun guide, ni au sujet ni à l'overlay. La bande retombe à
-#     son plancher (STRIP_MIN_H) : elle ne porte plus que la note de barème, que
-#     l'overlay doit bien imprimer quelque part — c'est l'espace du TEXTE du
-#     guide qui est récupéré (souvent 10 à 20 mm par carte).
-GUIDES_OVERLAY = "overlay"
-GUIDES_PRINT = "print"
+# --- modes de guide (§ assistants de création de sujet) ---------------------
+# Les guides sont des ENCADRÉS intégrés à l'énoncé (lignes « {{aide}} », cf.
+# services.statement.GUIDE_TOKEN) — plus une bande sous la carte, et plus
+# jamais imprimés par l'overlay de correction. Deux modes, portés par
+# item["guides"] et choisis dans l'assistant :
+#   GUIDES_INCLUDE : les encadrés s'impriment là où l'énoncé les place ;
+#   GUIDES_NONE    : ils sont retirés de l'énoncé AVANT la mise en page — la
+#     carte rétrécit d'autant.
+# La bande sous la carte ne porte plus que la note de barème (STRIP_MIN_H),
+# que l'overlay imprime. Les anciennes valeurs « overlay » / « print » (sujets
+# composés avant ce changement) se lisent « include ».
+GUIDES_INCLUDE = "include"
 GUIDES_NONE = "none"
-GUIDE_BG = HexColor("#F3F6FA")          # fond discret du guide imprimé
-GUIDE_TEXT = HexColor("#3A4A5C")
 RADIUS = 2.2 * mm
 GAP = 3.5 * mm          # espace vertical entre deux cartes
 COL_W = (PAGE_W - 2 * MARGIN - COL_GAP) / 2
@@ -255,8 +248,8 @@ def _badge_metrics(font_size: float) -> tuple[float, float, float]:
     """(largeur, hauteur, taille de police) du badge numéroté d'un exercice —
     dimensionné sur le corps de l'énoncé pour rester solidaire de la 1re ligne
     de texte quel que soit le gabarit."""
-    badge_fs = max(6.5, font_size - 0.5)
-    return (badge_fs + 5.4, badge_fs + 3.4, badge_fs)
+    badge_fs = max(6, font_size * 0.76)
+    return (max(13.0, badge_fs + 4), badge_fs + 2.5, badge_fs)
 
 
 def _badge_min_asc(font_size: float) -> float:
@@ -277,9 +270,9 @@ def _draw_badge(c: canvas.Canvas, x: float, y_base: float, font_size: float,
     bien qu'un coup d'œil rattache chaque sous-question à sa carte."""
     bw, bh, bfs = _badge_metrics(font_size)
     by = y_base + font_size * 0.35 - bh / 2
+    c.setFillColor(Color(color.red, color.green, color.blue, alpha=0.10))
+    c.roundRect(x, by, bw, bh, 0.65 * mm, stroke=0, fill=1)
     c.setFillColor(color)
-    c.roundRect(x, by, bw, bh, 1.0 * mm, stroke=0, fill=1)
-    c.setFillColor(white)
     draw_bfs = _subject_font_size(bfs)
     c.setFont(_font("bold"), draw_bfs)
     c.drawCentredString(x + bw / 2, by + (bh - draw_bfs * 0.72) / 2, str(label))
@@ -751,6 +744,79 @@ def _series_entry(items: list[str], avail: float, fs: float,
                        "cells": cells, "pad": _SERIES_PAD_Y}}
 
 
+# Encadré GUIDE intégré à l'énoncé (cf. statement.GUIDE_TOKEN) : fond jaune
+# clair, liseré ambre, pictogramme « ampoule » à gauche. L'élève doit y lire
+# d'un coup d'œil « ceci est une aide », jamais une consigne ni une question.
+GUIDE_BOX_BG = Color(1.0, 0.957, 0.761)          # #FFF4C2
+GUIDE_BOX_RULE = Color(0.894, 0.706, 0.176)      # ambre
+GUIDE_BOX_TEXT = Color(0.30, 0.23, 0.02)
+GUIDE_ICON_W = 5.2 * mm
+_GUIDE_PAD_X = 1.6 * mm
+_GUIDE_PAD_Y = 1.1 * mm
+_GUIDE_GAP = 1.0 * mm                            # au-dessus ET en dessous de l'encadré
+
+
+def _guide_entry(block: "blocks.Block", avail: float, fs: float,
+                 math_fs: float | None, indent: float) -> dict:
+    """Ligne de layout d'un ENCADRÉ GUIDE : sa hauteur (texte replié + marges)
+    est mesurée ici, donc comptée dans la carte comme n'importe quelle ligne —
+    le bin-packing des pages reste juste."""
+    g_fs = max(6.5, fs - 0.5)
+    inner_w = max(1.0, avail - GUIDE_ICON_W - 2 * _GUIDE_PAD_X)
+    lay = _rich_layout(block.text, inner_w, g_fs,
+                       math_fs=(math_fs - 0.5) if math_fs else None,
+                       parse_blocks=False)
+    box_h = max(lay["height"], GUIDE_ICON_W * 0.8) + 2 * _GUIDE_PAD_Y
+    total_h = box_h + 2 * _GUIDE_GAP
+    first_asc = lay["lines"][0]["asc"] if lay["lines"] else g_fs * 0.78
+    return {"segs": [], "asc": total_h, "desc": 0.0, "h": total_h, "fs": fs,
+            "indent": indent, "w": avail, "badge": None, "badge_x": 0.0,
+            "badge_color": None,
+            # un énoncé qui s'ouvre sur un encadré : le numéro de la carte
+            # s'aligne sur la 1re ligne DU GUIDE, pas sous l'encadré entier
+            "badge_asc": _GUIDE_GAP + _GUIDE_PAD_Y + first_asc,
+            "guide": {"lay": lay, "w": avail, "box_h": box_h}}
+
+
+def _draw_bulb(c: canvas.Canvas, cx: float, cy: float, size: float) -> None:
+    """Pictogramme « ampoule » vectoriel (aide), centré en (cx, cy)."""
+    r = size * 0.30
+    c.saveState()
+    c.setStrokeColor(GUIDE_BOX_RULE)
+    c.setFillColor(Color(1.0, 0.86, 0.35))
+    c.setLineWidth(0.6)
+    c.circle(cx, cy + r * 0.35, r, stroke=1, fill=1)
+    # culot
+    c.setFillColor(GUIDE_BOX_RULE)
+    c.rect(cx - r * 0.45, cy - r * 1.05, r * 0.9, r * 0.45, stroke=0, fill=1)
+    c.rect(cx - r * 0.32, cy - r * 1.3, r * 0.64, r * 0.2, stroke=0, fill=1)
+    # rayons
+    c.setLineWidth(0.5)
+    for dx, dy in ((0, 1), (0.8, 0.6), (-0.8, 0.6), (1, 0.05), (-1, 0.05)):
+        x0, y0 = cx + dx * r * 1.35, cy + r * 0.35 + dy * r * 1.35
+        x1, y1 = cx + dx * r * 1.75, cy + r * 0.35 + dy * r * 1.75
+        c.line(x0, y0, x1, y1)
+    c.restoreState()
+
+
+def _draw_guide_block(c: canvas.Canvas, x: float, y_top: float, line: dict,
+                      font: str | None) -> None:
+    g = line["guide"]
+    top = y_top - _GUIDE_GAP
+    w, h = g["w"], g["box_h"]
+    c.saveState()
+    c.setFillColor(GUIDE_BOX_BG)
+    c.setStrokeColor(GUIDE_BOX_RULE)
+    c.setLineWidth(0.6)
+    c.roundRect(x, top - h, w, h, 1.2 * mm, stroke=1, fill=1)
+    c.restoreState()
+    _draw_bulb(c, x + _GUIDE_PAD_X + GUIDE_ICON_W / 2 - 0.6 * mm,
+               top - _GUIDE_PAD_Y - GUIDE_ICON_W * 0.42, GUIDE_ICON_W * 0.9)
+    text_top = top - _GUIDE_PAD_Y - max(0.0, (h - 2 * _GUIDE_PAD_Y - g["lay"]["height"]) / 2)
+    _draw_rich(c, x + GUIDE_ICON_W + _GUIDE_PAD_X, text_top, g["lay"],
+               color=GUIDE_BOX_TEXT, font=font)
+
+
 def _rich_layout(text: str, width: float, fs: float, math_fs: float | None = None,
                  first_indent: float = 0.0, first_min_asc: float = 0.0,
                  blank_fs: float | None = None,
@@ -794,6 +860,11 @@ def _rich_layout(text: str, width: float, fs: float, math_fs: float | None = Non
                     for ln in statement_mod.lines(text or "")])
     for p_idx, block in enumerate(parsed):
         lead = first_indent if p_idx == 0 else 0.0
+        if block.kind == "guide":
+            entry = _guide_entry(block, max(1.0, width - lead), fs, math_fs, lead)
+            lines.append(entry)
+            total_h += entry["h"]
+            continue
         if block.kind == "table":
             entry = _table_entry(block, max(1.0, width - lead), fs, math_fs)
             # tableau plus étroit que la carte : centré dedans (§ demande)
@@ -916,7 +987,8 @@ def _rich_layout(text: str, width: float, fs: float, math_fs: float | None = Non
 
 def _draw_rich(c: canvas.Canvas, x: float, y_top: float, layout: dict,
                color=black, centered: bool = False, width: float | None = None,
-               font: str | None = None, blanks: list | None = None) -> float:
+               font: str | None = None, blanks: list | None = None,
+               right_aligned: bool = False) -> float:
     """Dessine un layout _rich_layout. Retourne le y sous la dernière ligne.
     `blanks`, si fourni, reçoit la géométrie PDF absolue (x_pt/y_pt/w_pt/h_pt)
     de chaque case de réponse courte insérée en ligne (BLANK_TOKEN), dans
@@ -939,6 +1011,8 @@ def _draw_rich(c: canvas.Canvas, x: float, y_top: float, layout: dict,
         cx = x + line.get("indent", 0.0)
         if centered and width:
             cx += (width - line["w"]) / 2
+        elif right_aligned and width:
+            cx += width - line["w"] - line.get("indent", 0.0)
         if line.get("badge"):
             _draw_badge(c, x + line.get("badge_x", 0.0), y_base, fs,
                         line["badge"], line["badge_color"])
@@ -948,6 +1022,10 @@ def _draw_rich(c: canvas.Canvas, x: float, y_top: float, layout: dict,
             continue
         if line.get("series") is not None:
             _draw_series_block(c, cx, y, line, color, font if font_forced else None)
+            y -= line["h"]
+            continue
+        if line.get("guide") is not None:
+            _draw_guide_block(c, cx, y, line, font if font_forced else None)
             y -= line["h"]
             continue
         for j, seg in enumerate(line["segs"]):
@@ -1062,9 +1140,14 @@ def _figure_image(figure_json: dict | None, max_w: float, max_h: float):
         from PIL import Image
         with Image.open(io.BytesIO(png)) as im:
             wpx, hpx = im.size
+            # figures déclaratives (geo/chart) rendues à 300 dpi : la taille
+            # physique voulue est portée par les métadonnées du PNG
+            dpi = float((im.info.get("dpi") or (_FIGURE_DPI,))[0] or _FIGURE_DPI)
     except Exception:
         return None
-    w_pt, h_pt = wpx * 72.0 / _FIGURE_DPI, hpx * 72.0 / _FIGURE_DPI
+    if not 50 <= dpi <= 1200:
+        dpi = _FIGURE_DPI
+    w_pt, h_pt = wpx * 72.0 / dpi, hpx * 72.0 / dpi
     scale = min(1.0, max_w / w_pt, max_h / h_pt)
     return (ImageReader(io.BytesIO(png)), w_pt * scale, h_pt * scale)
 
@@ -1133,7 +1216,7 @@ def _statement_layout(statement: str, width: float, font_size: float,
         if after.strip():
             body_after, expr = _display_split(after)
             if expr is not None:
-                im = _math_image(expr, math_size)
+                im = _math_image(expr, font_size)
                 if im is not None and im[1] <= width - 4:
                     display = im
                 else:
@@ -1155,7 +1238,7 @@ def _statement_layout(statement: str, width: float, font_size: float,
     display = None
     body, expr = _display_split(statement)
     if expr is not None:
-        im = _math_image(expr, math_size)
+        im = _math_image(expr, font_size)
         if im is not None and im[1] <= width - 4:
             display = im
         else:
@@ -1494,10 +1577,33 @@ def _table_zone_height(w: float, col_labels: list | None, row_labels: list | Non
                            sub_badge_color)["height"]
 
 
-def _matching_zone_height(left: list, right: list, font_size: int) -> float:
+def _matching_geometry(left: list, right: list, font_size: float, width: float) -> dict:
+    """Une seule mesure pour le dessin, la pagination et les cibles CV.
+
+    Colonnes de points fixes ; chaque rangée prend la hauteur du plus grand
+    libellé des deux côtés. Le groupe entier est centré, le texte gauche
+    aligné à droite. Le couloir de tracé ne contient aucune étiquette.
+    """
+    dot, gap, lane = _MATCHING_PASTILLE, 2.5 * mm, 14 * mm
+    available = width - 2 * CARD_PAD - 2 * dot - 2 * gap - lane
+    groups = [left, right]
+    natural = [max((_natural_w(str(v), font_size) for v in g), default=0) for g in groups]
+    floors = [max((_unbreakable_w(str(v), font_size) for v in g), default=0) for g in groups]
+    widths = natural if sum(natural) <= available else _fit_widths(natural, floors, available)
+    layouts = [[_rich_layout(str(v), max(1, widths[i]), font_size, parse_blocks=False)
+                for v in g] for i, g in enumerate(groups)]
     n = max(len(left), len(right), 1)
-    row_h = max(6.5 * mm, font_size + 4)
-    return n * row_h + 3 * mm
+    row_heights = [max([6.5 * mm] + [g[i]["height"] + 2 * mm for g in layouts if i < len(g)])
+                   for i in range(n)]
+    total_w = sum(widths) + 2 * dot + 2 * gap + lane
+    return {"widths": widths, "layouts": layouts, "rows": row_heights,
+            "width": total_w, "height": sum(row_heights) + 3 * mm,
+            "dot": dot, "gap": gap, "lane": lane}
+
+
+def _matching_zone_height(left: list, right: list, font_size: int,
+                          width: float = COL_W) -> float:
+    return _matching_geometry(left, right, font_size, width)["height"]
 
 
 def _zone_height(response_type: str, choices: list[str], width: float,
@@ -1527,7 +1633,7 @@ def _zone_height(response_type: str, choices: list[str], width: float,
                                   sub_badge_color)
     if response_type == "matching":
         return _matching_zone_height(grading.get("left", []), grading.get("right", []),
-                                     font_size)
+                                     font_size, width)
     if response_type == "manual_drawing":
         return _MANUAL_DRAWING_H
     return 13 * mm
@@ -1636,37 +1742,31 @@ def _draw_table_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float,
 
 def _draw_matching_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float,
                         left: list[str], right: list[str], font_size: int) -> dict:
-    n = max(len(left), len(right), 1)
-    row_h = (h - 3 * mm) / n
-    col_w = (w - 2 * CARD_PAD - _MATCHING_COL_GAP) / 2
-    p = _MATCHING_PASTILLE
-    top = y + h - 2 * mm
-
-    def _pastille(px: float, py: float) -> None:
-        c.setStrokeColor(DROPOUT)
-        c.setFillColor(white)
-        c.circle(px + p / 2, py + p / 2, p / 2, stroke=1, fill=1)
-        c.setFillColor(black)
-
-    left_pts, right_pts = [], []
-    for i, label in enumerate(left):
-        ly = top - i * row_h - row_h / 2
-        lay = _rich_layout(label, col_w - p - 3 * mm, font_size, parse_blocks=False)
-        _draw_rich(c, x + CARD_PAD, ly + lay["height"] / 2, lay)
-        px, py = x + CARD_PAD + col_w - p - 1 * mm, ly - p / 2
-        _pastille(px, py)
-        left_pts.append({"index": i, "x_pt": px, "y_pt": py, "w_pt": p, "h_pt": p})
-    for i, label in enumerate(right):
-        ry = top - i * row_h - row_h / 2
-        px = x + CARD_PAD + col_w + _MATCHING_COL_GAP
-        py = ry - p / 2
-        _pastille(px, py)
-        lay = _rich_layout(label, col_w - p - 3 * mm, font_size, parse_blocks=False)
-        _draw_rich(c, px + p + 2 * mm, ry + lay["height"] / 2, lay)
-        right_pts.append({"index": i, "x_pt": px, "y_pt": py, "w_pt": p, "h_pt": p})
+    geo = _matching_geometry(left, right, font_size, w)
+    p, gap = geo["dot"], geo["gap"]
+    lx = x + (w - geo["width"]) / 2
+    ldot = lx + geo["widths"][0] + gap
+    rdot = ldot + p + geo["lane"]
+    top = y + h - 1.5 * mm
+    points = [[], []]
+    for i, row_h in enumerate(geo["rows"]):
+        cy = top - row_h / 2
+        for side, px in enumerate((ldot, rdot)):
+            if i >= len(geo["layouts"][side]):
+                continue
+            lay = geo["layouts"][side][i]
+            tx = lx if side == 0 else px + p + gap
+            _draw_rich(c, tx, cy + lay["height"] / 2, lay,
+                       width=geo["widths"][side], right_aligned=side == 0)
+            c.setStrokeColor(DROPOUT)
+            c.setFillColor(white)
+            c.circle(px + p / 2, cy, p / 2, stroke=1, fill=1)
+            points[side].append({"index": i, "x_pt": px, "y_pt": cy - p / 2,
+                                 "w_pt": p, "h_pt": p})
+        top -= row_h
     c.setFillColor(black)
     c.setStrokeColor(black)
-    return {"left_points": left_pts, "right_points": right_pts}
+    return {"left_points": points[0], "right_points": points[1]}
 
 
 # ---- grille cochée (checkbox_grid) : une case cochée par ligne, lue par CV ----
@@ -1841,35 +1941,27 @@ def _draw_answer_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float,
 
 
 def _correction_strip_layout(correction: str, w: float, statement_fs: float,
-                             guides: str = GUIDES_OVERLAY) -> dict:
-    """Cadre corrigé sous une carte, dimensionné pour contenir le TEXTE du
-    corrigé de la banque — ANTICIPÉ à la composition du sujet pour que l'overlay
-    de correction puisse l'imprimer en entier (jamais coupé). Le corrigé est mis
-    en page comme un énoncé (flot riche : formules $...$ rasterisées, sauts de
-    ligne durs de services.statement), à un corps un cran plus petit que
-    l'énoncé (CORR_FS_DELTA). Une réserve droite (STRIP_NOTE_W) laisse la place à
-    la note de barème, imprimée en gros et gras. Retourne
-    {height, fs, text_w, lay, guides} — `lay` sert au SUJET (mesure) ; l'overlay
-    le recompose à l'identique depuis le texte et `fs` stockés dans la méta.
-
-    `guides` (cf. GUIDES_*) : GUIDES_NONE ramène la bande à son plancher (note
-    de barème seule, aucun texte composé) ; GUIDES_PRINT garde exactement la
-    même hauteur que GUIDES_OVERLAY et ne change que le dessin."""
+                             guides: str = GUIDES_INCLUDE) -> dict:
+    """Bande sous une carte : elle ne porte plus que la NOTE de barème, que
+    l'overlay de correction imprime à droite (STRIP_MIN_H). Le guide de bas de
+    carte a disparu — les guides vivent DANS l'énoncé (encadrés « {{aide}} »).
+    `correction` et `guides` restent en paramètres pour les appelants, sans
+    effet sur la géométrie. Retourne {height, fs, text_w, lay, guides}."""
     fs = max(6.0, statement_fs - CORR_FS_DELTA)
     text_w = max(10 * mm, w - 2 * CARD_PAD - STRIP_NOTE_W)
-    if guides == GUIDES_NONE:
-        return {"height": STRIP_MIN_H, "fs": fs, "text_w": text_w,
-                "lay": _rich_layout("", text_w, fs), "guides": GUIDES_NONE}
-    lay = _rich_layout(statement_mod.normalize(correction or ""), text_w, fs)
-    height = max(STRIP_MIN_H, lay["height"] + STRIP_PAD_TOP + STRIP_PAD_BOT)
-    return {"height": height, "fs": fs, "text_w": text_w, "lay": lay,
-            "guides": guides}
+    return {"height": STRIP_MIN_H, "fs": fs, "text_w": text_w,
+            "lay": _rich_layout("", text_w, fs), "guides": guides}
 
 
 def item_guides_mode(item: dict) -> str:
-    """Mode de guide d'une carte, normalisé (défaut = comportement historique)."""
-    g = item.get("guides") or GUIDES_OVERLAY
-    return g if g in (GUIDES_OVERLAY, GUIDES_PRINT, GUIDES_NONE) else GUIDES_OVERLAY
+    """Mode de guide d'une carte, normalisé. Toute valeur autre que « none »
+    (dont les anciennes « overlay » / « print ») vaut GUIDES_INCLUDE."""
+    return GUIDES_NONE if item.get("guides") == GUIDES_NONE else GUIDES_INCLUDE
+
+
+def _apply_guides(text: str, mode: str) -> str:
+    """Énoncé tel qu'il s'imprime selon le mode de guide de la carte."""
+    return statement_mod.strip_guides(text) if mode == GUIDES_NONE else (text or "")
 
 
 def _exercise_card_h(layout: dict, zone_h: float, strip_h: float,
@@ -1909,6 +2001,36 @@ def _draw_calc_icon(c: canvas.Canvas, x_right: float, y_top: float, size: float,
         c.setLineWidth(1.3)
         c.line(x, y, x + w, y + h)
     c.restoreState()
+
+
+def _draw_statement_content(c, x, ty, w, layout, inline_blanks=None):
+    line_y = _draw_rich(c, x + CARD_PAD, ty, layout["intro"], blanks=inline_blanks)
+    # figure INSÉRÉE au marqueur {{figure}} : image entre l'avant et l'après de
+    # l'énoncé (§ demande utilisateur — image placée au bon endroit, pas en fin).
+    if layout.get("figure_inline") and layout["figure"]:
+        fimg, fw, fh = layout["figure"]
+        c.drawImage(fimg, x + (w - fw) / 2, line_y - _FIG_MARKER_GAP - fh, width=fw,
+                    height=fh, mask="auto", preserveAspectRatio=True)
+        line_y -= 2 * _FIG_MARKER_GAP + fh
+        if layout.get("intro_after"):
+            line_y = _draw_rich(c, x + CARD_PAD, line_y, layout["intro_after"],
+                                blanks=inline_blanks)
+        if layout["display"]:
+            img, dw, dh, _dd = layout["display"]
+            c.drawImage(img, x + (w - dw) / 2, line_y - dh - 1 * mm, width=dw,
+                        height=dh, mask="auto", preserveAspectRatio=True)
+            line_y -= dh + 2.5 * mm
+    else:
+        if layout["display"]:
+            img, dw, dh, _dd = layout["display"]
+            c.drawImage(img, x + (w - dw) / 2, line_y - dh - 1 * mm, width=dw,
+                        height=dh, mask="auto", preserveAspectRatio=True)
+            line_y -= dh + 2.5 * mm
+        if layout["figure"]:
+            fimg, fw, fh = layout["figure"]
+            c.drawImage(fimg, x + (w - fw) / 2, line_y - fh - 0.5 * mm, width=fw,
+                        height=fh, mask="auto", preserveAspectRatio=True)
+    return ty - layout["height"]
 
 
 def _draw_exercise_card(c: canvas.Canvas, x: float, y_top: float, w: float,
@@ -1953,34 +2075,9 @@ def _draw_exercise_card(c: canvas.Canvas, x: float, y_top: float, w: float,
     inline_blanks: list = []
     badge_color = _exercise_badge_color(level3, probleme)
     first = layout["intro"]["lines"][0] if layout["intro"]["lines"] else None
-    _draw_badge(c, x + CARD_PAD, ty - (first["asc"] if first else font_size * 0.78),
+    _draw_badge(c, x + CARD_PAD, ty - (first.get("badge_asc", first["asc"]) if first else font_size * 0.78),
                 font_size, str(seq), badge_color)
-    line_y = _draw_rich(c, x + CARD_PAD, ty, layout["intro"], blanks=inline_blanks)
-    # figure INSÉRÉE au marqueur {{figure}} : image entre l'avant et l'après de
-    # l'énoncé (§ demande utilisateur — image placée au bon endroit, pas en fin).
-    if layout.get("figure_inline") and layout["figure"]:
-        fimg, fw, fh = layout["figure"]
-        c.drawImage(fimg, x + (w - fw) / 2, line_y - _FIG_MARKER_GAP - fh, width=fw,
-                    height=fh, mask="auto", preserveAspectRatio=True)
-        line_y -= 2 * _FIG_MARKER_GAP + fh
-        if layout.get("intro_after"):
-            line_y = _draw_rich(c, x + CARD_PAD, line_y, layout["intro_after"],
-                                blanks=inline_blanks)
-        if layout["display"]:
-            img, dw, dh, _dd = layout["display"]
-            c.drawImage(img, x + (w - dw) / 2, line_y - dh - 1 * mm, width=dw,
-                        height=dh, mask="auto", preserveAspectRatio=True)
-            line_y -= dh + 2.5 * mm
-    else:
-        if layout["display"]:
-            img, dw, dh, _dd = layout["display"]
-            c.drawImage(img, x + (w - dw) / 2, line_y - dh - 1 * mm, width=dw,
-                        height=dh, mask="auto", preserveAspectRatio=True)
-            line_y -= dh + 2.5 * mm
-        if layout["figure"]:
-            fimg, fw, fh = layout["figure"]
-            c.drawImage(fimg, x + (w - fw) / 2, line_y - fh - 0.5 * mm, width=fw,
-                        height=fh, mask="auto", preserveAspectRatio=True)
+    _draw_statement_content(c, x, ty, w, layout, inline_blanks)
     c.setFillColor(black)
 
     # icône calculette (exercices Indigo) au coin haut-droit de la carte :
@@ -1992,7 +2089,9 @@ def _draw_exercise_card(c: canvas.Canvas, x: float, y_top: float, w: float,
     # zone réponse élève (saumon) — sauf short_text/multi_blank inline : la ou
     # les case(s) font déjà partie de l'énoncé (inline_blanks), pas de zone
     # dédiée sous le texte
-    zone_y = card_bottom + CARD_PAD
+    guide_lay = layout.get("guides") or {"height": 0, "lines": []}
+    zone_y = card_bottom + CARD_PAD + guide_lay["height"]
+    _draw_rich(c, x + CARD_PAD, zone_y, guide_lay)
     if response_type == "short_text" and inline_blanks:
         b = inline_blanks[0]
         zone_geo = {"x_pt": b["x_pt"], "y_pt": b["y_pt"], "w_pt": b["w_pt"], "h_pt": b["h_pt"]}
@@ -2023,21 +2122,13 @@ def _draw_exercise_card(c: canvas.Canvas, x: float, y_top: float, w: float,
 
 def _strip_meta(c: canvas.Canvas, x: float, y: float, w: float,
                 strip: dict) -> dict:
-    """Géométrie de la bande corrigé stockée dans la méta de zone (relue par
-    l'overlay, cf. services.pipeline), et — en mode GUIDES_PRINT — dessin du
-    guide directement sur le sujet. `y` est le BAS de l'unité carte+bande."""
+    """Géométrie de la bande sous la carte stockée dans la méta de zone (relue
+    par l'overlay, cf. services.pipeline, qui y imprime la note). `y` est le
+    BAS de l'unité carte+bande."""
     strip_h = strip["height"]
-    geo = {"x_pt": x + CARD_PAD, "y_pt": y + STRIP_PAD_BOT,
-           "w_pt": w - 2 * CARD_PAD, "h_pt": strip_h - STRIP_PAD_TOP - STRIP_PAD_BOT,
-           "fs": strip["fs"], "guides": strip.get("guides", GUIDES_OVERLAY)}
-    if strip.get("guides") == GUIDES_PRINT and strip["lay"]["height"] > 0:
-        c.setFillColor(GUIDE_BG)
-        c.roundRect(geo["x_pt"] - 1.0 * mm, geo["y_pt"] - 0.6 * mm,
-                    geo["w_pt"] + 2.0 * mm, geo["h_pt"] + 1.4 * mm,
-                    1.2 * mm, stroke=0, fill=1)
-        _draw_rich(c, geo["x_pt"], geo["y_pt"] + geo["h_pt"], strip["lay"],
-                   color=GUIDE_TEXT)
-    return geo
+    return {"x_pt": x + CARD_PAD, "y_pt": y + STRIP_PAD_BOT,
+            "w_pt": w - 2 * CARD_PAD, "h_pt": strip_h - STRIP_PAD_TOP - STRIP_PAD_BOT,
+            "fs": strip["fs"], "guides": strip.get("guides", GUIDES_INCLUDE)}
 
 
 # ------------------------------------------------------------- copie entière
@@ -2178,7 +2269,9 @@ def _exercise_layout(item: dict, font_size: int,
     rtype = item["response_type"]
     badge_w, _bh, _bfs = _badge_metrics(font_size)
     sub_color = _exercise_badge_color(item.get("level3", 3), item.get("is_probleme", False))
-    layout = _statement_layout(item["statement"], COL_W - 2 * CARD_PAD, font_size,
+    body, guides = statement_mod.split_guides(_apply_guides(item["statement"], item_guides_mode(item)))
+    layout = _statement_layout(body,
+                               COL_W - 2 * CARD_PAD, font_size,
                                math_fs, item.get("figure"),
                                first_indent=badge_w + BADGE_GAP,
                                first_min_asc=_badge_min_asc(font_size),
@@ -2186,6 +2279,8 @@ def _exercise_layout(item: dict, font_size: int,
                                sub_badge_color=sub_color,
                                fraction_blank_indices=_inline_fraction_indices(
                                    rtype, item.get("expected")))
+    layout["guides"] = _rich_layout(guides, COL_W - 2 * CARD_PAD, font_size)
+    layout["height"] += layout["guides"]["height"]
     zone_fs = _zone_font_size(rtype, font_size)
     zone_h = _zone_height(rtype, item.get("choices", []), COL_W, zone_fs,
                           item.get("grading"), item.get("inline", False),
@@ -2217,7 +2312,7 @@ def _composite_parts(item: dict) -> list[dict]:
         out.append({"response_type": p.get("response_type", "short_text"),
                     "statement": p.get("statement", ""),
                     "choices": pg.get("choices") or [], "grading": pg,
-                    "expected": p.get("expected") or {},
+                    "expected": p.get("expected") or {}, "figure": p.get("figure"),
                     "item_id": ids[k] if k < len(ids) else None})
     return out
 
@@ -2225,25 +2320,43 @@ def _composite_parts(item: dict) -> list[dict]:
 def _composite_layout(item: dict, font_size: int, math_fs: int) -> dict:
     badge_w, _bh, _bfs = _badge_metrics(font_size)
     sub_color = _exercise_badge_color(item.get("level3", 3), item.get("is_probleme", False))
-    stmt = _statement_layout(item.get("statement", ""), COL_W - 2 * CARD_PAD, font_size,
-                             math_fs, item.get("figure"),
+    mode = item_guides_mode(item)
+    body, guides = statement_mod.split_guides(_apply_guides(item.get("statement", ""), mode))
+    stmt = _statement_layout(body, COL_W - 2 * CARD_PAD, font_size,
+                             font_size, item.get("figure"),
                              first_indent=badge_w + BADGE_GAP,
-                             first_min_asc=_badge_min_asc(font_size),
-                             blank_fs=font_size + BLANK_FONT_BOOST, sub_badge_color=sub_color)
-    laid, body_h = [], stmt["height"]
+                             first_min_asc=_badge_min_asc(font_size), sub_badge_color=sub_color)
+    # Un contexte VIDE (ni phrase, ni figure) est valide : la carte commence
+    # directement par « a. », sans numéro d'exercice isolé sur sa propre ligne.
+    numbered = bool(stmt["height"])
+    tail = _rich_layout(guides, COL_W - 2 * CARD_PAD, font_size)
+    # sans contexte, le blanc d'avant la 1re sous-question ferait double emploi
+    # avec la marge haute de la carte
+    laid, body_h = [], stmt["height"] - (0 if numbered else _COMPOSITE_PART_GAP)
     for k, p in enumerate(_composite_parts(item)):
         prt = p["response_type"]
-        frag = _rich_layout(f"{chr(97 + k)}. " + statement_mod.normalize(p["statement"]),
-                            COL_W - 2 * CARD_PAD, font_size, sub_badge_color=sub_color)
+        body, guides = statement_mod.split_guides(
+            _apply_guides(statement_mod.normalize(p["statement"]), mode))
+        before, after = statement_mod.split_figure_marker(body)
+        # Figure propre à la question : avant elle par défaut ; marqueur explicite sinon.
+        fig = _figure_image(p.get("figure"), COL_W - 2 * CARD_PAD, 63 * mm)
+        before_lay = _rich_layout(before if after is not None else "", COL_W - 2 * CARD_PAD, font_size)
+        question = after if after is not None else body
+        frag = _rich_layout(f"{chr(97 + k)}. " + question, COL_W - 2 * CARD_PAD,
+                            font_size, sub_badge_color=sub_color)
+        aid = _rich_layout(guides, COL_W - 2 * CARD_PAD, font_size)
+        figure_h = fig[2] + 2 * _FIG_MARKER_GAP if fig else 0
         zone_fs = _zone_font_size(prt, font_size)
         zone_h = _zone_height(prt, p["choices"], COL_W, zone_fs, p["grading"],
                               False, sub_color, p["expected"])
-        laid.append({**p, "frag": frag, "zone_fs": zone_fs, "zone_h": zone_h})
-        body_h += _COMPOSITE_PART_GAP + frag["height"] + _COMPOSITE_FRAG_GAP + zone_h
-    strip = _correction_strip_layout(item.get("correction", ""), COL_W, font_size,
-                                     item_guides_mode(item))
-    return {"stmt": stmt, "parts": laid, "body_h": body_h, "strip": strip,
-            "badge_color": sub_color}
+        laid.append({**p, "frag": frag, "before": before_lay, "figure_image": fig,
+                     "guides": aid, "zone_fs": zone_fs, "zone_h": zone_h})
+        body_h += (_COMPOSITE_PART_GAP + before_lay["height"] + figure_h + frag["height"]
+                   + _COMPOSITE_FRAG_GAP + zone_h + aid["height"])
+    body_h += tail["height"]
+    strip = _correction_strip_layout(item.get("correction", ""), COL_W, font_size, mode)
+    return {"stmt": stmt, "parts": laid, "tail": tail, "body_h": body_h, "strip": strip,
+            "badge_color": sub_color, "numbered": numbered}
 
 
 def _composite_card_h(cl: dict) -> float:
@@ -2273,29 +2386,28 @@ def _draw_composite_card(c: canvas.Canvas, x: float, y_top: float, w: float, seq
     badge_color = cl["badge_color"]
     ty = card_bottom + card_h_body - CARD_PAD
     first = stmt["intro"]["lines"][0] if stmt["intro"]["lines"] else None
-    _draw_badge(c, x + CARD_PAD, ty - (first["asc"] if first else font_size * 0.78),
-                font_size, str(seq), badge_color)
-    line_y = _draw_rich(c, x + CARD_PAD, ty, stmt["intro"])
-    if stmt.get("figure_inline") and stmt["figure"]:
-        fimg, fw, fh = stmt["figure"]
-        c.drawImage(fimg, x + (w - fw) / 2, line_y - _FIG_MARKER_GAP - fh, width=fw, height=fh,
-                    mask="auto", preserveAspectRatio=True)
-        line_y -= 2 * _FIG_MARKER_GAP + fh
-        if stmt.get("intro_after"):
-            line_y = _draw_rich(c, x + CARD_PAD, line_y, stmt["intro_after"])
-    elif stmt["figure"]:
-        fimg, fw, fh = stmt["figure"]
-        c.drawImage(fimg, x + (w - fw) / 2, line_y - fh - 0.5 * mm, width=fw, height=fh,
-                    mask="auto", preserveAspectRatio=True)
-        line_y -= fh + 1 * mm
+    numbered = cl.get("numbered", True)
+    if numbered:
+        _draw_badge(c, x + CARD_PAD,
+                    ty - (first.get("badge_asc", first["asc"]) if first else font_size * 0.78),
+                    font_size, str(seq), badge_color)
+    _draw_statement_content(c, x, ty, w, stmt)
     c.setFillColor(black)
     if item.get("calc") in ("necessaire", "interdite"):
         _draw_calc_icon(c, x + w - 1.4 * mm, card_bottom + card_h_body - 1.4 * mm, 3.6 * mm,
                         forbidden=(item.get("calc") == "interdite"))
 
+    line_y = ty - stmt["height"]
     part_zones = []
-    for p in cl["parts"]:
-        line_y -= _COMPOSITE_PART_GAP
+    for k, p in enumerate(cl["parts"]):
+        if numbered or k:
+            line_y -= _COMPOSITE_PART_GAP
+        line_y = _draw_rich(c, x + CARD_PAD, line_y, p["before"])
+        if p["figure_image"]:
+            fimg, fw, fh = p["figure_image"]
+            line_y -= _FIG_MARKER_GAP
+            c.drawImage(fimg, x + (w - fw) / 2, line_y - fh, width=fw, height=fh, mask="auto")
+            line_y -= fh + _FIG_MARKER_GAP
         line_y = _draw_rich(c, x + CARD_PAD, line_y, p["frag"])
         line_y -= _COMPOSITE_FRAG_GAP
         zone_y = line_y - p["zone_h"]
@@ -2304,13 +2416,8 @@ def _draw_composite_card(c: canvas.Canvas, x: float, y_top: float, w: float, seq
         part_zones.append({"item_id": p["item_id"], "response_type": p["response_type"],
                            "zone_geo": {"x_pt": x, "y_pt": zone_y, "w_pt": w, "h_pt": p["zone_h"]},
                            "meta": meta})
-        line_y = zone_y
-    # bande corrigé du composite : les parties n'en portent pas la géométrie
-    # (l'overlay imprime la note au-dessus de chaque zone, comportement
-    # d'origine), mais un guide À IMPRIMER doit l'être ici aussi, une seule fois
-    # pour la carte unifiée.
-    if cl["strip"].get("guides") == GUIDES_PRINT:
-        _strip_meta(c, x, y, w, cl["strip"])
+        line_y = _draw_rich(c, x + CARD_PAD, zone_y, p["guides"])
+    _draw_rich(c, x + CARD_PAD, line_y, cl["tail"])
     c.setFillColor(black)
     return card_h, part_zones
 
@@ -2395,6 +2502,9 @@ def _render_copy(pdf_canvas: canvas.Canvas, *, student_name: str, class_name: st
 
     def place(height: float):
         nonlocal col, y_cursor
+        if height > column_capacity(2) + 0.1:
+            raise ValueError(f"Carte {seq} trop haute ({height / mm:.1f} mm) : "
+                             "répartis ou raccourcis le contenu avant d'imprimer")
         if y_cursor - height < bottom_limit:
             if col == 0:
                 col = 1
@@ -2581,10 +2691,8 @@ def _draw_zone_marks(c: canvas.Canvas, z: dict, col):
 
 def _draw_correction_strip(c: canvas.Canvas, z: dict, col):
     """Bande de correction sous une carte : la note de barème à DROITE, en gros
-    et gras ; le corrigé (banque) à gauche — mis en page comme un énoncé (riche :
-    formules $...$, sauts de ligne), et imprimé SEULEMENT si l'élève s'est
-    trompé (z["text"] vide sinon). La hauteur a été anticipée à la génération
-    (_correction_strip_layout) pour que le corrigé ne soit jamais coupé."""
+    et gras. Plus aucun texte de guide : les guides sont des encadrés intégrés
+    à l'énoncé (statement.GUIDE_TOKEN), imprimés — ou non — dès le sujet."""
     strip = z.get("strip")
     score_txt = (f"{scoring.format_points(z['score'])}/"
                  f"{scoring.format_points(z['max_score'])}")
@@ -2596,19 +2704,9 @@ def _draw_correction_strip(c: canvas.Canvas, z: dict, col):
                           score_txt)
         return
     sx, sy, sw, sh = strip["x_pt"], strip["y_pt"], strip["w_pt"], strip["h_pt"]
-    fs = float(strip.get("fs", 7.5))
     c.setFillColor(col)
     c.setFont("Helvetica-Bold", 11)
     c.drawRightString(sx + sw, sy + sh / 2 - 11 * 0.34, score_txt)
-    # GUIDES_NONE : la bande n'a que la hauteur de la note (le texte n'a jamais
-    # été composé, l'imprimer déborderait sur la carte suivante).
-    # GUIDES_PRINT : le guide est DÉJÀ imprimé sur le sujet — le repasser en
-    # rouge par-dessus ne ferait qu'un pâté.
-    if z.get("text") and strip.get("guides", GUIDES_OVERLAY) == GUIDES_OVERLAY:
-        text_w = max(10 * mm, sw - STRIP_NOTE_W)
-        lay = _rich_layout(statement_mod.normalize(z["text"]), text_w, fs)
-        _draw_rich(c, sx, sy + sh, lay, color=col)
-    c.setFillColor(col)
 
 
 PROGRESS_GREEN = HexColor("#2E7D32")

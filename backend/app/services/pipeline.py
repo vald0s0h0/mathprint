@@ -1225,9 +1225,9 @@ def build_overlays(db: Session, batch: ScanBatch) -> str:
                      "max_score": bareme, "full_credit": full,
                      "response_type": item.response_type,
                      "strip": (zone.meta_json or {}).get("correction_strip"),
-                     # corrigé (banque) affiché SEULEMENT si erreur, pour guider
-                     # l'élève à se corriger lui-même
-                     "text": "" if full else item.correction,
+                     # plus de guide à l'overlay : les guides sont des encadrés
+                     # de l'énoncé, imprimés (ou non) dès le sujet
+                     "text": "",
                      "marks": _zone_marks(db, item, zone, decision)}
             zones.append(zdict)
             zones_by_page.setdefault(zone.page_id, []).append(zdict)
@@ -1235,7 +1235,7 @@ def build_overlays(db: Session, batch: ScanBatch) -> str:
                 dp = db.get(DocumentPage, zone.page_id)
                 page_no[zone.page_id] = dp.page_no if dp else 0
             db.add(Annotation(copy_id=copy.id, page_id=zone.page_id, zone_id=zone.id,
-                              content="" if full else item.correction,
+                              content="",
                               color=settings.correction_color,
                               geometry_json={"x_pt": zone.x_pt, "y_pt": zone.y_pt}))
         if not zones:

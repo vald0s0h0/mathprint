@@ -12,9 +12,8 @@ Différences avec la pipeline automatique (services.generation) :
         voisins de table ;
       « par niveau » : exactement 3 variantes (facile/moyen/difficile),
         attribuées d'après le niveau de l'élève (StudentLevel, échelle 1-10) ;
-  • les guides d'auto-correction attachés à chaque exercice sont
-    pilotés globalement par le sujet : à la correction seulement (overlay),
-    imprimés dès le sujet pour les élèves de niveau 1 à 4, ou supprimés (cf.
+  • les guides (encadrés « {{aide}} » intégrés aux énoncés) sont pilotés
+    globalement par le sujet : inclus ou retirés pour tous (cf.
     pdfgen.GUIDES_*).
 
 Le plan étant figé, la mise en page l'est aussi : c'est `pdfgen.render_copy`
@@ -38,28 +37,22 @@ from .security import sign_page
 
 logger = logging.getLogger(__name__)
 
-# Variantes par niveau : 3, toujours les mêmes clés, dans cet ordre. Le seuil
-# Le seuil de niveau <= 4 sur 10 est le même que celui qui déclenche
-# l'impression des guides — c'est la même population d'élèves.
+# Variantes par niveau : 3, toujours les mêmes clés, dans cet ordre. Un élève
+# de niveau <= 4 sur 10 reçoit la variante « facile ».
 LEVEL_KEYS = ("facile", "moyen", "difficile")
 LEVEL_LABELS = {"facile": "Facile", "moyen": "Moyen", "difficile": "Difficile"}
 GUIDES_PRINT_MAX_LEVEL = 4
 MAX_VARIANTS = 6            # anti-triche : au-delà, plus personne ne s'y retrouve
 
-# Modes de guide exposés par l'assistant, et leur traduction pdfgen. Le mode
-# "print_fragile" ne se traduit pas en un mode unique : la GÉOMÉTRIE est celle
-# du mode overlay pour tout le monde (une variante = une mise en page, quel que
-# soit l'élève), seuls les élèves de niveau 1 à 4 reçoivent l'encre du guide.
-GUIDE_MODES = ("overlay", "print_fragile", "none")
+# Modes de guide exposés par les assistants : les encadrés guide des énoncés
+# sont inclus, ou retirés, pour TOUS les élèves du sujet.
+GUIDE_MODES = (pdfgen.GUIDES_INCLUDE, pdfgen.GUIDES_NONE)
 
 
-def guides_for_student(mode: str, student_level: int) -> str:
-    """Mode pdfgen des cartes de la copie d'un élève (cf. pdfgen.GUIDES_*)."""
-    if mode == "none":
-        return pdfgen.GUIDES_NONE
-    if mode == "print_fragile" and student_level <= GUIDES_PRINT_MAX_LEVEL:
-        return pdfgen.GUIDES_PRINT
-    return pdfgen.GUIDES_OVERLAY
+def normalize_guide_mode(mode: str | None) -> str:
+    """Mode pdfgen d'un sujet. Les anciennes valeurs (« overlay »,
+    « print_fragile ») d'un sujet composé avant la refonte valent « include »."""
+    return pdfgen.GUIDES_NONE if mode == pdfgen.GUIDES_NONE else pdfgen.GUIDES_INCLUDE
 
 
 def variant_for_student(blueprint: dict, student_level: int, student_index: int) -> int:
@@ -119,7 +112,7 @@ def _card(db: Session, row: GeneratedExercise, comp: Competency, tpl: dict,
     """Une entrée du pool, telle que l'assistant l'affiche et la mesure."""
     indigo = (row.raw_extract_json or {}).get("indigo") or {}
     heights = {}
-    for mode in (pdfgen.GUIDES_OVERLAY, pdfgen.GUIDES_NONE):
+    for mode in GUIDE_MODES:
         shape = generation.render_shape(row, mode)
         heights[mode] = pdfgen.estimate_item_height(
             shape, font_size, math_fs, tpl["exercise"])
@@ -158,7 +151,7 @@ def _card(db: Session, row: GeneratedExercise, comp: Competency, tpl: dict,
         "bareme_points": scoring.item_bareme(row.grading_json, row.response_type),
         # hauteurs RÉELLES (points PDF) des deux mises en page possibles : c'est
         # la mesure de pdfgen, pas une estimation refaite côté navigateur.
-        "height_pt": round(heights[pdfgen.GUIDES_OVERLAY], 1),
+        "height_pt": round(heights[pdfgen.GUIDES_INCLUDE], 1),
         "height_pt_no_guide": round(heights[pdfgen.GUIDES_NONE], 1),
     }
 
@@ -239,7 +232,7 @@ def generate_manual_job(db: Session, assessment: Assessment, job: Job | None = N
     variants = blueprint.get("variants") or []
     if not variants or not any(v.get("items") for v in variants):
         raise ValueError("Aucun exercice placé : composez au moins une page.")
-    guide_mode = blueprint.get("guides", "overlay")
+    guide_mode = normalize_guide_mode(blueprint.get("guides"))
 
     school_class = db.get(SchoolClass, assessment.class_id)
     students = sorted((s for s in school_class.students if s.active),
@@ -292,7 +285,7 @@ def generate_manual_job(db: Session, assessment: Assessment, job: Job | None = N
                       if fixed_key and str(v.get("key")) == str(fixed_key)),
                      variant_for_student(blueprint, level, s_idx))
         variant = variants[v_idx]
-        guides = guides_for_student(guide_mode, level)
+        guides = guide_mode
         # seed = variante (et non élève) : deux élèves de la même variante ont
         # rigoureusement la même copie, c'est la définition d'un sujet commun.
         seed = base_seed + v_idx

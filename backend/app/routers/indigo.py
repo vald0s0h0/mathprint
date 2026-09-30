@@ -437,8 +437,24 @@ def export_published():
 
 @router.get("/exercises")
 def list_exercises(competency_id: str | None = None, extraction_id: str | None = None,
-                   status: str | None = None, db: Session = Depends(get_db)):
+                   status: str | None = None, chapter_id: str | None = None,
+                   category: str | None = None, db: Session = Depends(get_db)):
+    if chapter_id:
+        comp = db.get(Competency, chapter_id)
+        if not comp:
+            raise HTTPException(404, "Chapitre introuvable")
+        ids = [c.id for c in db.query(Competency).filter_by(
+            framework_id=comp.framework_id, chapter_code=comp.chapter_code,
+            domain_code=comp.domain_code).all()]
+        rows = db.query(IndigoExercise).filter(IndigoExercise.competency_id.in_(ids),
+                    IndigoExercise.badge_type.in_(("probleme", "enigme"))).all()
+        if status:
+            rows = [r for r in rows if r.status == status]
+        rows.sort(key=lambda r: (r.difficulty, indigo._exercise_number_key(r)))
+        return [indigo.exercise_out(db, ex) for ex in rows]
     rows = indigo.list_exercises(db, competency_id, extraction_id, status)
+    if category == "exercise":
+        rows = [r for r in rows if r.badge_type not in ("probleme", "enigme")]
     return [indigo.exercise_out(db, ex) for ex in rows]
 
 

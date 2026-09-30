@@ -6,7 +6,7 @@ Le manuel encode le TYPE et la DIFFICULTÉ d'un exercice par une couleur :
   couleur de badge qu'exercice, on le reconnaît à son FOND vert d'eau pâle,
   lu au coin bas-droit du numéro — cf. is_expert_background) ;
 - pour un PROBLÈME : la couleur n'est pas dans le badge mais dans le TITRE
-  (facile = orange, moyen = vert, difficile = gris/noir). On sait que c'est un
+  (facile = vert, moyen = orange, difficile = gris/noir). On sait que c'est un
   problème par la présence de tags (« Raisonner », « Calculer »…), détectée
   côté texte, pas ici.
 
@@ -30,8 +30,8 @@ REF_RGB = {
     "exercice": (40, 180, 185),   # teal   — 0.157 0.706 0.726
     "flash":    (240, 134, 47),   # orange — 0.941 0.525 0.184
     "enigme":   (240, 70, 43),    # rouge  — 0.941 0.274 0.169
-    "facile":   (244, 133, 42),   # orange — 0.957 0.521 0.165  (titre problème)
-    "moyen":    (118, 198, 58),   # vert   — 0.463 0.776 0.227  (titre problème)
+    "facile":   (118, 198, 58),   # vert (titre problème)
+    "moyen":    (244, 133, 42),   # orange (titre problème)
     "difficile": (35, 31, 32),    # gris   — 0.137 0.122 0.125  (titre problème)
 }
 
@@ -163,7 +163,7 @@ def _classify_badge(color: dict) -> str:
 
 
 def _classify_title(color: dict) -> str:
-    """facile (orange) | moyen (vert) | difficile (gris/noir). Le gris n'a pas
+    """facile (vert) | moyen (orange) | difficile (gris/noir). Le gris n'a pas
     de teinte fiable : on le détecte par faible saturation."""
     hue = color.get("hue_deg")
     if hue is None or color.get("sat", 0) < MIN_SAT:

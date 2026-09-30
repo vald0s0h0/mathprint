@@ -193,8 +193,8 @@ def _series_blocks(line: str) -> list["Block"] | None:
 @dataclass
 class Block:
     """Un bloc de présentation. `kind` dit quels champs portent le contenu."""
-    kind: str                                             # text | table | series
-    text: str = ""                                        # text
+    kind: str                                             # text | table | series | guide
+    text: str = ""                                        # text, guide (lignes jointes par \n)
     rows: list[list[str]] = field(default_factory=list)   # table
     header: bool = False                                  # table
     items: list[str] = field(default_factory=list)        # series
@@ -210,6 +210,7 @@ def parse(text: str) -> list[Block]:
     majorité, et la mise en page d'avant est donc conservée à l'identique."""
     out: list[Block] = []
     pending: list[str] = []
+    last_was_guide = False
 
     def flush_table() -> None:
         if not pending:
@@ -222,6 +223,17 @@ def parse(text: str) -> list[Block]:
         pending.clear()
 
     for line in statement_mod.lines(text or ""):
+        if statement_mod.is_guide_line(line):
+            # encadré guide : les lignes guide consécutives n'en font qu'UN
+            flush_table()
+            body = statement_mod.guide_body(line)
+            if out and out[-1].kind == "guide" and last_was_guide:
+                out[-1].text += "\n" + body
+            else:
+                out.append(Block(kind="guide", text=body))
+            last_was_guide = True
+            continue
+        last_was_guide = False
         if is_table_line(line):
             pending.append(line)
             continue

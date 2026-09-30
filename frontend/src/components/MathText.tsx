@@ -203,6 +203,10 @@ export function MathAnswer({ text, fallback = '—', size }: {
 // poser la figure (StatementPreview) ; partout ailleurs (banque, sujets), on
 // retire simplement sa ligne pour qu'il ne fuite pas dans le rendu.
 const FIGURE_LINE_RE = /^[ \t]*\{\{figure\}\}[ \t]*\n?/gm
+// Ligne GUIDE ({{aide}}, cf. backend statement.GUIDE_TOKEN) : l'encadré jaune est
+// dessiné par ExerciseRichBody ; dans un rendu en ligne (vignette, libellé), la
+// ligne est simplement retirée pour que le marqueur ne s'affiche jamais.
+const GUIDE_LINE_RE = /^[ \t]*\{\{aide\}\}.*(\n|$)/gm
 
 export default function MathText({ text, centered = false, size }: {
   text: string; centered?: boolean; size?: string | number
@@ -212,7 +216,7 @@ export default function MathText({ text, centered = false, size }: {
   // marques de part et d'autre d'un span, et les chercher après le découpage
   // mathématique les laisserait orphelines — donc affichées telles quelles.
   const chunks = useMemo(
-    () => splitBold((text || '').replace(FIGURE_LINE_RE, '')), [text])
+    () => splitBold((text || '').replace(FIGURE_LINE_RE, '').replace(GUIDE_LINE_RE, '')), [text])
   const elements = chunks.flatMap(([chunk, bold], c) => {
     const inner = splitMathSpans(chunk).map(([content, isMath], i) =>
       isMath ? <MathSpan key={`${c}-${i}`} latex={content} />

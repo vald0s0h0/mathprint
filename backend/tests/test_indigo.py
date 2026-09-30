@@ -42,10 +42,10 @@ def test_cv_probleme_difficulty_from_title_color():
         img = np.full((120, 300, 3), 255, np.uint8)
         cv2.putText(img, "Titre", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 1.4, bgr, 4)
         return img
-    # trois niveaux (§ exercise_gen.DIFFICULTY_LEVELS) : orange -> facile,
-    # vert -> moyen, gris/noir (peu saturé) -> difficile
-    assert indigo_cv.analyze(title((42, 133, 244)), True)["difficulty"] == 1
-    assert indigo_cv.analyze(title((58, 198, 118)), True)["difficulty"] == 2
+    # trois niveaux (§ exercise_gen.DIFFICULTY_LEVELS) : orange -> moyen,
+    # vert -> facile, gris/noir (peu saturé) -> difficile
+    assert indigo_cv.analyze(title((42, 133, 244)), True)["difficulty"] == 2
+    assert indigo_cv.analyze(title((58, 198, 118)), True)["difficulty"] == 1
     assert indigo_cv.analyze(title((32, 31, 35)), True)["difficulty"] == 3
 
 
@@ -463,13 +463,11 @@ def test_composite_card_renders_one_zone_per_part():
     assert zones[0]["meta"].get("boxes")               # la grille a ses cases CV
 
 
-def test_place_figure_marker_never_after_questions():
+def test_place_figure_marker_respects_explicit_author_order():
     from app.services import statement as s
     t = "On considère le triangle $ABC$.\na. Longueur de $AB$ ? {{blank}}\n{{figure}}"
     out = s.place_figure_marker(t, True)
-    lines = out.split("\n")
-    assert lines.index("{{figure}}") < next(i for i, ln in enumerate(lines)
-                                            if s.subquestion_label(ln))
+    assert out == t
     # sans figure disponible : marqueur parasite retiré
     assert "{{figure}}" not in s.place_figure_marker("Texte\n{{figure}}", False)
 
