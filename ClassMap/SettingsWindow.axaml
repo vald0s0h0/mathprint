@@ -1,0 +1,124 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="using:ClassMap"
+        x:Class="ClassMap.SettingsWindow"
+        Title="ClassMap — Réglages"
+        Icon="/Assets/classmap.ico"
+        Width="640" Height="580" MinWidth="480" MinHeight="420"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False">
+
+  <Window.Styles>
+    <Style Selector="TextBlock.h">
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Margin" Value="0,6,0,0"/>
+    </Style>
+    <Style Selector="TextBlock.note">
+      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="Opacity" Value="0.7"/>
+      <Setter Property="TextWrapping" Value="Wrap"/>
+    </Style>
+    <Style Selector="TabItem">
+      <Setter Property="FontSize" Value="15"/>
+      <Setter Property="MinHeight" Value="36"/>
+      <Setter Property="Padding" Value="10,0"/>
+    </Style>
+    <Style Selector="Grid.form > TextBlock">
+      <Setter Property="VerticalAlignment" Value="Center"/>
+    </Style>
+  </Window.Styles>
+
+  <TabControl x:Name="Tabs" Padding="14,0,14,10">
+
+    <TabItem Header="Affichage">
+      <ScrollViewer>
+        <StackPanel Spacing="8" Margin="0,8,8,8">
+          <TextBlock x:Name="GridTitle" Classes="h" Margin="0" Text="Grille de la classe"/>
+          <StackPanel Orientation="Horizontal" Spacing="10">
+            <TextBlock Text="Rangées" VerticalAlignment="Center"/>
+            <NumericUpDown x:Name="GridRowsBox" Minimum="1" Maximum="15" Increment="1" FormatString="0" Width="120"/>
+            <TextBlock Text="Colonnes" VerticalAlignment="Center" Margin="10,0,0,0"/>
+            <NumericUpDown x:Name="GridColsBox" Minimum="1" Maximum="15" Increment="1" FormatString="0" Width="120"/>
+          </StackPanel>
+          <TextBlock Classes="note" Text="Chaque case est une table : glissez plusieurs élèves dans la même case pour les regrouper. "/>
+
+          <TextBlock Classes="h" Text="Fenêtre"/>
+          <Grid Classes="form" ColumnDefinitions="190,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto" RowSpacing="2">
+            <TextBlock Text="Taille du texte"/>
+            <Slider x:Name="TextScaleSlider" Grid.Column="1" Minimum="0.6" Maximum="1.6"/>
+            <TextBlock Grid.Row="1" Text="Opacité"/>
+            <Slider x:Name="OpacitySlider" Grid.Row="1" Grid.Column="1" Minimum="0.15" Maximum="1"/>
+            <CheckBox x:Name="DualBox" Grid.Row="2" Grid.ColumnSpan="2"
+                      Content="Deux opacités : forte quand la souris survole la fenêtre, faible sinon"/>
+            <TextBlock Grid.Row="3" Text="Opacité hors survol"/>
+            <Slider x:Name="IdleSlider" Grid.Row="3" Grid.Column="1" Minimum="0.1" Maximum="1"/>
+            <TextBlock Grid.Row="4" Text="Fond (0 = transparent)"/>
+            <Slider x:Name="BackSlider" Grid.Row="4" Grid.Column="1" Minimum="0" Maximum="0.9"/>
+          </Grid>
+          <CheckBox x:Name="TopmostBox" Content="Toujours au premier plan"/>
+          <Button x:Name="ResetSizeButton" Content="Taille et position par défaut (1/9 de l'écran)"/>
+        </StackPanel>
+      </ScrollViewer>
+    </TabItem>
+
+    <TabItem Header="Classes">
+      <Grid ColumnDefinitions="170,*" Margin="0,8,0,0">
+        <DockPanel>
+          <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="6" Margin="0,8,0,0">
+            <Button x:Name="AddClassButton" Content="Ajouter"/>
+            <Button x:Name="DeleteClassButton" Content="Supprimer"/>
+          </StackPanel>
+          <ListBox x:Name="ClassList"/>
+        </DockPanel>
+        <DockPanel Grid.Column="1" Margin="14,0,0,0">
+          <StackPanel DockPanel.Dock="Top" Spacing="6">
+            <TextBlock Classes="h" Text="Nom de la classe" Margin="0"/>
+            <TextBox x:Name="ClassNameBox"/>
+            <TextBlock Classes="h" Text="Élèves — un par ligne"/>
+            <TextBlock Classes="note" Text="Copiez-collez la liste (Pronote, tableur…). Un élève déjà présent garde son score et sa place ; une nouvelle ligne ajoute un élève ; une ligne supprimée retire l'élève."/>
+          </StackPanel>
+          <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="6" Margin="0,8,0,0">
+            <Button x:Name="ApplyNamesButton" Classes="accent" Content="Enregistrer la liste"/>
+            <Button x:Name="ResetScoresButton" Content="Remettre les scores à 0"/>
+          </StackPanel>
+          <TextBox x:Name="NamesBox" AcceptsReturn="True" TextWrapping="NoWrap" Margin="0,6,0,0"
+                   VerticalContentAlignment="Top" ScrollViewer.VerticalScrollBarVisibility="Auto"/>
+        </DockPanel>
+      </Grid>
+    </TabItem>
+
+    <TabItem Header="Emploi du temps">
+      <DockPanel Margin="0,8,0,0">
+        <StackPanel DockPanel.Dock="Top" Spacing="6" Margin="0,0,0,8">
+          <CheckBox x:Name="AutoScheduleBox" Content="Afficher automatiquement la classe du créneau en cours"/>
+          <TextBlock Classes="note" Text="Choisissez une classe puis peignez ses créneaux (cliquer-glisser, pas de 15 min). Cliquer sur un créneau de la même classe l'efface ; clic droit = gomme. Un choix manuel de classe reste affiché jusqu'au créneau suivant."/>
+          <WrapPanel x:Name="Palette"/>
+        </StackPanel>
+        <ScrollViewer HorizontalScrollBarVisibility="Disabled">
+          <local:WeekGrid x:Name="Week" Margin="0,0,14,0"/>
+        </ScrollViewer>
+      </DockPanel>
+    </TabItem>
+
+    <TabItem Header="Données">
+      <ScrollViewer>
+        <StackPanel Spacing="10" Margin="0,8,8,8">
+          <TextBlock Classes="note" Text="Tout est enregistré automatiquement sur la clé, à côté de ClassMap.exe, après chaque modification (écriture sécurisée, copie de secours .bak). Rien n'est copié sur l'ordinateur."/>
+          <TextBlock Classes="h" Text="Dossier des données"/>
+          <SelectableTextBlock x:Name="DataPathText" TextWrapping="Wrap" FontSize="12"/>
+          <TextBlock x:Name="SaveStatusText" FontSize="12"/>
+          <WrapPanel>
+            <Button x:Name="OpenFolderButton" Content="Ouvrir le dossier" Margin="0,0,6,6"/>
+            <Button x:Name="OpenJournalButton" Content="Ouvrir le journal" Margin="0,0,6,6"/>
+            <Button x:Name="ExportButton" Content="Exporter une copie…" Margin="0,0,6,6"/>
+            <Button x:Name="ImportButton" Content="Importer une sauvegarde…" Margin="0,0,6,6"/>
+          </WrapPanel>
+          <TextBlock Classes="note" Text="Une copie par jour est gardée 14 jours dans le dossier « sauvegardes ». Contre la perte de la clé : exportez de temps en temps une copie ailleurs (clé de secours, ENT, messagerie). Pensez à fermer l'explorateur et le journal avant d'éjecter."/>
+          <TextBlock Classes="h" Text="Quitter"/>
+          <Button x:Name="QuitButton" Content="Quitter sans éjecter la clé"/>
+          <TextBlock x:Name="VersionText" Classes="note"/>
+        </StackPanel>
+      </ScrollViewer>
+    </TabItem>
+  </TabControl>
+</Window>

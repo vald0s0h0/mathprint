@@ -1,0 +1,88 @@
+name: ClassMap (Windows)
+
+# ClassMap est indépendant de MathPrint : ce workflow ne regarde que ClassMap/.
+# - push / PR touchant ClassMap/ : compilation + autotest, .zip en artefact ;
+# - tag « classmap-vX.Y.Z » : idem + publication d'une release GitHub.
+on:
+  push:
+    tags:
+      - "classmap-v*.*.*"
+    branches: [main]
+    paths:
+      - "ClassMap/**"
+      - ".github/workflows/classmap.yml"
+  pull_request:
+    paths:
+      - "ClassMap/**"
+      - ".github/workflows/classmap.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      # Signature Authenticode facultative (certificat .pfx en base64) : lève les blocages
+      # « exécutable non signé depuis une clé USB » (règle ASR Defender) et l'alerte SmartScreen.
+      SIGN_PFX: ${{ secrets.CLASSMAP_SIGN_PFX }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Vérifier la version (tag = csproj)
+        if: startsWith(github.ref, 'refs/tags/classmap-v')
+        shell: pwsh
+        run: |
+          $expected = $env:GITHUB_REF_NAME -replace '^classmap-v', ''
+          $actual = ([xml](Get-Content ClassMap/ClassMap.csproj)).Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
+          if ($expected -ne $actual) { throw "Tag $expected, csproj $actual" }
+
+      - name: Publier (NativeAOT, win-x64, autonome)
+        run: dotnet publish ClassMap/ClassMap.csproj -c Release -r win-x64 -o publish/ClassMap
+
+      - name: Autotest du binaire publié
+        shell: pwsh
+        run: |
+          $p = Start-Process publish/ClassMap/ClassMap.exe -ArgumentList '--selftest' -Wait -PassThru -NoNewWindow
+          if ($p.ExitCode -ne 0) { throw "selftest: code $($p.ExitCode)" }
+
+      - name: Signer l'exécutable (si un certificat est configuré)
+        if: env.SIGN_PFX != ''
+        shell: pwsh
+        env:
+          SIGN_PASSWORD: ${{ secrets.CLASSMAP_SIGN_PASSWORD }}
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP 'sign.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:SIGN_PFX))
+          $signtool = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe' | Sort-Object FullName | Select-Object -Last 1
+          & $signtool.FullName sign /f $pfx /p $env:SIGN_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 publish/ClassMap/ClassMap.exe
+          if ($LASTEXITCODE -ne 0) { throw 'signature' }
+          Remove-Item $pfx
+
+      - name: Empaqueter
+        shell: pwsh
+        run: |
+          Remove-Item publish/ClassMap/*.pdb -ErrorAction SilentlyContinue
+          Get-ChildItem publish/ClassMap | Format-Table Name, Length
+          Compress-Archive -Path publish/ClassMap -DestinationPath ClassMap-win-x64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ClassMap-win-x64
+          path: ClassMap-win-x64.zip
+
+      - name: Publier la release
+        if: startsWith(github.ref, 'refs/tags/classmap-v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create $env:GITHUB_REF_NAME ClassMap-win-x64.zip `
+            --title "ClassMap $($env:GITHUB_REF_NAME -replace '^classmap-v', '')" `
+            --notes "Windows 10/11 x64, sans installation : dézipper le dossier ClassMap sur la clé USB et lancer ClassMap.exe. Les données sont créées dans ClassMap\donnees." `
+            --latest=false
