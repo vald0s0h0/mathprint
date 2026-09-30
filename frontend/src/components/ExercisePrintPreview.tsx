@@ -44,13 +44,15 @@ type PreviewProps = {
   showCorrection?: boolean
   showGuide?: boolean
   // Coche la (les) bonne(s) réponse(s) sur la carte elle-même (QCM, grille,
-  // points à relier) — utile en RELECTURE (onglet Exercices) pour vérifier
-  // d'un coup d'œil que la réponse attendue est la bonne, jamais sur une
-  // copie destinée à l'élève (Banque, mise en page d'un sujet).
+  // points à relier) — en RELECTURE (onglets Exercices et Banque) pour
+  // vérifier d'un coup d'œil que la réponse attendue est la bonne, jamais sur
+  // une copie destinée à l'élève (mise en page d'un sujet).
   showAnswers?: boolean
   // Encadrés guide « {{aide}} » intégrés à l'énoncé : affichés par défaut
   // (sujet « Inclure les guides »), masqués à false.
   guides?: boolean
+  // largeur max de la carte (l'aperçu PNG est rendu à 180 dpi : net jusqu'à ~600 px)
+  maxWidth?: number
   className?: string
 }
 
@@ -250,9 +252,9 @@ function DetailBlock({ label, text, color, guide }: { label: string; text: strin
 
 export default function ExercisePrintPreview({ exercise, color = 'indigo', badges, actions,
   beforeFrame, afterFrame, showCorrection = false, showGuide = false, showAnswers = false,
-  guides = true, className }: PreviewProps) {
+  guides = true, maxWidth = 340, className }: PreviewProps) {
   return (
-    <Stack gap={3} className={className} style={{ width: '100%', maxWidth: 340 }}>
+    <Stack gap={3} className={className} style={{ width: '100%', maxWidth }}>
       {beforeFrame}
       {(badges || actions) && <Group justify="space-between" align="flex-start" wrap="nowrap">
         <Box style={{ minWidth: 0 }}>{badges}</Box>{actions}

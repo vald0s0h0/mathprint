@@ -1,5 +1,6 @@
 // Paramètres (§9.6) : Mon compte, API, Imprimantes, Calibration, Pédagogie,
-// Documents (éditeur de templates), Système, Données.
+// Documents (éditeur de templates), Système, Journaux, Données, Utilisateurs
+// (admin). `?onglet=<valeur>` ouvre directement un onglet.
 import {
   Accordion, ActionIcon, Alert, Badge, Box, Button, Card, ColorInput, FileButton,
   Group, Loader, Modal, NumberInput, PasswordInput, SimpleGrid, Stack, Switch, Table, Tabs, Text,
@@ -8,13 +9,15 @@ import {
 import { notifications } from '@mantine/notifications'
 import {
   AlertTriangle, Database, FileText, FlaskConical, KeyRound, Mail, Printer,
-  RefreshCw, Ruler, ScrollText, Save, SlidersHorizontal, Trash2, UserRound,
+  RefreshCw, Ruler, ScrollText, Save, SlidersHorizontal, Trash2, UserRound, Users,
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { api, getToken } from '../api'
 import MailIntakeSettings from '../components/MailIntakeSettings'
 import PrinterSettings, { type PrintersInfo } from '../components/PrinterSettings'
 import TemplateEditor from '../components/TemplateEditor'
+import UsersAdmin from './UsersAdmin'
 
 type Me = { id: string; email: string; display_name: string; role: string }
 type Provider = { provider: string; secret_preview: string; active: boolean }
@@ -80,6 +83,9 @@ export default function SettingsPage() {
   const [purgingOrphans, setPurgingOrphans] = useState(false)
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [logsLoading, setLogsLoading] = useState(false)
+  const [searchParams, setSearchParams] = useSearchParams()
+  const tab = searchParams.get('onglet') || 'compte'
+  const isAdmin = me?.role === 'admin'
 
   function refresh() {
     api.get<Me>('/api/auth/me').then(setMe)
@@ -98,6 +104,8 @@ export default function SettingsPage() {
       .catch(() => setWebBuild(null))
   }
   useEffect(refresh, [])
+  // arrivée directe sur ?onglet=journaux : le chargement suit l'onglet ouvert
+  useEffect(() => { if (tab === 'journaux') refreshLogs() }, [])
   useEffect(() => {
     const timer = window.setInterval(() => {
       api.get<PrintersInfo>('/api/printers').then(setPrinters).catch(() => {})
@@ -318,8 +326,12 @@ export default function SettingsPage() {
   return (
     <Stack>
       <Title order={2}>Paramètres</Title>
-      <Tabs defaultValue="compte" keepMounted={false}
-        onChange={(v) => { if (v === 'journaux') refreshLogs() }}>
+      <Tabs value={tab} keepMounted={false}
+        onChange={(v) => {
+          const next = v ?? 'compte'
+          setSearchParams(next === 'compte' ? {} : { onglet: next }, { replace: true })
+          if (next === 'journaux') refreshLogs()
+        }}>
         <Tabs.List>
           <Tabs.Tab value="compte" leftSection={<UserRound size={15} />}>Mon compte</Tabs.Tab>
           <Tabs.Tab value="api" leftSection={<KeyRound size={15} />}>API</Tabs.Tab>
@@ -331,6 +343,9 @@ export default function SettingsPage() {
           <Tabs.Tab value="systeme" leftSection={<Database size={15} />}>Système</Tabs.Tab>
           <Tabs.Tab value="journaux" leftSection={<ScrollText size={15} />}>Journaux</Tabs.Tab>
           <Tabs.Tab value="donnees" leftSection={<Trash2 size={15} />}>Données</Tabs.Tab>
+          {isAdmin && (
+            <Tabs.Tab value="utilisateurs" leftSection={<Users size={15} />}>Utilisateurs</Tabs.Tab>
+          )}
         </Tabs.List>
 
         <Tabs.Panel value="compte" pt="md">
@@ -830,6 +845,12 @@ export default function SettingsPage() {
             </Accordion>
           </Stack>
         </Tabs.Panel>
+
+        {isAdmin && (
+          <Tabs.Panel value="utilisateurs" pt="md">
+            <UsersAdmin />
+          </Tabs.Panel>
+        )}
       </Tabs>
 
       <Modal opened={!!confirmTarget} onClose={() => setConfirmTarget(null)}

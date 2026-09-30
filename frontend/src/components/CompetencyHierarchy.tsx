@@ -34,6 +34,10 @@ type Props<T> = {
   onRowClick?: (row: T) => void
   chapterAside?: (chapter: CompetencyHierarchyChapter<T>) => ReactNode
   showColumnHeaders?: boolean
+  // Largeur minimale commune à toutes les tables de chapitre : au-delà, le
+  // parent fait défiler horizontalement. Même largeur partout + colonnes à
+  // largeur fixe => les colonnes restent alignées d'un chapitre à l'autre.
+  tableMinWidth?: CSSProperties['minWidth']
 }
 
 /**
@@ -45,7 +49,7 @@ type Props<T> = {
  */
 export default function CompetencyHierarchy<T>({
   domains, getRowKey, getShortId, getLabel, columns = [], columnGroupLabel,
-  selectedKey, onRowClick, chapterAside, showColumnHeaders = true,
+  selectedKey, onRowClick, chapterAside, showColumnHeaders = true, tableMinWidth,
 }: Props<T>) {
   const accordionKey = domains.map((domain) => domain.key).join('|')
 
@@ -93,7 +97,7 @@ export default function CompetencyHierarchy<T>({
                     </Group>
 
                     <Table highlightOnHover verticalSpacing={5} horizontalSpacing="sm" fz="sm"
-                      style={{ width: '100%', tableLayout: 'fixed' }}>
+                      style={{ width: '100%', minWidth: tableMinWidth, tableLayout: 'fixed' }}>
                       <colgroup>
                         <col />
                         {columns.map((column) => (

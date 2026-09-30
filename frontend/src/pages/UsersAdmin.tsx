@@ -71,7 +71,7 @@ export default function UsersAdmin() {
   return (
     <Stack gap="lg">
       <div>
-        <Title order={2}>Utilisateurs</Title>
+        <Title order={4}>Utilisateurs</Title>
         <Text size="sm" c="dimmed">
           Comptes, rôles et niveaux d'abonnement de MathPrint.
         </Text>

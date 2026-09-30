@@ -1,5 +1,5 @@
 import {
-  ActionIcon, AppShell, Badge, Group, Loader, Menu, NavLink, Progress,
+  ActionIcon, AppShell, Badge, Box, Divider, Group, Loader, Menu, NavLink, Progress,
   SegmentedControl, Text, Title, Tooltip, useComputedColorScheme, useMantineColorScheme,
 } from '@mantine/core'
 import {
@@ -21,21 +21,27 @@ import Bank from './pages/Bank'
 import Exercices from './pages/Exercices'
 import Subjects from './pages/Subjects'
 import Grades from './pages/Grades'
-import UsersAdmin from './pages/UsersAdmin'
 import ScanProblemsModal from './components/ScanProblemsModal'
 import { CYCLES, useAppState, type Cycle } from './state/AppState'
 
-// `admin: true` => réservé au rôle admin (absent des builds utilisateur/correcteur).
-const NAV = [
+type NavItem = { to: string; label: string; icon: typeof LayoutDashboard; admin?: boolean }
+
+// Navigation du quotidien, en haut de la barre latérale.
+const NAV: NavItem[] = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/sujets', label: 'Sujets', icon: FileText },
   { to: '/banque', label: 'Banque', icon: Library },
-  { to: '/exercices', label: 'Exercices', icon: BookOpenCheck, admin: true },
-  { to: '/utilisateurs', label: 'Utilisateurs', icon: Users, admin: true },
   { to: '/corrections', label: 'Corrections', icon: ScanLine },
   { to: '/eleves', label: 'Élèves', icon: Users },
   { to: '/notes', label: 'Notes', icon: ClipboardList },
   { to: '/competences', label: 'Compétences', icon: Target },
+]
+
+// Zone « Admin », en bas de la barre latérale. `admin: true` => réservé au
+// rôle admin (absent des builds utilisateur/correcteur). Les utilisateurs se
+// gèrent désormais dans Paramètres > Utilisateurs.
+const NAV_BOTTOM: NavItem[] = [
+  { to: '/exercices', label: 'Exercices', icon: BookOpenCheck, admin: true },
   { to: '/parametres', label: 'Paramètres', icon: SettingsIcon },
 ]
 
@@ -60,7 +66,7 @@ export default function App() {
   const [role, setRole] = useState<string>('')
   const { cycle, setCycle, activeJobs } = useAppState()
   const isAdmin = role === 'admin'
-  const nav = NAV.filter((n) => !n.admin || isAdmin)
+  const navBottom = NAV_BOTTOM.filter((n) => !n.admin || isAdmin)
 
   useEffect(() => {
     api.get<{ needs_setup: boolean }>('/api/setup/status')
@@ -71,6 +77,21 @@ export default function App() {
   useEffect(() => {
     if (authed) api.get<{ role: string }>('/api/auth/me').then((m) => setRole(m.role)).catch(() => {})
   }, [authed])
+
+  function renderNavLink(n: NavItem) {
+    return (
+      <NavLink key={n.to} label={n.label} active={location.pathname === n.to}
+        leftSection={<n.icon size={17} strokeWidth={1.9} />}
+        rightSection={n.admin ? (
+          <Tooltip label="Réservé aux administrateurs" position="right">
+            <ShieldUser size={14} color="var(--mantine-color-gray-6)"
+              aria-label="Réservé aux administrateurs" />
+          </Tooltip>
+        ) : undefined}
+        style={{ borderRadius: 8 }} fw={500} mb={2}
+        onClick={() => navigate(n.to)} />
+    )
+  }
 
   if (needsSetup === null) return null
   if (needsSetup) return <Setup onDone={() => setNeedsSetup(false)} />
@@ -128,19 +149,16 @@ export default function App() {
       </AppShell.Header>
 
       <AppShell.Navbar p="xs">
-        {nav.map((n) => (
-          <NavLink key={n.to} label={n.label} active={location.pathname === n.to}
-            leftSection={<n.icon size={17} strokeWidth={1.9} />}
-            rightSection={n.admin ? (
-              <Tooltip label="Réservé aux administrateurs" position="right">
-                <ShieldUser size={14} color="var(--mantine-color-gray-6)"
-                  aria-label="Réservé aux administrateurs" />
-              </Tooltip>
-            ) : undefined}
-            style={{ borderRadius: 8 }} fw={500} mb={2}
-            onClick={() => navigate(n.to)} />
-        ))}
-        <Text size="xs" c="dimmed" mt="auto" px="sm" pb={4}>MathPrint v{APP_VERSION}</Text>
+        {NAV.map(renderNavLink)}
+        <Box mt="auto">
+          <Divider mb={6} />
+          {isAdmin && (
+            <Text size="10px" fw={700} c="dimmed" tt="uppercase" px="sm" mb={4}
+              style={{ letterSpacing: 0.6 }}>Admin</Text>
+          )}
+          {navBottom.map(renderNavLink)}
+          <Text size="xs" c="dimmed" px="sm" pt={4} pb={4}>MathPrint v{APP_VERSION}</Text>
+        </Box>
       </AppShell.Navbar>
 
       <AppShell.Main>
@@ -149,7 +167,8 @@ export default function App() {
           <Route path="/sujets" element={<Subjects />} />
           <Route path="/banque" element={<Bank />} />
           {isAdmin && <Route path="/exercices" element={<Exercices />} />}
-          {isAdmin && <Route path="/utilisateurs" element={<UsersAdmin />} />}
+          {/* ancien onglet, conservé pour les liens existants */}
+          <Route path="/utilisateurs" element={<Navigate to="/parametres?onglet=utilisateurs" replace />} />
           <Route path="/corrections" element={<Corrections />} />
           <Route path="/eleves" element={<Students />} />
           <Route path="/notes" element={<Grades />} />

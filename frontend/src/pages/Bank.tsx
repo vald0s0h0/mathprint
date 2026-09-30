@@ -3,8 +3,8 @@
 // donne la couverture, l'aperçu fidèle (KaTeX + figures identiques au PDF),
 // le retrait d'un contenu douteux. Toute création reste hors de cet onglet.
 import {
-  ActionIcon, Badge, Box, Button, Checkbox, Collapse, Group, Loader, Paper, ScrollArea,
-  SegmentedControl, Stack, Text, Title, Tooltip,
+  ActionIcon, Badge, Box, Button, Collapse, Group, Loader, Paper, ScrollArea,
+  SegmentedControl, SimpleGrid, Stack, Text, Title, Tooltip,
 } from '@mantine/core'
 import { ChevronDown, ChevronUp, Library } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
@@ -39,35 +39,15 @@ type Exercise = {
   raw: Record<string, any> | null
 }
 
-const RESPONSE_LABELS: Record<string, string> = {
-  short_text: 'réponse courte', multiline_text: 'raisonnement rédigé',
-  qcm_single: 'QCM', qcm_multiple: 'QCM multiple',
-  checkbox_grid: 'grille cochée', multi_blank: 'cases à trous',
-  table_fill: 'tableau à remplir', matching: 'points à relier',
-  manual_drawing: 'tracé / dessin (correction manuelle)',
-  composite: 'types mixtes',
-}
-
 /** Barème en écriture française : « 1,5 » et non « 1.5 », entier sans décimale. */
 // 3 décimales (pas du barème = 0,125), zéros inutiles retirés — cf. Exercices.tsx
 const formatPoints = (v: number) =>
   (Number.isInteger(v) ? String(v) : v.toFixed(3).replace(/0+$/, '').replace('.', ','))
 
-function QualityBadge({ quality }: { quality: Record<string, number> }) {
-  const vals = Object.values(quality || {})
-  if (!vals.length) return null
-  const avg = vals.reduce((a, b) => a + b, 0) / vals.length
-  const color = avg >= 4.5 ? 'teal' : avg >= 3.5 ? 'yellow' : 'red'
-  return (
-    <Tooltip label={Object.entries(quality).map(([k, v]) => `${k} : ${v}/5`).join(' · ')}>
-      <Badge size="xs" variant="light" color={color}>qualité {avg.toFixed(1)}</Badge>
-    </Tooltip>
-  )
-}
-
-function ExerciseCard({ ex, showCorrection, showGuide }: {
-  ex: Exercise; showCorrection: boolean; showGuide: boolean
-}) {
+// Carte de la banque : guides {{aide}} toujours visibles, bonnes réponses
+// cochées / reliées sur la carte (showAnswers). Les corrections textuelles
+// n'existent plus : aucun bloc Guide/Corrigé sous la carte.
+function ExerciseCard({ ex }: { ex: Exercise }) {
   const [showRaw, setShowRaw] = useState(false)
   // seule la source Sésamaths porte des blocs OCR affichables ici ; les
   // autres sources (indigo, gemini...) ont un raw_extract_json de forme
@@ -77,12 +57,10 @@ function ExerciseCard({ ex, showCorrection, showGuide }: {
   return (
     <Box>
       <ExercisePrintPreview exercise={ex} color={ex.kind === 'probleme' ? 'orange' : 'indigo'}
-        showCorrection={showCorrection} showGuide={showGuide} guides={showGuide}
+        guides showAnswers maxWidth={520}
         badges={<Group gap={6}>
           <Badge size="xs" variant="light" color={ex.kind === 'probleme' ? ['green', 'orange', 'dark'][ex.level - 1] : 'indigo'}>
             {['Facile', 'Moyen', 'Difficile'][ex.level - 1] || ex.level}</Badge>
-          {ex.kind === 'probleme' && <Badge size="xs" variant="light" color="orange">problème</Badge>}
-          <Badge size="xs" variant="light" color="gray">{RESPONSE_LABELS[ex.response_type] ?? ex.response_type}</Badge>
           {/* barème d'effort : ce que l'exercice VAUT, résolu côté API (repli
               déterministe compris) — même information que dans l'onglet Exercices. */}
           {ex.bareme_points > 0 && (
@@ -90,7 +68,6 @@ function ExerciseCard({ ex, showCorrection, showGuide }: {
               <Badge size="xs" variant="light" color="teal">{formatPoints(ex.bareme_points)} pt</Badge>
             </Tooltip>
           )}
-          <QualityBadge quality={ex.quality} />
         </Group>}
         actions={<Group gap={4} wrap="nowrap">
           {rawBlocks && (
@@ -133,16 +110,12 @@ export default function Bank() {
   const [selected, setSelected] = useState<Summary | null>(null)
   const [exercises, setExercises] = useState<Exercise[] | null>(null)
   const [levelFilter, setLevelFilter] = useState('all')
-  const [showCorrections, setShowCorrections] = useState(false)
-  const [showGuides, setShowGuides] = useState(true)
 
   const isAll = cycle === 'all'
   useEffect(() => {
     setSelected(null)
     setExercises(null)
     setLevelFilter('all')
-    setShowCorrections(false)
-    setShowGuides(false)
     if (isAll) {
       setSummary(null)
       return
@@ -157,8 +130,6 @@ export default function Bank() {
   const loadDetail = useCallback((s: Summary) => {
     setSelected(s)
     setExercises(null)
-    setShowCorrections(false)
-    setShowGuides(false)
     const query = s.competency_id.startsWith('chapter:')
       ? `chapter_id=${s.competency_id.slice(8)}` : `competency_id=${s.competency_id}&category=exercise`
     setLevelFilter('all')
@@ -239,9 +210,10 @@ export default function Bank() {
       </Group>
 
       <Group align="flex-start" gap="md" wrap="nowrap">
-        <Paper withBorder radius="md" p="xs" style={{
-          flex: 1, minWidth: 0,
-        }}>
+        {/* compétence ouverte : le tableau se rétrécit, les exercices prennent la place */}
+        <Paper withBorder radius="md" p="xs" style={selected
+          ? { flex: '0 0 400px', width: 400, minWidth: 0 }
+          : { flex: 1, minWidth: 0 }}>
           {summary === null ? <Loader size="sm" m="md" /> : rows.length === 0 ? (
             <Text c="dimmed" size="sm" p="md">
               Aucune compétence disponible pour ce cycle.
@@ -276,9 +248,7 @@ export default function Bank() {
         </Paper>
 
         {selected && (
-          <Paper withBorder radius="md" p="md" style={{
-            flex: '0 0 372px', width: 372, minWidth: 372,
-          }}>
+          <Paper withBorder radius="md" p="md" style={{ flex: 1, minWidth: 0 }}>
             <Group justify="space-between" mb="xs" wrap="nowrap">
               <Box>
                 <Text fw={600}>{selected.short_id || selected.code} — {selected.label}</Text>
@@ -286,32 +256,23 @@ export default function Bank() {
               </Box>
               <Button size="compact-xs" variant="subtle" onClick={() => setSelected(null)}>Fermer</Button>
             </Group>
-            <Group justify="space-between" mb="xs" align="flex-end" wrap="wrap">
-              <Group gap="md">
-                <Checkbox size="xs" checked={showCorrections}
-                  onChange={(e) => setShowCorrections(e.currentTarget.checked)}
-                  label="Afficher les corrections" />
-                <Checkbox size="xs" checked={showGuides}
-                  onChange={(e) => setShowGuides(e.currentTarget.checked)}
-                  label="Afficher les guides élèves" />
-              </Group>
+            <Group justify="space-between" mb="xs" align="center" wrap="wrap">
+              <Text size="xs" c="dimmed">
+                {exercises === null ? '…' : `${shownExercises.length} exercice(s)`}
+              </Text>
               <SegmentedControl size="xs" value={levelFilter} onChange={setLevelFilter}
                 data={[{ value: 'all', label: 'Tous' },
                   ...[1, 2, 3].map((l) => ({ value: String(l), label: ['Facile', 'Moyen', 'Difficile'][l - 1] }))]} />
             </Group>
-                {exercises === null ? <Loader size="sm" /> : (
-                  <ScrollArea.Autosize mah="58vh">
-                    <Stack gap="xs">
-                      {shownExercises.map((ex) => (
-                        <ExerciseCard key={ex.id} ex={ex}
-                          showCorrection={showCorrections} showGuide={showGuides} />
-                      ))}
-                      {shownExercises.length === 0 && (
-                        <Text c="dimmed" size="sm">Aucun exercice disponible pour ce filtre.</Text>
-                      )}
-                    </Stack>
-                  </ScrollArea.Autosize>
-                )}
+            {exercises === null ? <Loader size="sm" /> : shownExercises.length === 0 ? (
+              <Text c="dimmed" size="sm">Aucun exercice disponible pour ce filtre.</Text>
+            ) : (
+              <ScrollArea.Autosize mah="70vh" offsetScrollbars>
+                <SimpleGrid cols={{ base: 1, lg: 2 }} spacing="md" verticalSpacing="md">
+                  {shownExercises.map((ex) => <ExerciseCard key={ex.id} ex={ex} />)}
+                </SimpleGrid>
+              </ScrollArea.Autosize>
+            )}
           </Paper>
         )}
       </Group>
