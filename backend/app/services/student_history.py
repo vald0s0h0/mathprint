@@ -237,17 +237,39 @@ class Slot:
     level3: int
 
 
+def _level_sequence(quota: dict[int, int]) -> list[int]:
+    """Les dérivés du quota mis en SÉQUENCE de façon que chaque début de
+    séquence respecte déjà le mix (méthode du plus grand retard).
+
+    La trame est volontairement plus longue que la copie (cf. `student_plan`) :
+    une page n'en consomme que les premières cases. Rangés en bloc — tous les
+    faciles d'abord —, les dérivés laissaient un élève de niveau 5 avec une
+    copie 100 % facile, le « base » et le « difficile » du mix restant au-delà
+    de ce qui tient sur la page."""
+    total = sum(quota.values())
+    counts = {1: 0, 2: 0, 3: 0}
+    seq: list[int] = []
+    for k in range(total):
+        lvl = max((1, 2, 3), key=lambda l: (quota.get(l, 0) * (k + 1) / total - counts[l],
+                                             quota.get(l, 0), -l))
+        counts[lvl] += 1
+        seq.append(lvl)
+    return seq
+
+
 def _assign_levels(stats: dict[str, Stats], order: list[str],
-                   quota: dict[int, int]) -> list[Slot]:
+                   quota: dict[int, int], round_size: int = 0) -> list[Slot]:
     """Marie les cases (dans l'ordre des compétences) aux dérivés du quota.
 
-    Les compétences les plus PRIORITAIRES prennent les dérivés les plus faciles,
-    les mieux tenues les plus difficiles : c'est le sens pédagogique de la
-    manœuvre, et ça tombe juste, l'ordre étant déjà celui de la priorité."""
-    pool: list[int] = []
-    for lvl in (1, 2, 3):
-        pool.extend([lvl] * quota.get(lvl, 0))
-    # ordre = priorité décroissante ; pool = du plus facile au plus difficile
+    Le mix est tenu dès les premières cases (`_level_sequence`) ; à
+    l'intérieur de chaque tour (`round_size` cases, une par compétence
+    cochée), les compétences les plus PRIORITAIRES prennent les dérivés les
+    plus faciles, les mieux tenues les plus difficiles — c'est le sens
+    pédagogique de la manœuvre, l'ordre d'un tour étant déjà celui de la
+    priorité."""
+    pool = _level_sequence(quota)
+    step = max(1, round_size or len(pool) or 1)
+    pool = [lvl for i in range(0, len(pool), step) for lvl in sorted(pool[i:i + step])]
     slots = [Slot(competency_id=cid, level3=lvl) for cid, lvl in zip(order, pool)]
     # order plus long que pool (arrondis) : les cases restantes prennent le
     # dérivé de base, jamais rien d'extrême.
@@ -277,7 +299,7 @@ def student_plan(db: Session, student_id: str, competency_ids: list[str],
     n_slots = max(n_slots, len(ordered))
     quota = level_quota(student_level_1_10, n_slots)
     order = by_priority + _weighted_order(stats, by_priority, n_slots - len(ordered))
-    return _assign_levels(stats, order, quota), stats
+    return _assign_levels(stats, order, quota, round_size=len(ordered)), stats
 
 
 # ------------------------------------------------------- quel exercice concret
@@ -328,3 +350,119 @@ def preferred_rows(rows: list[GeneratedExercise], log: dict[str, Seen],
     ranked = rank_candidates(rows, log, at)
     best = candidate_rank(ranked[0], log, at)[0]
     return [r for r in ranked if candidate_rank(r, log, at)[0] == best]
+
+
+# ============================================================================
+# Création automatique (assistant « Créer un sujet », mode automatique)
+#
+# Trois politiques de plus, toutes indexées sur le niveau 1-10 de l'élève et
+# toutes en DÉGRADÉ — jamais un palier unique, pour la même raison que
+# LEVEL_MIX : dix niveaux ne se traduisent pas en deux états.
+# ============================================================================
+
+# Il faut assez de corrections pour que le niveau 1-10 et la courbe d'oubli
+# veuillent dire quelque chose : en deçà, la personnalisation choisirait sur du
+# bruit. Compté en SUJETS CORRIGÉS de la classe.
+AUTO_MIN_CORRECTED = 5
+
+# Guides (encadrés « {{aide}} ») : part des exercices guidés selon le niveau.
+# Tout guider jusqu'à GUIDE_FULL_MAX_LEVEL, plus rien à partir de
+# GUIDE_NONE_MIN_LEVEL ; entre les deux, deux pentes qui passent par la part
+# réglée par le professeur pour l'élève MOYEN (GUIDE_MEDIUM_LEVEL).
+GUIDE_FULL_MAX_LEVEL = 3
+GUIDE_MEDIUM_LEVEL = 6
+GUIDE_NONE_MIN_LEVEL = 9
+DEFAULT_GUIDE_MEDIUM_SHARE = 0.5
+
+
+def corrected_subjects(db: Session, class_id: str) -> int:
+    """Nombre de sujets CORRIGÉS (finalisés) de la classe — la condition
+    d'accès à la création automatique (AUTO_MIN_CORRECTED)."""
+    from ..models import Assessment
+    return (db.query(Assessment)
+            .filter(Assessment.class_id == class_id,
+                    Assessment.status == "finalized").count())
+
+
+def guide_ratio(level_1_10: int, medium_share: float = DEFAULT_GUIDE_MEDIUM_SHARE) -> float:
+    """Part (0-1) des exercices à guides d'une copie, pour un élève de ce
+    niveau. Interpolation linéaire entre trois points d'ancrage :
+
+        niveau ≤ 3 → 1 (tout guidé)   niveau 6 → medium_share   niveau ≥ 9 → 0
+
+    Avec la part moyenne par défaut (50 %) : 100 · 100 · 100 · 83 · 67 · 50 ·
+    33 · 17 · 0 · 0 %."""
+    m = max(0.0, min(1.0, float(medium_share)))
+    lvl = max(1, min(10, int(level_1_10 or 5)))
+    if lvl <= GUIDE_FULL_MAX_LEVEL:
+        return 1.0
+    if lvl >= GUIDE_NONE_MIN_LEVEL:
+        return 0.0
+    if lvl <= GUIDE_MEDIUM_LEVEL:
+        t = (lvl - GUIDE_FULL_MAX_LEVEL) / (GUIDE_MEDIUM_LEVEL - GUIDE_FULL_MAX_LEVEL)
+        return 1.0 + (m - 1.0) * t
+    t = (lvl - GUIDE_MEDIUM_LEVEL) / (GUIDE_NONE_MIN_LEVEL - GUIDE_MEDIUM_LEVEL)
+    return m * (1.0 - t)
+
+
+class GuideQuota:
+    """Décide, carte après carte, si l'encadré d'aide s'imprime.
+
+    Seules comptent les cartes qui ONT un guide (les autres n'ont rien à
+    montrer ni à cacher). La décision est gloutonne — une carte est guidée tant
+    que la part guidée reste sous la cible, arrondie vers le haut — donc
+    déterministe, et les premières cartes posées (les compétences les plus
+    prioritaires, cf. `student_plan`) sont les premières servies. Une carte
+    retirée (débordement) rend sa place via `release`."""
+
+    def __init__(self, ratio: float):
+        self.ratio = max(0.0, min(1.0, ratio))
+        self.guidable = 0
+        self.guided = 0
+
+    def decide(self, has_guide: bool) -> bool:
+        """Faut-il imprimer le guide de la PROCHAINE carte ? Sans effet sur les
+        compteurs : `take` les met à jour une fois la carte vraiment posée."""
+        if not has_guide:
+            return False
+        return self.guided < math.ceil(self.ratio * (self.guidable + 1) - 1e-9)
+
+    def take(self, has_guide: bool, guided: bool) -> None:
+        if has_guide:
+            self.guidable += 1
+            self.guided += int(guided)
+
+    def release(self, has_guide: bool, guided: bool) -> None:
+        if has_guide:
+            self.guidable = max(0, self.guidable - 1)
+            self.guided = max(0, self.guided - int(guided))
+
+
+# Problèmes (option cochée par le professeur) : part de la HAUTEUR de copie
+# qui leur revient, et mix de difficulté (facile, base, difficile), par niveau.
+# En deçà de 7 : aucun problème — les exercices d'abord. 7-8 : un mélange
+# exercices / problèmes ; 9-10 : beaucoup de problèmes, surtout difficiles.
+PROBLEM_PLAN: dict[int, tuple[float, tuple[float, float, float]]] = {
+    7:  (0.25, (0.40, 0.45, 0.15)),
+    8:  (0.35, (0.20, 0.50, 0.30)),
+    9:  (0.55, (0.00, 0.35, 0.65)),
+    10: (0.70, (0.00, 0.20, 0.80)),
+}
+
+
+def problem_plan(level_1_10: int) -> tuple[float, tuple[float, float, float]] | None:
+    """(part de la copie, mix de difficulté) des problèmes pour ce niveau, ou
+    None si l'élève n'en reçoit pas."""
+    return PROBLEM_PLAN.get(max(1, min(10, int(level_1_10 or 5))))
+
+
+def next_problem_level(mix: tuple[float, float, float], counts: dict[int, int]) -> int:
+    """Difficulté (1-3) du PROCHAIN problème : celle qui accuse le plus grand
+    déficit par rapport au mix visé — à égalité, la plus difficile, puisque
+    seuls les élèves forts reçoivent des problèmes."""
+    total = sum(counts.values()) + 1
+
+    def deficit(lvl: int) -> float:
+        return mix[lvl - 1] - counts.get(lvl, 0) / total
+
+    return max((3, 2, 1), key=lambda lvl: (deficit(lvl) if mix[lvl - 1] > 0 else -1.0, lvl))

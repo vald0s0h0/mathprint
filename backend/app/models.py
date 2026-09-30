@@ -230,7 +230,7 @@ class Copy(Base):
     status: Mapped[str] = mapped_column(String, default="generated")  # generated|printed|scanned|graded|finalized|absent
     total_pages: Mapped[int] = mapped_column(Integer, default=1)
     # variante servie à cet élève sur un sujet composé à la main (assistant
-    # « Créer mon sujet ») : "A"/"B"/… en anti-triche, "facile"/"moyen"/
+    # « Créer un sujet », mode manuel) : "A"/"B"/… en anti-triche, "facile"/"moyen"/
     # "difficile" en variantes par niveau. Vide sur un sujet automatique.
     variant_key: Mapped[str] = mapped_column(String, default="")
     generated_at: Mapped[datetime] = mapped_column(DateTime, default=now)

@@ -2176,7 +2176,7 @@ def pages_needed(heights: list[float]) -> int:
 
 def column_metrics(pages: int) -> dict:
     """Géométrie des colonnes d'un sujet de `pages` pages, en points PDF —
-    servie telle quelle à l'assistant « Créer mon sujet », qui dessine ses
+    servie telle quelle à le mode manuel de l'assistant « Créer un sujet », qui dessine ses
     pages à l'échelle et doit connaître EXACTEMENT la place disponible (la 1re
     page perd la hauteur de l'en-tête élève). Une seule définition, ici : une
     capacité recalculée côté navigateur dériverait du rendu réel."""
@@ -2187,7 +2187,8 @@ def column_metrics(pages: int) -> dict:
     }
 
 
-def pack_reading_order(heights: list[float]) -> list[int]:
+def pack_reading_order(heights: list[float],
+                       tiers: list[int] | None = None) -> list[int]:
     """Ordonne des cartes (hauteurs dans l'ordre d'origine) pour un remplissage
     en colonnes SANS bas de colonne perdu, et retourne leurs index d'origine
     dans l'ordre de LECTURE (haut→bas, colonne gauche puis droite, page par
@@ -2201,14 +2202,16 @@ def pack_reading_order(heights: list[float]) -> list[int]:
     sont affectées à la PREMIÈRE colonne (ordre de lecture) où elles tiennent —
     les petites viennent ainsi combler les trous laissés par les grandes.
 
-    Rendu tel quel au placement glouton de `render_copy`, cet ordre reproduit
-    EXACTEMENT l'affectation : un FFD ne laisse jamais dans une colonne un trou
-    qu'une carte d'une colonne ultérieure aurait pu combler (sinon le premier
-    ajustement l'y aurait mise), donc poser les cartes séquentiellement retombe
-    sur les mêmes colonnes. `pages_needed` reste ainsi la mesure fidèle du rendu.
+    Sans `tiers`, rendu tel quel au placement glouton de `render_copy`, cet
+    ordre reproduit EXACTEMENT l'affectation : un FFD ne laisse jamais dans une
+    colonne un trou qu'une carte d'une colonne ultérieure aurait pu combler
+    (sinon le premier ajustement l'y aurait mise), donc poser les cartes
+    séquentiellement retombe sur les mêmes colonnes. Avec `tiers` (ordre
+    pédagogique, cf. `pack_columns`), cette garantie tombe : l'appelant passe
+    alors le placement explicite de `pack_placement` à `render_copy`.
     Les hauteurs de colonne diffèrent (la 1re page porte l'en-tête élève, cf.
     `_top_of_page`), d'où une capacité par page."""
-    return [i for col in pack_columns(heights) for i in col]
+    return [i for col in pack_columns(heights, tiers) for i in col]
 
 
 def column_capacity(col_index: int) -> float:
@@ -2216,31 +2219,81 @@ def column_capacity(col_index: int) -> float:
     return _top_of_page(col_index // 2) - _BOTTOM_LIMIT
 
 
-def pack_columns(heights: list[float]) -> list[list[int]]:
+def reading_tier(level3: int, probleme: bool) -> int:
+    """Palier de LECTURE d'une carte : du plus simple au plus difficile, les
+    problèmes toujours après tous les exercices, quelle que soit leur
+    difficulté. Un seul entier comparable, pour `pack_columns`."""
+    return (10 if probleme else 0) + max(1, min(3, int(level3 or 2)))
+
+
+def pack_columns(heights: list[float],
+                 tiers: list[int] | None = None) -> list[list[int]]:
     """Affectation First-Fit-Decreasing des cartes aux colonnes : une liste
     d'index d'origine PAR COLONNE, dans l'ordre de lecture.
 
     Définition unique du placement : `pack_reading_order` l'aplatit, et
     `free_space` en déduit ce qu'il reste à remplir. Deux parcours FFD écrits
     séparément finiraient par diverger, et le remplissage viserait alors des
-    trous que le rendu ne laisse pas."""
-    order = sorted(range(len(heights)), key=lambda i: heights[i], reverse=True)
+    trous que le rendu ne laisse pas.
+
+    `tiers` (un entier par carte, cf. `reading_tier`) impose l'ordre de
+    lecture : une carte n'est JAMAIS lue avant une carte de palier inférieur —
+    un sujet se lit du plus simple au plus difficile, problèmes en dernier. Le
+    FFD tourne alors palier par palier, chacun ne disposant que des colonnes à
+    partir de la dernière occupée par le palier précédent (il peut en combler
+    le bas, jamais remonter plus haut). Sans `tiers`, un seul palier : FFD pur,
+    comportement historique."""
+    n = len(heights)
+    tiers = list(tiers) if tiers is not None else [0] * n
     cols: list[list[int]] = []      # index d'origine, par colonne (ordre de lecture)
     used: list[float] = []          # hauteur déjà occupée dans chaque colonne
-    for i in order:
-        h = heights[i]
-        for b in range(len(cols)):
-            if used[b] + h <= column_capacity(b):
-                cols[b].append(i)
-                used[b] += h
-                break
-        else:
-            cols.append([i])        # aucune colonne existante : on en ouvre une
-            used.append(h)
-    return cols
+    frontier = 0                    # 1re colonne ouverte au palier courant
+    for tier in sorted(set(tiers)):
+        members = sorted((i for i in range(n) if tiers[i] == tier),
+                         key=lambda i: heights[i], reverse=True)
+        last = frontier
+        for i in members:
+            h = heights[i]
+            for b in range(frontier, len(cols)):
+                if used[b] + h <= column_capacity(b):
+                    cols[b].append(i)
+                    used[b] += h
+                    last = max(last, b)
+                    break
+            else:
+                # aucune colonne existante : on en ouvre une. Une carte plus
+                # haute que la colonne suivante (1re page, amputée de l'en-tête)
+                # la saute, exactement comme `render_copy` la ferait glisser.
+                while h > column_capacity(len(cols)) and h <= column_capacity(2):
+                    cols.append([])
+                    used.append(0.0)
+                cols.append([i])
+                used.append(h)
+                last = max(last, len(cols) - 1)
+        frontier = last
+    # dans une colonne, la lecture suit le palier (tri stable : l'ordre FFD
+    # est conservé à palier égal)
+    return [sorted(col, key=lambda i: tiers[i]) for col in cols]
 
 
-def free_space(heights: list[float], pages: int) -> list[float]:
+def pack_placement(heights: list[float], tiers: list[int] | None = None
+                   ) -> tuple[list[int], list[tuple[int, int]], int]:
+    """(ordre de lecture, (page, colonne) de chaque carte DANS cet ordre,
+    nombre de pages) — le placement de `pack_columns`, prêt pour
+    `render_copy(placement=…)`. Passer le placement explicite garantit que la
+    feuille imprimée est celle qui a été simulée, paliers compris."""
+    order: list[int] = []
+    slots: list[tuple[int, int]] = []
+    cols = pack_columns(heights, tiers)
+    for b, col in enumerate(cols):
+        for i in col:
+            order.append(i)
+            slots.append((b // 2, b % 2))
+    return order, slots, max(1, (len(cols) + 1) // 2)
+
+
+def free_space(heights: list[float], pages: int,
+               tiers: list[int] | None = None) -> list[float]:
     """Place encore libre dans chaque colonne d'un sujet de `pages` pages, une
     fois ces cartes placées (ordre décroissant, la plus grande d'abord).
 
@@ -2248,7 +2301,7 @@ def free_space(heights: list[float], pages: int) -> list[float]:
     plus grand de ces trous ne peut que déborder. Mesurer avant de choisir
     remplace l'ancien tâtonnement (créer la carte, mesurer, la supprimer), qui
     abandonnait sans avoir essayé la petite carte qui tenait."""
-    cols = pack_columns(heights)
+    cols = pack_columns(heights, tiers)
     used = [sum(heights[i] for i in col) for col in cols]
     return [column_capacity(b) - (used[b] if b < len(used) else 0.0)
             for b in range(2 * max(1, pages))]
@@ -2461,7 +2514,7 @@ def _render_copy(pdf_canvas: canvas.Canvas, *, student_name: str, class_name: st
     `tpl` porte les templates éditables (runtime_settings).
     Retourne les zones pour le manifeste.
 
-    `placement` (assistant « Créer mon sujet ») : une paire (page, colonne) PAR
+    `placement` (assistant « Créer un sujet » (mode manuel)) : une paire (page, colonne) PAR
     item, dans l'ordre de `items` — qui doit alors être trié par (page, colonne,
     rang), le canvas reportlab étant strictement séquentiel (on ne revient
     jamais sur une page déjà close). Sans lui, le placement reste glouton :

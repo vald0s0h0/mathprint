@@ -17,7 +17,10 @@ from ..models import (
     GeneratedExercise, ScanBatch, SchoolClass, Student,
     StudentCompetencyState,
 )
-from ..services import job_worker, manual_subject, scoring
+from ..services import (
+    exercise_gen, generation, job_worker, manual_subject, scoring,
+    student_history,
+)
 from ..services.forgetting import due_competencies
 from .misc import build_competency_tree
 
@@ -53,7 +56,7 @@ class GenerateIn(BaseModel):
     font_size: int = 10
 
 
-# ------------------------------------------------- assistant « Créer mon sujet »
+# ------------------------------------------------- assistant « Créer un sujet » (mode manuel)
 
 class PlacedItem(BaseModel):
     exercise_id: str
@@ -66,6 +69,17 @@ class VariantIn(BaseModel):
     key: str                 # "A"/"B"/… (anti-triche) ou facile|moyen|difficile
     label: str = ""
     items: list[PlacedItem] = []
+
+
+class AutoPlanIn(BaseModel):
+    """Création AUTOMATIQUE : le professeur fixe le périmètre, la plateforme
+    compose une copie personnalisée par élève (services.student_history)."""
+    competency_ids: list[str]
+    # part d'exercices guidés pour un élève MOYEN (niveau 6) ; les autres
+    # niveaux suivent en dégradé (student_history.guide_ratio)
+    guides_medium_pct: int = 50
+    # problèmes des chapitres touchés, dosés selon le niveau (7+ seulement)
+    problems: bool = False
 
 
 class ManualPlanIn(BaseModel):
@@ -93,8 +107,11 @@ def list_assessments(db: Session = Depends(get_db)):
                     "grade_level": cls.grade_level if cls else "",
                     "duplex": bool(a.duplex),
                     "personalization_mode": a.personalization_mode,
-                    # sujet composé à la main (assistant « Créer mon sujet »)
+                    # sujet composé à la main (assistant « Créer un sujet »,
+                    # mode manuel) ou personnalisé par élève (mode automatique)
                     "manual": (a.blueprint_json or {}).get("mode") == "manual",
+                    "auto": (a.blueprint_json or {}).get("mode") == "auto",
+                    "problems": bool((a.blueprint_json or {}).get("problems")),
                     "variant_kind": (a.blueprint_json or {}).get("variant_kind") or "",
                     "duplicate_version": int((a.blueprint_json or {}).get(
                         "duplicate_version") or 1),
@@ -213,7 +230,7 @@ def ai_bank_status(competency_id: str, db: Session = Depends(get_db)):
 @router.get("/manual/pool")
 def manual_pool(competency_ids: str = "", pages: int = 1,
                 db: Session = Depends(get_db)):
-    """Exercices ET problèmes proposés à l'assistant « Créer mon sujet », avec
+    """Exercices ET problèmes proposés au mode manuel de l'assistant « Créer un sujet », avec
     la hauteur réelle (points PDF) de chaque carte et la géométrie des colonnes
     — l'assistant dessine ses pages à l'échelle du rendu final."""
     ids = [c for c in competency_ids.split(",") if c]
@@ -222,10 +239,82 @@ def manual_pool(competency_ids: str = "", pages: int = 1,
     return manual_subject.pool(db, ids, pages=max(1, min(6, pages)))
 
 
+@router.get("/auto-eligibility")
+def auto_eligibility(class_id: str, db: Session = Depends(get_db)):
+    """La création automatique est-elle ouverte pour cette classe ? Il faut
+    `AUTO_MIN_CORRECTED` sujets corrigés pour que le niveau des élèves soit
+    fiable. Renvoie aussi la répartition des niveaux 1-10 de la classe : c'est
+    elle que l'assistant montre face au dégradé des guides et aux problèmes."""
+    cls = db.get(SchoolClass, class_id)
+    if not cls:
+        raise HTTPException(404, "Classe introuvable")
+    corrected = student_history.corrected_subjects(db, class_id)
+    levels = {lvl: 0 for lvl in range(1, 11)}
+    students = db.query(Student).filter_by(class_id=class_id, active=True).all()
+    for st in students:
+        levels[generation._student_level(db, st.id)] += 1
+    return {"corrected": corrected, "required": student_history.AUTO_MIN_CORRECTED,
+            "eligible": corrected >= student_history.AUTO_MIN_CORRECTED,
+            "students": len(students),
+            "levels": [{"level": k, "count": v} for k, v in levels.items()]}
+
+
+@router.get("/suggested-competencies")
+def suggested_competencies(class_id: str, db: Session = Depends(get_db)):
+    """Proposition automatique de compétences à cocher : privilégie celles
+    dues (courbe d'oubli) sur l'ensemble de la classe (§7.4). Déterministe ;
+    aucun LLM n'intervient pour planifier."""
+    students = (db.query(Student).filter_by(class_id=class_id, active=True)
+                .order_by(Student.order_index, Student.id).all())
+    due_comp_ids: list[str] = []
+    seen: set[str] = set()
+    for s in students:
+        for d in due_competencies(db, s.id):
+            if d["competency_id"] not in seen:
+                seen.add(d["competency_id"])
+                due_comp_ids.append(d["competency_id"])
+    return {"competency_ids": due_comp_ids[:8],
+            "reason": f"{len(due_comp_ids)} compétence(s) à revoir (courbe de l'oubli) "
+                      "chez au moins un élève de la classe." if due_comp_ids else
+                      "Aucune compétence à revoir pour l'instant."}
+
+
+@router.post("/{assessment_id}/auto-plan")
+def save_auto_plan(assessment_id: str, body: AutoPlanIn, db: Session = Depends(get_db)):
+    """Enregistre une création AUTOMATIQUE : sujet individuel (une copie par
+    élève, choisie sur son historique), exercices pris dans toute la banque,
+    guides en dégradé selon le niveau, problèmes en option."""
+    a = db.get(Assessment, assessment_id)
+    if not a:
+        raise HTTPException(404)
+    if a.status != "draft":
+        raise HTTPException(409, "Sujet déjà mis en file de génération")
+    corrected = student_history.corrected_subjects(db, a.class_id)
+    if corrected < student_history.AUTO_MIN_CORRECTED:
+        raise HTTPException(
+            409, f"Création automatique : {student_history.AUTO_MIN_CORRECTED} sujets "
+                 f"corrigés sont nécessaires pour connaître le niveau des élèves "
+                 f"({corrected} pour l'instant).")
+    ids = list(dict.fromkeys(body.competency_ids))
+    if not ids:
+        raise HTTPException(422, "Aucune compétence sélectionnée")
+    if not 0 <= body.guides_medium_pct <= 100:
+        raise HTTPException(422, "Part de guides : entre 0 et 100 %")
+    a.blueprint_json = {**(a.blueprint_json or {}), "mode": "auto",
+                        "competency_ids": ids,
+                        "exercise_source": exercise_gen.BANK_SOURCE,
+                        "guides": "auto",
+                        "guides_medium_pct": body.guides_medium_pct,
+                        "problems": body.problems}
+    a.personalization_mode = "individual"
+    db.commit()
+    return {"ok": True}
+
+
 @router.post("/{assessment_id}/manual-plan")
 def save_manual_plan(assessment_id: str, body: ManualPlanIn,
                      db: Session = Depends(get_db)):
-    """Enregistre le plan composé à la main (§ assistant « Créer mon sujet »).
+    """Enregistre le plan composé à la main (§ assistant « Créer un sujet », mode manuel).
     Le sujet passe en mode "manual" : la génération ne choisit plus aucun
     exercice, elle pose ceux du plan là où ils ont été placés."""
     a = db.get(Assessment, assessment_id)
@@ -313,31 +402,6 @@ def duplicate_assessment(assessment_id: str, db: Session = Depends(get_db)):
             "title": duplicate.title, "version": version}
 
 
-@router.get("/{assessment_id}/suggested-competencies")
-def suggested_competencies(assessment_id: str, db: Session = Depends(get_db)):
-    """Proposition automatique de compétences à cocher : privilégie celles
-    dues (courbe d'oubli) sur l'ensemble de la classe (§7.4). Déterministe ;
-    DeepSeek n'intervient jamais pour planifier."""
-    a = db.get(Assessment, assessment_id)
-    if not a:
-        raise HTTPException(404)
-    students = (db.query(Student).filter_by(class_id=a.class_id, active=True)
-                .order_by(Student.order_index, Student.id).all())
-
-    due_comp_ids: list[str] = []
-    seen: set[str] = set()
-    for s in students:
-        for d in due_competencies(db, s.id):
-            if d["competency_id"] not in seen:
-                seen.add(d["competency_id"])
-                due_comp_ids.append(d["competency_id"])
-
-    return {"competency_ids": due_comp_ids[:8],
-            "reason": f"{len(due_comp_ids)} compétence(s) due(s) (courbe de l'oubli) "
-                      "sur au moins un élève de la classe." if due_comp_ids else
-                      "Aucune compétence due pour l'instant : à choisir manuellement."}
-
-
 @router.get("/competency-matrix")
 def competency_matrix(grade_level: str, db: Session = Depends(get_db)):
     """Tableau complet des compétences du niveau (même hiérarchie/ordre que
@@ -377,8 +441,30 @@ def competency_matrix(grade_level: str, db: Session = Depends(get_db)):
             out[c.id] = round(sums[key] / counts[key], 3) if counts.get(key) else None
         return out
 
+    # Ce que la banque contient pour chaque compétence (exercices) et chaque
+    # chapitre (problèmes) : l'assistant grise ce qui ne produirait rien.
+    from ..services.gemini_gen import FILLER_KIND
+    ex_count: dict[str, int] = {}
+    pb_count: dict[str, int] = {}
+    comp_chapter = {c.id: c.chapter_code for c in rows}
+    if rows:
+        bank = (db.query(GeneratedExercise.competency_id, GeneratedExercise.kind)
+                .filter(GeneratedExercise.competency_id.in_(comp_chapter.keys()),
+                        GeneratedExercise.status == "active",
+                        GeneratedExercise.kind != FILLER_KIND).all())
+        for comp_id, kind in bank:
+            if kind == "probleme":
+                ch = comp_chapter.get(comp_id) or ""
+                pb_count[ch] = pb_count.get(ch, 0) + 1
+            else:
+                ex_count[comp_id] = ex_count.get(comp_id, 0) + 1
+
     domains = build_competency_tree(
-        rows, competency_extra=lambda c: {"mastery_by_class": mastery_by_class(c)})
+        rows, competency_extra=lambda c: {"mastery_by_class": mastery_by_class(c),
+                                          "exercise_count": ex_count.get(c.id, 0)})
+    for d in domains:
+        for ch in d["chapters"]:
+            ch["problem_count"] = pb_count.get(ch["code"] or "", 0)
     return {"classes": [{"id": c.id, "name": c.name} for c in classes], "domains": domains}
 
 

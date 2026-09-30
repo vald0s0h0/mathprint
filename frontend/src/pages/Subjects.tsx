@@ -1,25 +1,23 @@
-// Écran Sujets : assistant en 4 étapes (contexte, exercices, adaptation,
-// génération). La génération tourne dans un worker de fond côté API : la
-// modale se ferme dès la mise en file, et la liste (groupée par classe,
-// filtrée par le cycle global) affiche la progression jusqu'à "prêt".
+// Écran Sujets : la liste des sujets, groupés par classe et filtrés par le
+// cycle global, et UN assistant « Créer un sujet » (création automatique
+// personnalisée par élève, ou composition manuelle — cf. SubjectWizard). La
+// génération tourne dans un worker de fond côté API : l'assistant se ferme dès
+// la mise en file, et la liste affiche la progression jusqu'à "prêt".
 import {
-  Alert, Badge, Button, Card, Group, Modal, NumberInput, Radio, Select,
-  Stack, Stepper, Text, TextInput, Title, Tooltip,
+  Alert, Badge, Button, Card, Group, Stack, Text, Title, Tooltip,
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
-import { AlertTriangle, Copy, Eye, FileText, Plus, RotateCcw, ScrollText, Wand2 } from 'lucide-react'
+import { AlertTriangle, Copy, Eye, FileText, Plus, RotateCcw, ScrollText } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api } from '../api'
 import GenerationLogModal from '../components/GenerationLogModal'
 import PdfPreviewModal from '../components/PdfPreview'
 import PrintButton from '../components/PrintButton'
-import AdaptationStep from './subjects/AdaptationStep'
-import CompetencyMatrixStep from './subjects/CompetencyMatrixStep'
-import ManualWizard from './subjects/ManualWizard'
+import SubjectWizard, { type WizardClass } from './subjects/SubjectWizard'
 import { useAppState } from '../state/AppState'
 
-type Cls = { id: string; name: string; grade_level: string }
+type Cls = WizardClass
 type Assessment = {
   id: string; title: string; type: string; status: string
   class_name: string; class_id: string; grade_level: string
@@ -27,20 +25,18 @@ type Assessment = {
   personalization_mode: string; error_message: string | null
   // base de scoring du sujet ; un entraînement ne l'imprime pas
   note_base: number
-  // sujet composé à la main (assistant « Créer mon sujet ») et nature de ses
-  // variantes : '' | 'none' | 'anticheat' | 'level'
+  // sujet composé à la main (mode manuel) et nature de ses variantes :
+  // '' | 'none' | 'anticheat' | 'level' ; ou personnalisé par élève (mode
+  // automatique), avec ou sans problèmes
   manual: boolean; variant_kind: string; duplicate_version: number
+  auto: boolean; problems: boolean
   overlay_distributed: boolean
 }
 
 const VARIANT_LABEL: Record<string, string> = {
-  anticheat: 'variantes anti-triche',
+  anticheat: 'variantes aléatoires',
   level: 'variantes par niveau',
 }
-
-// bases proposées pour tous les sujets — le barème d'effort des exercices est
-// ramené à cette base par règle de trois à la correction (cf. services/scoring.py)
-const NOTE_BASES = ['5', '10', '20']
 
 const STATUS_LABEL: Record<string, { label: string; color: string }> = {
   draft: { label: 'brouillon', color: 'gray' },
@@ -56,34 +52,12 @@ const STATUS_LABEL: Record<string, { label: string; color: string }> = {
 export default function Subjects() {
   const [list, setList] = useState<Assessment[]>([])
   const [classes, setClasses] = useState<Cls[]>([])
-  const [open, setOpen] = useState(false)
-  const [manualOpen, setManualOpen] = useState(false)
-  const [step, setStep] = useState(0)
+  const [wizardOpen, setWizardOpen] = useState(false)
   const [previewId, setPreviewId] = useState<string | null>(null)
   const [logAssessment, setLogAssessment] = useState<Assessment | null>(null)
   const [duplicatingId, setDuplicatingId] = useState<string | null>(null)
   const { cycle, matches } = useAppState()
   const [params, setParams] = useSearchParams()
-
-  // étape 1 : contexte
-  const [classId, setClassId] = useState<string | null>(null)
-  const [type, setType] = useState('training')
-  const [title, setTitle] = useState('')
-  const [pages, setPages] = useState(1)
-  // encadrés d'aide intégrés aux énoncés : inclus ou retirés pour tout le sujet
-  const [guides, setGuides] = useState<'include' | 'none'>('include')
-  const [noteBase, setNoteBase] = useState('20')
-  // étape 2 : compétences cochées + source des exercices (§ Sésamaths)
-  const [competencyIds, setCompetencyIds] = useState<string[]>([])
-  const [suggestReason, setSuggestReason] = useState('')
-  // Indigo activé par défaut (manuel 3e publié en dur, aucune génération) ;
-  // l'utilisateur peut repasser en Sésamaths/Gemini/Automatique/MathALÉA dans l'assistant
-  const [exerciseSource, setExerciseSource] = useState('indigo')
-  // étape 3 : adaptation
-  const [mode, setMode] = useState('common')
-  // étape 4
-  const [assessmentId, setAssessmentId] = useState<string | null>(null)
-  const [generating, setGenerating] = useState(false)
 
   const refresh = useCallback(() => {
     api.get<Assessment[]>('/api/assessments').then(setList)
@@ -98,24 +72,14 @@ export default function Subjects() {
   // ouverture directe depuis le Dashboard (+ Créer un sujet)
   useEffect(() => {
     if (params.get('nouveau')) {
-      setOpen(true)
+      setWizardOpen(true)
       params.delete('nouveau')
       setParams(params, { replace: true })
     }
   }, [params, setParams])
 
-  const cycleClasses = classes.filter((c) => matches(c.grade_level))
-  const grade = classes.find((c) => c.id === classId)?.grade_level
-
-  // Indigo (manuel 3e, publié en dur) par défaut, mais seulement pour une
-  // classe de 3e : sans exercice publié pour les autres niveaux, un sujet
-  // 6e/5e/4e resterait sans contenu (§ pipeline exercice_source, un item
-  // manquant se contente d'un warning, pas d'une erreur bloquante — d'où
-  // l'intérêt de ne pas laisser Indigo par défaut hors 3e).
-  useEffect(() => {
-    if (!classId) return
-    setExerciseSource(grade === '3e' ? 'indigo' : 'gemini')
-  }, [classId, grade])
+  const cycleClasses = useMemo(
+    () => classes.filter((c) => matches(c.grade_level)), [classes, matches])
 
   const groups = useMemo(() => {
     const filtered = list.filter((a) => matches(a.grade_level))
@@ -127,49 +91,6 @@ export default function Subjects() {
     }
     return [...by.values()].sort((x, y) => x.cls.localeCompare(y.cls))
   }, [list, matches])
-
-  async function createDraft() {
-    const r = await api.post<{ id: string }>('/api/assessments', {
-      class_id: classId, type, title: title || 'Sans titre', pages,
-      note_base: Number(noteBase),
-    })
-    setAssessmentId(r.id)
-    try {
-      const s = await api.get<{ competency_ids: string[]; reason: string }>(
-        `/api/assessments/${r.id}/suggested-competencies`)
-      setCompetencyIds(s.competency_ids)
-      setSuggestReason(s.reason)
-    } catch { /* proposition facultative */ }
-    setStep(1)
-  }
-
-  async function confirmCompetencies() {
-    if (!assessmentId) return
-    await api.patch(`/api/assessments/${assessmentId}`,
-      { competency_ids: competencyIds, exercise_source: exerciseSource, guides })
-    setStep(2)
-  }
-
-  async function confirmAdaptation() {
-    if (!assessmentId) return
-    await api.patch(`/api/assessments/${assessmentId}`, { personalization_mode: mode })
-    setStep(3)
-  }
-
-  async function generate() {
-    if (!assessmentId) return
-    setGenerating(true)
-    try {
-      await api.post(`/api/assessments/${assessmentId}/generate`, { font_size: 10 })
-      notifications.show({ color: 'blue', message: 'Sujet en file de génération' })
-      reset()
-      refresh()
-    } catch (e) {
-      notifications.show({ color: 'red', message: (e as Error).message })
-    } finally {
-      setGenerating(false)
-    }
-  }
 
   async function retry(a: Assessment) {
     try {
@@ -197,16 +118,6 @@ export default function Subjects() {
     }
   }
 
-  function reset() {
-    setOpen(false); setStep(0); setAssessmentId(null)
-    setCompetencyIds([]); setTitle(''); setSuggestReason('')
-    // Indigo par défaut, comme à l'initialisation de l'état : "auto" n'a plus
-    // aucune pipeline derrière depuis le 16/07, un assistant rouvert après un
-    // reset repartait donc sur une source morte.
-    setMode('common'); setType('training'); setPages(1); setGuides('include'); setExerciseSource('indigo')
-    setNoteBase('20')
-  }
-
   return (
     <Stack gap="lg">
       <Group justify="space-between">
@@ -216,18 +127,9 @@ export default function Subjects() {
             {cycle === 'all' ? 'Tous les cycles' : `Cycle ${cycle}`} — groupés par classe
           </Text>
         </div>
-        <Group gap="xs">
-          {/* Pipeline historique, inchangée : la plateforme choisit et place
-              les exercices à partir des compétences cochées. */}
-          <Button variant="default" leftSection={<Wand2 size={18} />}
-            onClick={() => setOpen(true)}>
-            Création automatique
-          </Button>
-          {/* Assistant complet : le professeur compose lui-même ses pages. */}
-          <Button leftSection={<Plus size={18} />} onClick={() => setManualOpen(true)}>
-            Créer mon sujet
-          </Button>
-        </Group>
+        <Button leftSection={<Plus size={18} />} onClick={() => setWizardOpen(true)}>
+          Créer un sujet
+        </Button>
       </Group>
 
       {groups.length === 0 && (
@@ -235,21 +137,14 @@ export default function Subjects() {
           <Stack align="center" gap="xs">
             <FileText size={36} strokeWidth={1.4} opacity={0.5} />
             <Text fw={600}>Aucun sujet {cycle !== 'all' && `en ${cycle}`}</Text>
-            <Text size="sm" c="dimmed" ta="center">
-              <b>Création automatique</b> : cochez des compétences, la plateforme
-              choisit et place les exercices.<br />
-              <b>Créer mon sujet</b> : composez vous-même vos pages, exercice par
-              exercice, avec vos variantes.
+            <Text size="sm" c="dimmed" ta="center" maw={520}>
+              Composez vos pages vous-même, ou laissez la plateforme préparer une
+              copie personnalisée pour chaque élève dès que la classe compte assez
+              de sujets corrigés.
             </Text>
-            <Group mt="xs">
-              <Button variant="default" leftSection={<Wand2 size={16} />}
-                onClick={() => setOpen(true)}>
-                Création automatique
-              </Button>
-              <Button leftSection={<Plus size={16} />} onClick={() => setManualOpen(true)}>
-                Créer mon sujet
-              </Button>
-            </Group>
+            <Button mt="xs" leftSection={<Plus size={16} />} onClick={() => setWizardOpen(true)}>
+              Créer un sujet
+            </Button>
           </Stack>
         </Card>
       )}
@@ -291,6 +186,13 @@ export default function Subjects() {
                           ? `Composé à la main — ${VARIANT_LABEL[a.variant_kind]}`
                           : 'Composé à la main'}>
                           <Badge size="sm" variant="light" color="grape">sur mesure</Badge>
+                        </Tooltip>
+                      )}
+                      {a.auto && (
+                        <Tooltip label={a.problems
+                          ? 'Une copie personnalisée par élève, avec problèmes pour les plus forts'
+                          : 'Une copie personnalisée par élève'}>
+                          <Badge size="sm" variant="light" color="violet">personnalisé</Badge>
                         </Tooltip>
                       )}
                     </Group>
@@ -355,81 +257,8 @@ export default function Subjects() {
       <GenerationLogModal assessmentId={logAssessment?.id ?? null}
         title={logAssessment?.title} onClose={() => setLogAssessment(null)} />
 
-      <ManualWizard opened={manualOpen} classes={cycleClasses}
-        onClose={() => setManualOpen(false)} onCreated={refresh} />
-
-      <Modal opened={open} onClose={reset}
-        title={<Text fw={650}>Création automatique</Text>} size="xl">
-        <Stepper active={step} onStepClick={setStep} allowNextStepsSelect={false} size="sm">
-          <Stepper.Step label="Contexte">
-            <Stack mt="md">
-              <Select label="Classe" required value={classId} onChange={setClassId}
-                placeholder={cycleClasses.length ? 'Choisir une classe'
-                  : `Aucune classe ${cycle !== 'all' ? `en ${cycle}` : ''} — créez-en une dans Élèves`}
-                data={cycleClasses.map((c) => ({ value: c.id, label: `${c.name} (${c.grade_level})` }))} />
-              <Radio.Group label="Type" value={type} onChange={setType}>
-                <Group mt="xs">
-                  <Radio value="training" label="Entraînement" />
-                  <Radio value="control" label="Contrôle noté" />
-                </Group>
-              </Radio.Group>
-              <Radio.Group label="Base de scoring" value={noteBase} onChange={setNoteBase}
-                description={type === 'control'
-                  ? "Le résultat est ramené à cette base par règle de trois."
-                  : "Le résultat est ramené à cette base pour le suivi, sans être imprimé sur la copie."}>
-                <Group mt="xs">
-                  {NOTE_BASES.map((b) => (
-                    <Radio key={b} value={b} label={`/${b}`} />
-                  ))}
-                </Group>
-              </Radio.Group>
-              <TextInput label="Titre" placeholder="ex. Fractions — semaine 12"
-                value={title} onChange={(e) => setTitle(e.target.value)} />
-              <NumberInput label="Nombre de pages" value={pages} min={1} max={6}
-                description="1 = recto seul, 2 = recto/verso, 3+ = feuilles supplémentaires"
-                onChange={(v) => setPages(Number(v) || 1)} />
-              <Radio.Group label="Guides" value={guides}
-                onChange={(v) => setGuides(v === 'none' ? 'none' : 'include')}
-                description="Encadrés d'aide (fond jaune) intégrés aux exercices, pour accompagner la démarche.">
-                <Group mt="xs">
-                  <Radio value="include" label="Inclure les guides" />
-                  <Radio value="none" label="Ne pas inclure" />
-                </Group>
-              </Radio.Group>
-              <Button onClick={createDraft} disabled={!classId}>Continuer</Button>
-            </Stack>
-          </Stepper.Step>
-
-          <Stepper.Step label="Exercices">
-            <Stack mt="md" gap="xs">
-              {suggestReason && <Alert color="blue" p="xs">{suggestReason}</Alert>}
-              <CompetencyMatrixStep gradeLevel={grade} selected={competencyIds}
-                onChange={setCompetencyIds} source={exerciseSource}
-                onSourceChange={setExerciseSource} />
-              <Button onClick={confirmCompetencies} disabled={!competencyIds.length}>
-                Continuer
-              </Button>
-            </Stack>
-          </Stepper.Step>
-
-          <Stepper.Step label="Adaptation">
-            <AdaptationStep mode={mode} onChange={setMode} type={type} />
-            <Button mt="md" onClick={confirmAdaptation}>Continuer</Button>
-          </Stepper.Step>
-
-          <Stepper.Step label="Génération">
-            <Stack mt="md">
-              <Text size="sm">{competencyIds.length} compétence(s) sélectionnée(s).</Text>
-              <Text size="xs" c="dimmed">
-                La génération (et, si besoin, la création d'exercices manquants) se fait en
-                file de fond : la fenêtre se ferme aussitôt, le sujet apparaît dans la liste
-                dès qu'il est prêt.
-              </Text>
-              <Button onClick={generate} loading={generating}>Générer le sujet</Button>
-            </Stack>
-          </Stepper.Step>
-        </Stepper>
-      </Modal>
+      <SubjectWizard opened={wizardOpen} classes={cycleClasses}
+        onClose={() => setWizardOpen(false)} onCreated={refresh} />
     </Stack>
   )
 }

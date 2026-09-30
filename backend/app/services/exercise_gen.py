@@ -1424,6 +1424,11 @@ _GEOMETRY_RULES = (
 
 # ================================================================ banque
 
+# Source des sujets de l'assistant « Créer un sujet » : la banque telle qu'elle
+# est, toutes provenances confondues (cf. ensure_bank).
+BANK_SOURCE = "bank"
+
+
 def ensure_bank(db: Session, competency: Competency, level: int,
                 source: str = "sesamaths") -> list[GeneratedExercise]:
     """Garantit une banque d'exercices actifs pour (compétence, niveau).
@@ -1448,6 +1453,17 @@ def ensure_bank(db: Session, competency: Competency, level: int,
         # pool fini, publié en dur (aucune génération) — cf. services.indigo
         from . import indigo
         return indigo.published_rows(db, competency, level)
+    if source == BANK_SOURCE:
+        # assistant « Créer un sujet » : TOUT ce qui est en banque, quelle que
+        # soit sa provenance, sans jamais rien générer — exactement ce que le
+        # mode manuel propose au glisser-déposer. Les cartes de remplissage
+        # Gemini restent hors de la sélection normale (cf. filler_bank_rows).
+        from .gemini_gen import FILLER_KIND
+        return (db.query(GeneratedExercise)
+                .filter(GeneratedExercise.competency_id == competency.id,
+                        GeneratedExercise.difficulty_level == level,
+                        GeneratedExercise.status == "active",
+                        GeneratedExercise.kind != FILLER_KIND).all())
     raise NotImplementedError(
         f"Génération d'exercices source={source!r} désactivée : seules "
         "l'extraction Sésamaths (source=\"sesamaths\"), la création Gemini "
@@ -1471,10 +1487,16 @@ def _source_pool(source: str) -> tuple[str, ...] | None:
 
 
 def bank_rows_near_level(db: Session, competency: Competency, level: int,
-                         source: str = "sesamaths") -> tuple[list[GeneratedExercise], int]:
+                         source: str = "sesamaths",
+                         exclude_kinds: tuple[str, ...] = ()
+                         ) -> tuple[list[GeneratedExercise], int]:
     """Comme pick_exercise, mais retourne toute la banque du niveau le plus
     proche disponible (pour une sélection en aval équilibrée par type de
-    réponse, cf. services.distribution). `source` : voir ensure_bank."""
+    réponse, cf. services.distribution). `source` : voir ensure_bank.
+
+    `exclude_kinds` (ex. « probleme ») est appliqué AVANT de juger un niveau
+    vide : un niveau qui ne contient que des problèmes doit laisser la main au
+    niveau voisin, pas renvoyer une banque vide après filtrage."""
     pool = _source_pool(source)
     for candidate in sorted(DIFFICULTY_LEVELS, key=lambda l: abs(l - level)):
         try:
@@ -1494,6 +1516,8 @@ def bank_rows_near_level(db: Session, competency: Competency, level: int,
             if pool is not None:
                 q = q.filter(GeneratedExercise.source.in_(pool))
             rows = q.all()
+        if exclude_kinds:
+            rows = [r for r in rows if r.kind not in exclude_kinds]
         if rows:
             return rows, candidate
     raise ValueError(f"Aucun exercice disponible pour {competency.code}")

@@ -34,6 +34,7 @@ from ..models import (
     ResponseZone, SchoolClass, StudentLevel,
 )
 from . import distribution, exercise_gen, scoring, student_history
+from . import statement as statement_mod
 from . import pdfgen
 from .runtime_settings import doc_templates
 from .security import sign_page
@@ -83,7 +84,7 @@ def render_shape(row, guides: str = pdfgen.GUIDES_INCLUDE) -> dict:
     """Carte pdfgen d'une ligne de banque, SANS aucune écriture en base : tout
     ce dont dépendent la mise en page et la mesure de hauteur. `item_id` (et
     `part_item_ids` d'un composite) sont ajoutés par `build_render_item` quand
-    les CopyItem existent ; l'assistant « Créer mon sujet », lui, s'en sert tel
+    les CopyItem existent ; le mode manuel de l'assistant « Créer un sujet », lui, s'en sert tel
     quel pour mesurer la hauteur des cartes proposées au professeur.
 
     Les parties d'un composite sont dans grading["parts"] : la carte reste
@@ -161,7 +162,7 @@ def generate_assessment_job(db: Session, assessment: Assessment,
                             job: Job | None = None, font_size: int = 9) -> dict:
     """Génère toutes les copies à partir des compétences cochées. Retourne le
     rapport de génération. Appelé par le worker de fond (job_worker)."""
-    # assistant « Créer mon sujet » : le professeur a composé lui-même ses
+    # assistant « Créer un sujet » (mode manuel) : le professeur a composé lui-même ses
     # pages (exercices choisis, placés colonne par colonne, variantes). Rien à
     # distribuer ni à remplir — pipeline dédiée, cf. services.manual_subject.
     if (assessment.blueprint_json or {}).get("mode") == "manual":
@@ -171,16 +172,27 @@ def generate_assessment_job(db: Session, assessment: Assessment,
     school_class = db.get(SchoolClass, assessment.class_id)
     students = sorted((s for s in school_class.students if s.active),
                       key=lambda s: (s.order_index, s.id))
+    blueprint = assessment.blueprint_json or {}
+    # Création AUTOMATIQUE de l'assistant « Créer un sujet » (mode "auto") :
+    # sujet individuel, banque entière, guides en dégradé selon le niveau,
+    # problèmes à part (option). Sans ce mode : sujets historiques, inchangés.
+    auto_mode = blueprint.get("mode") == "auto"
     # source des exercices choisie dans l'assistant (§ Sésamaths) : "auto"
     # préserve le comportement historique (MathALÉA + DeepSeek), inchangé
     # par défaut pour tout sujet existant sans ce champ
-    exercise_source = (assessment.blueprint_json or {}).get("exercise_source", "auto")
-    # guides (encadrés « {{aide}} ») inclus ou retirés pour tout le sujet
-    guide_mode = (pdfgen.GUIDES_NONE
-                  if (assessment.blueprint_json or {}).get("guides") == pdfgen.GUIDES_NONE
+    exercise_source = blueprint.get("exercise_source", "auto")
+    # guides (encadrés « {{aide}} ») inclus ou retirés pour tout le sujet —
+    # ou, en création automatique, décidés carte par carte (GuideQuota)
+    guide_mode = (pdfgen.GUIDES_NONE if blueprint.get("guides") == pdfgen.GUIDES_NONE
                   else pdfgen.GUIDES_INCLUDE)
-    competency_ids = list(dict.fromkeys(
-        (assessment.blueprint_json or {}).get("competency_ids") or []))
+    guides_by_level = auto_mode and blueprint.get("guides") == "auto"
+    guide_medium_share = max(0, min(100, int(blueprint.get(
+        "guides_medium_pct", 100 * student_history.DEFAULT_GUIDE_MEDIUM_SHARE)))) / 100
+    # Problèmes : en création automatique, JAMAIS piochés comme des exercices —
+    # ils n'arrivent que par l'option « Problèmes », dosés selon le niveau.
+    exclude_kinds = ("probleme",) if auto_mode else ()
+    with_problems = auto_mode and bool(blueprint.get("problems"))
+    competency_ids = list(dict.fromkeys(blueprint.get("competency_ids") or []))
     competencies = {c.id: c for c in db.query(Competency).filter(
         Competency.id.in_(competency_ids)).all()}
     ordered_ids = [cid for cid in competency_ids if cid in competencies]
@@ -188,6 +200,28 @@ def generate_assessment_job(db: Session, assessment: Assessment,
         raise ValueError("Aucune compétence sélectionnée")
     catalog_refs = {cid: exercise_gen.ensure_catalog_ref(db, competencies[cid])
                     for cid in ordered_ids}
+
+    def catalog_ref(comp_id: str):
+        """Entrée catalogue d'une compétence — y compris celle d'un problème,
+        rattaché à une compétence voisine non cochée du même chapitre."""
+        if comp_id not in catalog_refs:
+            catalog_refs[comp_id] = exercise_gen.ensure_catalog_ref(
+                db, db.get(Competency, comp_id))
+        return catalog_refs[comp_id]
+
+    # Problèmes proposables : ceux des CHAPITRES touchés par les compétences
+    # cochées (un problème porte sur un chapitre, cf. manual_subject).
+    problem_rows: list = []
+    if with_problems:
+        from . import manual_subject
+        from ..models import GeneratedExercise
+        chapter_ids = {cid for ids in manual_subject.chapter_competency_ids(
+            db, ordered_ids).values() for cid in ids}
+        problem_rows = (db.query(GeneratedExercise)
+                        .filter(GeneratedExercise.competency_id.in_(chapter_ids or ordered_ids),
+                                GeneratedExercise.status == "active",
+                                GeneratedExercise.kind == "probleme")
+                        .order_by(GeneratedExercise.id).all())
     logger.info("Génération sujet %s — source d'exercices : %s | %s élève(s), "
                 "%s compétence(s) : %s", assessment.id, exercise_source,
                 len(students), len(ordered_ids),
@@ -213,7 +247,8 @@ def generate_assessment_job(db: Session, assessment: Assessment,
         if comp.id in _bank_exhausted:
             raise _bank_exhausted[comp.id]
         try:
-            return exercise_gen.bank_rows_near_level(db, comp, lvl, source=exercise_source)
+            return exercise_gen.bank_rows_near_level(db, comp, lvl, source=exercise_source,
+                                                     exclude_kinds=exclude_kinds)
         except Exception as e:
             _bank_exhausted[comp.id] = e
             raise
@@ -276,6 +311,20 @@ def generate_assessment_job(db: Session, assessment: Assessment,
         db.add(copy)
         db.flush()
 
+        # Guides en dégradé (création automatique) : la part d'exercices guidés
+        # glisse avec le niveau de l'élève (cf. student_history.guide_ratio).
+        quota = (student_history.GuideQuota(
+            student_history.guide_ratio(level, guide_medium_share))
+            if guides_by_level else None)
+
+        def _guide_for(row) -> tuple[str, bool, bool]:
+            """(mode pdfgen, la carte a-t-elle un guide, est-il imprimé)."""
+            if quota is None:
+                return guide_mode, False, False
+            has = statement_mod.has_guides(row.statement)
+            on = quota.decide(has)
+            return (pdfgen.GUIDES_INCLUDE if on else pdfgen.GUIDES_NONE), has, on
+
         render_items: list[dict] = []
         kind_counts: dict[str, int] = {}
         # exercices déjà servis dans CETTE copie, par identité de CONTENU et non
@@ -336,13 +385,21 @@ def generate_assessment_job(db: Session, assessment: Assessment,
             # les cartes de remplissage ne passent pas par le tirage équilibré
             # (kind_counts), donc pas de bucket à décrémenter si retirées.
             bucket = None if filler else distribution.exercise_bucket(row)
+            mode, has_guide, guided = _guide_for(row)
 
             render = build_render_item(
-                db, row=row, copy_id=copy.id, catalog_id=catalog_refs[comp_id].id,
-                seq=seq, guides=guide_mode)
+                db, row=row, copy_id=copy.id, catalog_id=catalog_ref(comp_id).id,
+                seq=seq, guides=mode)
             if render is None:
                 return False
-            render_items.append({**render, "_identity": identity, "_bucket": bucket})
+            if quota is not None:
+                quota.take(has_guide, guided)
+            # palier de lecture : du plus simple au plus difficile, problèmes
+            # en dernier (cf. pdfgen.reading_tier)
+            tier = pdfgen.reading_tier(
+                row.difficulty_level, row.kind == "probleme" or render["is_probleme"])
+            render_items.append({**render, "_identity": identity, "_bucket": bucket,
+                                 "_tier": tier, "_guide": (has_guide, guided)})
             if not row.response_type.startswith("qcm"):
                 total_non_qcm += 1
             return True
@@ -375,15 +432,34 @@ def generate_assessment_job(db: Session, assessment: Assessment,
                 ri, ex_tpl_font_size, math_fs, tpl["exercise"])
                 for ri in items]
 
-        def _pack(items: list[dict]) -> tuple[list[dict], list[float]]:
+        def _pack(items: list[dict]) -> tuple[list[dict], list[tuple[int, int]], int]:
             """Réordonne les cartes pour un remplissage colonne par colonne
-            efficace (First-Fit-Decreasing, cf. pdfgen.pack_reading_order) :
-            les grandes cartes d'abord, les petites comblant les bas de colonne,
-            au lieu du grand vide laissé par l'ordre de production du LLM.
-            Retourne (cartes réordonnées, leurs hauteurs)."""
-            hs = _heights(items)
-            order = pdfgen.pack_reading_order(hs)
-            return [items[i] for i in order], [hs[i] for i in order]
+            efficace (First-Fit-Decreasing, cf. pdfgen.pack_columns) : les
+            grandes cartes d'abord, les petites comblant les bas de colonne, au
+            lieu du grand vide laissé par l'ordre de production du LLM — mais
+            TOUJOURS lues du plus simple au plus difficile, problèmes en
+            dernier (paliers `_tier`).
+            Retourne (cartes réordonnées, leur (page, colonne), nb de pages) :
+            le placement est passé tel quel à render_copy, la feuille imprimée
+            est donc exactement celle qui a été simulée ici."""
+            order, slots, n_pages = pdfgen.pack_placement(
+                _heights(items), [ri["_tier"] for ri in items])
+            return [items[i] for i in order], slots, n_pages
+
+        def _pages(items: list[dict]) -> int:
+            return _pack(items)[2]
+
+        _measure_cache: dict[tuple[str, str], float] = {}
+
+        def _h_for(row) -> float:
+            """Hauteur de la carte telle qu'elle serait posée MAINTENANT —
+            guide compris ou non selon la décision du quota à cet instant."""
+            mode = _guide_for(row)[0]
+            key = (row.id, mode)
+            if key not in _measure_cache:
+                _measure_cache[key] = pdfgen.estimate_item_height(
+                    render_shape(row, mode), ex_tpl_font_size, math_fs, tpl["exercise"])
+            return _measure_cache[key]
 
         def _rollback(before: int) -> None:
             nonlocal total_non_qcm
@@ -399,6 +475,8 @@ def generate_assessment_job(db: Session, assessment: Assessment,
                     if ri.get("_bucket"):
                         kind_counts[ri["_bucket"]] = max(0, kind_counts.get(ri["_bucket"], 0) - 1)
                     picked_keys.discard(ri.get("_identity"))
+                    if quota is not None:
+                        quota.release(*ri["_guide"])
             db.flush()
             del render_items[before:]
 
@@ -430,7 +508,7 @@ def generate_assessment_job(db: Session, assessment: Assessment,
                 # ce placement-là que render_copy réalise en bout de chaîne, donc
                 # ce qui décide du débordement — pas l'ordre de production brut,
                 # qui gaspille des bas de colonne et remplirait donc moins.
-                if pdfgen.pages_needed(_pack(render_items)[1]) > max_pages:
+                if _pages(render_items) > max_pages:
                     _rollback(before)
                     stagnant += 1
                 else:
@@ -482,9 +560,7 @@ def generate_assessment_job(db: Session, assessment: Assessment,
                 for row in rows:
                     rank = (student_history.candidate_rank(row, ex_log)[0]
                             if individual else 0)
-                    measured.append((rank, pdfgen.estimate_item_height(
-                        render_shape(row, guide_mode), ex_tpl_font_size, math_fs,
-                        tpl["exercise"]), comp_id, row))
+                    measured.append((rank, _h_for(row), comp_id, row))
             # rang croissant d'abord (ce que l'élève n'a pas encore vu), puis
             # hauteur décroissante : à préférence égale, la plus grande carte qui
             # tient laisse le plus petit trou derrière elle.
@@ -499,16 +575,19 @@ def generate_assessment_job(db: Session, assessment: Assessment,
             blocked: set[str] = set()
             seq = start_seq
             for _ in range(MAX_FILL_ATTEMPTS):
-                holes = pdfgen.free_space(_heights(render_items), max_pages)
+                holes = pdfgen.free_space(_heights(render_items), max_pages,
+                                           [ri["_tier"] for ri in render_items])
                 biggest = max(holes) if holes else 0.0
                 if biggest <= 0 or not measured:
                     return
                 # best-fit : la PLUS GRANDE carte qui tienne encore, pour que le
                 # trou restant soit le plus petit possible (`measured` est trié
                 # décroissant, donc la première qui rentre est la bonne).
+                # hauteur relue à chaque tour : en guides par niveau, le quota
+                # peut avoir changé d'avis (guide imprimé ou non) depuis le tri
                 pick = next(
                     (m for m in measured
-                     if m[1] <= biggest and m[3].id not in blocked
+                     if _h_for(m[3]) <= biggest and m[3].id not in blocked
                      and distribution.exercise_identity(m[3]) not in picked_keys),
                     None)
                 if pick is None:
@@ -519,19 +598,80 @@ def generate_assessment_job(db: Session, assessment: Assessment,
                     blocked.add(row.id)
                     continue
                 # ceinture : la simulation de placement reste l'autorité finale
-                if pdfgen.pages_needed(_pack(render_items)[1]) > max_pages:
+                if _pages(render_items) > max_pages:
                     _rollback(before)
                     blocked.add(row.id)
                     continue
                 seq += 1
 
+        def _add_problems(start_seq: int) -> int:
+            """Problèmes (option de la création automatique) : combien, et de
+            quelle difficulté, selon le niveau de l'élève
+            (student_history.problem_plan). La part de copie qui leur revient
+            est un BUDGET de hauteur : le premier problème passe toujours
+            (s'il tient dans les pages), les suivants tant qu'ils tiennent dans
+            le budget. À difficulté visée égale : inédit d'abord (même
+            préférence que les exercices), puis un tirage propre à l'élève —
+            deux élèves forts ne reçoivent pas forcément le même problème."""
+            plan = student_history.problem_plan(level) if with_problems else None
+            if not plan or not problem_rows:
+                return start_seq
+            share, mix = plan
+            budget = share * sum(pdfgen.column_capacity(b) for b in range(2 * max_pages))
+
+            def tiebreak(row) -> str:
+                return hashlib.sha256(f"{seed}:{row.id}".encode()).hexdigest()
+
+            # jamais une difficulté que le mix exclut (un élève de niveau 10 ne
+            # reçoit pas de problème facile, même quand les difficiles sont
+            # épuisés : la place revient alors aux exercices) — sauf si la
+            # banque n'a RIEN d'autre à offrir
+            allowed = [r for r in problem_rows
+                       if mix[max(1, min(3, r.difficulty_level or 2)) - 1] > 0]
+            candidates = [r for r in (allowed or problem_rows)
+                          if distribution.exercise_identity(r) not in picked_keys]
+            counts = {1: 0, 2: 0, 3: 0}
+            spent, seq = 0.0, start_seq
+            while candidates:
+                want = student_history.next_problem_level(mix, counts)
+                ordered = sorted(candidates, key=lambda r: (
+                    abs(r.difficulty_level - want),
+                    student_history.candidate_rank(r, ex_log), tiebreak(r)))
+                added = False
+                for row in ordered:
+                    h = _h_for(row)
+                    if sum(counts.values()) and spent + h > budget:
+                        continue        # hors budget : un plus court peut tenir
+                    candidates.remove(row)
+                    before = len(render_items)
+                    ok = _add_row(seq, row.competency_id, row)
+                    if ok and _pages(render_items) > max_pages:
+                        _rollback(before)
+                        ok = False
+                    if ok:
+                        spent += h
+                        lvl = max(1, min(3, row.difficulty_level or 2))
+                        counts[lvl] += 1
+                        seq += 1
+                        added = True
+                        candidates = [r for r in candidates
+                                      if distribution.exercise_identity(r) not in picked_keys]
+                        break
+                if not added:
+                    break
+            return seq
+
         if priority:
+            # 0) les problèmes (création automatique, option cochée), dosés
+            #    selon le niveau AVANT le remplissage — sinon les exercices
+            #    prendraient toute la place ;
             # 1) remplir au maximum avec les exercices classiques (grandes cartes) ;
             # 2) combler les trous de bas de page restants avec les cartes courtes ;
             # 3) finir au plus juste, en choisissant ce qui TIENT dans ce qui reste.
             # On reprend la trame là où la passe obligatoire l'a laissée : ses
             # cases suivantes sont déjà pondérées par la priorité.
-            next_seq = _fill(n_required, filler=False)
+            next_seq = _add_problems(n_required)
+            next_seq = _fill(next_seq, filler=False)
             next_seq = _fill(next_seq, filler=True)
             _best_fit(next_seq)
 
@@ -547,11 +687,12 @@ def generate_assessment_job(db: Session, assessment: Assessment,
                 "(onglet Exercices), ou changez la source d'exercices du sujet.")
 
         # Ordre DÉFINITIF des cartes : le remplissage colonne par colonne (FFD)
-        # est figé ici, une fois toutes les cartes choisies. On renumérote alors
-        # les exercices dans l'ordre de LECTURE ainsi obtenu, pour que le badge
+        # est figé ici, une fois toutes les cartes choisies — du plus simple au
+        # plus difficile, problèmes en dernier. On renumérote alors les
+        # exercices dans l'ordre de LECTURE ainsi obtenu, pour que le badge
         # imprimé et le « Ex. N » de la correction manuelle (routers.scans)
         # restent alignés.
-        render_items, _ = _pack(render_items)
+        render_items, placement, _n = _pack(render_items)
         seq_no = 0
         for ri in render_items:
             if ri.get("kind") == "exercise" and (ri.get("part_item_ids") or ri.get("item_id")):
@@ -585,7 +726,7 @@ def generate_assessment_job(db: Session, assessment: Assessment,
             class_name=school_class.name, title=assessment.title,
             assessment_type=assessment.type, items=render_items,
             pages_meta=pages_meta, font_size=font_size, tpl=tpl,
-            dyslexic=student.dyslexic)
+            placement=placement, dyslexic=student.dyslexic)
 
         used_pages = max((z["page_index"] for z in zones), default=0) + 1
         if used_pages > max_pages + PAGE_RESERVE:

@@ -1,5 +1,5 @@
-"""Assistant « Créer mon sujet » (§3.1 bis) : le professeur compose LUI-MÊME
-son sujet, exercice par exercice, page par page, colonne par colonne.
+"""Assistant « Créer un sujet », mode MANUEL (§3.1 bis) : le professeur compose
+LUI-MÊME son sujet, exercice par exercice, page par page, colonne par colonne.
 
 Différences avec la pipeline automatique (services.generation) :
 
@@ -8,8 +8,8 @@ Différences avec la pipeline automatique (services.generation) :
     enregistré par l'assistant dans `assessment.blueprint_json["variants"]` ;
   • pas de sujet individuel : uniquement des sujets COMMUNS. Les variantes
     existent pour deux raisons bien distinctes, jamais mélangées —
-      « anti-triche » : N sujets équivalents distribués en tourniquet aux
-        voisins de table ;
+      « aléatoires » (clé « anticheat ») : N sujets équivalents répartis au
+        hasard, en nombre égal ;
       « par niveau » : exactement 3 variantes (facile/moyen/difficile),
         attribuées d'après le niveau de l'élève (StudentLevel, échelle 1-10) ;
   • les guides (encadrés « {{aide}} » intégrés aux énoncés) sont pilotés
@@ -22,6 +22,7 @@ réordonnancement ni remplissage automatique.
 """
 import hashlib
 import logging
+import random
 
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
@@ -61,9 +62,9 @@ def variant_for_student(blueprint: dict, student_level: int, student_index: int)
     • « par niveau » : la variante dont la clé correspond à son niveau
       (facile <= 4, moyen 5-7, difficile >= 8) ; repli sur la variante médiane
       si cette clé n'a pas été composée.
-    • « anti-triche » : tourniquet sur le rang de l'élève dans la classe —
-      deux voisins de liste (donc, en pratique, de table) n'ont jamais le même
-      sujet tant qu'il y a plus d'une variante.
+    • « aléatoires » (clé historique « anticheat ») : tourniquet sur le rang
+      de l'élève — rang TIRÉ AU SORT par l'appelant (`shuffled_ranks`), pour
+      une répartition au hasard mais en nombre égal par variante.
     """
     variants = blueprint.get("variants") or []
     if len(variants) <= 1:
@@ -205,6 +206,17 @@ def _student_level(db: Session, student_id: str) -> int:
     return lvl.level if lvl else 5
 
 
+def shuffled_ranks(n: int, seed: int) -> list[int]:
+    """Rang tiré au sort de chacun des `n` élèves (index de classe → rang).
+    Graine = sujet : régénérer le même sujet redonne la même répartition."""
+    order = list(range(n))
+    random.Random(seed).shuffle(order)
+    ranks = [0] * n
+    for rank, idx in enumerate(order):
+        ranks[idx] = rank
+    return ranks
+
+
 def _ordered_slots(variant: dict, max_pages: int = 6) -> list[dict]:
     """Cartes d'une variante, dans l'ordre où reportlab doit les dessiner :
     page, puis colonne, puis rang dans la colonne. Le canvas est séquentiel —
@@ -275,6 +287,7 @@ def generate_manual_job(db: Session, assessment: Assessment, job: Job | None = N
                 assessment.id, len(variants),
                 blueprint.get("variant_kind", "none"), guide_mode, len(students))
 
+    ranks = shuffled_ranks(len(students), base_seed)
     for s_idx, student in enumerate(students):
         generation._set_progress(
             db, job, round(5 + 90 * s_idx / max(1, len(students))),
@@ -283,7 +296,7 @@ def generate_manual_job(db: Session, assessment: Assessment, job: Job | None = N
         fixed_key = (blueprint.get("duplicate_student_variants") or {}).get(student.id)
         v_idx = next((i for i, v in enumerate(variants)
                       if fixed_key and str(v.get("key")) == str(fixed_key)),
-                     variant_for_student(blueprint, level, s_idx))
+                     variant_for_student(blueprint, level, ranks[s_idx]))
         variant = variants[v_idx]
         guides = guide_mode
         # seed = variante (et non élève) : deux élèves de la même variante ont

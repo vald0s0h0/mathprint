@@ -1,4 +1,4 @@
-"""Assistant « Créer mon sujet » : le sujet composé à la main doit sortir de
+"""Assistant « Créer un sujet » (mode manuel) : le sujet composé à la main doit sortir de
 l'imprimante EXACTEMENT comme le professeur l'a posé.
 
 Trois invariants surveillés ici :

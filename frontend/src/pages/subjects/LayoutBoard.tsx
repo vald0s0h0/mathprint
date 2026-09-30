@@ -1,4 +1,4 @@
-// Étape « Mise en page » de l'assistant « Créer mon sujet » : à gauche les
+// Étape « Mise en page » de l'assistant « Créer un sujet » (mode manuel) : à gauche les
 // exercices disponibles, à droite les pages vierges du sujet où le professeur
 // les dépose.
 //
@@ -16,7 +16,7 @@ import {
   SegmentedControl, Stack, Text, TextInput, Tooltip,
 } from '@mantine/core'
 import {
-  AlertTriangle, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Calculator,
+  AlertTriangle, ArrowDown, ArrowDownWideNarrow, ArrowLeft, ArrowRight, ArrowUp, Calculator,
   GripVertical, Image as ImageIcon, Search, Sparkles, Trash2, X,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -79,6 +79,84 @@ export function overfullColumns(layout: Layout, byId: Map<string, PoolItem>,
     }
   }))
   return out
+}
+
+/** Palier de lecture d'une carte — miroir de pdfgen.reading_tier : du plus
+ *  simple au plus difficile, les problèmes toujours après les exercices. */
+export function readingTier(it: PoolItem | undefined): number {
+  if (!it) return 0
+  return (it.is_problem || it.kind === 'probleme' ? 10 : 0)
+    + Math.max(1, Math.min(3, it.difficulty || 2))
+}
+
+/** Range toutes les cartes posées du plus simple au plus difficile, problèmes
+ *  en dernier, en remplissant les colonnes au plus juste — le même
+ *  First-Fit-Decreasing par paliers que pdfgen.pack_columns (la création
+ *  automatique range ses copies ainsi). Les hauteurs sont celles du moteur PDF.
+ *  Ce qui ne tient pas dans les pages finit dans la dernière colonne (signalée
+ *  « trop chargée »). */
+export function packLayout(layout: Layout, byId: Map<string, PoolItem>, metrics: Metrics,
+                           guides: string, pages: number): Layout {
+  const ids = layout.flatMap((page) => page.flatMap((col) => col))
+  const h = (id: string) => cardHeight(byId.get(id), guides)
+  const tier = (id: string) => readingTier(byId.get(id))
+  const cap = (b: number) => metrics.column_h[Math.floor(b / 2)]
+    ?? metrics.column_h[metrics.column_h.length - 1]
+  const cols: string[][] = []
+  const used: number[] = []
+  let frontier = 0
+  for (const t of [...new Set(ids.map(tier))].sort((a, b) => a - b)) {
+    const members = ids.filter((id) => tier(id) === t).sort((a, b) => h(b) - h(a))
+    let last = frontier
+    for (const id of members) {
+      let b = frontier
+      while (b < cols.length && used[b] + h(id) > cap(b)) b += 1
+      if (b === cols.length) { cols.push([]); used.push(0) }
+      cols[b].push(id)
+      used[b] += h(id)
+      last = Math.max(last, b)
+    }
+    frontier = last
+  }
+  const out = emptyLayout(pages)
+  cols.forEach((col, b) => {
+    const sorted = [...col].sort((x, y) => tier(x) - tier(y))
+    const slot = Math.min(b, pages * 2 - 1)
+    out[Math.floor(slot / 2)][slot % 2].push(...sorted)
+  })
+  return out
+}
+
+/** Décline une variante à partir d'une autre : même plan, mais chaque carte
+ *  est remplacée par un exercice ÉQUIVALENT tiré au hasard — même compétence
+ *  (même chapitre pour un problème), même difficulté, hauteur la plus proche.
+ *  Sans équivalent disponible, la carte d'origine est conservée. */
+export function deriveVariant(base: Layout, items: PoolItem[], guides: string): {
+  layout: Layout; kept: number
+} {
+  const byId = new Map(items.map((it) => [it.id, it]))
+  // jamais une carte déjà présente dans la variante d'origine : deux voisins
+  // auraient le même exercice, simplement déplacé
+  const baseIds = new Set(base.flatMap((page) => page.flatMap((col) => col)))
+  const taken = new Set<string>()
+  let kept = 0
+  const pick = (id: string): string => {
+    const src = byId.get(id)
+    if (!src) return id
+    const same = (it: PoolItem) => (src.kind === 'probleme'
+      ? it.kind === 'probleme' && it.chapter_code === src.chapter_code
+      : it.kind !== 'probleme' && it.competency_id === src.competency_id)
+    const free = items.filter((it) => !baseIds.has(it.id) && !taken.has(it.id) && same(it))
+    const pool = free.filter((it) => it.difficulty === src.difficulty)
+    const candidates = (pool.length ? pool : free)
+      .map((it) => ({ it, d: Math.abs(cardHeight(it, guides) - cardHeight(src, guides)) }))
+      .sort((a, b) => a.d - b.d).slice(0, 3)
+    if (!candidates.length) { kept += 1; taken.add(id); return id }
+    const chosen = candidates[Math.floor(Math.random() * candidates.length)].it
+    taken.add(chosen.id)
+    return chosen.id
+  }
+  return { layout: base.map((page) => page.map((col) => col.map(pick))), kept }
 }
 
 // 3 niveaux (facile / moyen / difficile), indexé par la difficulté 1-3 —
@@ -421,11 +499,21 @@ export default function LayoutBoard({
             Glissez un exercice sur la colonne de votre choix. Réorganisez-les à
             la souris ou avec les flèches de chaque carte.
           </Text>
-          <Button size="compact-xs" variant="subtle" color="red"
-            leftSection={<Trash2 size={12} />} onClick={clearAll}
-            disabled={layoutCount(layout) === 0}>
-            Vider
-          </Button>
+          <Group gap={4} wrap="nowrap">
+            <Tooltip label="Ranger toutes les cartes du plus simple au plus difficile, problèmes en dernier, en remplissant les colonnes au plus juste">
+              <Button size="compact-xs" variant="light"
+                leftSection={<ArrowDownWideNarrow size={12} />}
+                onClick={() => onChange(packLayout(layout, byId, metrics, guides, pages))}
+                disabled={layoutCount(layout) < 2}>
+                Ranger facile → difficile
+              </Button>
+            </Tooltip>
+            <Button size="compact-xs" variant="subtle" color="red"
+              leftSection={<Trash2 size={12} />} onClick={clearAll}
+              disabled={layoutCount(layout) === 0}>
+              Vider
+            </Button>
+          </Group>
         </Group>
         {overfull.length > 0 && (
           <Alert color="orange" p={6} icon={<AlertTriangle size={14} />}>
