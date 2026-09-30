@@ -42,7 +42,23 @@ def status(db: Session = Depends(get_db)):
                  "alert": disk.free / disk.total < 0.1},
         "data_dir": str(settings.data_dir),
         "last_backup": backups[0].name if backups else None,
+        "indigo": _indigo_status(db),
     }
+
+
+def _indigo_status(db: Session) -> dict:
+    """Exercices publiés : combien le fichier en porte, combien sont réellement
+    en banque, et d'où ils viennent (image livrée par le dépôt, ou volume).
+    Un écart publié/en banque = compétences introuvables sur ce déploiement."""
+    from ..models import GeneratedExercise
+    from ..services import indigo
+    try:
+        pub = indigo.published_status()
+    except Exception:
+        pub = {"count": 0, "source": "?", "generated_at": ""}
+    in_bank = db.query(GeneratedExercise).filter_by(source="indigo", status="active").count()
+    return {"published": pub.get("count", 0), "in_bank": in_bank,
+            "source": pub.get("source"), "generated_at": pub.get("generated_at", "")}
 
 
 # --------------------------------------------------------------- sauvegardes

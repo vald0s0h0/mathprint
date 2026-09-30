@@ -2413,23 +2413,38 @@ def _generated_at(jf) -> datetime | None:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
-def _read_dir():
-    """Couche qui fait autorité en LECTURE : la publication la PLUS RÉCENTE.
+def _image_stamp() -> str:
+    """Horodatage (brut) du contenu livré dans l'image, "" s'il n'y en a pas."""
+    try:
+        data = json.loads((_IMAGE_PUB_DIR / "exercises.json").read_text(encoding="utf-8"))
+    except Exception:
+        return ""
+    return str(data.get("generated_at") or "")
 
-    Le volume l'emporte tant qu'il est plus récent que l'image — la publication
-    faite sur le NAS survit donc aux mises à jour. Mais une image livrée APRÈS
-    (dépôt mis à jour, cf. `_mirror_to_repo`) remplace un volume périmé : sans
-    ça, un serveur qui a publié une fois ne verrait plus jamais le contenu du
-    dépôt. Date illisible : le volume garde la main (comportement d'avant)."""
+
+def _read_dir():
+    """Couche qui fait autorité en LECTURE : le DÉPÔT (l'image), sauf publication
+    locale construite PAR-DESSUS l'image actuellement livrée.
+
+    Chaque écriture du volume note l'image sur laquelle elle s'appuie
+    (`base_image` = horodatage de l'image à ce moment). Le volume ne l'emporte
+    que si cette base est l'image en service : une publication faite sur le NAS
+    survit donc au redémarrage, mais dès que le dépôt livre un nouveau contenu
+    (nouvelle image), il prend la main — quelle que soit la date du volume. Un
+    volume ancien sans `base_image` (avant ce mécanisme) cède toujours la place
+    à l'image : c'est ce qui masquait le contenu du dépôt sur un NAS qui avait
+    publié une fois."""
     vol = _volume_pub_dir()
     vol_json, img_json = vol / "exercises.json", _IMAGE_PUB_DIR / "exercises.json"
     if not vol_json.exists():
         return _IMAGE_PUB_DIR
-    if img_json.exists():
-        v, i = _generated_at(vol_json), _generated_at(img_json)
-        if v is not None and i is not None and i > v:
-            return _IMAGE_PUB_DIR
-    return vol
+    if not img_json.exists():
+        return vol
+    try:
+        base = str(json.loads(vol_json.read_text(encoding="utf-8")).get("base_image") or "")
+    except Exception:
+        return _IMAGE_PUB_DIR
+    return vol if base and base == _image_stamp() else _IMAGE_PUB_DIR
 
 
 def _publish_stamp() -> str:
@@ -2480,7 +2495,8 @@ def _mirror_to_repo() -> bool:
         for f in folder.glob("*.png"):
             if f.name not in wanted[kind]:
                 f.unlink()
-    shutil.copyfile(v_json, r_json)
+    repo_data = {k: v for k, v in data.items() if k != "base_image"}
+    r_json.write_text(json.dumps(repo_data, ensure_ascii=False, indent=1), encoding="utf-8")
     logger.info("Indigo : publication recopiée dans le dépôt (%s exercice(s))",
                 len(data.get("exercises", [])))
     return True
@@ -2568,7 +2584,7 @@ def publish(db, force: bool = False) -> dict:
             f"exercice(s) sont publiés : publier maintenant les effacerait. "
             f"Validez des exercices, ou forcez explicitement la remise à zéro.")
     payload = {"version": settings.indigo_schema_version, "grade_level": "3e",
-               "generated_at": _publish_stamp(),
+               "generated_at": _publish_stamp(), "base_image": _image_stamp(),
                "exercises": records}
     jf.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
     # images d'exercices retirés depuis la dernière publication : plus rien ne
@@ -2647,7 +2663,7 @@ def publish_rows(db, rows: list[IndigoExercise]) -> int:
     new_ids = {r["id"] for r in new_records}
     payload = {"version": settings.indigo_schema_version,
                "grade_level": data.get("grade_level", "3e"),
-               "generated_at": _publish_stamp(),
+               "generated_at": _publish_stamp(), "base_image": _image_stamp(),
                "exercises": [r for r in records if r.get("id") not in new_ids]
                             + new_records}
     jf.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -2695,6 +2711,7 @@ def _unpublish(ex_id: str) -> bool:
                 (folder / fname).unlink()
     data["exercises"] = kept
     data["generated_at"] = _publish_stamp()
+    data["base_image"] = _image_stamp()
     jf.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
     _mirror_to_repo()
     return True
@@ -2784,6 +2801,11 @@ def seed_published(db) -> int:
     db.query(GeneratedExercise).filter_by(source="indigo").delete()
     n = sum(1 for rec in data.get("exercises", []) if _seed_record(db, data, rec, figs))
     db.commit()
+    total = len(data.get("exercises", []))
+    (logger.warning if n < total else logger.info)(
+        "Indigo : %s/%s exercice(s) publiés semés en banque (source %s, %s)",
+        n, total, "volume" if _read_dir() != _IMAGE_PUB_DIR else "image",
+        data.get("generated_at", "?"))
     return n
 
 

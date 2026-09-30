@@ -283,3 +283,29 @@ def test_no_repo_mirror_inside_a_docker_image(db):
     _validated(db)
     indigo.publish(db)
     assert not (indigo._IMAGE_PUB_DIR / "exercises.json").exists()
+
+
+def test_a_volume_dated_later_but_built_on_an_old_image_gives_way(db):
+    """Cas réel du NAS : une publication locale PLUS RÉCENTE en date, mais faite
+    sur l'ANCIEN contenu livré, ne doit jamais masquer le nouveau dépôt."""
+    _seed_image(indigo._IMAGE_PUB_DIR, ids=("ancien",))
+    _validated(db, n=2)
+    indigo.publish(db)                       # volume construit sur l'image « ancien »
+    assert indigo.published_status()["source"] == "volume"
+    _seed_image(indigo._IMAGE_PUB_DIR, ids=("depot-1", "depot-2", "depot-3"))
+    img = indigo._IMAGE_PUB_DIR / "exercises.json"
+    data = json.loads(img.read_text())
+    data["generated_at"] = "2000-01-01T00:00:00+00:00"   # daté AVANT le volume
+    img.write_text(json.dumps(data))
+    assert indigo.published_status()["source"] == "image"
+    assert indigo.seed_published(db) == 3
+
+
+def test_a_legacy_volume_without_base_never_hides_the_repo(db, tmp_path):
+    vol = tmp_path / "data" / "indigo" / "published"
+    vol.mkdir(parents=True)
+    (vol / "exercises.json").write_text(json.dumps(
+        {"version": "2", "generated_at": "2999-01-01", "exercises": []}))
+    _seed_image(indigo._IMAGE_PUB_DIR, ids=("livre-1", "livre-2"))
+    assert indigo.published_status()["source"] == "image"
+    assert indigo.seed_published(db) == 2

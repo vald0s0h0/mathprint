@@ -47,6 +47,7 @@ type SystemStatus = {
   database: { ok: boolean; url_scheme: string }
   disk: { total_gb: number; free_gb: number; alert: boolean }
   last_backup: string | null
+  indigo?: { published: number; in_bank: number; source: string; generated_at: string }
 }
 type LogEntry = { ts: string; method: string; path: string; error: string; traceback: string }
 
@@ -569,6 +570,14 @@ export default function SettingsPage() {
                   <Badge variant="light" color={status.disk.alert ? 'red' : 'green'}>
                     Disque {status.disk.free_gb} / {status.disk.total_gb} Go libres
                   </Badge>
+                  {status.indigo && (
+                    <Badge variant="light"
+                      color={status.indigo.in_bank > 0 && status.indigo.in_bank === status.indigo.published ? 'green' : 'orange'}>
+                      Exercices publiés : {status.indigo.in_bank} en banque / {status.indigo.published}
+                      {' '}({status.indigo.source === 'image' ? 'dépôt' : 'volume'}
+                      {status.indigo.generated_at ? `, ${status.indigo.generated_at.slice(0, 16).replace('T', ' ')}` : ''})
+                    </Badge>
+                  )}
                 </Group>
                 <Text size="xs" c="dimmed" mt="sm">
                   Version {status.version}

@@ -246,10 +246,11 @@ L'export est volontairement manuel : aucun jeton d'écriture GitHub ne vit sur
 le NAS, et vous voyez ce qui entre dans le dépôt à partir duquel vos images
 sont construites.
 
-> **Quelle publication un serveur affiche-t-il ?** La plus RÉCENTE entre son
-> volume et l'image livrée. Une image construite depuis un dépôt plus récent
-> remplace donc une ancienne publication faite sur le NAS ; une publication
-> faite sur le NAS après la dernière mise à jour reste affichée.
+> **Quelle publication un serveur affiche-t-il ?** Celle du **dépôt** (livrée
+> dans l'image), sauf si « Publier » a été cliqué sur ce serveur DEPUIS sa
+> dernière mise à jour : cette publication locale reste affichée jusqu'à la
+> mise à jour suivante, où le dépôt reprend la main. Paramètres → Système
+> affiche « Exercices publiés : N en banque / N (dépôt ou volume, date) ».
 
 > Publier alors qu'aucun exercice n'est validé sur l'instance est **refusé**
 > (message explicite) : cela effacerait le contenu déjà publié, que le
