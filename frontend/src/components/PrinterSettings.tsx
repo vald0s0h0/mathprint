@@ -57,7 +57,7 @@ function PilePicture({ reversed, caption, muted = false, onInvert, inverting = f
   onInvert?: () => void; inverting?: boolean
 }) {
   return (
-    <Paper withBorder p="sm" maw={430} bg={muted ? 'gray.0' : undefined}>
+    <Paper withBorder p="sm" maw={430} bg={muted ? 'var(--mp-surface-sunken)' : undefined}>
       <Group gap="lg" wrap="nowrap" align="center">
         <Image src={`/printer-order/${reversed ? '321' : '123'}.png`}
           alt={reversed ? 'Pile de feuilles dans l’ordre 3, 2, 1' : 'Pile de feuilles dans l’ordre 1, 2, 3'}

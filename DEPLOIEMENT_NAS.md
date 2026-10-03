@@ -191,6 +191,8 @@ Dans File Station, sous `/docker/mathprint/volumes/data/`, créer un dossier
 ```
 /docker/mathprint/volumes/data/manuals/3_indigo.pdf         (manuel élève)
 /docker/mathprint/volumes/data/manuals/3_indigo_prof.pdf    (corrigés)
+/docker/mathprint/volumes/data/manuals/6_indigo.pdf         (manuel élève 6e)
+/docker/mathprint/volumes/data/manuals/6_indigo_prof.pdf    (guide pédagogique 6e)
 ```
 
 Les **noms de fichiers comptent** : la résolution se fait sur le nom, pas sur

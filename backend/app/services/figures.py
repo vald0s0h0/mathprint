@@ -149,6 +149,33 @@ def is_photograph(png_bytes: bytes) -> bool:
     return coverage < _PHOTO_COVERAGE_THRESHOLD
 
 
+def _finish_legacy(fig) -> bytes:
+    """Les anciens tracés gardent aussi une police lisible à taille imprimée.
+
+    Un dessin de 6 pouces était réduit à 9 cm dans le PDF : ses lettres de
+    13 pt devenaient minuscules. On dimensionne le canevas avant de placer
+    les textes, et on écrit cette taille dans les métadonnées du PNG.
+    """
+    from . import figkit as fk
+    w, h = fig.get_size_inches()
+    fig.set_size_inches(82 / 25.4, max(22, min(74, 82*h/w)) / 25.4)
+    fig.set_dpi(fk.RENDER_DPI)
+    for ax in fig.axes:
+        layout = fk.labels_for(ax)
+        for text in list(ax.texts):
+            x, y = text.get_position()
+            direction = (0, -1) if text.get_va() == "top" or y < 0 else (0, 1)
+            if text.get_ha() == "right":
+                direction = (-1, 0)
+            elif text.get_ha() == "left":
+                direction = (1, 0)
+            layout.add(text.get_text(), (x, y), direction=direction, radial=True,
+                       distance=0, fontsize=max(fk.FONT_SIZE, text.get_fontsize()), max_extra=36)
+            text.remove()
+        layout.place(outside_penalty=2)
+    return fk.to_png(fig)
+
+
 def render_rectangle(length: float, width: float, unit: str = "cm", show_diagonal: bool = False) -> bytes:
     """Rectangle annoté (longueur, largeur, diagonale optionnelle)."""
     length = _validate_bounds(length, name="length")
@@ -170,16 +197,14 @@ def render_rectangle(length: float, width: float, unit: str = "cm", show_diagona
     if show_diagonal:
         diag = np.sqrt(length**2 + width**2)
         ax.plot([0, length], [0, width], 'k--', linewidth=1, label=f'diagonale')
-        ax.legend()
+        ax.legend(loc="upper center", bbox_to_anchor=(0.5, 1.15),
+                  frameon=False, fontsize=10)
 
     ax.set_xlim(-0.8, length + 0.5)
     ax.set_ylim(-0.8, width + 0.5)
     ax.axis('off')
 
-    buffer = BytesIO()
-    fig.savefig(buffer, format='png', transparent=True, bbox_inches='tight', dpi=150)
-    plt.close(fig)
-    return buffer.getvalue()
+    return _finish_legacy(fig)
 
 
 def render_triangle(base: float, height: float, unit: str = "cm", right_angle_at: str | None = None) -> bytes:
@@ -211,10 +236,7 @@ def render_triangle(base: float, height: float, unit: str = "cm", right_angle_at
     ax.set_ylim(-0.8, height + 0.5)
     ax.axis('off')
 
-    buffer = BytesIO()
-    fig.savefig(buffer, format='png', transparent=True, bbox_inches='tight', dpi=150)
-    plt.close(fig)
-    return buffer.getvalue()
+    return _finish_legacy(fig)
 
 
 def render_circle(radius: float, unit: str = "cm", show_diameter: bool = False) -> bytes:
@@ -242,10 +264,7 @@ def render_circle(radius: float, unit: str = "cm", show_diameter: bool = False) 
     ax.set_ylim(-radius - 0.5, radius + 0.5)
     ax.axis('off')
 
-    buffer = BytesIO()
-    fig.savefig(buffer, format='png', transparent=True, bbox_inches='tight', dpi=150)
-    plt.close(fig)
-    return buffer.getvalue()
+    return _finish_legacy(fig)
 
 
 def render_angle(degrees: float, label: str | None = None) -> bytes:
@@ -282,10 +301,7 @@ def render_angle(degrees: float, label: str | None = None) -> bytes:
     ax.set_ylim(-0.5, radius + 0.5)
     ax.axis('off')
 
-    buffer = BytesIO()
-    fig.savefig(buffer, format='png', transparent=True, bbox_inches='tight', dpi=150)
-    plt.close(fig)
-    return buffer.getvalue()
+    return _finish_legacy(fig)
 
 
 def render_number_line(min_val: float, max_val: float, points: list[dict] | None = None) -> bytes:
@@ -320,44 +336,23 @@ def render_number_line(min_val: float, max_val: float, points: list[dict] | None
     ax.set_ylim(-0.5, 0.6)
     ax.axis('off')
 
-    buffer = BytesIO()
-    fig.savefig(buffer, format='png', transparent=True, bbox_inches='tight', dpi=150)
-    plt.close(fig)
-    return buffer.getvalue()
+    return _finish_legacy(fig)
 
 
 def render_coordinate_plane(points: list[dict] | None = None, grid: bool = True) -> bytes:
     """Repère cartésien avec points annotés optionnels."""
-    matplotlib.use('Agg')
-    fig, ax = plt.subplots(figsize=(6, 6), dpi=150)
-    ax.set_aspect('equal')
-
-    # Axes
-    ax.axhline(0, color='k', linewidth=0.5)
-    ax.axvline(0, color='k', linewidth=0.5)
-
-    # Grille optionnelle
-    if grid:
-        ax.grid(True, alpha=0.3)
-
-    # Points
-    if points:
-        for pt in points:
-            x = _validate_bounds(pt.get('x', 0), min_val=-999, max_val=999, name="x")
-            y = _validate_bounds(pt.get('y', 0), min_val=-999, max_val=999, name="y")
-            label = pt.get('label', f'({x},{y})')
-            ax.plot(x, y, 'ko', markersize=5)
-            ax.text(x + 0.25, y + 0.25, label, fontsize=12, weight='bold')
-
-    ax.set_xlim(-10, 10)
-    ax.set_ylim(-10, 10)
-    ax.set_xlabel('x', fontsize=11)
-    ax.set_ylabel('y', fontsize=11)
-
-    buffer = BytesIO()
-    fig.savefig(buffer, format='png', transparent=True, bbox_inches='tight', dpi=150)
-    plt.close(fig)
-    return buffer.getvalue()
+    # Même moteur de placement et même taille physique que les courbes.
+    from . import chartfig
+    annotated = []
+    for pt in points or []:
+        x = _validate_bounds(pt.get('x', 0), min_val=-999, max_val=999, name="x")
+        y = _validate_bounds(pt.get('y', 0), min_val=-999, max_val=999, name="y")
+        annotated.append({"xy": [x, y], "label": pt.get('label', f'({_fmt(x)} ; {_fmt(y)})')})
+    return chartfig.render({"width_mm": 93, "height_mm": 76,
+                            "axes": {"x": {"min": -10, "max": 10, "label": "x"},
+                                     "y": {"min": -10, "max": 10, "label": "y"},
+                                     "grid": "major" if grid else "none", "equal": True},
+                            "points": annotated})
 
 
 def render_figure(figure_json: dict) -> bytes:
@@ -388,10 +383,8 @@ def render_figure(figure_json: dict) -> bytes:
 
     # Clé de cache
     import json as _json
-    key_src = figure_json
-    if fig_type in DECLARATIVE_TYPES:
-        from .figkit import ENGINE_VERSION
-        key_src = {**figure_json, "_engine": ENGINE_VERSION}
+    from .figkit import ENGINE_VERSION
+    key_src = {**figure_json, "_engine": ENGINE_VERSION}
     cache_key = hashlib.sha256(
         _json.dumps(key_src, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     cache_dir = Path(settings.data_dir) / "figcache"

@@ -253,11 +253,11 @@ function PlacedCard({ it, h, first, last, canLeft, canRight, onDragStart,
       }}
       style={{
         height: h, minHeight: 18, cursor: 'grab', position: 'relative',
-        border: '1px solid var(--mantine-color-gray-4)',
+        border: '1px solid var(--mantine-color-default-border)',
         borderTop: edge === 'top' ? '3px solid var(--mantine-color-indigo-6)'
-          : '1px solid var(--mantine-color-gray-4)',
+          : '1px solid var(--mantine-color-default-border)',
         borderBottom: edge === 'bottom' ? '3px solid var(--mantine-color-indigo-6)'
-          : '1px solid var(--mantine-color-gray-4)',
+          : '1px solid var(--mantine-color-default-border)',
         borderRadius: 4, background: 'var(--mantine-color-body)',
         padding: '3px 4px', overflow: 'hidden',
       }}>
@@ -534,8 +534,8 @@ export default function LayoutBoard({
                 <Group gap={metrics.col_gap * scale} align="flex-start" wrap="nowrap"
                   style={{
                     padding: metrics.margin * scale,
-                    border: '1px solid var(--mantine-color-gray-4)',
-                    borderRadius: 6, background: 'var(--mantine-color-gray-0)',
+                    border: '1px solid var(--mantine-color-default-border)',
+                    borderRadius: 6, background: 'var(--mp-surface-sunken)',
                   }}>
                   {[0, 1].map((cIdx) => {
                     const used = usedHeight(p, cIdx)
@@ -558,7 +558,7 @@ export default function LayoutBoard({
                         style={{
                           width: metrics.col_w * scale, height: colHeight(p),
                           border: `1px dashed ${over ? 'var(--mantine-color-red-6)'
-                            : 'var(--mantine-color-gray-4)'}`,
+                            : 'var(--mantine-color-default-border)'}`,
                           borderRadius: 4, padding: 2, overflow: 'hidden',
                           background: 'var(--mantine-color-body)', position: 'relative',
                         }}>

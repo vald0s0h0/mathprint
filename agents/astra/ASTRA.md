@@ -8,6 +8,8 @@ le demande explicitement. Lance les commandes depuis la racine avec
 ## 1. Procédure complète
 
 1. `prepare --chapter "<chapitre>"` (`--pages 76-78`, `--lesson 74` si demandé).
+   Le niveau se déduit du chapitre ; préfixe-le si la demande le donne ou si le
+   nom est commun à deux manuels (`--chapter "6e Angles"`, `"3e B3"`).
    En cas d’ambiguïté, consulte `chapters`.
 2. Lis `RUN/payload.json` puis CHAQUE image de leçon : définitions, méthodes,
    notations, vocabulaire. Lis ensuite CHAQUE page d’exercices dans l’ordre.
@@ -17,6 +19,8 @@ le demande explicitement. Lance les commandes depuis la racine avec
 4. Écris la sortie par lots (une page à la fois), en validant à chaque lot.
 5. `figures RUN` : ouvre CHAQUE PNG utile, y compris les figures de sous-questions.
    Vérifie cadrage, valeurs, noms, lisibilité et absence de chevauchement.
+   Pour chaque variante, recense les objets à traiter et les figures candidates
+   visibles, puis vérifie leur correspondance avec les réponses proposées.
 6. `validate RUN` : corrige chaque erreur et chaque réserve fondée jusqu’à zéro erreur.
 7. `preview RUN` : ouvre CHAQUE page PNG. Contrôle aussi le PDF réel : toutes les
    tâches présentes, aides APRÈS les réponses concernées, figures au bon endroit,
@@ -39,6 +43,12 @@ Pour produire des sujets séparés à la demande de l’utilisateur :
 - Facile reste la même compétence mais devient réellement plus accessible :
   nombres plus simples, moins de questions (4 au plus), étapes plus courtes,
   2 ou 3 choix, au moins une aide de méthode. Pas une simple copie avec une aide.
+  La complétude par rapport à la figure est PRIORITAIRE sur ces objectifs de
+  réduction. Ne tronque jamais automatiquement les questions, lignes ou choix.
+  Six angles indépendants visibles exigent six réponses ; trois constructions
+  candidates visibles exigent trois choix. Réduis réellement la figure avec les
+  questions, ou conserve toutes les réponses nécessaires. Une grille complète
+  ou un exercice à relier peut être plus accessible grâce à une démarche guidée.
 
 **Problème de chapitre** : badge `probleme` ou `enigme`, `chapter_code`, `title`,
 `difficulty`, et UNE SEULE variante `original`. Aucun dérivé Base/Facile.
@@ -53,6 +63,28 @@ Pour produire des sujets séparés à la demande de l’utilisateur :
 
 Calculette : barrée `interdite`, pictogramme seul `necessaire`, absente `autorisee`.
 
+### Manuel 6e (Mission Indigo 6e, `payload.grade = "6e"`)
+
+La mise en page diffère du 3e ; ces règles l’emportent sur celles d’au-dessus.
+- **Compétence** : pas de bandeau rose. Le titre numéroté en haut à gauche des pages
+  d’exercices (« ② Calculer avec des nombres entiers ») vaut pour toute la double
+  page, jusqu’au titre suivant : compétence n → `<code du chapitre>.n` (ex. `A1.2`).
+- **Rubriques** : « Questions flash » → `flash` ; ceintures jaune et verte →
+  `exercice` ; ceinture noire → `expert`.
+- **Problèmes** (pages « Problèmes », y compris « Prise d’initiative » et
+  « Algorithmique & outils numériques ») : la difficulté se lit sur la CEINTURE
+  (nœud coloré sous le numéro), jamais sur la couleur du titre : jaune = **1**,
+  verte = **2**, noire = **3**. `difficulty_source: "manual_title"`.
+- **Énigmes & jeux** : les énigmes sont numérotées à part (« Énigme 1 ») :
+  `source_number` `"E1"`, `"E2"`… Un « Jeu » se traite comme une énigme
+  (`"J1"`…) s’il a une réponse cochable, sinon il va dans `skipped`.
+- **À ignorer** : page d’ouverture du chapitre, « Rappels express », « Activités »,
+  « Parcours de réussite », « Boîte à outils », exercices de Savoir-faire (pages
+  de leçon, corrigés en fin de livre), pictogramme imprimante (figure imprimable),
+  boutons de la liseuse (« Animation », « Version à vidéoprojeter », « Document PDF »).
+- Les pages viennent de captures de la liseuse (≈ 130 dpi natifs) : en cas de
+  doute sur un petit nombre ou un indice, préfère `crop` à une valeur devinée.
+
 ## 3. Contenu et ordre de lecture
 
 L’élève répond uniquement en cochant ou en reliant. La carte se suffit à elle-même.
@@ -64,6 +96,13 @@ comme « Réponds aux questions » pour le remplir. Évite les consignes répét
 une sous-question de calcul peut être simplement `$expression$` lorsque la tâche
 est claire. Le rendu met les formules en valeur à un corps constant et lisible.
 
+N'écris jamais les rubriques ou niveaux du manuel dans les énoncés : « Bilan »,
+« Automatismes », « ceinture jaune/verte/noire », « Questions flash », « Exercice
+Base/Facile », « Problème — », « Énigme — », etc. Ils appartiennent aux métadonnées. Conserve le titre concret
+d'un problème dans `title`. Une seule invitation à observer suffit : évite
+« Observe la figure. Observe le polygone. » et commence directement par la tâche
+quand elle désigne déjà le visuel.
+
 Chaque question d’un composite porte sa propre zone de réponse et peut porter
 sa propre `figure`. Par défaut, cette figure apparaît juste AVANT la question.
 Exemple : pyramide 1 avant A, pyramide 2 avant D ; jamais les deux figures ensemble
@@ -73,6 +112,13 @@ permet un placement explicite, que les scripts conservent.
 Utilise les lettres visibles sur la figure dans les questions (`g`, `h`, `i`).
 Chaque inconnue dessinée correspond à une question, en Base comme en Facile :
 s’il reste trois lettres à chercher, pose trois questions ou adapte la figure.
+Cette règle concerne aussi chaque dessin indépendant, angle coloré à identifier,
+personnage, ligne de tableau et figure candidate. Les points qui définissent un
+même dessin ne constituent pas tous des tâches séparées ; explicite les angles
+demandés sans annoncer « tous les angles » si tu n'en demandes qu'une partie.
+Déclare `figure.items` pour les ensembles d'éléments indépendants (voir le schéma).
+Après toute simplification, contrôle les libellés, les consignes « chaque/tous »,
+les indices de bonnes réponses et la totalité des objets encore affichés.
 
 ## 4. Aides après l’effort
 
@@ -88,6 +134,18 @@ Une aide fait 4 à 45 mots, tutoie, donne une méthode du cours, une étape de r
 ou un piège à éviter. Jamais de réponse, de calcul résolu ou d’indice de bonne case.
 Les aides restent retirables : sans elles, l’exercice doit rester complet.
 Base et problèmes : aides seulement si utiles. Facile : au moins une aide adaptée.
+
+Rédige les guides APRÈS avoir fixé les questions de la variante. Pour chacun,
+identifie la tâche précise et la difficulté qu'il débloque. Un guide de placement
+du rapporteur explique centre, sommet, zéro et côté ; un guide de lecture précise
+comment choisir la graduation ; un guide de calcul explique l'opération utile.
+La simple comparaison à l'angle droit n'aide ni à nommer un angle ni à additionner
+des mesures. N'utilise pas de guide par défaut pour tout un chapitre et ne recopie
+pas un guide d'une autre carte sans vérifier sa pertinence.
+Si les sous-questions demandent des démarches différentes, place plusieurs guides
+ciblés après les réponses concernées. Un guide global convient seulement à une
+méthode commune. Relis chaque guide avec sa question et sans le corrigé : il doit
+permettre une prochaine étape, sans donner le résultat ni désigner la bonne case.
 
 ## 5. Formats et vérifications
 

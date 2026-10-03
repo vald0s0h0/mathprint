@@ -18,10 +18,10 @@ vérifie tout ce qui est décrit ici et nomme chaque écart.
 
 | Champ | Obligatoire | Contenu |
 |---|---|---|
-| `source_number` | oui | Numéro imprimé dans le badge (`"39"`). Unique dans le fichier. |
+| `source_number` | oui | Numéro imprimé dans le badge (`"39"`) ; énigmes 6e numérotées à part : `"E1"`. Unique dans le fichier. |
 | `source_page` | oui | Id de page du payload où l'exercice COMMENCE (`"p075"`). |
 | `source_bbox_px` | recommandé | `[x0, y0, x1, y1]` en pixels de cette page : tout l'exercice (extrait montré au professeur à la relecture). |
-| `competency_code` | exercices | Code d'une compétence de `payload.competencies` (bandeau rose au-dessus de l'exercice). |
+| `competency_code` | exercices | Code d'une compétence de `payload.competencies` (3e : bandeau rose au-dessus de l'exercice ; 6e : titre numéroté en haut des pages d'exercices). |
 | `badge` | non | `exercice` (défaut), `flash` (questions flash), `expert` (mode expert), `probleme`, `enigme`. |
 | `calculator` | non | `autorisee` (défaut), `interdite` (calculatrice barrée), `necessaire` (pictogramme calculatrice). |
 | `title` | non | Titre d'un problème ou d'une énigme (« Course cycliste »). |
@@ -29,7 +29,7 @@ vérifie tout ce qui est décrit ici et nomme chaque écart.
 | `figure` | non | FIGURE commune aux deux niveaux, ou `null`. |
 | `variants` | oui | Exercice : `{"base": V, "facile": V}`. Problème/énigme : `{"original": V}` uniquement. |
 | `chapter_code` | problèmes | Code du chapitre, ex. `"A2"`. Omettre `competency_code` pour un problème. |
-| `difficulty` | problèmes | `1` Facile (vert), `2` Moyen (orange), `3` Difficile (noir). |
+| `difficulty` | problèmes | `1` Facile, `2` Moyen, `3` Difficile. 3e : titre vert/orange/noir ; 6e : ceinture jaune/verte/noire. |
 | `difficulty_source` | recommandé | `"manual_title"` ou `"estimated"` si le manuel n’a pas de code exploitable. |
 
 ## V — une variante (Base ou Facile)
@@ -57,6 +57,9 @@ Exercice à plusieurs questions :
 Une QUESTION est une question simple avec `figure` facultative, sans `solution`.
 La figure propre à une question s’imprime avant cette question ; `{{figure}}` dans
 son texte permet de préciser la position. Le contexte commun peut être `""`.
+Les énoncés ne contiennent pas de rubriques (« Bilan », « Automatismes », ceintures,
+niveaux, préfixes « Problème — » ou « Énigme — ») ni d'invitations à observer répétées. Les guides doivent correspondre à la
+tâche de leur portée ; plusieurs guides de sous-questions sont autorisés.
 Les marqueurs `{{aide}}` vont à la fin du `statement` concerné. Une aide de question
 s’imprime APRÈS sa zone de réponse ; une aide du contexte s’imprime à la FIN de la
 carte. Plusieurs aides distinctes sont permises. Ne numérote pas les questions :
@@ -92,6 +95,17 @@ utiles : `gcd`, `lcm`, `isprime`, `Mod`, `expand`, `factor`, `sqrt`, `Rational(3
 
 Trois sortes, par ordre de préférence (un tableau n'est JAMAIS une figure : Markdown
 dans l'énoncé).
+
+Pour un ensemble de dessins ou d'objets indépendants à traiter, ajoute `items`
+à la FIGURE : par exemple `"items": ["Angle 1", "Angle 2", "Angle 3"]` ou
+`"items": ["Figure 1", "Figure 2", "Figure 3"]`. Chaque libellé doit apparaître
+dans les questions ou les zones de réponse qui utilisent cette figure. Il s'agit
+des objets effectivement visibles, pas d'une liste tronquée aux questions retenues.
+Le validateur signale les éléments non repris ; la relecture visuelle vérifie
+que l'inventaire est complet. Pour un QCM de constructions, toutes les figures
+candidates doivent avoir leur choix. Une figure Facile conservée impose de garder
+toutes ses réponses, même si leur nombre dépasse l'objectif de simplification.
+Un dessin unique partagé n'exige pas un item pour chacun de ses points.
 
 ### Découpe du manuel — `crop`
 

@@ -3,8 +3,8 @@
 ## Commande « astra »
 
 Quand l'utilisateur écrit `astra <chapitre>` (ex. `astra "Fonctions affines"`,
-`astra B3`, `astra "Thalès" pages 116-118`), ou demande de lancer la pipeline
-Astra sur un chapitre :
+`astra "3e B3"`, `astra "Thalès" pages 116-118`, `astra "6e Angles"`), ou demande
+de lancer la pipeline Astra sur un chapitre (manuels Indigo 3e et 6e) :
 
 1. lis **entièrement** `agents/astra/ASTRA.md` puis `agents/astra/schema.md` ;
 2. suis la procédure d'ASTRA.md de bout en bout, sans t'arrêter entre les étapes,

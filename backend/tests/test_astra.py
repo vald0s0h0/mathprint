@@ -176,14 +176,99 @@ def test_typical_defects_are_named(db, tmp_path, mutate, needle):
     assert any(needle in e for e in errors), errors
 
 
-def test_base_with_several_guides_is_only_a_reserve(db, tmp_path):
+def test_several_distinct_guides_are_allowed_without_a_count_warning(db, tmp_path):
     exos = _good()
     v = exos[0]["variants"]["base"]
     v["statement"] = ("{{aide}} Développe chaque produit avant de comparer.\n"
                       "Relie chaque expression.\n{{aide}} Regroupe ensuite les termes semblables.")
     rep, _ = astra.validate(db, _run(db, tmp_path, exos))
     assert rep.ok, rep.errors
-    assert any("encadrés guide en Base" in w for w in rep.warnings)
+    assert not any("encadrés guide en Base" in w for w in rep.warnings)
+
+
+@pytest.mark.parametrize("intro", ["Bilan : ", "Automatismes, ceinture jaune. ",
+                                  "Questions flash : ", "Ceinture noire. ",
+                                  "Problème — ", "Énigme : ", "Exercice — "])
+def test_editorial_headings_are_rejected_in_questions(db, tmp_path, intro):
+    errors = _defect(db, tmp_path, lambda e: e[1]["variants"]["facile"]["questions"][0].update(
+        statement=intro + "Quelle est l'aire du rectangle ?"))
+    assert any("rubrique éditoriale" in e for e in errors)
+
+
+def test_editorial_check_keeps_legitimate_story_and_flags_repeated_observation():
+    assert not astra._editorial_problems({"statement": "Le bilan de l'association donne les recettes. Calcule leur somme."})
+    assert not astra._editorial_problems({"statement": "Problème de rangement : combien de boîtes faut-il ?"})
+    assert astra._editorial_problems({"statement": "Observe la figure.\nObserve le polygone."})
+
+
+def test_all_visible_angles_require_answers_even_in_facile(db, tmp_path):
+    ex = _good()[2]
+    ex["figure"]["items"] = [f"Angle {i}" for i in range(1, 7)]
+    for kind in astra.VARIANTS:
+        ex["variants"][kind] = {
+            "response_type": "checkbox_grid", "statement": "Classe chaque angle de la figure.",
+            "cols": ["Aigu", "Obtus"],
+            "rows": [{"label": f"Angle {i}", "correct": i % 2} for i in range(1, 7)]}
+    facile = ex["variants"]["facile"]
+    facile["statement"] += "\n{{aide}} Compare chaque ouverture à un coin de feuille."
+    facile["rows"] = facile["rows"][:3]
+    run = _run(db, tmp_path, [ex])
+    rep, _ = astra.validate(db, run)
+    assert any("Facile" in e and "Angle 6" in e and "sans question/réponse" in e for e in rep.errors)
+    # A failed preview must not silently omit cards or overwrite the last PDF.
+    (run / "preview").mkdir()
+    previous = run / "preview" / "preview.pdf"
+    previous.write_bytes(b"last reviewed preview")
+    with pytest.raises(SystemExit, match="PDF complet"):
+        astra.preview(db, run)
+    assert previous.read_bytes() == b"last reviewed preview"
+    with pytest.raises(SystemExit, match="Validation en échec"):
+        astra.persist(db, run)
+    # Restoring the complete answer grid resolves the error.
+    facile["rows"] = copy.deepcopy(ex["variants"]["base"]["rows"])
+    (run / astra.OUTPUT_FILE).write_text(json.dumps({"exercises": [ex]}))
+    rep, _ = astra.validate(db, run)
+    assert rep.ok, rep.errors
+
+
+def test_numbered_geo_candidates_must_all_remain_selectable():
+    fig = {"kind": "geo", "spec": {"texts": [{"text": str(i)} for i in (1, 2, 3)]}}
+    v = {"response_type": "qcm_single", "statement": "Choisis la figure.",
+         "choices": ["Figure 1", "Figure 3"], "correct": [1]}
+    assert any("Figure 2" in e for e in astra._figure_coverage_problems(v, fig))
+    v["choices"].insert(1, "Figure 2")
+    assert not astra._figure_coverage_problems(v, fig)
+
+
+def test_question_figure_can_serve_following_questions_but_not_another_panel():
+    fig = {"kind": "crop", "items": ["Angle a", "Angle b"]}
+    v = {"response_type": "composite", "statement": "", "questions": [
+        {"statement": "Mesure Angle a.", "figure": fig}, {"statement": "Mesure Angle b."}]}
+    assert not astra._figure_coverage_problems(v, None)
+    v["questions"][1]["figure"] = {"kind": "crop"}
+    assert any("Angle b" in e for e in astra._figure_coverage_problems(v, None))
+
+
+def test_repeated_guides_trigger_a_semantic_review_warning(db, tmp_path):
+    exos = _good()
+    guide = "Repère le sommet puis compare son ouverture à un angle droit."
+    for ex in exos:
+        ex["variants"]["facile"]["statement"] += "\n{{aide}} " + guide
+    rep, _ = astra.validate(db, _run(db, tmp_path, exos))
+    assert any("Guide identique dans 3 sources" in w for w in rep.warnings)
+
+
+def test_multiple_question_guides_survive_persistence(db, tmp_path):
+    ex = _good()[1]
+    run = _run(db, tmp_path, [ex])
+    rep, _ = astra.validate(db, run)
+    assert rep.ok, rep.errors
+    astra.persist(db, run)
+    row = db.query(IndigoExercise).filter_by(variant_kind="facile").one()
+    qs = row.expected_json["parts"]
+    assert "{{aide}}" in qs[0]["statement"]
+    assert "{{aide}}" in qs[2]["statement"]
+    assert "Compare les deux expressions" in qs[2]["statement"]
 
 
 def test_a_crop_whitens_its_masks_and_keeps_the_page_dpi(db, tmp_path):
@@ -204,6 +289,20 @@ def test_preview_is_a_real_copy_pdf(db, tmp_path):
     assert (out / "preview.pdf").stat().st_size > 0
     assert list(out.glob("page-*.png"))
     assert "n°44  Facile" in (out / "index.txt").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("badge", ["probleme", "enigme"])
+def test_printed_problem_keeps_title_without_editorial_type(db, tmp_path, badge):
+    import fitz
+    data = _good()
+    ex = data[0]
+    ex.update(badge=badge, title="Distance inaccessible", difficulty=1)
+    ex["variants"] = {"original": ex["variants"]["base"]}
+    out = astra.preview(db, _run(db, tmp_path, data))
+    with fitz.open(out / "preview.pdf") as pdf:
+        text = "\n".join(page.get_text() for page in pdf)
+    assert "Distance inaccessible" in text
+    assert "Problème" not in text and "Énigme" not in text
 
 
 def test_persist_writes_linked_drafts_once(db, tmp_path):
@@ -246,10 +345,45 @@ def test_persist_refuses_an_invalid_run(db, tmp_path):
 
 def test_chapter_lookup_is_tolerant():
     assert astra.find_chapter("thales")["code"] == "C2"
-    assert astra.find_chapter("B3")["name"] == "Fonctions affines"
+    assert astra.find_chapter("3e B3")["name"] == "Fonctions affines"
+    assert astra.find_chapter("B3", "3e")["name"] == "Fonctions affines"
     assert astra.find_chapter("CALCUL LITTERAL")["code"] == "A3"
     with pytest.raises(SystemExit):
         astra.find_chapter("fonction")                  # Fonctions / Fonctions affines
+
+
+def test_chapter_lookup_resolves_the_grade():
+    """Les codes A1, B3… existent dans les deux manuels : le niveau vient du
+    préfixe, de --grade, ou d'un nom propre à un seul manuel — jamais deviné."""
+    assert astra.find_chapter("Angles") == {**astra.find_chapter("6e B2"), "grade": "6e"}
+    assert astra.find_chapter("thales")["grade"] == "3e"
+    assert astra.find_chapter("6ème triangles")["code"] == "B3"   # exact : pas « Triangles rectangles »
+    assert astra.find_chapter("6e 10")["name"] == "Triangles"     # numéro du livre
+    for ambiguous in ("B3", "Probabilités"):
+        with pytest.raises(SystemExit):
+            astra.find_chapter(ambiguous)
+    with pytest.raises(SystemExit):
+        astra.find_chapter("6e Thalès")                 # chapitre absent du manuel 6e
+
+
+@pytest.mark.parametrize("grade", ["3e", "6e"])
+def test_chapter_table_matches_the_competency_framework(grade):
+    """Chaque chapitre de la table d'Astra existe dans le référentiel du niveau
+    (sinon `prepare` échoue : « aucune compétence en base »), et ses pages sont
+    ordonnées : leçon avant exercices, sans chevauchement d'un chapitre à l'autre."""
+    data = json.loads((REPO / "backend/app/data/competencies_fr.json").read_text(encoding="utf-8"))
+    fw = next(f for f in data["frameworks"] if f["grade_level"] == grade)
+    framework = {ch["code"]: [c["code"] for c in ch["competencies"]]
+                 for dom in fw["domains"] for ch in dom["chapters"]}
+    table = astra.chapters(grade)
+    assert [ch["code"] for ch in table] == list(framework)
+    last = 0
+    for ch in table:
+        (l0, l1), (e0, e1) = ch["lesson"], ch["exercises"]
+        assert last < l0 <= l1 < e0 <= e1, ch["code"]
+        last = e1
+        if "competency_pages" in ch:
+            assert list(ch["competency_pages"]) == framework[ch["code"]]
 
 
 def test_every_figure_example_of_the_prompt_renders():

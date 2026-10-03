@@ -341,6 +341,28 @@ def _match_competency(title: str, comps: list):
     return None
 
 
+# Numéro d'une compétence en tête de son titre de section (manuel 6e :
+# « 1 Lire et écrire des nombres entiers », que l'OCR peut rendre « (1) » ou « ① »).
+_HEADING_NUM = re.compile(r"^\s*(?:[\(\[]?\d{1,2}[\)\].]?|[\u2460-\u2473])\s+")
+
+
+def _section_competency(block: dict, comps: list):
+    """La compétence qu'annonce ce bloc s'il est un TITRE de section, sinon None.
+
+    Un titre de section peut porter le numéro de la compétence dans le
+    chapitre : on le reconnaît donc aussi une fois ce numéro retiré — sans
+    quoi « 1 Lire et écrire… » passerait pour l'exercice n°1."""
+    if block.get("type") != "title":
+        return None
+    text = str(block.get("content") or "").lstrip("# ")
+    match = _match_competency(text, comps)
+    if match is None:
+        bare = _HEADING_NUM.sub("", text, count=1)
+        if bare != text:
+            match = _match_competency(bare, comps)
+    return match
+
+
 def _flatten_text(blocks: list[dict]) -> str:
     lines = []
     for b in blocks:
@@ -400,14 +422,15 @@ def _segment_target(page: dict, target, comps: list) -> list[dict]:
     exercises: list[dict] = []
     for b in ordered:
         n = _leading_num(b.get("content"))
-        # un bloc-titre SANS numéro est un en-tête de section : il change la
-        # compétence courante s'il correspond au libellé d'une compétence
-        # (« Reconnaître un nombre premier »), sinon c'est une sous-section
-        # neutre (« QUESTIONS FLASH », « ÂGE EXPERT ») qu'on ignore.
+        # un bloc-titre qui reprend le libellé d'une compétence (« Reconnaître
+        # un nombre premier », « 2 Calculer avec des nombres entiers ») ouvre
+        # sa section ; un autre titre SANS numéro est une sous-section neutre
+        # (« QUESTIONS FLASH », « ÂGE EXPERT ») qu'on ignore.
+        m = _section_competency(b, comps)
+        if m is not None:
+            current, cur = m, None
+            continue
         if b.get("type") == "title" and n is None:
-            m = _match_competency(str(b.get("content") or ""), comps)
-            if m is not None:
-                current, cur = m, None
             continue
         if n is not None and (last == 0 or last < n <= last + _SEQ_GAP):
             last = n
@@ -2616,6 +2639,11 @@ def _published_record(db, ex: IndigoExercise, crops, figs) -> dict:
     if ex.has_figure and ex.figure_path and crop_abs_path(ex.figure_path).exists():
         fig_file = f"{ex.id}.png"
         shutil.copyfile(crop_abs_path(ex.figure_path), figs / fig_file)
+    spec = (ex.raw_ocr_json or {}).get("figure_spec") or {}
+    procedural = ({"type": spec["kind"], "params": spec["spec"]}
+                  if ex.has_figure and not ex.figure_box_json
+                  and spec.get("kind") in figures.DECLARATIVE_TYPES
+                  and isinstance(spec.get("spec"), dict) else None)
     return {
         "id": ex.id, "competency_code": comp.code if comp else "",
         "grade_level": ex.grade_level, "source_number": ex.source_number,
@@ -2629,6 +2657,7 @@ def _published_record(db, ex: IndigoExercise, crops, figs) -> dict:
         "correction_guide": ex.correction_guide,
         "correction_solution": ex.correction_solution,
         "has_figure": ex.has_figure, "crop_file": crop_file, "figure_file": fig_file,
+        **({"figure_json": procedural} if procedural else {}),
         "model": ex.model, "prompt_version": ex.prompt_version,
     }
 
@@ -2819,8 +2848,10 @@ def _seed_record(db, data: dict, rec: dict, figs) -> bool:
                                rec.get("grade_level", "3e"))
     if comp is None:
         return False  # compétence absente de ce déploiement : on saute proprement
-    fig_json = None
-    if rec.get("figure_file"):
+    procedural = rec.get("figure_json") or {}
+    fig_json = (figures.validate_figure(procedural)
+                if procedural.get("type") in figures.DECLARATIVE_TYPES else None)
+    if fig_json is None and rec.get("figure_file"):
         fig_json = {"type": "image", "params": {"path": str(figs / rec["figure_file"])}}
     db.add(GeneratedExercise(
         id=rec["id"], competency_id=comp.id,

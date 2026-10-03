@@ -47,8 +47,47 @@ def test_matching_points_align_with_multiline_and_fraction_labels():
     l,r=meta['left_points'],meta['right_points']
     assert len({p['x_pt'] for p in l}) == len({p['x_pt'] for p in r}) == 1
     assert [p['y_pt'] for p in l] == [p['y_pt'] for p in r]
-    assert r[0]['x_pt'] - l[0]['x_pt'] - l[0]['w_pt'] >= 14*pdfgen.mm-0.001
+    assert r[0]['x_pt'] - l[0]['x_pt'] - l[0]['w_pt'] >= pdfgen._MATCHING_LANE_MIN-0.001
     assert geo['width'] <= pdfgen.COL_W-2*pdfgen.CARD_PAD
+
+
+
+def test_matching_label_at_its_natural_width_never_wraps():
+    # « Marron en A » est le plus large de sa colonne : posé à sa largeur
+    # naturelle, il passait à la ligne sur une erreur d'arrondi.
+    left=['Marron en A','Violet en E','Bleu en E','Rouge en B']
+    right=[r'$\widehat{AEB}$',r'$\widehat{BAE}$',r'$\widehat{ABE}$',r'$\widehat{BED}$']
+    for width in (pdfgen.COL_W, 2*pdfgen.COL_W):
+        geo=pdfgen._matching_geometry(left,right,9,width)
+        assert all(len(lay['lines'])==1 for side in geo['layouts'] for lay in side)
+        assert geo['lane'] == pdfgen._MATCHING_LANE
+
+
+def test_matching_lane_narrows_before_a_label_wraps():
+    left=['Une étiquette plutôt longue ici']; right=['Une autre étiquette assez longue']
+    nat=sum(pdfgen._natural_w(v,9) for v in left+right)
+    width=nat+2*pdfgen.CARD_PAD+2*pdfgen._MATCHING_PASTILLE+5*pdfgen.mm+10*pdfgen.mm
+    geo=pdfgen._matching_geometry(left,right,9,width)
+    assert pdfgen._MATCHING_LANE_MIN <= geo['lane'] < pdfgen._MATCHING_LANE
+    assert all(len(lay['lines'])==1 for side in geo['layouts'] for lay in side)
+
+
+def test_qcm_number_list_stays_inline_next_to_its_box():
+    # « 2, 4, 3, 1 » ressemble à une série de valeurs : un choix de QCM reste
+    # pourtant un libellé en ligne, collé à sa case, pas une grille étalée.
+    choices=['2, 4, 3, 1','4, 2, 3, 1','1, 3, 4, 2']
+    items,_h,ncols=pdfgen._qcm_layout(choices,pdfgen.COL_W-2*pdfgen.CARD_PAD,9)
+    assert ncols == 3
+    for it in items:
+        assert len(it['lay']['lines'])==1 and it['lay']['lines'][0]['segs']
+        assert it['lw'] < 25*pdfgen.mm
+
+
+def test_single_line_label_is_centred_on_its_box():
+    lay=pdfgen._rich_layout('Angle 1',50*pdfgen.mm,9,parse_blocks=False)
+    top=pdfgen._centered_top(lay,100.0)
+    baseline=top-lay['lines'][0]['asc']
+    assert abs(baseline+9*0.35-100.0) < 1e-6
 
 
 def test_fraction_style_does_not_depend_on_latex_spelling():

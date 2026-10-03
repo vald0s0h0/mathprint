@@ -4,6 +4,7 @@
 Depuis la racine du repo, avec le Python du venv backend :
 
     backend/.venv/bin/python agents/astra/run.py prepare --chapter "Fonctions affines"
+    backend/.venv/bin/python agents/astra/run.py prepare --chapter "6e Angles"
     backend/.venv/bin/python agents/astra/run.py validate  [RUN]
     backend/.venv/bin/python agents/astra/run.py figures   [RUN]
     backend/.venv/bin/python agents/astra/run.py preview   [RUN] [--no-guides]
@@ -33,11 +34,13 @@ from app.db import SessionLocal                 # noqa: E402
 
 
 def _cmd_chapters(args, db):
-    for ch in astra.chapters(args.grade):
-        comps = astra.chapter_competencies(db, args.grade, ch["code"])
-        print(f"{ch['code']:>3}  {ch['name']:<45} leçon p.{ch['lesson'][0]}-{ch['lesson'][1]}"
-              f"  exercices p.{ch['exercises'][0]}-{ch['exercises'][1]}  "
-              f"({', '.join(c.short_id or c.code for c in comps)})")
+    for grade in [args.grade] if args.grade else astra.grades():
+        print(f"== {grade}")
+        for ch in astra.chapters(grade):
+            comps = astra.chapter_competencies(db, grade, ch["code"])
+            print(f"{ch['code']:>3}  {ch['name']:<45} leçon p.{ch['lesson'][0]}-{ch['lesson'][1]}"
+                  f"  exercices p.{ch['exercises'][0]}-{ch['exercises'][1]}  "
+                  f"({', '.join(c.short_id or c.code for c in comps)})")
 
 
 def _cmd_prepare(args, db):
@@ -47,7 +50,7 @@ def _cmd_prepare(args, db):
     lesson = [p["id"] for p in payload["pages"] if p["role"] == "lesson"]
     exos = [p["id"] for p in payload["pages"] if p["role"] == "exercises"]
     print(f"Run : {payload['run_id']}\nDossier : {run}")
-    print(f"Chapitre : {payload['chapter']['code']} — {payload['chapter']['name']}")
+    print(f"Chapitre : {payload['grade']} {payload['chapter']['code']} — {payload['chapter']['name']}")
     print("Compétences : " + " ; ".join(f"{c['code']} {c['label']}" for c in payload["competencies"]))
     print(f"Pages LEÇON ({len(lesson)}) : {', '.join(lesson)}")
     print(f"Pages EXERCICES ({len(exos)}) : {', '.join(exos)}")
@@ -117,11 +120,13 @@ def _cmd_persist(args, db):
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="astra", description="Pipeline Astra (GPT-6 Astra via Codex).")
-    ap.add_argument("--grade", default="3e")
+    ap.add_argument("--grade", default=None,
+                    help="Niveau (3e, 6e…) ; défaut : déduit du chapitre, ou préfixe « 6e B3 ».")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("chapters", help="Liste les chapitres et leurs pages.")
     p = sub.add_parser("prepare", help="Images des pages du chapitre + payload.json.")
-    p.add_argument("--chapter", required=True, help="Nom du chapitre (ou code, ex. B3).")
+    p.add_argument("--chapter", required=True,
+                   help="Nom du chapitre, code (B3) ou numéro du livre ; « 6e B3 » précise le niveau.")
     p.add_argument("--pages", help="Pages PDF des EXERCICES, ex. 76-80 (défaut : table).")
     p.add_argument("--lesson", help="Pages PDF de la LEÇON, ex. 74-75 (défaut : table).")
     p.add_argument("--dpi", type=int, default=astra.PAGE_DPI)

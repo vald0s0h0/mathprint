@@ -163,7 +163,7 @@ export default function Subjects() {
                 : STATUS_LABEL[a.status] ?? { label: a.status, color: 'gray' }
               return (
                 <Card key={a.id} withBorder padding="sm" style={done ? {
-                  opacity: 0.55, background: 'var(--mantine-color-gray-1)',
+                  opacity: 0.55, background: 'var(--mp-surface-muted)',
                 } : undefined}>
                   <Group justify="space-between" wrap="nowrap">
                     <Group gap="sm" wrap="nowrap" style={{ minWidth: 0 }}>

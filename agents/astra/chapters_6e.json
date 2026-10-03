@@ -1,0 +1,439 @@
+{
+ "_doc": "Chapitres du manuel élève Mission Indigo 6e (context/6_indigo.pdf, reconstruit depuis des captures de la liseuse par backend/scripts/indigo_screenshots_to_pdf.py). Numéros de page PDF 1-based ; chaque page PDF est une DOUBLE page imprimée (page PDF p = pages imprimées 2p-2 et 2p-1, page imprimée P = page PDF P//2+1). « lesson » = Cours + Savoir-faire, « exercises » = Exercices + Problèmes. « printed » = pages imprimées du sommaire (p. 2-3) ; « competency_pages » = page imprimée du cours de chaque compétence ; « book_chapter » = numéro du chapitre dans le livre. Domaines (guide pédagogique) : A = Nombres et calcul (chapitres 1-7), B = Géométrie (chapitres 8-13). Relevé sur le sommaire le 02/10/2026.",
+ "grade": "6e",
+ "chapters": [
+  {
+   "code": "A1",
+   "name": "Nombres entiers et données",
+   "book_chapter": 1,
+   "lesson": [
+    5,
+    7
+   ],
+   "exercises": [
+    8,
+    14
+   ],
+   "printed": {
+    "chapter": 5,
+    "lesson": [
+     8,
+     13
+    ],
+    "exercises": [
+     14,
+     21
+    ],
+    "problems": [
+     22,
+     26
+    ]
+   },
+   "competency_pages": {
+    "A1.1": 8,
+    "A1.2": 10,
+    "A1.3": 12
+   }
+  },
+  {
+   "code": "A2",
+   "name": "Nombres décimaux",
+   "book_chapter": 2,
+   "lesson": [
+    16,
+    18
+   ],
+   "exercises": [
+    19,
+    25
+   ],
+   "printed": {
+    "chapter": 27,
+    "lesson": [
+     30,
+     35
+    ],
+    "exercises": [
+     36,
+     43
+    ],
+    "problems": [
+     44,
+     48
+    ]
+   },
+   "competency_pages": {
+    "A2.1": 30,
+    "A2.2": 32,
+    "A2.3": 34
+   }
+  },
+  {
+   "code": "A3",
+   "name": "Comparaisons et opérations",
+   "book_chapter": 3,
+   "lesson": [
+    27,
+    29
+   ],
+   "exercises": [
+    30,
+    36
+   ],
+   "printed": {
+    "chapter": 49,
+    "lesson": [
+     52,
+     57
+    ],
+    "exercises": [
+     58,
+     65
+    ],
+    "problems": [
+     66,
+     70
+    ]
+   },
+   "competency_pages": {
+    "A3.1": 52,
+    "A3.2": 54,
+    "A3.3": 56
+   }
+  },
+  {
+   "code": "A4",
+   "name": "Division",
+   "book_chapter": 4,
+   "lesson": [
+    38,
+    40
+   ],
+   "exercises": [
+    41,
+    47
+   ],
+   "printed": {
+    "chapter": 71,
+    "lesson": [
+     74,
+     79
+    ],
+    "exercises": [
+     80,
+     87
+    ],
+    "problems": [
+     88,
+     92
+    ]
+   },
+   "competency_pages": {
+    "A4.1": 74,
+    "A4.2": 76,
+    "A4.3": 78
+   }
+  },
+  {
+   "code": "A5",
+   "name": "Fractions",
+   "book_chapter": 5,
+   "lesson": [
+    49,
+    51
+   ],
+   "exercises": [
+    52,
+    59
+   ],
+   "printed": {
+    "chapter": 93,
+    "lesson": [
+     96,
+     101
+    ],
+    "exercises": [
+     102,
+     111
+    ],
+    "problems": [
+     112,
+     116
+    ]
+   },
+   "competency_pages": {
+    "A5.1": 96,
+    "A5.2": 98,
+    "A5.3": 98,
+    "A5.4": 100
+   }
+  },
+  {
+   "code": "A6",
+   "name": "Proportionnalité",
+   "book_chapter": 6,
+   "lesson": [
+    61,
+    63
+   ],
+   "exercises": [
+    64,
+    70
+   ],
+   "printed": {
+    "chapter": 117,
+    "lesson": [
+     120,
+     125
+    ],
+    "exercises": [
+     126,
+     133
+    ],
+    "problems": [
+     134,
+     138
+    ]
+   },
+   "competency_pages": {
+    "A6.1": 120,
+    "A6.2": 122,
+    "A6.3": 124
+   }
+  },
+  {
+   "code": "A7",
+   "name": "Probabilités",
+   "book_chapter": 7,
+   "lesson": [
+    72,
+    74
+   ],
+   "exercises": [
+    75,
+    81
+   ],
+   "printed": {
+    "chapter": 139,
+    "lesson": [
+     142,
+     147
+    ],
+    "exercises": [
+     148,
+     155
+    ],
+    "problems": [
+     156,
+     160
+    ]
+   },
+   "competency_pages": {
+    "A7.1": 142,
+    "A7.2": 144,
+    "A7.3": 146
+   }
+  },
+  {
+   "code": "B1",
+   "name": "Droites et cercles",
+   "book_chapter": 8,
+   "lesson": [
+    83,
+    85
+   ],
+   "exercises": [
+    86,
+    92
+   ],
+   "printed": {
+    "chapter": 161,
+    "lesson": [
+     164,
+     169
+    ],
+    "exercises": [
+     170,
+     177
+    ],
+    "problems": [
+     178,
+     182
+    ]
+   },
+   "competency_pages": {
+    "B1.1": 164,
+    "B1.2": 166,
+    "B1.3": 168
+   }
+  },
+  {
+   "code": "B2",
+   "name": "Angles",
+   "book_chapter": 9,
+   "lesson": [
+    94,
+    97
+   ],
+   "exercises": [
+    98,
+    105
+   ],
+   "printed": {
+    "chapter": 183,
+    "lesson": [
+     186,
+     193
+    ],
+    "exercises": [
+     194,
+     203
+    ],
+    "problems": [
+     204,
+     208
+    ]
+   },
+   "competency_pages": {
+    "B2.1": 186,
+    "B2.2": 188,
+    "B2.3": 190,
+    "B2.4": 192
+   }
+  },
+  {
+   "code": "B3",
+   "name": "Triangles",
+   "book_chapter": 10,
+   "lesson": [
+    107,
+    109
+   ],
+   "exercises": [
+    110,
+    116
+   ],
+   "printed": {
+    "chapter": 209,
+    "lesson": [
+     212,
+     217
+    ],
+    "exercises": [
+     218,
+     225
+    ],
+    "problems": [
+     226,
+     230
+    ]
+   },
+   "competency_pages": {
+    "B3.1": 212,
+    "B3.2": 214,
+    "B3.3": 216
+   }
+  },
+  {
+   "code": "B4",
+   "name": "Périmètre et aire",
+   "book_chapter": 11,
+   "lesson": [
+    118,
+    121
+   ],
+   "exercises": [
+    122,
+    129
+   ],
+   "printed": {
+    "chapter": 231,
+    "lesson": [
+     234,
+     241
+    ],
+    "exercises": [
+     242,
+     251
+    ],
+    "problems": [
+     252,
+     256
+    ]
+   },
+   "competency_pages": {
+    "B4.1": 234,
+    "B4.2": 236,
+    "B4.3": 238,
+    "B4.4": 240
+   }
+  },
+  {
+   "code": "B5",
+   "name": "Symétrie axiale",
+   "book_chapter": 12,
+   "lesson": [
+    131,
+    134
+   ],
+   "exercises": [
+    135,
+    142
+   ],
+   "printed": {
+    "chapter": 257,
+    "lesson": [
+     260,
+     267
+    ],
+    "exercises": [
+     268,
+     277
+    ],
+    "problems": [
+     278,
+     282
+    ]
+   },
+   "competency_pages": {
+    "B5.1": 260,
+    "B5.2": 262,
+    "B5.3": 264,
+    "B5.4": 266
+   }
+  },
+  {
+   "code": "B6",
+   "name": "Espace et temps",
+   "book_chapter": 13,
+   "lesson": [
+    144,
+    146
+   ],
+   "exercises": [
+    147,
+    153
+   ],
+   "printed": {
+    "chapter": 283,
+    "lesson": [
+     286,
+     291
+    ],
+    "exercises": [
+     292,
+     299
+    ],
+    "problems": [
+     300,
+     304
+    ]
+   },
+   "competency_pages": {
+    "B6.1": 286,
+    "B6.2": 288,
+    "B6.3": 290
+   }
+  }
+ ]
+}

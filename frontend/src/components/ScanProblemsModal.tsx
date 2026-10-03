@@ -159,7 +159,7 @@ export default function ScanProblemsModal() {
 
         <Group align="flex-start" wrap="nowrap" gap="md">
           <AuthImg src={current.image} alt="Page non identifiée"
-            style={{ width: 240, maxWidth: '40%', border: '1px solid var(--mantine-color-gray-4)',
+            style={{ width: 240, maxWidth: '40%', border: '1px solid var(--mantine-color-default-border)',
               borderRadius: 4, objectFit: 'contain' }} />
           <Stack gap={6} style={{ flex: 1, minWidth: 0 }}>
             <Text size="xs" c="dimmed">

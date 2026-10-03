@@ -182,7 +182,7 @@ export default function Bank() {
                 borderRadius: 2,
                 background: competency.by_level[String(level)] > 0
                   ? 'var(--mantine-color-blue-5)'
-                  : 'var(--mantine-color-gray-3)',
+                  : 'var(--mp-border-subtle)',
               }} />
             </Tooltip>
           ))}

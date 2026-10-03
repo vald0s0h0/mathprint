@@ -71,8 +71,10 @@ def seed_frameworks(db: Session) -> dict[str, list[Competency]]:
 CAHIER_VERSION = "2026-cahier"
 # Niveaux refondus sur le sommaire du cahier (hiérarchie domaine > chapitre >
 # compétence, IDs courts type A1.1). Les autres niveaux gardent l'ancien
-# modèle (objectifs fins) en attendant leur propre refonte.
-CAHIER_GRADES = ("5e", "3e")
+# modèle (objectifs fins) en attendant leur propre refonte. La 6e suit le
+# sommaire du manuel Mission Indigo 6e (domaines du guide pédagogique :
+# A = Nombres et calcul, chapitres 1-7 ; B = Géométrie, chapitres 8-13).
+CAHIER_GRADES = ("6e", "5e", "3e")
 
 # rétro-compat : d'anciens imports/commentaires référencent ces noms.
 NEW_5E_VERSION = CAHIER_VERSION

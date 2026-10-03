@@ -294,7 +294,12 @@ class Settings(BaseSettings):
     # instance ; seuls les CROPS validés (petits PNG) sont ensuite publiés dans
     # le repo (backend/app/data/indigo/), eux livrés à tous. Résolution via le
     # même _resolve_manual_path que Sésamaths (essaie context/, data_dir/…).
+    # Le manuel élève 6e n'existe qu'en liseuse : on le reconstruit depuis des
+    # captures d'écran (backend/scripts/indigo_screenshots_to_pdf.py), au même
+    # format double page que le 3e. Son « prof » est le guide pédagogique.
     indigo_manuals: dict[str, dict[str, str]] = {
+        "6e": {"eleve": str(_REPO_ROOT / "context" / "6_indigo.pdf"),
+               "prof": str(_REPO_ROOT / "context" / "6_indigo_prof.pdf")},
         "3e": {"eleve": str(_REPO_ROOT / "context" / "3_indigo.pdf"),
                "prof": str(_REPO_ROOT / "context" / "3_indigo_prof.pdf")},
     }

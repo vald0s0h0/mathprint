@@ -646,6 +646,13 @@ _SERIES_GAP_Y = 0.9 * mm       # air entre deux lignes de valeurs
 _SERIES_PAD_Y = 0.8 * mm       # air au-dessus et en dessous de la série
 
 
+# Marge de repli des lignes (pt) : la largeur d'une ligne est une SOMME de
+# segments, la largeur naturelle d'un libellé la même somme calculée ailleurs —
+# sans tolérance, un libellé posé dans une colonne à sa juste largeur
+# (« Marron en A » dans un points-à-relier) passait à la ligne sur un 1e-14.
+WRAP_EPS = 0.5
+
+
 def _natural_w(text: str, fs: float) -> float:
     """Largeur du texte s'il ne se repliait jamais (besoin d'une colonne)."""
     lay = _rich_layout(text, 10_000.0, fs, parse_blocks=False)
@@ -923,12 +930,15 @@ def _rich_layout(text: str, width: float, fs: float, math_fs: float | None = Non
             # ligne suivante plutôt que de couper. Les formules très longues restent
             # sur leur propre ligne (toujours mises si la ligne est vide).
             is_math = seg[0] == "math"
-            should_wrap = cur and cur_w + add > avail and is_math
+            # tolérance WRAP_EPS : un libellé mis en page à sa largeur
+            # naturelle (colonne ajustée au contenu) ne doit pas se replier
+            # pour une erreur d'arrondi sur la somme des segments
+            should_wrap = cur and cur_w + add > avail + WRAP_EPS and is_math
             if should_wrap:
                 raw_lines.append(cur)
                 cur, cur_w = [seg], w
                 avail = max(1.0, width - cont_indent)
-            elif cur and cur_w + add > avail:
+            elif cur and cur_w + add > avail + WRAP_EPS:
                 raw_lines.append(cur)
                 cur, cur_w = [seg], w
                 avail = max(1.0, width - cont_indent)
@@ -983,6 +993,18 @@ def _rich_layout(text: str, width: float, fs: float, math_fs: float | None = Non
             })
             total_h += lh
     return {"lines": lines, "height": total_h}
+
+
+def _centered_top(lay: dict, cy: float) -> float:
+    """Haut de dessin d'un libellé centré verticalement sur `cy` (centre d'une
+    case, d'une pastille, d'une rangée). Une seule ligne : on centre sa hauteur
+    d'œil — centrer la boîte asc+desc+interligne posait le texte ~2 pt trop
+    haut, visiblement décalé de la case voisine. Plusieurs lignes : la boîte."""
+    lines = lay.get("lines") or []
+    if len(lines) == 1 and lines[0].get("segs"):       # ligne de texte (pas un bloc)
+        ln = lines[0]
+        return cy - ln.get("fs", 9) * 0.35 + ln["asc"]
+    return cy + lay["height"] / 2
 
 
 def _draw_rich(c: canvas.Canvas, x: float, y_top: float, layout: dict,
@@ -1199,7 +1221,7 @@ def _statement_layout(statement: str, width: float, font_size: float,
     # traverse inchangé.
     statement = statement_mod.normalize(statement)
     statement = _mark_fraction_blanks(statement, fraction_blank_indices)
-    figure = _figure_image(figure_json, min(width, 93 * mm), 63 * mm)
+    figure = _figure_image(figure_json, min(width, 93 * mm), 90 * mm)
 
     # PLACEMENT DE L'IMAGE (§ demande utilisateur) : si l'énoncé porte le
     # marqueur « {{figure}} » ET qu'une image est attachée, on coupe l'énoncé au
@@ -1311,7 +1333,11 @@ def _qcm_layout(choices: list[str], width: float,
     gap_x, gap_y, pad = 3.0 * mm, 1.6 * mm, 1.6 * mm
     n = len(choices)
     solo_w = max(10 * mm, width - gutter - pad)     # label sur une seule colonne
-    nat = [max((ln["w"] for ln in _rich_layout(ch, solo_w, font_size)["lines"]),
+    # Un choix est un libellé EN LIGNE, jamais un bloc de présentation : « 2, 4,
+    # 3, 1 » lu comme une série de valeurs s'étalait sur toute la colonne, loin
+    # de sa case (parse_blocks=False, comme les étiquettes de points à relier).
+    nat = [max((ln["w"] for ln in _rich_layout(ch, solo_w, font_size,
+                                               parse_blocks=False)["lines"]),
                default=0.0) for ch in choices]
     item_w = gutter + pad + (max(nat) if nat else 0.0) + gap_x
     # Le plafond géométrique vient de la largeur du plus grand libellé rendu :
@@ -1329,7 +1355,8 @@ def _qcm_layout(choices: list[str], width: float,
     while True:
         col_total = width / ncols
         lab_w = max(10 * mm, col_total - gutter - pad - (gap_x if ncols > 1 else 0.0))
-        lays = [_rich_layout(choice, lab_w, font_size) for choice in choices]
+        lays = [_rich_layout(choice, lab_w, font_size, parse_blocks=False)
+                for choice in choices]
         max_line_w = max((max((ln["w"] for ln in lay["lines"]), default=0.0)
                           for lay in lays), default=0.0)
         if max_line_w <= lab_w + 0.1 or ncols <= 1:
@@ -1373,6 +1400,8 @@ _TABLE_BANK_GAP = 6.0 * mm         # séparation VISIBLE entre les deux bandes d
 _TABLE_TWO_BANK_MIN_ROWS = 6       # au-delà, un tableau fin passe à 2 bandes (2de moitié à côté)
 _MATCHING_PASTILLE = 2.2 * mm
 _MATCHING_COL_GAP = 10.0 * mm
+_MATCHING_LANE = 14.0 * mm         # couloir de tracé confortable entre les pastilles
+_MATCHING_LANE_MIN = 8.0 * mm      # resserré avant de replier un libellé
 _MANUAL_DRAWING_H = 60.0 * mm
 
 
@@ -1583,12 +1612,18 @@ def _matching_geometry(left: list, right: list, font_size: float, width: float) 
     Colonnes de points fixes ; chaque rangée prend la hauteur du plus grand
     libellé des deux côtés. Le groupe entier est centré, le texte gauche
     aligné à droite. Le couloir de tracé ne contient aucune étiquette.
+
+    Un libellé ne se replie qu'en dernier recours : s'il manque de la place, le
+    couloir de tracé se resserre d'abord (jusqu'à _MATCHING_LANE_MIN), puis les
+    colonnes se partagent le reste au prorata de ce qui leur manque.
     """
-    dot, gap, lane = _MATCHING_PASTILLE, 2.5 * mm, 14 * mm
-    available = width - 2 * CARD_PAD - 2 * dot - 2 * gap - lane
+    dot, gap = _MATCHING_PASTILLE, 2.5 * mm
     groups = [left, right]
     natural = [max((_natural_w(str(v), font_size) for v in g), default=0) for g in groups]
     floors = [max((_unbreakable_w(str(v), font_size) for v in g), default=0) for g in groups]
+    room = width - 2 * CARD_PAD - 2 * dot - 2 * gap      # labels + couloir
+    lane = min(_MATCHING_LANE, max(_MATCHING_LANE_MIN, room - sum(natural)))
+    available = room - lane
     widths = natural if sum(natural) <= available else _fit_widths(natural, floors, available)
     layouts = [[_rich_layout(str(v), max(1, widths[i]), font_size, parse_blocks=False)
                 for v in g] for i, g in enumerate(groups)]
@@ -1756,7 +1791,7 @@ def _draw_matching_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float
                 continue
             lay = geo["layouts"][side][i]
             tx = lx if side == 0 else px + p + gap
-            _draw_rich(c, tx, cy + lay["height"] / 2, lay,
+            _draw_rich(c, tx, _centered_top(lay, cy), lay,
                        width=geo["widths"][side], right_aligned=side == 0)
             c.setStrokeColor(DROPOUT)
             c.setFillColor(white)
@@ -1830,7 +1865,7 @@ def _draw_grid_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float,
     c.setLineWidth(0.5)
     c.setFillColor(black)
     for j, lay in enumerate(geo["head_lays"]):               # libellés de colonnes
-        _draw_rich(c, grid_x + j * opt_w + 1 * mm, grid_top - (head_h - lay["height"]) / 2,
+        _draw_rich(c, grid_x + j * opt_w + 1 * mm, _centered_top(lay, grid_top - head_h / 2),
                    lay, centered=True, width=opt_w - 2 * mm)
     c.setStrokeColor(DROPOUT)
     c.line(x0, grid_top - head_h, x0 + grid_w, grid_top - head_h)
@@ -1849,7 +1884,7 @@ def _draw_grid_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float,
             c.line(x0, ry_top, x0 + grid_w, ry_top)
         lay = geo["row_lays"][i]                              # énoncé de la sous-question
         c.setFillColor(black)
-        _draw_rich(c, x0 + _GRID_CELL_PAD, ry_top - (row_h - lay["height"]) / 2, lay,
+        _draw_rich(c, x0 + _GRID_CELL_PAD, _centered_top(lay, ry_top - row_h / 2), lay,
                    width=rowlab_w - 2 * _GRID_CELL_PAD)
         for j in range(ncols):
             cx = grid_x + j * opt_w
@@ -2392,7 +2427,7 @@ def _composite_layout(item: dict, font_size: int, math_fs: int) -> dict:
             _apply_guides(statement_mod.normalize(p["statement"]), mode))
         before, after = statement_mod.split_figure_marker(body)
         # Figure propre à la question : avant elle par défaut ; marqueur explicite sinon.
-        fig = _figure_image(p.get("figure"), COL_W - 2 * CARD_PAD, 63 * mm)
+        fig = _figure_image(p.get("figure"), COL_W - 2 * CARD_PAD, 90 * mm)
         before_lay = _rich_layout(before if after is not None else "", COL_W - 2 * CARD_PAD, font_size)
         question = after if after is not None else body
         frag = _rich_layout(f"{chr(97 + k)}. " + question, COL_W - 2 * CARD_PAD,

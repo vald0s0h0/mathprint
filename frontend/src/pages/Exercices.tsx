@@ -304,7 +304,7 @@ function ExerciseCard({ ex, onEdit, onChange, onDelete, selectable, selected, on
     <Box style={{
       minWidth: 0, padding: 8, borderRadius: 8,
       outline: selected ? '2px solid var(--mantine-color-blue-5)' : undefined,
-      background: done ? 'var(--mantine-color-gray-1)' : undefined,
+      background: done ? 'var(--mp-surface-muted)' : undefined,
       opacity: done ? 0.72 : undefined,
     }}>
       <ExercisePrintPreview exercise={ex} color={color} showGuide showCorrection showAnswers
@@ -476,7 +476,7 @@ function EditModal({ ex, comps, onClose, onSaved, onChange, onFamilyChanged }: {
           autosize minRows={3}
           value={form.statement} onChange={(e) => setForm({ ...form, statement: e.currentTarget.value })} />
         {/* aperçu live : ce que verra l'élève (pastilles a./b./1., puces, cases) */}
-        <Paper withBorder p="xs" radius="sm" bg="var(--mantine-color-gray-0)">
+        <Paper withBorder p="xs" radius="sm" bg="var(--mp-surface-sunken)">
           <Text size="10px" c="dimmed" mb={2}>Aperçu</Text>
           <ExercisePrintPreview exercise={form} color={badgeColor(form)} />
         </Paper>
@@ -584,7 +584,7 @@ function EditModal({ ex, comps, onClose, onSaved, onChange, onFamilyChanged }: {
             {form.figure_url && (
               <AuthImg src={form.figure_url} reloadKey={figV} alt="figure"
                 style={{ maxWidth: 360, maxHeight: 180, display: 'block', marginBottom: 12,
-                  border: '1px solid var(--mantine-color-gray-3)' }} />
+                  border: '1px solid var(--mp-border-subtle)' }} />
             )}
             {form.figure_box && <FigureEditor exerciseId={form.id} figureBox={form.figure_box}
               busy={busy} onApply={editFigure} />}
@@ -633,7 +633,7 @@ function PagePeek({ grade, which, info }: { grade: string; which: 'eleve' | 'pro
       </Group>
       <AuthImg src={`/api/indigo/manual/page.png?which=${which}&grade_level=${grade}&index=${pg - 1}`}
         reloadKey={pg} alt={`page ${pg}`}
-        style={{ width: 150, height: 205, objectFit: 'contain', border: '1px solid var(--mantine-color-gray-3)', borderRadius: 4 }} />
+        style={{ width: 150, height: 205, objectFit: 'contain', border: '1px solid var(--mp-border-subtle)', borderRadius: 4 }} />
     </Stack>
   )
 }

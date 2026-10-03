@@ -159,7 +159,8 @@ def render(params: dict, *, dry: bool = False) -> bytes:
     spec = fk.as_dict(params, "params")
     pts = _points(spec)
     has_axes = spec.get("axes") is not None
-    w_mm = fk.width_mm(spec)
+    w_mm = fk.readable_width(spec, labels=sum(bool(p["label"]) and not p["hide"]
+                                             for p in pts.values()), axes=spec.get("axes"))
     if has_axes:
         axes_spec = fk.as_dict(spec["axes"], "axes")
         xr = fk.as_dict(axes_spec.get("x") or {}, "axes.x")
@@ -172,12 +173,13 @@ def render(params: dict, *, dry: bool = False) -> bytes:
     if bw <= 0 or bh <= 0:
         fail("points", "figure dégénérée (tous les points alignés sur un axe)")
     h_mm = w_mm * bh / bw
-    if h_mm > fk.MAX_HEIGHT_MM * 1.5:
+    if h_mm > fk.MAX_HEIGHT_MM - 12:
         # figure très haute : on réduit la largeur pour tenir en hauteur
-        w_mm = w_mm * fk.MAX_HEIGHT_MM * 1.5 / h_mm
-        h_mm = fk.MAX_HEIGHT_MM * 1.5
+        w_mm = w_mm * (fk.MAX_HEIGHT_MM - 12) / h_mm
+        h_mm = fk.MAX_HEIGHT_MM - 12
     fig = fk.new_figure(w_mm, h_mm)
-    ax = fig.add_axes([0, 0, 1, 1])
+    ax = fig.add_axes([0.06, 0.06, 0.88, 0.88])
+    labels = fk.labels_for(ax)
     if has_axes:
         fk.draw_axes(ax, spec["axes"], "axes", equal=True)
     else:
@@ -205,9 +207,8 @@ def render(params: dict, *, dry: bool = False) -> bytes:
                 linestyle=fk.line_style(f.get("style"), f"functions[{i}].style"))
         if f.get("label"):
             k = int(len(xs) * 0.85)
-            ax.annotate(fk.label(f["label"], f"functions[{i}].label", max_len=20),
-                        (xs[k], ys[k]), xytext=(4, 4), textcoords="offset points",
-                        fontsize=fk.FONT_SIZE, color=fk.SERIES_COLORS[i % 6])
+            labels.add(fk.label(f["label"], f"functions[{i}].label", max_len=20),
+                       (xs[k], ys[k]), color=fk.SERIES_COLORS[i % 6])
 
     for i, poly in enumerate(_items(spec, "polygons")):
         where = f"polygons[{i}]"
@@ -244,8 +245,7 @@ def render(params: dict, *, dry: bool = False) -> bytes:
         if ln.get("label"):
             d = (q - p) / np.linalg.norm(q - p)
             anchor = q - d * (bw * 0.06)
-            ax.annotate(fk.label(ln["label"], f"{where}.label", max_len=20), anchor,
-                        xytext=(3, 4), textcoords="offset points", fontsize=fk.FONT_SIZE)
+            labels.add(fk.label(ln["label"], f"{where}.label", max_len=20), anchor)
 
     for i, r in enumerate(_items(spec, "rays")):
         where = f"rays[{i}]"
@@ -321,9 +321,10 @@ def render(params: dict, *, dry: bool = False) -> bytes:
             d = np.array(_POS[p["pos"]]) if p["pos"] else p["xy"] - centroid
             n = np.linalg.norm(d)
             d = d / n if n > 1e-9 else np.array([0.7, 0.7])
-            ax.annotate(p["label"], p["xy"], xytext=(d[0] * 7, d[1] * 7),
-                        textcoords="offset points", ha="center", va="center",
-                        fontsize=fk.FONT_SIZE + 0.5, color=fk.INK)
+            labels.add(p["label"], p["xy"], direction=d, fontsize=fk.FONT_SIZE + 0.5)
+    if has_axes:
+        fk.space_tick_labels(ax)
+    labels.place()
     if dry:
         import matplotlib.pyplot as plt
         fig.canvas.draw()          # force le rendu mathtext : une formule qui casse casse ici
@@ -342,13 +343,7 @@ def _side_label(ax, a, b, text, centroid, scale, side):
         normal = -normal
     if side == "left":
         normal = np.array([-d[1], d[0]])
-    off = normal * 5
-    # alignement tourné vers l'extérieur : un texte long (« 3 cm ») ne
-    # chevauche jamais le segment qu'il cote
-    ha = "left" if normal[0] > 0.35 else "right" if normal[0] < -0.35 else "center"
-    va = "bottom" if normal[1] > 0.35 else "top" if normal[1] < -0.35 else "center"
-    ax.annotate(text, mid, xytext=(off[0], off[1]), textcoords="offset points",
-                ha=ha, va=va, fontsize=fk.FONT_SIZE, color=fk.INK)
+    fk.labels_for(ax).add(text, mid, direction=normal, radial=True)
 
 
 def _angle(ax, pts, g: dict, where: str, span: float) -> None:
@@ -359,7 +354,9 @@ def _angle(ax, pts, g: dict, where: str, span: float) -> None:
     if np.linalg.norm(u) < 1e-9 or np.linalg.norm(v) < 1e-9:
         fail(where, "un côté de l'angle est de longueur nulle")
     u, v = u / np.linalg.norm(u), v / np.linalg.norm(v)
-    size = span * 0.07 * float(g.get("size", 1) or 1)
+    # Un arc dépend de SES côtés, pas de la largeur de toute une planche.
+    size = min(np.linalg.norm(a-o), np.linalg.norm(b-o), span) * 0.18 * fk.num(
+        g.get("size", 1) or 1, f"{where}.size", 0.1, 4)
     if g.get("right"):
         p1, p3 = o + u * size * 0.8, o + v * size * 0.8
         p2 = p1 + v * size * 0.8
@@ -377,8 +374,9 @@ def _angle(ax, pts, g: dict, where: str, span: float) -> None:
     if g.get("label"):
         bis = u + v
         bis = bis / np.linalg.norm(bis) if np.linalg.norm(bis) > 1e-9 else np.array([-u[1], u[0]])
-        ax.annotate(fk.label(g["label"], f"{where}.label", max_len=20), o + bis * size * 1.9,
-                    ha="center", va="center", fontsize=fk.FONT_SIZE - 0.5, color=fk.INK)
+        fk.labels_for(ax).add(fk.label(g["label"], f"{where}.label", max_len=20),
+                             o + bis * size * (1 + 0.22 * (marks-1)),
+                             direction=bis, radial=True, distance=5)
 
 
 def _ticks(ax, a, b, n: int, span: float) -> None:

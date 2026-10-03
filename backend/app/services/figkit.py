@@ -28,12 +28,12 @@ from . import mathrender  # noqa: E402
 RENDER_DPI = 300
 # version du rendu : entre dans la clé du cache disque (services.figures), pour
 # qu'une amélioration du moteur ne serve jamais une ancienne image
-ENGINE_VERSION = "2"
+ENGINE_VERSION = "3.4"
 DEFAULT_WIDTH_MM = 70.0
 MIN_WIDTH_MM, MAX_WIDTH_MM = 25.0, 93.0
-MAX_HEIGHT_MM = 63.0            # plafond de pdfgen._figure_image
+MAX_HEIGHT_MM = 90.0            # plafond de pdfgen._figure_image
 INK = "#1A1A1A"
-FONT_SIZE = 9.5
+FONT_SIZE = 10.0
 
 
 class FigureSpecError(ValueError):
@@ -125,9 +125,129 @@ def width_mm(params: dict, where: str = "width_mm") -> float:
 
 
 def new_figure(w_mm: float, h_mm: float):
-    h_mm = max(15.0, min(h_mm, MAX_HEIGHT_MM * 1.6))
+    h_mm = max(20.0, min(h_mm, MAX_HEIGHT_MM - 10))
     fig = plt.figure(figsize=(w_mm / 25.4, h_mm / 25.4), dpi=RENDER_DPI)
     return fig
+
+
+def readable_width(params: dict, *, labels: int = 0, axes: dict | None = None) -> float:
+    """La largeur demandée est un minimum ; la densité peut l'augmenter.
+
+    On garde la taille des lettres, même sur une petite figure. Les graduations
+    conservent toutes leurs valeurs et leur pas : on agrandit le repère.
+    """
+    wanted = max(width_mm(params), min(MAX_WIDTH_MM, 48 + labels * 2.5))
+    if axes:
+        for axis in ("x", "y"):
+            a = as_dict(axes.get(axis) or {}, f"axes.{axis}")
+            lo = num(a.get("min", -5), f"axes.{axis}.min")
+            hi = num(a.get("max", 5), f"axes.{axis}.max")
+            step = num(a.get("step", 1), f"axes.{axis}.step", 1e-6, 1e4)
+            if a.get("tick_labels", True):
+                wanted = max(wanted, 18 + (hi - lo) / step * 6)
+    return min(MAX_WIDTH_MM, wanted)
+
+
+class LabelLayout:
+    """Place les étiquettes en coordonnées d'impression, après tous les tracés.
+
+    Les boîtes mesurées par matplotlib évitent textes, points, traits et arcs.
+    La direction fournie est une préférence, pas un placement aveugle. Les
+    cotes et angles limitent leurs candidats à leur normale/bissectrice pour
+    rester associés au bon objet. Aucun point de la figure n'est déplacé.
+    """
+
+    def __init__(self, ax):
+        self.ax = ax
+        self.items = []
+
+    def add(self, text, xy, *, direction=(1, 1), distance=4, radial=False,
+            fontsize=FONT_SIZE, color=INK, max_extra=12):
+        if not text:
+            return
+        artist = self.ax.annotate(
+            text, xy, xytext=(0, 0), textcoords="offset points",
+            ha="center", va="center", fontsize=fontsize, color=color,
+            zorder=10, annotation_clip=False,
+            bbox={"facecolor": "white", "edgecolor": "none", "pad": 0.12})
+        self.items.append((artist, np.asarray(direction, dtype=float), distance, radial, max_extra))
+        return artist
+
+    def place(self, *, outside_penalty=100):
+        if not self.items:
+            return
+        from matplotlib.transforms import Bbox
+
+        fig = self.ax.figure
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+        px = fig.dpi / 72
+        movable = {a for a, *_ in self.items}
+        occupied = [t.get_window_extent(renderer).expanded(1.06, 1.15)
+                    for t in self.ax.texts if t not in movable and t.get_text()]
+        occupied += [t.get_window_extent(renderer).expanded(1.08, 1.15)
+                     for axis in (self.ax.xaxis, self.ax.yaxis)
+                     for t in axis.get_ticklabels() if t.get_visible() and t.get_text()]
+        paths, dots = [], []
+        for line in self.ax.lines:
+            path = line.get_transform().transform_path(line.get_path())
+            if line.get_linestyle() not in ("None", "none", "", " "):
+                paths.append(path)
+            if line.get_marker() not in ("None", "none", "", " ", None):
+                r = (line.get_markersize() / 2 + 1.5) * px
+                dots += [Bbox.from_extents(x-r, y-r, x+r, y+r)
+                         for x, y in path.vertices if np.isfinite([x, y]).all()]
+        for patch in self.ax.patches:
+            paths.append(patch.get_transform().transform_path(patch.get_path()))
+        for spine in self.ax.spines.values():
+            if spine.get_visible() and self.ax.axison:
+                paths.append(spine.get_transform().transform_path(spine.get_path()))
+        for collection in self.ax.collections:
+            offsets = collection.get_offset_transform().transform(collection.get_offsets())
+            r = 3 * px
+            dots += [Bbox.from_extents(x-r, y-r, x+r, y+r) for x, y in offsets]
+
+        # Les points les plus proches d'autres points sont traités d'abord.
+        anchors = [self.ax.transData.transform(a.xy) for a, *_ in self.items]
+        def clearance(i):
+            return min((np.linalg.norm(anchors[i]-p) for j, p in enumerate(anchors)
+                        if i != j), default=float("inf"))
+
+        for i in sorted(range(len(self.items)), key=clearance):
+            artist, direction, distance, radial, max_extra = self.items[i]
+            norm = np.linalg.norm(direction)
+            direction = direction / norm if norm > 1e-9 else np.array([0., 1.])
+            initial = artist.get_window_extent(renderer)
+            half_w, half_h = initial.width / (2*px), initial.height / (2*px)
+            candidates = []
+            rotations = [0] if radial else [0, 45, -45, 90, -90, 135, -135, 180]
+            for extra in (v for v in (0, 4, 8, 12, 20, 28, 36) if v <= max_extra):
+                for turn in rotations:
+                    theta = math.radians(turn)
+                    d = np.array([direction[0]*math.cos(theta)-direction[1]*math.sin(theta),
+                                  direction[0]*math.sin(theta)+direction[1]*math.cos(theta)])
+                    # Distance au bord réel du texte, pas seulement à son centre.
+                    radius = distance + abs(d[0])*half_w + abs(d[1])*half_h + extra
+                    off = d * radius
+                    artist.set_position(tuple(off))
+                    bb = artist.get_window_extent(renderer).padded(1.1 * px)
+                    overlap = sum(max(0, min(bb.x1,b.x1)-max(bb.x0,b.x0)) *
+                                  max(0, min(bb.y1,b.y1)-max(bb.y0,b.y0))
+                                  for b in occupied + dots) / px**2
+                    crossings = sum(path.intersects_bbox(bb, filled=False) for path in paths)
+                    outside = (max(0, fig.bbox.x0-bb.x0) + max(0, bb.x1-fig.bbox.x1) +
+                               max(0, fig.bbox.y0-bb.y0) + max(0, bb.y1-fig.bbox.y1)) / px
+                    score = overlap * 1000 + crossings * 200 + outside * outside_penalty + extra + abs(turn)/45
+                    candidates.append((score, tuple(off), bb))
+            _, offset, bb = min(candidates, key=lambda v: v[0])
+            artist.set_position(offset)
+            occupied.append(bb)
+
+
+def labels_for(ax) -> LabelLayout:
+    if not hasattr(ax, "_figure_labels"):
+        ax._figure_labels = LabelLayout(ax)
+    return ax._figure_labels
 
 
 def to_png(fig) -> bytes:
@@ -137,6 +257,35 @@ def to_png(fig) -> bytes:
                 bbox_inches="tight", pad_inches=0.04)
     plt.close(fig)
     return buf.getvalue()
+
+
+def space_tick_labels(ax) -> None:
+    """Espace les valeurs d'un repère dense en conservant ses traits/graduations.
+
+    Les valeurs sont écrites à intervalles réguliers (2, 5, 10… graduations),
+    sans réduire leur police. Les bornes et zéro sont prioritaires.
+    """
+    ax.figure.canvas.draw()
+    renderer = ax.figure.canvas.get_renderer()
+    for axis in (ax.xaxis, ax.yaxis):
+        labels = axis.get_ticklabels()
+        boxes = [t.get_window_extent(renderer).padded(2 * ax.figure.dpi / 72)
+                 for t in labels]
+        stride = 1
+        for candidate in (1, 2, 5, 10, 20, 50, 100):
+            selected = [i for i, t in enumerate(labels) if t.get_text() and i % candidate == 0]
+            if all(not boxes[a].overlaps(boxes[b]) for a, b in zip(selected, selected[1:])):
+                stride = candidate
+                break
+        priority = [i for i, t in enumerate(labels) if t.get_text() in ("0", "O")]
+        priority += [i for i in (0, len(labels)-1) if 0 <= i < len(labels)]
+        priority += [i for i in range(len(labels)) if i % stride == 0]
+        visible = []
+        for i in dict.fromkeys(priority):
+            if labels[i].get_text() and not any(boxes[i].overlaps(boxes[j]) for j in visible):
+                visible.append(i)
+        for i, t in enumerate(labels):
+            t.set_visible(i in visible)
 
 
 # ------------------------------------------------------------ expressions
@@ -265,9 +414,9 @@ def draw_axes(ax, spec: dict, where: str, *, equal: bool) -> dict:
     origin = spec.get("origin", "")
     crosses = x0 <= 0 <= x1 and y0 <= 0 <= y1
     ax.set_xticklabels([fmt(v) if xtl and not (abs(v) < 1e-12 and (origin or (crosses and x0 < 0)))
-                        else "" for v in xt], fontsize=FONT_SIZE - 1.5)
+                        else "" for v in xt], fontsize=FONT_SIZE - 1)
     ax.set_yticklabels([fmt(v) if ytl and not (abs(v) < 1e-12 and (crosses or origin))
-                        else "" for v in yt], fontsize=FONT_SIZE - 1.5)
+                        else "" for v in yt], fontsize=FONT_SIZE - 1)
     if xm:
         ax.set_xticks(ticks(x0, x1, xm), minor=True)
     if ym:
@@ -285,23 +434,22 @@ def draw_axes(ax, spec: dict, where: str, *, equal: bool) -> dict:
     for side in ("left", "bottom"):
         ax.spines[side].set_linewidth(0.9)
         ax.spines[side].set_color(INK)
-    ax.tick_params(which="both", length=2.5, width=0.6, colors=INK, pad=1.5)
+    ax.tick_params(which="both", length=2.5, width=0.6, colors=INK, pad=3)
     if spec.get("arrows", True):
         ax.plot(1, 0 if y0 <= 0 <= y1 else y0, ">", color=INK, markersize=3.5,
                 transform=ax.get_yaxis_transform(), clip_on=False)
         ax.plot(0 if x0 <= 0 <= x1 else x0, 1, "^", color=INK, markersize=3.5,
                 transform=ax.get_xaxis_transform(), clip_on=False)
     if xl:
-        ax.annotate(xl, xy=(1, 0 if y0 <= 0 <= y1 else y0),
-                    xycoords=("axes fraction", "data"), xytext=(0, -13),
-                    textcoords="offset points", ha="right", va="top", fontsize=FONT_SIZE - 1)
+        ax.set_xlabel(xl, fontsize=FONT_SIZE - 1, labelpad=9)
+        ax.xaxis.set_label_coords(1, -0.11)
+        ax.xaxis.label.set_horizontalalignment("right")
     if yl:
-        ax.annotate(yl, xy=(0 if x0 <= 0 <= x1 else x0, 1),
-                    xycoords=("data", "axes fraction"), xytext=(4, 2),
-                    textcoords="offset points", ha="left", va="bottom", fontsize=FONT_SIZE - 1)
+        ax.text(0, 1.06, yl, transform=ax.transAxes, ha="left", va="bottom",
+                fontsize=FONT_SIZE - 1)
     if origin and crosses:
-        ax.annotate(label(origin, f"{where}.origin", max_len=4), xy=(0, 0), xytext=(-3, -3),
-                    textcoords="offset points", ha="right", va="top", fontsize=FONT_SIZE - 1.5)
+        labels_for(ax).add(label(origin, f"{where}.origin", max_len=4), (0, 0),
+                           direction=(-1, -1), fontsize=FONT_SIZE - 1)
     if spec.get("break"):
         # cassure d'axe : double zigzag près de l'origine du cadre
         for axis in ("x", "y"):

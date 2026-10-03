@@ -4,7 +4,7 @@ Astra est l'agent Codex `gpt-6-astra` lancé depuis le chat VSCode : il LIT
 lui-même les images des pages du manuel et ÉCRIT `astra_output.json`. Ce module
 fait tout le reste, de façon déterministe, en réutilisant le backend MathPrint :
 
-  prepare  : chapitre → pages (chapters_3e.json) → images PNG + payload.json
+  prepare  : chapitre → pages (chapters_<niveau>.json) → images PNG + payload.json
   validate : astra_output.json → contrat MathPrint (validateur partagé, sympy,
              barème codé) + règles Astra (CV seulement, guides) → report.json
   figures  : découpes (bbox + masques blanchis) et figures geo/chart → PNG
@@ -28,7 +28,7 @@ HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 
 MODEL = "gpt-6-astra"
-PROMPT_VERSION = "astra-v2-layout-problems"
+PROMPT_VERSION = "astra-v3-figure-coverage-guides"
 PIPELINE = "astra"
 VARIANTS = ("base", "facile")
 VARIANT_LEVEL = {"facile": 1, "base": 2}
@@ -51,7 +51,6 @@ COMPOSITE = "composite"
 BADGES = ("exercice", "flash", "expert", "probleme", "enigme")
 CALCULATORS = ("interdite", "autorisee", "necessaire")
 GUIDE_MIN_WORDS, GUIDE_MAX_WORDS = 4, 45
-BASE_GUIDES_WARN = 1                    # Base : au-delà d'un encadré, c'est suspect
 MATCH_MIN, MATCH_MAX = 2, 6
 PAGE_DPI = 220                          # ≈ résolution native du manuel (2560 px par double page)
 OUTPUT_FILE = "astra_output.json"
@@ -98,6 +97,11 @@ def dump_json(path: Path, data) -> None:
 
 
 # ================================================================== PREPARE
+def grades() -> list[str]:
+    """Niveaux dotés d'une table de chapitres (chapters_<niveau>.json)."""
+    return sorted(p.stem.split("_", 1)[1] for p in HERE.glob("chapters_*.json"))
+
+
 def chapters(grade: str = "3e") -> list[dict]:
     path = HERE / f"chapters_{grade}.json"
     if not path.exists():
@@ -105,18 +109,37 @@ def chapters(grade: str = "3e") -> list[dict]:
     return load_json(path)["chapters"]
 
 
-def find_chapter(query: str, grade: str = "3e") -> dict:
-    """Chapitre par nom (accents/casse ignorés, correspondance partielle) ou code."""
+# « 6e B3 », « 6eme Angles », « 3e: Thalès » : niveau en tête de la demande
+_GRADE_PREFIX_RE = re.compile(r"^([3-6])\s*(?:e|eme)\b[\s:/-]*")
+
+
+def find_chapter(query: str, grade: str | None = None) -> dict:
+    """Chapitre par nom (accents/casse ignorés, correspondance partielle), par
+    code (« B3 ») ou par numéro du livre (« 8 ») ; renvoie le chapitre avec son
+    niveau sous la clé "grade".
+
+    Sans niveau (ni `grade`, ni préfixe « 6e … » dans la demande), on cherche
+    dans TOUS les manuels : les codes A1, B3… existent en 3e comme en 6e, une
+    demande qui désigne deux chapitres est refusée plutôt que devinée."""
     q = fold(query)
-    chs = chapters(grade)
-    for ch in chs:
-        if q in (fold(ch["code"]), fold(ch["name"])):
-            return ch
-    hits = [ch for ch in chs if q and (q in fold(ch["name"]) or fold(ch["name"]) in q)]
+    m = _GRADE_PREFIX_RE.match(q)
+    if m:
+        asked = f"{m.group(1)}e"
+        if grade and grade != asked:
+            raise SystemExit(f"Niveaux contradictoires : {query!r} avec --grade {grade}.")
+        grade, q = asked, q[m.end():].strip()
+    pool = [(g, ch) for g in ([grade] if grade else grades()) for ch in chapters(g)]
+    hits = [(g, ch) for g, ch in pool
+            if q in (fold(ch["code"]), fold(ch["name"]), str(ch.get("book_chapter", "")))]
+    if not hits:
+        hits = [(g, ch) for g, ch in pool
+                if q and not q.isdigit() and (q in fold(ch["name"]) or fold(ch["name"]) in q)]
     if len(hits) == 1:
-        return hits[0]
-    names = ", ".join(f"« {c['name']} » ({c['code']})" for c in (hits or chs))
-    raise SystemExit(f"Chapitre ambigu ou inconnu : {query!r}. Choisis parmi : {names}")
+        g, ch = hits[0]
+        return {**ch, "grade": g}
+    names = ", ".join(f"« {g} {c['name']} » ({c['code']})" for g, c in (hits or pool))
+    raise SystemExit(f"Chapitre ambigu ou inconnu : {query!r}. Précise au besoin le niveau "
+                     f"(ex. « 6e B3 ») et choisis parmi : {names}")
 
 
 def chapter_competencies(db, grade: str, chapter_code: str) -> list:
@@ -139,7 +162,7 @@ def _span(value: str) -> tuple[int, int]:
     return a, b
 
 
-def prepare(db, chapter_query: str, *, grade: str = "3e", pages: str | None = None,
+def prepare(db, chapter_query: str, *, grade: str | None = None, pages: str | None = None,
             lesson: str | None = None, dpi: int = PAGE_DPI) -> Path:
     """Rastérise les pages du chapitre (double page → deux pages imprimées) et
     écrit le payload qu'Astra lira. Retourne le dossier du run."""
@@ -148,6 +171,7 @@ def prepare(db, chapter_query: str, *, grade: str = "3e", pages: str | None = No
 
     from app.config import settings
     ch = find_chapter(chapter_query, grade)
+    grade = ch["grade"]
     comps = chapter_competencies(db, grade, ch["code"])
     if not comps:
         raise SystemExit(f"Aucune compétence en base pour le chapitre {ch['code']} ({grade}).")
@@ -157,7 +181,7 @@ def prepare(db, chapter_query: str, *, grade: str = "3e", pages: str | None = No
     if not pdf.exists():
         raise SystemExit(f"Manuel élève introuvable : {pdf}")
     doc = fitz.open(str(pdf))
-    run_id = f"{ch['code'].lower()}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    run_id = f"{grade}-{ch['code'].lower()}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
     run = runs_dir() / run_id
     (run / "pages").mkdir(parents=True)
     entries = []
@@ -392,9 +416,6 @@ def _guide_problems(kind: str, variant: dict) -> tuple[list[str], list[str]]:
     if kind == "facile" and not guides:
         errors.append("aucun encadré guide : la version Facile accompagne l'élève en "
                       "difficulté (au moins un « {{aide}} … » bien placé)")
-    if kind == "base" and len(guides) > BASE_GUIDES_WARN:
-        warnings.append(f"{len(guides)} encadrés guide en Base : garde-les pour la version "
-                        "Facile, sauf nécessité réelle")
     seen = set()
     for g in guides:
         n = _words(g)
@@ -430,12 +451,78 @@ def _guide_leak(guide: str, variant: dict) -> str:
     return ""
 
 
+def _editorial_problems(variant: dict) -> list[str]:
+    """Refuse les rubriques éditoriales, sans interdire leur emploi dans un récit."""
+    from app.services import statement as st
+    problems = []
+    scopes = [variant] + (parts(variant) if variant.get("response_type") == COMPOSITE else [])
+    heading = re.compile(
+        r"^(?:bilan|automatismes?|questions? flash|ceinture (?:jaune|verte|noire)|"
+        r"(?:exercice|niveau) (?:base|facile))(?=\s|[,:.—-]|$)|"
+        r"^(?:probleme|enigme|exercice)\s*[,:.—-]")
+    for scope in scopes:
+        text = st.strip_guides(scope.get("statement") or "")
+        if any(heading.match(fold(line)) for line in text.splitlines()):
+            problems.append("rubrique éditoriale dans l'énoncé (Bilan, Automatismes, type d'exercice, ceinture ou niveau) : utilise les métadonnées")
+        if re.search(r"\bobserve\b[^.!?]*[.!?]\s*(?:\{\{figure\}\}\s*)?observe\b", fold(text)):
+            problems.append("consigne d'observation répétée : une seule invitation à observer suffit")
+    return problems
+
+
+def _figure_coverage_problems(variant: dict, common_figure: dict | None) -> list[str]:
+    """Contrôle les items déclarés et les candidats numérotés des figures geo.
+
+    L'inventaire d'une image reste à vérifier visuellement. On ne prétend pas
+    déduire les tâches d'une image à partir de ses pixels ou de tous ses points.
+    """
+    from app.services import indigo_multipass as mp
+    from app.services import statement as st
+
+    def response_text(scopes):
+        return "\n".join(mp._plain(st.strip_guides(t)) for s in scopes for t in _texts(s))
+
+    scopes = parts(variant)
+    bindings = [(common_figure, scopes, "figure commune")]
+    if variant.get("response_type") == COMPOSITE:
+        # Une figure peut servir à plusieurs questions successives.
+        for i, q in enumerate(scopes):
+            if q.get("figure"):
+                end = next((j for j in range(i + 1, len(scopes)) if scopes[j].get("figure")), len(scopes))
+                bindings.append((q["figure"], scopes[i:end], f"figure de la question {chr(97+i)}"))
+    problems = []
+    for fig, related, where in bindings:
+        if not isinstance(fig, dict):
+            continue
+        text = response_text(related)
+        items = fig.get("items") or []
+        if not isinstance(items, list) or any(not isinstance(x, str) for x in items):
+            continue  # signalé par _figure_problems
+        # Dans les panneaux de constructions geo, « 1 » sous le dessin signifie
+        # « Figure 1 ». Ne pas confondre avec des nombres inscrits sur un dessin.
+        candidates = [c for s in related for c in (s.get("choices") or [])
+                      if re.fullmatch(r"Figure\s+\d+", c, re.I)]
+        if fig.get("kind") == "geo" and candidates:
+            numbers = [re.fullmatch(r"(?:Figure\s+)?(\d+)", str(t.get("text", "")), re.I)
+                       for t in (fig.get("spec") or {}).get("texts", []) if isinstance(t, dict)]
+            items = list(dict.fromkeys([*items, *(f"Figure {m[1]}" for m in numbers if m)]))
+        for item in items:
+            label = mp._plain(item)
+            haystack = response_text([{"choices": candidates}]) if re.fullmatch(r"figure\s+\d+", label, re.I) and candidates else text
+            if label and not re.search(rf"(?<!\w){re.escape(label)}(?!\w)", haystack, re.I):
+                problems.append(f"{where} : élément visible « {item} » sans question/réponse correspondante ; complète les réponses ou adapte la figure")
+    return problems
+
+
 def _figure_problems(fig, payload: dict, where: str) -> list[str]:
     from app.services import figures
     if fig is None:
         return []
     if not isinstance(fig, dict):
         return [f"{where} : objet attendu"]
+    if "items" in fig and (not isinstance(fig["items"], list) or not fig["items"]
+                          or any(not isinstance(x, str) or not x.strip() for x in fig["items"])
+                          or len({fold(x) for x in fig["items"]}) != len(fig["items"])):
+        return [f"{where} : items doit contenir des libellés non vides et distincts"]
     kind = fig.get("kind")
     if kind == "crop":
         pages = {p["id"]: p for p in payload["pages"]}
@@ -552,7 +639,8 @@ def validate(db, run: Path) -> tuple[Report, dict]:
             has_fig = variant_figure(ex, kind) is not None
             v = normalize_variant(v_raw)
             normalized[kind] = v
-            probs = []
+            probs = _editorial_problems(v)
+            probs += _figure_coverage_problems(v, variant_figure(ex, kind))
             if v["response_type"] == COMPOSITE:
                 qs = parts(v)
                 if not 2 <= len(qs) <= 8:
@@ -586,7 +674,11 @@ def validate(db, run: Path) -> tuple[Report, dict]:
             probs += g_err
             e_warn += [f"{label} : {w}" for w in g_warn]
             if not any("|---" in t for t in _texts(v)):
-                e_warn += [f"{label} : {n}" for n in mp._figure_notes(v, has_figure=has_fig)]
+                # Les figures de questions ont déjà une portée explicite. Ne pas
+                # les chercher seulement dans le contexte global du composite.
+                question_figs = any(q.get("figure") for q in parts(v)) if v["response_type"] == COMPOSITE else False
+                if has_fig or not question_figs:
+                    e_warn += [f"{label} : {n}" for n in mp._figure_notes(v, has_figure=has_fig)]
             if not probs and comp is not None:
                 raw = to_raw(v)
                 for j, (q, rp) in enumerate(zip(parts(v), (raw.get("answer") or {}).get("parts") or [])):
@@ -623,6 +715,16 @@ def validate(db, run: Path) -> tuple[Report, dict]:
         rep.warnings += [f"{tag} — {w}" for w in e_warn]
         if e_err:
             contracts.pop(num, None)
+    guide_uses: dict[str, set[str]] = {}
+    for ex in exercises:
+        for kind, variant in (ex.get("variants") or {}).items():
+            for guide in variant_guides(variant):
+                for line in guide.splitlines():
+                    if line.strip():
+                        guide_uses.setdefault(fold(line), set()).add(str(ex["source_number"]))
+    for guide, numbers in guide_uses.items():
+        if len(numbers) >= 3:
+            rep.warnings.append(f"Guide identique dans {len(numbers)} sources ({', '.join(sorted(numbers))}) : vérifie sa pertinence pour chaque tâche : « {guide[:90]} »")
     for s in data.get("skipped") or []:
         if not (isinstance(s, dict) and s.get("source_number") and s.get("reason")):
             rep.errors.append("skipped : chaque entrée porte source_number et reason")
@@ -732,6 +834,9 @@ def preview(db, run: Path, *, guides: bool = True, variant: str | None = None) -
 
     from app.services import generation, pdfgen
     rep, contracts = validate(db, run)
+    if not rep.ok:
+        raise SystemExit(f"Aperçu refusé : {len(rep.errors)} erreur(s) de validation. "
+                         "Corrige le run pour produire un PDF complet.")
     figs = build_figures(run)
     data = load_json(run / OUTPUT_FILE)
     payload = load_json(run / "payload.json")

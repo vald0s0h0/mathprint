@@ -1178,6 +1178,25 @@ def test_seed_resolves_competency_by_code_not_id(db, tmp_path):
     assert db2.query(GeneratedExercise).filter_by(source="indigo").count() == 1
 
 
+def test_published_declarative_figure_survives_reseeding(db, tmp_path):
+    comp = _comp(db)
+    spec = {"points": {"A": [0, 0], "B": [3, 0], "C": [1, 2]},
+            "polygons": [["A", "B", "C"]]}
+    png = tmp_path / "indigo/drafts/geo.png"
+    png.parent.mkdir(parents=True)
+    png.write_bytes(figures.render_figure({"type": "geo", "params": spec}))
+    row = IndigoExercise(id="geo", competency_id=comp.id, grade_level="3e",
+                         statement="Observe.", response_type="short_text", status="validated",
+                         has_figure=True, figure_path="indigo/drafts/geo.png",
+                         raw_ocr_json={"figure_spec": {"kind": "geo", "spec": spec}})
+    db.add(row); db.commit()
+    indigo.publish(db)
+    assert indigo.load_published()["exercises"][0]["figure_json"] == {"type": "geo", "params": spec}
+    assert db.get(GeneratedExercise, "geo").figure_json == {"type": "geo", "params": spec}
+    indigo.seed_published(db)
+    assert db.get(GeneratedExercise, "geo").figure_json["type"] == "geo"
+
+
 def test_delete_exercise_unpublishes_from_bank_and_file(db, tmp_path):
     """Supprimer un brouillon déjà publié doit le retirer de la banque LIVE
     (GeneratedExercise) et du fichier versionné — sinon il reste servi aux

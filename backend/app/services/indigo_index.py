@@ -47,6 +47,9 @@ OCR_CHUNK = 5
 # Un numéro d'exercice du manuel PROF : un bloc qui ne contient QUE ce nombre,
 # et qui est étroit (il tient dans la gouttière, jamais toute une colonne).
 _NUM_ONLY_RE = re.compile(r"^\s*(\d{1,3})\s*$")
+# Caractères de contrôle laissés par la mise en page (le guide 6e suit chaque
+# numéro de pastille d'un \x07 invisible : « 67\x07 ») — retirés avant lecture.
+_CTRL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _MARKER_MAX_WIDTH_PT = 45.0
 # Tolérance d'appariement numéro <-> corps du corrigé, en points PDF : même
 # hauteur de ligne à la ligne de base près, et corps immédiatement à droite.
@@ -165,9 +168,10 @@ def correction_page(doc, idx: int) -> tuple[list[dict], list[int]]:
     markers: list[tuple] = []
     bodies: list[tuple] = []
     for b in raw:
-        content = str(b[4] or "").strip()
+        content = _CTRL_RE.sub("", str(b[4] or "")).strip()
         if not content:
             continue
+        b = (*b[:4], content, *b[5:])
         if _NUM_ONLY_RE.match(content) and (b[2] - b[0]) < _MARKER_MAX_WIDTH_PT:
             markers.append(b)
         else:
@@ -342,7 +346,7 @@ def _eleve_sections(db, grade: str) -> dict[str, dict]:
     acceptés par CROISSANCE STRICTE bornée, exactement comme dans le découpage
     géométrique — un « 1. » de sous-question ou un nombre au fil du texte n'ouvre
     pas d'exercice."""
-    from .indigo import _SKIP_BLOCKS, _leading_num, _match_competency, _order_blocks
+    from .indigo import _SKIP_BLOCKS, _leading_num, _order_blocks, _section_competency
 
     data = load(grade, "eleve")
     if not data:
@@ -358,10 +362,11 @@ def _eleve_sections(db, grade: str) -> dict[str, dict]:
         width = float((page.get("dims") or {}).get("width") or 0)
         for b in _order_blocks(blocks, width):
             n = _leading_num(b.get("content"))
+            match = _section_competency(b, comps)
+            if match is not None:
+                current, last = match, 0
+                continue
             if b.get("type") == "title" and n is None:
-                match = _match_competency(str(b.get("content") or ""), comps)
-                if match is not None:
-                    current, last = match, 0
                 continue
             if current is None or n is None:
                 continue
@@ -408,15 +413,14 @@ def _prof_pages_for(grade: str, chapter_name: str, numbers: set[int]) -> list[in
     data = load(grade, "prof")
     if not data or not numbers:
         return []
-    wanted = _fold(chapter_name)
     chapters = _prof_chapters(data)
     pages, hors_chapitre = [], []
     for key, page in (data.get("pages") or {}).items():
         if not set(page.get("numbers") or []) & numbers:
             continue
         idx = int(key)
-        chapter = _fold(chapters.get(idx, ""))
-        if not wanted or (chapter and (wanted in chapter or chapter in wanted)):
+        chapter = chapters.get(idx, "")
+        if not chapter_name.strip() or (chapter and _same_chapter(chapter_name, chapter)):
             pages.append(idx)
         else:
             hors_chapitre.append(idx)
@@ -434,6 +438,26 @@ def _prof_pages_for(grade: str, chapter_name: str, numbers: set[int]) -> list[in
 def _fold(s: str) -> str:
     from .indigo import _fold as fold
     return fold(s)
+
+
+def _chapter_words(name: str) -> list[str]:
+    """Mots d'un titre de chapitre, accents et pluriels effacés
+    (« Périmètres et aires » → perimetre, et, aire)."""
+    words = re.findall(r"[a-z0-9]+", _fold(name))
+    return [w[:-1] if len(w) > 3 and w[-1] in "sx" else w for w in words]
+
+
+def _same_chapter(a: str, b: str) -> bool:
+    """Deux titres désignent le même chapitre : l'un est une suite de MOTS de
+    l'autre. Comparer des sous-chaînes ne suffit pas — « angles » est dans
+    « triangles » (6e : chapitres Angles et Triangles), et un simple pluriel
+    (« Périmètre et aire » / « Périmètres et aires ») faisait tout rater."""
+    wa, wb = _chapter_words(a), _chapter_words(b)
+    if not wa or not wb:
+        return False
+    short, long_ = sorted((wa, wb), key=len)
+    return any(long_[i:i + len(short)] == short
+               for i in range(len(long_) - len(short) + 1))
 
 
 def coverage(db, grade: str) -> dict:

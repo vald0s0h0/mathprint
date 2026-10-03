@@ -61,10 +61,10 @@ type PreviewProps = {
 function GuideBox({ text }: { text: string }) {
   return (
     <Group gap={6} align="flex-start" wrap="nowrap" my={4} style={{
-      background: '#FFF4C2', border: '1px solid #E4B42D', borderRadius: 5,
-      padding: '4px 7px', color: '#4D3B05',
+      background: 'var(--mp-guide-bg)', border: '1px solid var(--mp-guide-border)', borderRadius: 5,
+      padding: '4px 7px', color: 'var(--mp-guide-text)',
     }}>
-      <Lightbulb size={15} color="#C99A12" style={{ flex: '0 0 auto', marginTop: 1 }} />
+      <Lightbulb size={15} color="var(--mp-guide-icon)" style={{ flex: '0 0 auto', marginTop: 1 }} />
       <Box style={{ flex: 1, minWidth: 0, fontSize: '0.95em' }}>
         {text.split('\n').map((ln, i) => <Box key={i}><MathText text={ln} /></Box>)}
       </Box>
@@ -80,7 +80,7 @@ const BULLET_RE = /^[•–—-]\s+/
  *  Le tableau est centré, et défile horizontalement s'il est trop large pour
  *  la carte plutôt que de déborder. */
 function StatementTable({ block }: { block: Extract<RichBlock, { kind: 'table' }> }) {
-  const rule = '1px solid var(--mantine-color-gray-4)'
+  const rule = '1px solid var(--mantine-color-default-border)'
   const cell = {
     border: rule, padding: '3px 6px', textAlign: 'center' as const,
     verticalAlign: 'middle' as const, lineHeight: 1.25,
@@ -95,7 +95,7 @@ function StatementTable({ block }: { block: Extract<RichBlock, { kind: 'table' }
                 {row.map((value, c) => (block.header && r === 0 ? (
                   <th key={c} style={{
                     ...cell, fontWeight: 700,
-                    background: 'var(--mantine-color-gray-1)',
+                    background: 'var(--mp-surface-muted)',
                   }}><MathText text={stripBold(value)} /></th>
                 ) : (
                   <td key={c} style={cell}><MathText text={value} /></td>
@@ -241,7 +241,7 @@ function PrintedCard({ exercise, guides, showAnswers }: {
 function DetailBlock({ label, text, color, guide }: { label: string; text: string; color: string; guide?: boolean }) {
   return <Box>
     <Text size="10px" fw={700} c="dimmed" mb={2}>{label}</Text>
-    <Box style={guide ? { borderLeft: `3px solid var(--mantine-color-${color}-4)`, background: 'var(--mantine-color-gray-0)', borderRadius: 4, padding: '6px 8px' } : undefined}>
+    <Box style={guide ? { borderLeft: `3px solid var(--mantine-color-${color}-4)`, background: 'var(--mp-surface-sunken)', borderRadius: 4, padding: '6px 8px' } : undefined}>
       <Group gap={6} align="flex-start" wrap="nowrap">
         {guide && <BookOpen size={15} color={`var(--mantine-color-${color}-6)`} style={{ flex: '0 0 auto', marginTop: 2 }} />}
         <Box style={{ flex: 1, minWidth: 0 }}><ExerciseRichBody text={text} color={color} size="sm" /></Box>

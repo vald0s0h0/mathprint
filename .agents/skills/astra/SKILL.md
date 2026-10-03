@@ -1,6 +1,6 @@
 ---
 name: astra
-description: Crée les exercices MathPrint (versions Base + Facile, réponses à cocher ou relier, guides intégrés, figures redessinées) d'un chapitre du manuel Indigo 3e à partir des images de ses pages. À utiliser quand l'utilisateur écrit « astra <chapitre> » ou demande la pipeline Astra.
+description: Crée les exercices MathPrint (versions Base + Facile, réponses à cocher ou relier, guides intégrés, figures redessinées) d'un chapitre d'un manuel Indigo (3e ou 6e) à partir des images de ses pages. À utiliser quand l'utilisateur écrit « astra <chapitre> » ou demande la pipeline Astra.
 ---
 
 # Astra

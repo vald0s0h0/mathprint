@@ -33,10 +33,10 @@ function formatNote(value: number) {
 type GradeView = 'all' | 'control' | 'training' | 'mastery' | 'level'
 
 function masteryStyle(delta: number) {
-  if (delta === 0) return { color: 'var(--mantine-color-gray-6)' }
+  if (delta === 0) return { color: 'var(--mantine-color-dimmed)' }
   const strength = Math.min(0.28, 0.07 + Math.abs(delta) / 80)
   return {
-    color: delta > 0 ? 'var(--mantine-color-green-8)' : 'var(--mantine-color-red-8)',
+    color: delta > 0 ? 'var(--mp-text-green-strong)' : 'var(--mp-text-red-strong)',
     backgroundColor: delta > 0
       ? `rgba(47, 158, 68, ${strength})`
       : `rgba(224, 49, 49, ${strength})`,
@@ -168,9 +168,9 @@ export default function Grades() {
                             style={{
                               verticalAlign: 'bottom',
                               background: assessment.pronote_entered
-                                ? 'var(--mantine-color-gray-2)'
+                                ? 'var(--mp-surface-strong)'
                                 : training ? 'var(--mantine-color-gray-light)' : undefined,
-                              color: training ? 'var(--mantine-color-gray-6)' : undefined,
+                              color: training ? 'var(--mantine-color-dimmed)' : undefined,
                             }}>
                             <Stack gap={4} align="center" pb={6}>
                               <Tooltip label={`${training ? 'Entraînement' : 'Note'} /${assessment.note_base}`}>
@@ -223,12 +223,12 @@ export default function Grades() {
                               style={{
                                 ...(training && view !== 'mastery' && view !== 'level'
                                   ? { background: 'var(--mantine-color-gray-light)',
-                                      color: 'var(--mantine-color-gray-6)' }
+                                      color: 'var(--mantine-color-dimmed)' }
                                   : {}),
                                 ...(view === 'mastery' && mastery != null
                                   ? masteryStyle(mastery) : {}),
                                 ...(assessment.pronote_entered
-                                  ? { background: 'var(--mantine-color-gray-2)' } : {}),
+                                  ? { background: 'var(--mp-surface-strong)' } : {}),
                               }}>
                               {value?.absent ? (
                                 <Text size="xs" fw={650} fs="italic" c="dimmed">Abs</Text>
@@ -240,7 +240,7 @@ export default function Grades() {
                                 )
                               ) : view === 'level' ? (
                                 <Text size="md" fw={800}
-                                  c={level === 1 ? 'green.7' : level === -1 ? 'red.7' : undefined}>
+                                  c={level === 1 ? 'var(--mp-text-green)' : level === -1 ? 'var(--mp-text-red)' : undefined}>
                                   {level === 1 ? '+' : level === -1 ? '−' : ''}
                                 </Text>
                               ) : value?.note != null ? (

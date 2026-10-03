@@ -290,3 +290,49 @@ def test_only_paired_numbers_are_recorded_as_exercise_numbers():
     ]
     _blocks, numbers = indigo_index.correction_page(_FakeDoc(noisy), 0)
     assert numbers == [102, 103]
+
+
+def test_a_marker_followed_by_a_control_character_is_still_a_number():
+    """Le guide pédagogique 6e suit chaque numéro de pastille d'un \\x07 invisible
+    (« 69\\x07 ») : sans nettoyage, aucun numéro n'était reconnu et les corrigés
+    du chapitre 1 se réduisaient à une poignée de pages."""
+    doc = _FakeDoc([
+        (44.6, 227.3, 59.1, 239.6, "69\x07\n", 0, 0),
+        (60.9, 227.6, 282.8, 300.0, "1. 52 filles sont allées au théâtre.", 1, 0),
+    ])
+    blocks, numbers = indigo_index.correction_page(doc, 0)
+    assert numbers == [69]
+    assert blocks[0]["content"].startswith("69 1. 52 filles")
+
+
+@pytest.mark.parametrize("competency, prof, same", [
+    ("Angles", "Triangles", False),                       # 6e : « angles » ⊂ « triangles »
+    ("Triangles", "Angles", False),
+    ("Périmètre et aire", "Périmètres et aires", True),   # pluriel du guide 6e
+    ("Solides de l'espace", "Solides de l’espace", True), # apostrophe typographique (3e)
+    ("Construction et transformation de figures",
+     "Construction et  transformation de figures", True), # double espace (3e)
+    ("Fonctions", "Fonctions affines", True),             # suite de mots : toléré, comme avant
+    ("Nombres entiers", "Nombres entiers et données", True),
+])
+def test_chapters_are_compared_word_by_word(competency, prof, same):
+    assert indigo_index._same_chapter(competency, prof) is same
+
+
+@pytest.mark.parametrize("prefix", ["1 ", "# (1) ", "① "])
+def test_a_numbered_section_title_opens_its_competency(db, prefix):
+    """Manuel 6e : le titre de section porte le numéro de la compétence dans le
+    chapitre (« 2 Calculer avec des nombres entiers »). Il doit ouvrir la
+    section, et non passer pour l'exercice n°1 ou n°2."""
+    a, b = _comps(db)
+    pages = _eleve_pages()
+    for page in pages.values():
+        for blk in page["blocks"]:
+            if blk["type"] == "title":
+                num = "1" if "premier" in blk["content"] else "2"
+                blk["content"] = prefix.replace("1", num).replace("①", "②" if num == "2" else "①") \
+                    + blk["content"]
+    _write_index("3e", "eleve", pages)
+    sections = indigo_index._eleve_sections(db, "3e")
+    assert sections[a.code]["numbers"] == [12, 13, 14, 15]
+    assert sections[b.code]["numbers"] == [16, 17]

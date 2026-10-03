@@ -8,645 +8,316 @@
     {
       "grade_level": "6e",
       "cycle": 3,
-      "name": "Programme officiel 6e (cycle 3)",
-      "version": "2026",
+      "program_year": 2026,
+      "name": "Cahier 6e (sommaire) — programme 2026",
+      "version": "2026-cahier",
       "domains": [
         {
-          "name": "Nombres, calcul et résolution de problèmes",
-          "code": "NC",
+          "name": "Nombres et calcul",
+          "code": "A",
           "chapters": [
             {
-              "name": "Les nombres entiers et décimaux",
-              "code": "NOMB",
+              "name": "Nombres entiers et données",
+              "code": "A1",
               "competencies": [
                 {
-                  "code": "6E-NC-NOMB-01",
-                  "label": "Connaître et utiliser la valeur des chiffres selon leur rang dans l'écriture d'un nombre",
-                  "short_id": ""
+                  "code": "A1.1",
+                  "short_id": "A1.1",
+                  "label": "Lire et écrire des nombres entiers"
                 },
                 {
-                  "code": "6E-NC-NOMB-02",
-                  "label": "Connaître les liens entre les unités de numération unité, dizaine, centaine, millier, dixième, centième, millième",
-                  "short_id": ""
+                  "code": "A1.2",
+                  "short_id": "A1.2",
+                  "label": "Calculer avec des nombres entiers"
                 },
                 {
-                  "code": "6E-NC-NOMB-03",
-                  "label": "Connaître des grands nombres entiers",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-NC-NOMB-04",
-                  "label": "Reconnaître un nombre décimal",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-NC-NOMB-05",
-                  "label": "Connaître la définition d'un pourcentage",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-NC-NOMB-06",
-                  "label": "Associer et utiliser différentes écritures d'un nombre décimal : écriture à virgule, fraction, nombre mixte, pourcentage",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-NC-NOMB-07",
-                  "label": "Placer sur une demi-droite graduée un point dont l'abscisse est un nombre décimal",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-NC-NOMB-08",
-                  "label": "Repérer un nombre décimal sur une demi-droite graduée",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-NC-NOMB-09",
-                  "label": "Comparer deux nombres décimaux",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-NC-NOMB-10",
-                  "label": "Ordonner une liste de nombres décimaux",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-NC-NOMB-11",
-                  "label": "Donner la valeur arrondie à l'unité, au dixième ou au centième, d'un nombre décimal",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-NC-NOMB-12",
-                  "label": "Déterminer ou connaître la valeur arrondie de certains nombres non décimaux",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-NC-NOMB-13",
-                  "label": "Encadrer un nombre décimal par deux nombres décimaux, intercaler un nombre décimal entre deux nombres décimaux",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-NC-NOMB-14",
-                  "label": "Additionner et soustraire des nombres décimaux",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-NC-NOMB-15",
-                  "label": "Multiplier un nombre entier ou un nombre décimal par 0,1, par 0,01, et par 0,001",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-NC-NOMB-16",
-                  "label": "Connaître le lien avec la division par 10, 100 et par 1 000",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-NC-NOMB-17",
-                  "label": "Comprendre le sens de la multiplication de deux nombres décimaux",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-NC-NOMB-18",
-                  "label": "Calculer le produit de deux nombres décimaux",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-NC-NOMB-19",
-                  "label": "Contrôler les résultats à l'aide d'ordres de grandeur",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-NC-NOMB-20",
-                  "label": "Résoudre des problèmes mettant en jeu des multiplications entre des nombres décimaux",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-NC-NOMB-21",
-                  "label": "Diviser un nombre décimal par un nombre entier non nul inférieur à 10",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-NC-NOMB-22",
-                  "label": "Résoudre des problèmes mettant en jeu des divisions décimales",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-NC-NOMB-23",
-                  "label": "Effectuer la division euclidienne d'un nombre entier par un nombre entier inférieur à 100",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-NC-NOMB-24",
-                  "label": "Résoudre des problèmes mettant en jeu des divisions euclidiennes",
-                  "short_id": ""
+                  "code": "A1.3",
+                  "short_id": "A1.3",
+                  "label": "Organiser et représenter des données"
                 }
               ]
             },
             {
-              "name": "Les fractions",
-              "code": "FRAC",
+              "name": "Nombres décimaux",
+              "code": "A2",
               "competencies": [
                 {
-                  "code": "6E-NC-FRAC-01",
-                  "label": "Relier une fraction au résultat exact de la division de son numérateur par son dénominateur",
-                  "short_id": ""
+                  "code": "A2.1",
+                  "short_id": "A2.1",
+                  "label": "Connaitre la notion de fraction partage"
                 },
                 {
-                  "code": "6E-NC-FRAC-02",
-                  "label": "Comprendre et connaître la définition du quotient d'un entier a par un entier b non nul",
-                  "short_id": ""
+                  "code": "A2.2",
+                  "short_id": "A2.2",
+                  "label": "Comprendre et utiliser des fractions décimales"
                 },
                 {
-                  "code": "6E-NC-FRAC-03",
-                  "label": "Compléter des égalités à trous multiplicatives",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-NC-FRAC-04",
-                  "label": "Placer une fraction sur une demi-droite graduée dans des cas simples",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-NC-FRAC-05",
-                  "label": "Graduer un segment de longueur donnée",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-NC-FRAC-06",
-                  "label": "Savoir que la fraction a b peut représenter un nombre entier, un nombre décimal non entier ou un nombre non décimal",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-NC-FRAC-07",
-                  "label": "La fraction comme opérateur multiplicatif",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-NC-FRAC-08",
-                  "label": "En 6e, l'objectif est de faire opérer une fraction, non seulement sur une quantité ou sur une grandeur comme au cours moyen, mais également sur un nombre entier, ce qui constitue un niveau d'abstraction plus élevé.",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-NC-FRAC-09",
-                  "label": "Utiliser une multiplication pour appliquer une fraction à un nombre entier",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-NC-FRAC-10",
-                  "label": "Comparer des fractions",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-NC-FRAC-11",
-                  "label": "Établir des égalités de fractions",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-NC-FRAC-12",
-                  "label": "Comparer et encadrer des fractions",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-NC-FRAC-13",
-                  "label": "Ordonner une liste de nombres écrits sous forme de fractions ou de nombres mixtes",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-NC-FRAC-14",
-                  "label": "Effectuer des opérations sur les fractions",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-NC-FRAC-15",
-                  "label": "Additionner et soustraire des fractions",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-NC-FRAC-16",
-                  "label": "Multiplier une fraction par un nombre entier",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-NC-FRAC-17",
-                  "label": "Résoudre des problèmes mettant en jeu des fractions",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-NC-FRAC-18",
-                  "label": "Inventer des problèmes mettant en jeu des fractions",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-NC-FRAC-19",
-                  "label": "Comprendre le sens d'un pourcentage",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-NC-FRAC-20",
-                  "label": "Calculer une proportion (rapport entre une partie et le tout) et l'exprimer sous forme de pourcentage dans des cas simples",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-NC-FRAC-21",
-                  "label": "Appliquer un pourcentage à une grandeur ou à un nombre",
-                  "short_id": ""
+                  "code": "A2.3",
+                  "short_id": "A2.3",
+                  "label": "Comprendre et utiliser des nombres décimaux"
                 }
               ]
             },
             {
-              "name": "Algèbre",
-              "code": "ALGE",
+              "name": "Comparaisons et opérations",
+              "code": "A3",
               "competencies": [
                 {
-                  "code": "6E-NC-ALGE-01",
-                  "label": "Utiliser des modèles pré-algébriques pour résoudre des problèmes algébriques",
-                  "short_id": ""
+                  "code": "A3.1",
+                  "short_id": "A3.1",
+                  "label": "Comparer des nombres décimaux"
                 },
                 {
-                  "code": "6E-NC-ALGE-02",
-                  "label": "Identifier la structure d'un motif évolutif en repérant une régularité et en identifiant une structure",
-                  "short_id": ""
+                  "code": "A3.2",
+                  "short_id": "A3.2",
+                  "label": "Additionner et soustraire avec des nombres décimaux"
+                },
+                {
+                  "code": "A3.3",
+                  "short_id": "A3.3",
+                  "label": "Multiplier avec des nombres décimaux"
+                }
+              ]
+            },
+            {
+              "name": "Division",
+              "code": "A4",
+              "competencies": [
+                {
+                  "code": "A4.1",
+                  "short_id": "A4.1",
+                  "label": "Effectuer et utiliser une division euclidienne"
+                },
+                {
+                  "code": "A4.2",
+                  "short_id": "A4.2",
+                  "label": "Déterminer des multiples et des diviseurs"
+                },
+                {
+                  "code": "A4.3",
+                  "short_id": "A4.3",
+                  "label": "Effectuer et utiliser une division décimale"
+                }
+              ]
+            },
+            {
+              "name": "Fractions",
+              "code": "A5",
+              "competencies": [
+                {
+                  "code": "A5.1",
+                  "short_id": "A5.1",
+                  "label": "Connaitre la notion de fraction quotient"
+                },
+                {
+                  "code": "A5.2",
+                  "short_id": "A5.2",
+                  "label": "Comparer des fractions"
+                },
+                {
+                  "code": "A5.3",
+                  "short_id": "A5.3",
+                  "label": "Additionner et soustraire avec des fractions"
+                },
+                {
+                  "code": "A5.4",
+                  "short_id": "A5.4",
+                  "label": "Calculer et exprimer une proportion"
+                }
+              ]
+            },
+            {
+              "name": "Proportionnalité",
+              "code": "A6",
+              "competencies": [
+                {
+                  "code": "A6.1",
+                  "short_id": "A6.1",
+                  "label": "Reconnaitre une situation de proportionnalité"
+                },
+                {
+                  "code": "A6.2",
+                  "short_id": "A6.2",
+                  "label": "Utiliser une situation de proportionnalité"
+                },
+                {
+                  "code": "A6.3",
+                  "short_id": "A6.3",
+                  "label": "Utiliser une échelle, un pourcentage"
+                }
+              ]
+            },
+            {
+              "name": "Probabilités",
+              "code": "A7",
+              "competencies": [
+                {
+                  "code": "A7.1",
+                  "short_id": "A7.1",
+                  "label": "Décrire une expérience aléatoire"
+                },
+                {
+                  "code": "A7.2",
+                  "short_id": "A7.2",
+                  "label": "Exprimer la probabilité d'un évènement"
+                },
+                {
+                  "code": "A7.3",
+                  "short_id": "A7.3",
+                  "label": "Dénombrer des issues"
                 }
               ]
             }
           ]
         },
         {
-          "name": "Grandeurs et mesures",
-          "code": "GM",
+          "name": "Géométrie",
+          "code": "B",
           "chapters": [
             {
-              "name": "Les longueurs",
-              "code": "LONG",
+              "name": "Droites et cercles",
+              "code": "B1",
               "competencies": [
                 {
-                  "code": "6E-GM-LONG-01",
-                  "label": "Savoir que le périmètre du disque est proportionnel à son diamètre",
-                  "short_id": ""
+                  "code": "B1.1",
+                  "short_id": "B1.1",
+                  "label": "Tracer des droites et des segments"
                 },
                 {
-                  "code": "6E-GM-LONG-02",
-                  "label": "Connaître la formule du périmètre d'un disque",
-                  "short_id": ""
+                  "code": "B1.2",
+                  "short_id": "B1.2",
+                  "label": "Construire et utiliser un cercle"
                 },
                 {
-                  "code": "6E-GM-LONG-03",
-                  "label": "Calculer le périmètre d'un disque",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-GM-LONG-04",
-                  "label": "Calculer des périmètres de figures composées",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-GM-LONG-05",
-                  "label": "Résoudre des problèmes impliquant des longueurs",
-                  "short_id": ""
+                  "code": "B1.3",
+                  "short_id": "B1.3",
+                  "label": "Raisonner avec des droites et des médiatrices"
                 }
               ]
             },
             {
-              "name": "Les aires",
-              "code": "AIRE",
+              "name": "Angles",
+              "code": "B2",
               "competencies": [
                 {
-                  "code": "6E-GM-AIRE-01",
-                  "label": "Effectuer des conversions d'aire",
-                  "short_id": ""
+                  "code": "B2.1",
+                  "short_id": "B2.1",
+                  "label": "Connaitre et utiliser la notion d'angle"
                 },
                 {
-                  "code": "6E-GM-AIRE-02",
-                  "label": "Connaître la formule de l'aire d'un carré ou d'un rectangle",
-                  "short_id": ""
+                  "code": "B2.2",
+                  "short_id": "B2.2",
+                  "label": "Mesurer un angle"
                 },
                 {
-                  "code": "6E-GM-AIRE-03",
-                  "label": "Calculer l'aire d'un carré ou d'un rectangle",
-                  "short_id": ""
+                  "code": "B2.3",
+                  "short_id": "B2.3",
+                  "label": "Construire un angle"
+                },
+                {
+                  "code": "B2.4",
+                  "short_id": "B2.4",
+                  "label": "Utiliser les propriétés des angles"
                 }
               ]
             },
             {
-              "name": "Les volumes",
-              "code": "VOLU",
+              "name": "Triangles",
+              "code": "B3",
               "competencies": [
                 {
-                  "code": "6E-GM-VOLU-01",
-                  "label": "Connaître l'unité centimètre cube",
-                  "short_id": ""
+                  "code": "B3.1",
+                  "short_id": "B3.1",
+                  "label": "Construire un triangle"
                 },
                 {
-                  "code": "6E-GM-VOLU-02",
-                  "label": "Comparer des volumes",
-                  "short_id": ""
+                  "code": "B3.2",
+                  "short_id": "B3.2",
+                  "label": "Utiliser les propriétés des triangles"
                 },
                 {
-                  "code": "6E-GM-VOLU-03",
-                  "label": "Déterminer un volume",
-                  "short_id": ""
+                  "code": "B3.3",
+                  "short_id": "B3.3",
+                  "label": "Utiliser les propriétés des triangles particuliers"
                 }
               ]
             },
             {
-              "name": "Le repérage dans le temps et les durées",
-              "code": "REPE",
+              "name": "Périmètre et aire",
+              "code": "B4",
               "competencies": [
                 {
-                  "code": "6E-GM-REPE-01",
-                  "label": "Effectuer des calculs sur des horaires et des durées",
-                  "short_id": ""
+                  "code": "B4.1",
+                  "short_id": "B4.1",
+                  "label": "Comparer et mesurer des périmètres"
                 },
                 {
-                  "code": "6E-GM-REPE-02",
-                  "label": "Résoudre des problèmes impliquant des horaires et des durées",
-                  "short_id": ""
+                  "code": "B4.2",
+                  "short_id": "B4.2",
+                  "label": "Calculer un périmètre"
                 },
                 {
-                  "code": "6E-GM-REPE-03",
-                  "label": "Convertir des durées",
-                  "short_id": ""
-                }
-              ]
-            }
-          ]
-        },
-        {
-          "name": "Espace et géométrie",
-          "code": "EG",
-          "chapters": [
-            {
-              "name": "Étude de configurations planes",
-              "code": "ETUD",
-              "competencies": [
-                {
-                  "code": "6E-EG-ETUD-01",
-                  "label": "Connaître et utiliser la définition de la distance entre deux points",
-                  "short_id": ""
+                  "code": "B4.3",
+                  "short_id": "B4.3",
+                  "label": "Comparer et déterminer des aires"
                 },
                 {
-                  "code": "6E-EG-ETUD-02",
-                  "label": "Connaître et utiliser la définition du milieu d'un segment",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-EG-ETUD-03",
-                  "label": "Cercles et disques",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-EG-ETUD-04",
-                  "label": "Connaître les définitions d'un cercle, d'un disque, d'un rayon, d'un diamètre, d'une corde",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-EG-ETUD-05",
-                  "label": "Comprendre la définition d'un cercle et celle d'un disque sous la forme d'ensembles de points",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-EG-ETUD-06",
-                  "label": "Résoudre des problèmes mettant en jeu des distances à un point",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-EG-ETUD-07",
-                  "label": "Médiatrice d'un segment",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-EG-ETUD-08",
-                  "label": "Connaître la définition de la médiatrice d'un segment",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-EG-ETUD-09",
-                  "label": "Comprendre et utiliser la propriété caractéristique de la médiatrice d'un segment",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-EG-ETUD-10",
-                  "label": "Résoudre des problèmes en s'appuyant sur la propriété caractéristique de la médiatrice",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-EG-ETUD-11",
-                  "label": "Connaître et utiliser les angles ainsi que le lexique et les notations qui s'y rapportent : angle droit, angle plat, angle plein, angle nul, angle aigu, angle obtus, angles opposés par le sommet, angles adjacents, angles supplémentaires",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-EG-ETUD-12",
-                  "label": "Mesurer un angle",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-EG-ETUD-13",
-                  "label": "Construire un angle de mesure donnée",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-EG-ETUD-14",
-                  "label": "Bissectrice d'un angle saillant",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-EG-ETUD-15",
-                  "label": "Connaître la définition de la bissectrice d'un angle saillant",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-EG-ETUD-16",
-                  "label": "Utiliser la définition de la bissectrice d'un angle pour effectuer des constructions et résoudre des problèmes",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-EG-ETUD-17",
-                  "label": "Le triangle se prête à un travail portant conjointement sur les distances et sur les angles. Le positionnement d'un triangle sur la feuille doit être varié. À l'aide du compas, l'élève remarque que la donnée de trois longueurs ne permet pas toujours de construire un triangle.",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-EG-ETUD-18",
-                  "label": "Construire des triangles",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-EG-ETUD-19",
-                  "label": "Connaître et utiliser les propriétés angulaires des triangles particuliers : triangle rectangle, triangle isocèle, triangle équilatéral",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-EG-ETUD-20",
-                  "label": "Connaître la valeur de la somme des mesures des angles d'un triangle",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-EG-ETUD-21",
-                  "label": "L'utiliser pour calculer des angles, effectuer des constructions et résoudre des problèmes",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-EG-ETUD-22",
-                  "label": "Savoir que les médiatrices d'un triangle sont concourantes",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-EG-ETUD-23",
-                  "label": "Connaître et construire le cercle circonscrit à un triangle",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-EG-ETUD-24",
-                  "label": "Le travail de construction réalisé au cours moyen se poursuit. Différents supports peuvent être utilisés : papier quadrillé, papier pointé, auxquels on ajoute le papier uni.",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-EG-ETUD-25",
-                  "label": "Connaître la définition du symétrique d'un point par rapport à une droite",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-EG-ETUD-26",
-                  "label": "Connaître et utiliser les propriétés de la symétrie axiale pour effectuer des constructions",
-                  "short_id": ""
+                  "code": "B4.4",
+                  "short_id": "B4.4",
+                  "label": "Calculer une aire"
                 }
               ]
             },
             {
-              "name": "La vision dans l'espace",
-              "code": "VISI",
+              "name": "Symétrie axiale",
+              "code": "B5",
               "competencies": [
                 {
-                  "code": "6E-EG-VISI-01",
-                  "label": "Voir dans l'espace des assemblages de cubes",
-                  "short_id": ""
-                }
-              ]
-            }
-          ]
-        },
-        {
-          "name": "Organisation et gestion de données et probabilités",
-          "code": "OGD",
-          "chapters": [
-            {
-              "name": "Organisation et gestion de données",
-              "code": "ORGA",
-              "competencies": [
-                {
-                  "code": "6E-OGD-ORGA-01",
-                  "label": "Planifier une enquête et recueillir des données",
-                  "short_id": ""
+                  "code": "B5.1",
+                  "short_id": "B5.1",
+                  "label": "Construire le symétrique d'un point par rapport à une droite"
                 },
                 {
-                  "code": "6E-OGD-ORGA-02",
-                  "label": "Réaliser des mesures et les consigner dans un tableau",
-                  "short_id": ""
+                  "code": "B5.2",
+                  "short_id": "B5.2",
+                  "label": "Utiliser les propriétés de la symétrie axiale"
                 },
                 {
-                  "code": "6E-OGD-ORGA-03",
-                  "label": "Construire un tableau simple pour présenter des données (observations, caractères)",
-                  "short_id": ""
+                  "code": "B5.3",
+                  "short_id": "B5.3",
+                  "label": "Reconnaitre et utiliser l'axe de symétrie d'une figure"
                 },
                 {
-                  "code": "6E-OGD-ORGA-04",
-                  "label": "Faire un choix en filtrant les données d'un tableau selon un critère",
-                  "short_id": ""
+                  "code": "B5.4",
+                  "short_id": "B5.4",
+                  "label": "Connaitre des axes de symétrie particuliers"
                 }
               ]
             },
             {
-              "name": "Les probabilités",
-              "code": "PROB",
+              "name": "Espace et temps",
+              "code": "B6",
               "competencies": [
                 {
-                  "code": "6E-OGD-PROB-01",
-                  "label": "Savoir que la probabilité d'un évènement est un nombre compris entre 0 et 1",
-                  "short_id": ""
+                  "code": "B6.1",
+                  "short_id": "B6.1",
+                  "label": "Reconnaitre et représenter des solides"
                 },
                 {
-                  "code": "6E-OGD-PROB-02",
-                  "label": "Calculer des probabilités dans des situations simples d'équiprobabilité",
-                  "short_id": ""
+                  "code": "B6.2",
+                  "short_id": "B6.2",
+                  "label": "Déterminer un volume"
                 },
                 {
-                  "code": "6E-OGD-PROB-03",
-                  "label": "Comparer des résultats d'une expérience aléatoire répétée à une probabilité calculée",
-                  "short_id": ""
-                }
-              ]
-            }
-          ]
-        },
-        {
-          "name": "La proportionnalité",
-          "code": "PF",
-          "chapters": [
-            {
-              "name": "La proportionnalité",
-              "code": "PROP",
-              "competencies": [
-                {
-                  "code": "6E-PF-PROP-01",
-                  "label": "Connaître la définition de la proportionnalité entre deux grandeurs et la mettre en lien avec des expressions de la vie courante",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-PF-PROP-02",
-                  "label": "Identifier si une situation relève du « modèle » de la proportionnalité",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-PF-PROP-03",
-                  "label": "Résoudre un problème de proportionnalité en choisissant une procédure adaptée : propriété de linéarité pour la multiplication ou l'addition, retour à l'unité",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-PF-PROP-04",
-                  "label": "Représenter une situation de proportionnalité à l'aide d'un tableau ou de notations symboliques",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-PF-PROP-05",
-                  "label": "S'initier à la résolution de problèmes d'échelles",
-                  "short_id": ""
-                }
-              ]
-            }
-          ]
-        },
-        {
-          "name": "Initiation à la pensée informatique",
-          "code": "PI",
-          "chapters": [
-            {
-              "name": "Initiation à la pensée informatique",
-              "code": "INIT",
-              "competencies": [
-                {
-                  "code": "6E-PI-INIT-01",
-                  "label": "Identifier une instruction ou une séquence d'instructions",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-PI-INIT-02",
-                  "label": "Produire et exécuter une séquence d'instructions",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-PI-INIT-03",
-                  "label": "Répéter à la main une séquence d'instructions pour accomplir une tâche imposée",
-                  "short_id": ""
-                },
-                {
-                  "code": "6E-PI-INIT-04",
-                  "label": "Programmer la construction d'un chemin simple",
-                  "short_id": ""
+                  "code": "B6.3",
+                  "short_id": "B6.3",
+                  "label": "Se repérer dans le temps"
                 }
               ]
             }
           ]
         }
-      ],
-      "program_year": 2026
+      ]
     },
     {
       "grade_level": "5e",

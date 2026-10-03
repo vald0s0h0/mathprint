@@ -9,7 +9,7 @@ interface FigurePreviewProps {
   maxWidth?: number
 }
 
-export default function FigurePreview({ exerciseId, figureJson, maxWidth = 260 }: FigurePreviewProps) {
+export default function FigurePreview({ exerciseId, figureJson, maxWidth = 352 }: FigurePreviewProps) {
   const [imageSrc, setImageSrc] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(false)
@@ -57,7 +57,7 @@ export default function FigurePreview({ exerciseId, figureJson, maxWidth = 260 }
 
   return (
     <img src={imageSrc} alt="figure"
-      style={{ maxWidth, maxHeight: 180, objectFit: 'contain', display: 'block' }} />
+      style={{ maxWidth: `min(100%, ${maxWidth}px)`, maxHeight: 340, objectFit: 'contain', display: 'block' }} />
   )
 }
 

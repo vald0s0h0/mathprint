@@ -86,7 +86,7 @@ export default function CompetencyHierarchy<T>({
                         borderRadius: 'var(--mantine-radius-sm)',
                       }}>
                       <Group gap={7} wrap="nowrap">
-                        <Text size="xs" fw={750} c="gray.8">
+                        <Text size="xs" fw={750} c="var(--mp-text-strong)">
                           {chapter.code ? `${chapter.code} — ` : ''}{chapter.name || 'Chapitre'}
                         </Text>
                         <Text size="xs" c="dimmed" style={{ whiteSpace: 'nowrap' }}>
@@ -111,7 +111,7 @@ export default function CompetencyHierarchy<T>({
                               <Table.Tr>
                                 <Table.Th rowSpan={2}>Compétence</Table.Th>
                                 <Table.Th colSpan={columns.length} ta="center"
-                                  style={{ borderLeft: '1px solid var(--mantine-color-gray-3)' }}>
+                                  style={{ borderLeft: '1px solid var(--mp-border-subtle)' }}>
                                   {columnGroupLabel}
                                 </Table.Th>
                               </Table.Tr>
@@ -119,7 +119,7 @@ export default function CompetencyHierarchy<T>({
                                 {columns.map((column, index) => (
                                   <Table.Th key={column.key} w={column.width} ta={column.align ?? 'left'}
                                     style={index === 0
-                                      ? { borderLeft: '1px solid var(--mantine-color-gray-3)' }
+                                      ? { borderLeft: '1px solid var(--mp-border-subtle)' }
                                       : undefined}>
                                     {column.label}
                                   </Table.Th>
@@ -132,7 +132,7 @@ export default function CompetencyHierarchy<T>({
                               {columns.map((column, index) => (
                                 <Table.Th key={column.key} w={column.width} ta={column.align ?? 'left'}
                                   style={index === 0
-                                    ? { borderLeft: '1px solid var(--mantine-color-gray-3)' }
+                                    ? { borderLeft: '1px solid var(--mp-border-subtle)' }
                                     : undefined}>
                                   {column.label}
                                 </Table.Th>
@@ -168,7 +168,7 @@ export default function CompetencyHierarchy<T>({
                               {columns.map((column, index) => (
                                 <Table.Td key={column.key} ta={column.align ?? 'left'}
                                   style={index === 0
-                                    ? { borderLeft: '1px solid var(--mantine-color-gray-3)' }
+                                    ? { borderLeft: '1px solid var(--mp-border-subtle)' }
                                     : undefined}>
                                   {column.render(row, chapter)}
                                 </Table.Td>

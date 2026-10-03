@@ -317,7 +317,7 @@ function ScanImage({ responseId, cellIndex, expectedOverlay = false, large = fal
     <img src={url} alt="Scan de la réponse de l'élève"
       style={{ maxWidth: '100%', maxHeight: 260, objectFit: 'contain',
         ...(large ? { maxHeight: 430 } : {}),
-        border: '1px solid var(--mantine-color-gray-3)', borderRadius: 4, background: '#fff' }} />
+        border: '1px solid var(--mp-border-subtle)', borderRadius: 4, background: '#fff' }} />
   )
 }
 
@@ -350,7 +350,7 @@ function OcrScan({ item, cellIndex, selectedChoices, selectedPairs, matchStart,
     <Box style={{ display: 'inline-block', position: 'relative', maxWidth: '100%' }}>
       {url ? <img src={url} alt="Scan de la réponse de l'élève"
         style={{ display: 'block', maxWidth: '100%', maxHeight: 430, objectFit: 'contain',
-          border: '1px solid var(--mantine-color-gray-3)', borderRadius: 4 }} />
+          border: '1px solid var(--mp-border-subtle)', borderRadius: 4 }} />
         : <Text size="xs" c="dimmed" p="sm">Chargement du scan…</Text>}
       {url && controls?.kind === 'boxes' && (controls.boxes ?? []).map((box) => (
         <button key={`${box.row ?? '-'}:${box.col ?? box.index}`}
@@ -987,7 +987,7 @@ export default function Corrections() {
               const badge = done ? { label: 'terminé', color: 'gray' } : STAGE_BADGE[stage]
               return (
                 <Card key={b.id} withBorder padding="md" style={done ? {
-                  opacity: 0.55, background: 'var(--mantine-color-gray-1)',
+                  opacity: 0.55, background: 'var(--mp-surface-muted)',
                 } : undefined}>
                   <Group justify="space-between" wrap="nowrap" align="flex-start">
                     <Stack gap={6} style={{ minWidth: 0, flex: 1 }}>
@@ -1171,7 +1171,7 @@ export default function Corrections() {
       </Modal>
 
       <Modal opened={!!ocrBatch} onClose={closeOcr} size="xl"
-        title={<Group gap="xs"><Text fw={650} c="blue.7">OCRiser</Text>
+        title={<Group gap="xs"><Text fw={650} c="var(--mp-text-blue)">OCRiser</Text>
           <Text fw={500}>— {ocrBatch?.assessment_title}</Text></Group>}>
         <Stack>
           <Group justify="space-between" wrap="nowrap">
@@ -1201,7 +1201,7 @@ export default function Corrections() {
             <>
               <Group justify="space-between">
                 <Text size="sm" fw={600}>{currentOcrItem.student}</Text>
-                <Text size="xs" c="blue.7" fw={600}>
+                <Text size="xs" c="var(--mp-text-blue)" fw={600}>
                   Reprise de la réponse élève — aucune note n'est attribuée ici
                 </Text>
               </Group>
@@ -1214,12 +1214,12 @@ export default function Corrections() {
                   onChoice={toggleOcrChoice} onMatchPoint={toggleMatchPoint} />
                 {(currentOcrItem.response_type.startsWith('qcm')
                   || currentOcrItem.response_type === 'checkbox_grid') && (
-                  <Text size="xs" c="blue.7" mt="xs">
+                  <Text size="xs" c="var(--mp-text-blue)" mt="xs">
                     Cliquez les carrés bleus directement sur le scan : plein = coché, vide = non coché.
                   </Text>
                 )}
                 {currentOcrItem.response_type === 'matching' && (
-                  <Text size="xs" c="blue.7" mt="xs">
+                  <Text size="xs" c="var(--mp-text-blue)" mt="xs">
                     Cliquez un point bleu à gauche puis son correspondant à droite. Recliquez la liaison pour la retirer.
                   </Text>
                 )}
@@ -1228,8 +1228,8 @@ export default function Corrections() {
               {!currentOcrItem.response_type.startsWith('qcm')
                 && currentOcrItem.response_type !== 'checkbox_grid'
                 && currentOcrItem.response_type !== 'matching' && (
-                  <Card withBorder padding="sm" style={{ borderColor: 'var(--mantine-color-blue-3)' }}>
-                    <Text size="xs" c="blue.7" fw={600} tt="uppercase" mb={6}>
+                  <Card withBorder padding="sm" style={{ borderColor: 'var(--mp-border-blue)' }}>
+                    <Text size="xs" c="var(--mp-text-blue)" fw={600} tt="uppercase" mb={6}>
                       Aperçu LaTeX — modifiable
                     </Text>
                     <Text size="xs" c="dimmed" mb={6}>
@@ -1250,11 +1250,11 @@ export default function Corrections() {
                             || currentOcrItem.response_type === 'composite'))) {
                           e.preventDefault(); saveCurrentOcr(1)
                         }
-                      }} style={{ minHeight: 34, padding: 7, color: 'var(--mantine-color-blue-8)',
-                        border: '1px solid var(--mantine-color-blue-3)', borderRadius: 4,
+                      }} style={{ minHeight: 34, padding: 7, color: 'var(--mp-text-blue-strong)',
+                        border: '1px solid var(--mp-border-blue)', borderRadius: 4,
                         fontFamily: 'monospace', whiteSpace: 'pre-wrap' }}>{ocrLatex}</Box>
                     <Divider my="sm" />
-                    <Box fz="1.55rem" c="blue.8" style={{ minHeight: 38 }}>
+                    <Box fz="1.55rem" c="var(--mp-text-blue-strong)" style={{ minHeight: 38 }}>
                       <MathAnswer text={ocrLatex} fallback="Aucune réponse détectée" />
                     </Box>
                   </Card>
@@ -1361,7 +1361,7 @@ export default function Corrections() {
                     <Text size="xs" c="dimmed" mt={6}>Motif : {curItem.reason_code}</Text>
                   )}
                   {curItem.flagged && curItem.reason_code === 'llm_low_confidence' && (
-                    <Text size="xs" c="orange.8" mt={6} fw={600}>
+                    <Text size="xs" c="var(--mp-text-orange-strong)" mt={6} fw={600}>
                       Seuil LLM {(curItem.llm_threshold * 100).toFixed(0)} %
                       {curItem.llm_min_confidence != null
                         ? ` · confiance minimale de la réponse ${(curItem.llm_min_confidence * 100).toFixed(0)} %`
@@ -1371,7 +1371,7 @@ export default function Corrections() {
                   )}
                   {curItem.flagged && !curItem.reason_code.startsWith('llm_')
                     && (curItem.llm_notes ?? []).length > 0 && (
-                    <Text size="xs" c="orange.8" mt={6} fw={600}>
+                    <Text size="xs" c="var(--mp-text-orange-strong)" mt={6} fw={600}>
                       Cette revue n'est pas déclenchée par la confiance LLM,
                       mais par le contrôle « {curItem.reason_code} ».
                     </Text>
@@ -1382,7 +1382,7 @@ export default function Corrections() {
                       {currentLlmNotes.map((n, i) => {
                         const color = llmVerdictColor(n.verdict)
                         return (
-                          <Text key={i} size="xs" c={`${color}.7`} fw={650}>
+                          <Text key={i} size="xs" c={`var(--mp-text-${color})`} fw={650}>
                             {n.verdict} ({fmtPts(n.points)}/{fmtPts(n.bareme)})
                             {n.verdict !== 'indisponible' && n.confidence != null
                               ? ` · confiance ${(n.confidence * 100).toFixed(0)} %` : ''}

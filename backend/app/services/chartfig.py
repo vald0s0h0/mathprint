@@ -66,7 +66,8 @@ def _family(spec: dict) -> str:
 def render(params: dict, *, dry: bool = False) -> bytes:
     spec = fk.as_dict(params, "params")
     family = _family(spec)
-    w_mm = fk.width_mm(spec)
+    w_mm = fk.readable_width(spec, labels=len(spec.get("points") or []),
+                             axes=spec.get("axes"))
     h_mm = fk.num(spec["height_mm"], "height_mm", 15, fk.MAX_HEIGHT_MM) \
         if spec.get("height_mm") is not None else None
     if family == "pie":
@@ -77,6 +78,10 @@ def render(params: dict, *, dry: bool = False) -> bytes:
         fig = _axes_chart(spec, w_mm, h_mm)
     if spec.get("title"):
         fig.suptitle(fk.label(spec["title"], "title", max_len=80), fontsize=fk.FONT_SIZE)
+    for ax in fig.axes:
+        if family == "axes":
+            fk.space_tick_labels(ax)
+        fk.labels_for(ax).place()
     if dry:
         import matplotlib.pyplot as plt
         fig.canvas.draw()
@@ -89,7 +94,7 @@ def render(params: dict, *, dry: bool = False) -> bytes:
 def _axes_chart(spec: dict, w_mm: float, h_mm: float | None):
     axes = fk.as_dict(spec["axes"], "axes")
     has_bars = spec.get("bars") is not None
-    fig = fk.new_figure(w_mm, h_mm or w_mm * 0.68)
+    fig = fk.new_figure(w_mm, h_mm or w_mm * 0.78)
     ax = fig.add_axes([0.1, 0.12, 0.86, 0.82])
     if has_bars:
         _bars(ax, spec, axes)
@@ -147,8 +152,7 @@ def _function(ax, f: dict, where: str, i: int) -> list:
         k = max(0, int(len(xs) * 0.9) - 1)
         y0, y1 = ax.get_ylim()
         if np.isfinite(ys[k]) and y0 <= ys[k] <= y1:
-            ax.annotate(lab, (xs[k], ys[k]), xytext=(3, 5), textcoords="offset points",
-                        fontsize=fk.FONT_SIZE, color=color)
+            fk.labels_for(ax).add(lab, (xs[k], ys[k]), color=color)
     return handles
 
 
@@ -184,9 +188,8 @@ def _point(ax, p: dict, where: str) -> None:
         if pos not in _POS:
             fail(f"{where}.pos", f"une de {sorted(_POS)}")
         d = _POS[pos]
-        ax.annotate(fk.label(p["label"], f"{where}.label", max_len=20), (x, y),
-                    xytext=(d[0] * 7, d[1] * 7), textcoords="offset points",
-                    ha="center", va="center", fontsize=fk.FONT_SIZE, zorder=6)
+        fk.labels_for(ax).add(fk.label(p["label"], f"{where}.label", max_len=20),
+                             (x, y), direction=d)
 
 
 def _bars(ax, spec: dict, axes: dict) -> None:

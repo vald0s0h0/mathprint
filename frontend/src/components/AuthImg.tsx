@@ -42,6 +42,6 @@ export default function AuthImg({ src, alt, style, reloadKey }: {
   if (err)
     return <Box style={{ ...style, fontSize: 10, color: 'var(--mantine-color-red-6)' }}>image indisponible</Box>
   if (!url)
-    return <Box style={{ ...style, minHeight: 24, background: 'var(--mantine-color-gray-1)', borderRadius: 4 }} />
+    return <Box style={{ ...style, minHeight: 24, background: 'var(--mp-surface-muted)', borderRadius: 4 }} />
   return <img src={url} alt={alt} style={style} />
 }

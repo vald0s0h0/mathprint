@@ -108,3 +108,86 @@ def test_the_cache_key_follows_the_engine_version(monkeypatch):
     before = set(cache.iterdir())
     figures.render_figure(fig)
     assert len(set(cache.iterdir()) - before) == 1 and first
+
+
+def test_close_labels_avoid_each_other_and_geometry():
+    import matplotlib.pyplot as plt
+    from app.services import figkit as fk
+    fig = fk.new_figure(85, 55)
+    ax = fig.add_axes([0.08, 0.08, 0.84, 0.84])
+    ax.set_xlim(-1, 5); ax.set_ylim(-2, 2); ax.axis("off")
+    ax.plot([0, 4], [0, 0], color="black")
+    ax.plot([2, 2], [-1, 1], color="black")
+    layout = fk.LabelLayout(ax)
+    for lab, xy in (("A", [2, 0]), ("B", [2.1, 0]), ("12 cm", [2, 0.05])):
+        ax.plot(*xy, "o", markersize=2)
+        layout.add(lab, xy)
+    layout.place()
+    renderer = fig.canvas.get_renderer()
+    boxes = [a.get_window_extent(renderer).padded(1) for a, *_ in layout.items]
+    assert all(not a.overlaps(b) for i, a in enumerate(boxes) for b in boxes[i+1:])
+    for line in ax.lines[:2]:
+        path = line.get_transform().transform_path(line.get_path())
+        assert all(not path.intersects_bbox(box, filled=False) for box in boxes)
+    assert [a.get_text() for a, *_ in layout.items] == ["A", "B", "12 cm"]
+    plt.close(fig)
+
+
+def test_dense_axes_keep_the_grid_and_space_readable_values():
+    import matplotlib.pyplot as plt
+    from app.services import figkit as fk
+    fig = fk.new_figure(93, 78)
+    ax = fig.add_axes([0.1, 0.1, 0.8, 0.8])
+    fk.draw_axes(ax, {"x": {"min": 0, "max": 60}, "y": {"min": 0, "max": 60}},
+                 "axes", equal=False)
+    before = ax.get_xticks().copy()
+    fk.space_tick_labels(ax)
+    assert list(ax.get_xticks()) == list(before)  # aucun changement de graduation
+    renderer = fig.canvas.get_renderer()
+    for axis in (ax.xaxis, ax.yaxis):
+        boxes = [t.get_window_extent(renderer) for t in axis.get_ticklabels() if t.get_text()]
+        assert len(boxes) >= 3
+        assert all(not a.overlaps(b) for i, a in enumerate(boxes) for b in boxes[i+1:])
+        assert all(t.get_fontsize() >= 9 for t in axis.get_ticklabels())
+    plt.close(fig)
+
+
+def test_a_tall_geometry_keeps_its_physical_size_in_print():
+    from app.services import pdfgen
+    fig = {"type": "geo", "params": {"points": {"A": [0, 0], "B": [3, 5], "C": [6, 0]},
+                                     "polygons": [["A", "B", "C"]], "width_mm": 85}}
+    png = figures.render_figure(fig)
+    with Image.open(io.BytesIO(png)) as im:
+        natural_h = im.height * 72 / im.info["dpi"][0]
+    layout = pdfgen._statement_layout("Observe.\n{{figure}}", 93 * pdfgen.mm, 9, 9, fig)
+    assert natural_h > 63 * pdfgen.mm
+    assert layout["figure"][2] == pytest.approx(natural_h, abs=0.1)
+
+
+def test_legacy_coordinate_plane_also_uses_readable_physical_rendering():
+    png = figures.render_figure({"type": "coordinate_plane", "params": {
+        "points": [{"x": 1, "y": 1, "label": "A"}, {"x": 1.1, "y": 1, "label": "B"}]}})
+    with Image.open(io.BytesIO(png)) as im:
+        assert round(im.info["dpi"][0]) == 300
+        assert im.width / im.info["dpi"][0] * 25.4 <= 95
+
+
+@pytest.mark.parametrize("kind,params", [
+    ("rectangle", {"length": 5, "width": 3, "show_diagonal": True}),
+    ("triangle", {"base": 4, "height": 3}),
+    ("circle", {"radius": 2, "show_diameter": True}),
+    ("angle", {"degrees": 45}),
+    ("number_line", {"min": 0, "max": 10, "points": [{"value": 2, "label": "A"},
+                                                        {"value": 2.1, "label": "B"}]}),
+])
+def test_legacy_shapes_keep_readable_letters_at_print_size(kind, params):
+    from app.services import pdfgen
+    figure = {"type": kind, "params": params}
+    png = figures.render_figure(figure)
+    with Image.open(io.BytesIO(png)) as im:
+        assert round(im.info["dpi"][0]) == 300
+        natural_w = im.width * 72 / im.info["dpi"][0]
+        natural_h = im.height * 72 / im.info["dpi"][0]
+    _, width, height = pdfgen._figure_image(figure, 88 * pdfgen.mm, 90 * pdfgen.mm)
+    assert width / natural_w >= 0.85
+    assert height / natural_h >= 0.85

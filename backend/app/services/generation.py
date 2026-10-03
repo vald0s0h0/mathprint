@@ -64,20 +64,17 @@ def _set_progress(db: Session, job: Job | None, progress: int, message: str) -> 
 
 def indigo_display(row) -> tuple[str, str, bool]:
     """(énoncé affiché, statut calculette, est-un-problème) d'une ligne de
-    banque. Les exercices Indigo (manuel) portent un label « Problème/Énigme +
-    titre » affiché À CÔTÉ du numéro (préfixe de 1re ligne d'énoncé) et un
-    statut calculette dessiné en icône par pdfgen. Les tags du manuel ne sont
-    JAMAIS affichés."""
+    banque. Le titre concret des problèmes Indigo précède leur énoncé, sans
+    rubrique éditoriale. Le statut calculette est dessiné en icône par pdfgen.
+    Les types et tags du manuel restent dans les métadonnées."""
     meta = (row.raw_extract_json or {}).get("indigo") if row.source == "indigo" else None
     if not meta:
         return row.statement, "autorisee", False
     calc = meta.get("calculator") or "autorisee"
     if meta.get("badge_type") not in ("probleme", "enigme"):
         return row.statement, calc, False
-    lbl = "Problème" if meta.get("badge_type") == "probleme" else "Énigme"
     title = (meta.get("title") or "").strip()
-    head = f"{lbl} — {title}" if title else lbl
-    return f"{head}\n{row.statement}", calc, True
+    return f"{title}\n{row.statement}" if title else row.statement, calc, True
 
 
 def render_shape(row, guides: str = pdfgen.GUIDES_INCLUDE) -> dict:
