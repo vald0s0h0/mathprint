@@ -7,7 +7,7 @@ Depuis la racine du repo, avec le Python du venv backend :
     backend/.venv/bin/python agents/astra/run.py prepare --chapter "6e Angles"
     backend/.venv/bin/python agents/astra/run.py validate  [RUN]
     backend/.venv/bin/python agents/astra/run.py figures   [RUN]
-    backend/.venv/bin/python agents/astra/run.py preview   [RUN] [--no-guides]
+    backend/.venv/bin/python agents/astra/run.py preview   [RUN] --variant base|facile|original
     backend/.venv/bin/python agents/astra/run.py persist   [RUN] [--replace]
     backend/.venv/bin/python agents/astra/run.py chapters
 
@@ -96,7 +96,7 @@ def _cmd_preview(args, db):
     run = astra.resolve_run(args.run)
     out = astra.preview(db, run, guides=not args.no_guides, variant=args.variant)
     rep = astra.load_json(run / "report.json")
-    print(f"Aperçu : {out / 'preview.pdf'}")
+    print(f"Sujet : {out / 'preview.pdf'}")
     for png in sorted(out.glob("page-*.png")):
         print(f"  {png}")
     print(f"Index des cartes : {out / 'index.txt'}")
@@ -132,13 +132,13 @@ def main(argv=None) -> int:
     p.add_argument("--dpi", type=int, default=astra.PAGE_DPI)
     for name, helptext in (("validate", "Valide astra_output.json."),
                            ("figures", "Produit les PNG des figures."),
-                           ("preview", "PDF + PNG de relecture."),
+                           ("preview", "Sujet séparé d'un type de cartes (sur demande)."),
                            ("persist", "Écrit les brouillons (onglet Exercices).")):
         q = sub.add_parser(name, help=helptext)
         q.add_argument("run", nargs="?", help="Identifiant ou dossier du run (défaut : dernier).")
         if name == "preview":
             q.add_argument("--no-guides", action="store_true")
-            q.add_argument("--variant", choices=("base", "facile", "original"),
+            q.add_argument("--variant", choices=("base", "facile", "original"), required=True,
                            help="Sujet ne contenant que ce type de cartes")
         if name == "persist":
             q.add_argument("--replace", action="store_true",

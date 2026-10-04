@@ -95,8 +95,19 @@ def test_an_announced_series_splits_from_its_lead():
     passent en grille sous elle."""
     lead, series = blocks.parse(
         "Voici les prix : 4,50 € ; 2,50 € ; 2,10 € ; 3,00 € ; 2,90 €.")
-    assert (lead.kind, lead.text) == ("text", "Voici les prix :")
+    # « : » insécable (services/typography) : il ne part jamais seul à la ligne
+    assert (lead.kind, lead.text) == ("text", "Voici les prix\u00a0:")
     assert series.items == ["4,50 €", "2,50 €", "2,10 €", "3,00 €", "2,90 €"]
+
+
+def test_a_series_typeset_with_non_breaking_spaces_is_still_a_series():
+    """Après la typographie française, les séparateurs portent des insécables
+    (« 2,5 ; 4 », « 4,50 € ») : la série doit rester une grille."""
+    (block,) = blocks.parse("2,5\u202f; 4\u202f; 5,4\u202f; 4,5")
+    assert block.kind == "series" and block.items == ["2,5", "4", "5,4", "4,5"]
+    lead, series = blocks.parse(
+        "Voici les prix\u00a0: 4,50\u00a0€\u202f; 2,50\u00a0€\u202f; 2,10\u00a0€\u202f; 3\u00a0€")
+    assert series.items == ["4,50\u00a0€", "2,50\u00a0€", "2,10\u00a0€", "3\u00a0€"]
 
 
 def test_a_labelled_series_keeps_its_subquestion_label():

@@ -114,9 +114,10 @@ def _table_block(lines: list[str]) -> "Block | None":
 _NUMBER = r"[-+]?\d+(?:[.,]\d+)?(?:\s*%)?"
 _UNIT = r"(?:%|€|°[CF]?|\$?[A-Za-zµΩ]{1,4}(?:/[A-Za-zµΩ]{1,4})?)"
 _VALUE_RE = re.compile(
-    rf"(?P<value>\$[^$\n]+\$|{_NUMBER})(?:[ \t]*(?P<unit>{_UNIT}))?")
+    rf"(?P<value>\$[^$\n]+\$|{_NUMBER})(?:[ \t\u00a0\u202f]*(?P<unit>{_UNIT}))?")
 # Séparateurs admis ENTRE deux valeurs : ponctuation de liste ou simple espace.
-_GAP_RE = re.compile(r"[ \t]*[;,·•/][ \t]*|[ \t]+")
+# Les insécables comptent (services/typography : « 2,5 ; 4 », « 4,50 € »).
+_GAP_RE = re.compile(r"[ \t\u00a0\u202f]*[;,·•/][ \t\u00a0\u202f]*|[ \t\u00a0\u202f]+")
 # Mots courts qui ressemblent à une unité mais relient deux valeurs : sans ce
 # garde-fou, « 12, 18, 21 et 25 » se lirait comme une série d'unité « et ».
 _NOT_UNITS = {"et", "ou", "a", "de", "du", "des", "la", "le", "au", "aux",
@@ -185,7 +186,7 @@ def _series_blocks(line: str) -> list["Block"] | None:
     items = parse_series(tail)
     if items is None:
         return None
-    lead = f"{label}. {head.strip()} :" if label else f"{head.strip()} :"
+    lead = f"{label}. {head.strip()}\u00a0:" if label else f"{head.strip()}\u00a0:"
     return [Block(kind="text", text=lead), Block(kind="series", items=items)]
 
 

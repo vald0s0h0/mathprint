@@ -576,6 +576,13 @@ def _has_render_answer_field(text: str) -> bool:
         token in (text or "") for token in _TOKEN_KIND if token not in statement_mod.ANSWER_TOKENS)
 
 
+# Espaces qui autorisent une coupure de ligne ; les insécables (NBSP, espace
+# fine insécable) n'en font pas partie — cf. services/typography.
+_BREAKING = " \t\n"
+_NOBREAK = "  "
+_BREAK_SPACE = re.compile(r"[ \t\n]+")
+
+
 def _paragraph_segs(text: str, fs: float, math_fs: float) -> list[tuple]:
     """Segments d'UNE ligne logique d'énoncé (elle peut encore se replier sur
     plusieurs lignes de rendu). seg = ("word", texte, gras, glue) |
@@ -591,14 +598,19 @@ def _paragraph_segs(text: str, fs: float, math_fs: float) -> list[tuple]:
     prev_no_space = False  # le flux précédent se termine sans espace
 
     def _emit_words(part: str, bold: bool) -> None:
+        # Seules les espaces ORDINAIRES coupent : une insécable (services/
+        # typography — « Combien ? », « 5 cm », « $x$ ; $y$ ») soude ses deux
+        # voisins en un seul mot, dessiné avec une espace. Portée en tête du
+        # morceau, elle devient l'espace de tête d'un mot COLLÉ au segment
+        # précédent (formule, case) : le « ? » ne part jamais seul à la ligne.
         nonlocal prev_no_space
-        words = _pdf_safe(part).split()
-        leading_ws = bool(part[:1].isspace())
+        words = [_pdf_safe(w) for w in _BREAK_SPACE.split(part) if w]
+        leading_ws = part[:1] in _BREAKING
         for j, w in enumerate(words):
             segs.append(("word", w, bold,
                          j == 0 and not leading_ws and prev_no_space and bool(segs)))
         if words:
-            prev_no_space = not part[-1:].isspace()
+            prev_no_space = part[-1:] not in _BREAKING
         elif part:
             prev_no_space = False
 
@@ -624,6 +636,13 @@ def _paragraph_segs(text: str, fs: float, math_fs: float) -> list[tuple]:
                         kind, extra_h = spec
                         segs.append(_blank_seg(kind, fs, False, extra_h))
                         prev_no_space = False
+                    elif piece and piece[:1] not in _BREAKING and segs \
+                            and segs[-1][0] == "blank":
+                        # ponctuation collée à une case (« {{blank}}. ») :
+                        # soudée à la case, avec l'espace qui l'en sépare
+                        # à l'œil — jamais en tête de la ligne suivante
+                        prev_no_space = True
+                        _emit_words(piece if piece[:1] in _NOBREAK else " " + piece, bold)
                     else:
                         _emit_words(piece, bold)
             else:
@@ -922,25 +941,31 @@ def _rich_layout(text: str, width: float, fs: float, math_fs: float | None = Non
         cur: list[tuple] = []
         cur_w = 0.0
         avail = max(1.0, width - head_indent)
+        def _run_w(run: list[tuple]) -> float:
+            return sum(_seg_w(s, p_fs) + (space_w if k and not _seg_glue(s) else 0.0)
+                       for k, s in enumerate(run))
+
         for seg in segs:
             w = _seg_w(seg, p_fs)
             add = w if (not cur or _seg_glue(seg)) else w + space_w
-            # Logique de no-break pour les formules mathématiques : si la formule
-            # ne tient pas sur la ligne et qu'il y a déjà du contenu, passer à la
-            # ligne suivante plutôt que de couper. Les formules très longues restent
-            # sur leur propre ligne (toujours mises si la ligne est vide).
-            is_math = seg[0] == "math"
-            # tolérance WRAP_EPS : un libellé mis en page à sa largeur
-            # naturelle (colonne ajustée au contenu) ne doit pas se replier
-            # pour une erreur d'arrondi sur la somme des segments
-            should_wrap = cur and cur_w + add > avail + WRAP_EPS and is_math
-            if should_wrap:
-                raw_lines.append(cur)
-                cur, cur_w = [seg], w
-                avail = max(1.0, width - cont_indent)
-            elif cur and cur_w + add > avail + WRAP_EPS:
-                raw_lines.append(cur)
-                cur, cur_w = [seg], w
+            # Une formule, comme un mot, ne se coupe jamais : si elle ne tient
+            # pas, elle passe entière à la ligne (seule sur sa ligne si elle est
+            # plus longue qu'elle). Tolérance WRAP_EPS : un libellé mis en page
+            # à sa largeur naturelle (colonne ajustée au contenu) ne doit pas se
+            # replier pour une erreur d'arrondi sur la somme des segments.
+            if cur and cur_w + add > avail + WRAP_EPS:
+                # Segment COLLÉ (ponctuation après une formule, « ? » insécable,
+                # unité après une case) : il emmène avec lui toute sa chaîne
+                # soudée — jamais de « ? » ni de « ; » en tête de ligne.
+                k = len(cur)
+                if _seg_glue(seg):
+                    k -= 1
+                    while k > 0 and _seg_glue(cur[k]):
+                        k -= 1
+                carry = cur[k:] if k > 0 else []
+                raw_lines.append(cur[:k] if k > 0 else cur)
+                cur = [*carry, seg]
+                cur_w = _run_w(cur)
                 avail = max(1.0, width - cont_indent)
             else:
                 cur.append(seg)

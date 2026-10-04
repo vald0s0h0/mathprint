@@ -110,8 +110,9 @@ function tableBlock(lines: string[]): RichBlock | null {
 // ------------------------------------------------------------------ séries
 const NUMBER = String.raw`[-+]?\d+(?:[.,]\d+)?(?:\s*%)?`
 const UNIT = String.raw`(?:%|€|°[CF]?|\$?[A-Za-zµΩ]{1,4}(?:\/[A-Za-zµΩ]{1,4})?)`
-const VALUE_RE = new RegExp(String.raw`^(\$[^$\n]+\$|${NUMBER})(?:[ \t]*(${UNIT}))?`)
-const GAP_RE = /^(?:[ \t]*[;,·•/][ \t]*|[ \t]+)/
+const VALUE_RE = new RegExp(String.raw`^(\$[^$\n]+\$|${NUMBER})(?:[ \t\u00a0\u202f]*(${UNIT}))?`)
+// les insécables comptent (backend services/typography : « 2,5 ; 4 », « 4,50 € »)
+const GAP_RE = /^(?:[ \t\u00a0\u202f]*[;,·•/][ \t\u00a0\u202f]*|[ \t\u00a0\u202f]+)/
 // Mots courts qui ressemblent à une unité mais relient deux valeurs : sans ce
 // garde-fou, « 12, 18, 21 et 25 » se lirait comme une série d'unité « et ».
 const NOT_UNITS = new Set(['et', 'ou', 'a', 'de', 'du', 'des', 'la', 'le', 'au',
@@ -165,7 +166,7 @@ function seriesBlocks(line: string): RichBlock[] | null {
   const head = body.slice(0, cut).trim()
   const items = parseSeries(body.slice(cut + 1))
   if (!head || !items) return null
-  const lead = label ? `${label}. ${head} :` : `${head} :`
+  const lead = label ? `${label}. ${head}\u00a0:` : `${head}\u00a0:`
   return [{ kind: 'text', text: lead }, { kind: 'series', items, label: null }]
 }
 

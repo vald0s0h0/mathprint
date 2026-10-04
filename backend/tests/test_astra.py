@@ -216,11 +216,11 @@ def test_all_visible_angles_require_answers_even_in_facile(db, tmp_path):
     rep, _ = astra.validate(db, run)
     assert any("Facile" in e and "Angle 6" in e and "sans question/réponse" in e for e in rep.errors)
     # A failed preview must not silently omit cards or overwrite the last PDF.
-    (run / "preview").mkdir()
-    previous = run / "preview" / "preview.pdf"
+    (run / "subject-facile").mkdir()
+    previous = run / "subject-facile" / "preview.pdf"
     previous.write_bytes(b"last reviewed preview")
     with pytest.raises(SystemExit, match="PDF complet"):
-        astra.preview(db, run)
+        astra.preview(db, run, variant="facile")
     assert previous.read_bytes() == b"last reviewed preview"
     with pytest.raises(SystemExit, match="Validation en échec"):
         astra.persist(db, run)
@@ -285,7 +285,7 @@ def test_a_crop_whitens_its_masks_and_keeps_the_page_dpi(db, tmp_path):
 
 
 def test_preview_is_a_real_copy_pdf(db, tmp_path):
-    out = astra.preview(db, _run(db, tmp_path, _good()))
+    out = astra.preview(db, _run(db, tmp_path, _good()), variant="facile")
     assert (out / "preview.pdf").stat().st_size > 0
     assert list(out.glob("page-*.png"))
     assert "n°44  Facile" in (out / "index.txt").read_text(encoding="utf-8")
@@ -298,11 +298,13 @@ def test_printed_problem_keeps_title_without_editorial_type(db, tmp_path, badge)
     ex = data[0]
     ex.update(badge=badge, title="Distance inaccessible", difficulty=1)
     ex["variants"] = {"original": ex["variants"]["base"]}
-    out = astra.preview(db, _run(db, tmp_path, data))
+    out = astra.preview(db, _run(db, tmp_path, data), variant="original")
     with fitz.open(out / "preview.pdf") as pdf:
         text = "\n".join(page.get_text() for page in pdf)
     assert "Distance inaccessible" in text
-    assert "Problème" not in text and "Énigme" not in text
+    # l'en-tête du sujet « … — Problèmes » est légitime ; la CARTE, elle, ne
+    # porte pas de rubrique éditoriale devant son titre
+    assert "Problème —" not in text and "Énigme" not in text
 
 
 def test_persist_writes_linked_drafts_once(db, tmp_path):

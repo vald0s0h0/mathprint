@@ -33,7 +33,7 @@ from ..models import (
     Assessment, Competency, Copy, CopyItem, DocumentPage, FileObject, Job,
     ResponseZone, SchoolClass, StudentLevel,
 )
-from . import distribution, exercise_gen, scoring, student_history
+from . import blocks, distribution, exercise_gen, scoring, student_history
 from . import statement as statement_mod
 from . import pdfgen
 from .runtime_settings import doc_templates
@@ -64,17 +64,18 @@ def _set_progress(db: Session, job: Job | None, progress: int, message: str) -> 
 
 def indigo_display(row) -> tuple[str, str, bool]:
     """(énoncé affiché, statut calculette, est-un-problème) d'une ligne de
-    banque. Le titre concret des problèmes Indigo précède leur énoncé, sans
-    rubrique éditoriale. Le statut calculette est dessiné en icône par pdfgen.
-    Les types et tags du manuel restent dans les métadonnées."""
+    banque. Le titre concret des problèmes Indigo précède leur énoncé, EN GRAS
+    (balisage `**` de services/blocks, lu à l'identique par le PDF et le web),
+    sans rubrique éditoriale. Le statut calculette est dessiné en icône par
+    pdfgen. Les types et tags du manuel restent dans les métadonnées."""
     meta = (row.raw_extract_json or {}).get("indigo") if row.source == "indigo" else None
     if not meta:
         return row.statement, "autorisee", False
     calc = meta.get("calculator") or "autorisee"
     if meta.get("badge_type") not in ("probleme", "enigme"):
         return row.statement, calc, False
-    title = (meta.get("title") or "").strip()
-    return f"{title}\n{row.statement}" if title else row.statement, calc, True
+    title = blocks.strip_bold(meta.get("title") or "").strip()
+    return f"**{title}**\n{row.statement}" if title else row.statement, calc, True
 
 
 def render_shape(row, guides: str = pdfgen.GUIDES_INCLUDE) -> dict:

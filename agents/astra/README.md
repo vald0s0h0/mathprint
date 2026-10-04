@@ -41,7 +41,7 @@ $PY agents/astra/run.py chapters                          # chapitres, pages, co
 $PY agents/astra/run.py prepare --chapter "Fonctions affines" [--pages 76-78] [--lesson 74-75]
 $PY agents/astra/run.py figures  [RUN]                    # PNG des figures à vérifier
 $PY agents/astra/run.py validate [RUN]                    # contrat MathPrint + règles Astra
-$PY agents/astra/run.py preview  [RUN] [--no-guides]      # PDF réel des copies + PNG
+$PY agents/astra/run.py preview  [RUN] --variant base|facile|original [--no-guides]  # sujet séparé, sur demande
 $PY agents/astra/run.py persist  [RUN] [--replace]        # brouillons onglet Exercices
 ```
 
@@ -56,7 +56,7 @@ sont sous droits :
 - `astra_output.json` : écrit par Astra ;
 - `report.json` : rapport de validation ;
 - `figures/` : PNG des figures ;
-- `preview/` : aperçu PDF et PNG.
+- `subject-<variante>/` : sujet séparé (PDF et PNG), seulement sur demande.
 
 ## Fichiers
 

@@ -22,13 +22,10 @@ le demande explicitement. Lance les commandes depuis la racine avec
    Pour chaque variante, recense les objets à traiter et les figures candidates
    visibles, puis vérifie leur correspondance avec les réponses proposées.
 6. `validate RUN` : corrige chaque erreur et chaque réserve fondée jusqu’à zéro erreur.
-7. `preview RUN` : ouvre CHAQUE page PNG. Contrôle aussi le PDF réel : toutes les
-   tâches présentes, aides APRÈS les réponses concernées, figures au bon endroit,
-   formules lisibles, points alignés, aucune carte hors page. Corrige et revalide.
-8. `persist RUN` : enregistre en brouillons. `--replace` remplace les anciens
+7. `persist RUN` : enregistre en brouillons. `--replace` remplace les anciens
    brouillons Astra des mêmes sources ; ne remplace jamais un exercice validé.
-9. Donne le nombre de sources et de cartes, les sauts motivés, les réserves utiles
-   et le chemin du PDF. Ne t’arrête pas entre les étapes. Ne publie rien.
+8. Donne le nombre de sources et de cartes, les sauts motivés et les réserves
+   utiles. Ne t’arrête pas entre les étapes. Ne publie rien.
 
 Pour produire des sujets séparés à la demande de l’utilisateur :
 `preview RUN --variant base`, `--variant facile` ou `--variant original`

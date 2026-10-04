@@ -10,7 +10,7 @@ import fitz
 from reportlab.pdfgen import canvas
 from reportlab.lib.colors import HexColor
 
-from . import pdfgen
+from . import blocks, pdfgen
 
 _LOCK = RLock()
 
@@ -25,7 +25,7 @@ def shape(ex: dict, guides: bool = True) -> dict:
     problem = ex.get('badge_type') in ('probleme', 'enigme') or ex.get('kind') == 'probleme' or ex.get('is_problem', False)
     if problem and ex.get('title'):
         prefix = 'Énigme' if ex.get('badge_type') == 'enigme' else 'Problème'
-        statement = f"{prefix} — {ex['title']}\n{statement}"
+        statement = f"**{prefix} — {blocks.strip_bold(ex['title']).strip()}**\n{statement}"
     return {'kind': 'exercise', 'statement': statement, 'correction': '',
             'response_type': ex['response_type'], 'choices': ex.get('choices') or grading.get('choices') or [],
             'grading': grading, 'expected': expected, 'figure': ex.get('figure'),

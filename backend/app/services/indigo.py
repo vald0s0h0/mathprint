@@ -46,6 +46,7 @@ from . import (exercise_gen, figures, indigo_check, indigo_cv, indigo_fields,
                indigo_offpeak, indigo_qcm, indigo_segment, indigo_verify,
                indigo_vision, providers, scoring)
 from . import statement as statement_mod
+from . import typography
 
 logger = logging.getLogger("app.indigo")
 
@@ -2644,7 +2645,10 @@ def _published_record(db, ex: IndigoExercise, crops, figs) -> dict:
                   if ex.has_figure and not ex.figure_box_json
                   and spec.get("kind") in figures.DECLARATIVE_TYPES
                   and isinstance(spec.get("spec"), dict) else None)
-    return {
+    # Typographie française (insécables, guillemets, LaTeX…) posée ICI, une
+    # seule fois : c'est l'entonnoir par lequel TOUT exercice validé entre en
+    # banque — Astra, Gemini, retouche du professeur après génération.
+    return typography.apply_to_record({
         "id": ex.id, "competency_code": comp.code if comp else "",
         "grade_level": ex.grade_level, "source_number": ex.source_number,
         "badge_type": ex.badge_type, "difficulty": ex.difficulty,
@@ -2659,7 +2663,7 @@ def _published_record(db, ex: IndigoExercise, crops, figs) -> dict:
         "has_figure": ex.has_figure, "crop_file": crop_file, "figure_file": fig_file,
         **({"figure_json": procedural} if procedural else {}),
         "model": ex.model, "prompt_version": ex.prompt_version,
-    }
+    })
 
 
 def publish_rows(db, rows: list[IndigoExercise]) -> int:

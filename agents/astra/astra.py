@@ -312,6 +312,8 @@ def _unprintable(text: str) -> str:
         if is_math:
             continue
         for ch in content:
+            if ch == "\u202f":      # espace fine insécable (services/typography) : imprimée en espace
+                continue
             try:
                 ch.encode("cp1252")
             except UnicodeEncodeError:
@@ -827,7 +829,9 @@ def _render_row(num: str, kind: str, valid: dict, ex: dict, fig_path: Path | Non
                                      "calculator": ex.get("calculator", "autorisee")}})
 
 
-def preview(db, run: Path, *, guides: bool = True, variant: str | None = None) -> Path:
+def preview(db, run: Path, *, variant: str, guides: bool = True) -> Path:
+    """Sujet séparé d'un seul type de cartes (base, facile ou original), à la
+    demande. Le document récapitulatif de TOUTES les cartes n'est plus produit."""
     import fitz
     from reportlab.lib.pagesizes import A4
     from reportlab.pdfgen import canvas
@@ -844,7 +848,7 @@ def preview(db, run: Path, *, guides: bool = True, variant: str | None = None) -
     for ex in data.get("exercises") or []:
         num = str(ex.get("source_number"))
         for kind in exercise_variants(ex):
-            if variant and kind != variant:
+            if kind != variant:
                 continue
             valid = contracts.get(num, {}).get(kind)
             if valid is None:
@@ -856,7 +860,7 @@ def preview(db, run: Path, *, guides: bool = True, variant: str | None = None) -
             index.append(f"{len(items):>3}  n°{num}  {VARIANT_LABEL[kind]}")
     if not items:
         raise SystemExit("Rien à prévisualiser : aucune variante valide (lance `validate`).")
-    out_dir = run / (f"subject-{variant}" if variant else "preview")
+    out_dir = run / f"subject-{variant}"
     shutil.rmtree(out_dir, ignore_errors=True)
     out_dir.mkdir()
     pdf_path = out_dir / "preview.pdf"
@@ -864,7 +868,7 @@ def preview(db, run: Path, *, guides: bool = True, variant: str | None = None) -
     pages_meta = [{"page_id": f"p{i}", "payload": f"MP1|p{i}|0"} for i in range(len(items) + 2)]
     # rendu page par page : la mise en page réelle des copies, sans placement imposé
     subject_label = "Problèmes" if variant == "original" else VARIANT_LABEL.get(variant, "Astra")
-    pdfgen.render_copy(c, student_name="Nom : __________________" if variant else "Aperçu Astra", class_name=payload["grade"],
+    pdfgen.render_copy(c, student_name="Nom : __________________", class_name=payload["grade"],
                        title=f"{payload['chapter']['name']} — {subject_label}", assessment_type="training",
                        items=items, pages_meta=pages_meta, font_size=9)
     c.save()
