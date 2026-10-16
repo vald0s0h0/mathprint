@@ -26,7 +26,8 @@ from ..services import sandbox as sandbox_service
 from ..services import scan_intake, scoring
 from ..services.file_sniff import sniff_file as _sniff_file
 from ..services.pipeline import (
-    build_overlays, effective_reading, finalize_batch, grade_stored_responses,
+    FinalizeInProgress, build_overlays, effective_reading, finalize_batch,
+    grade_stored_responses,
     pending_ocr_responses, process_batch,
 )
 from ..services.runtime_settings import llm_confidence_threshold, ocr_confidence_threshold
@@ -374,6 +375,9 @@ def _batch_view(db: Session, b: ScanBatch) -> dict:
         # pour un lot antérieur à ce changement, au premier affichage.
         try:
             finalize_batch(db, b)
+        except FinalizeInProgress:
+            db.rollback()   # une autre requête finalise déjà : simple affichage
+            b = db.get(ScanBatch, b.id)
         except Exception as e:
             db.rollback()
             b = db.get(ScanBatch, b.id)
@@ -1133,6 +1137,8 @@ def _apply_resolution(db: Session, resp: StudentResponse, body: ResolveIn) -> di
             if batch is not None:
                 try:
                     finalize_batch(db, batch)
+                except FinalizeInProgress:
+                    db.rollback()
                 except Exception as e:
                     db.rollback()
                     batch = db.get(ScanBatch, batch.id)
@@ -1185,7 +1191,12 @@ def retry_batch(batch_id: str, tasks: BackgroundTasks, db: Session = Depends(get
     b.error = None
     db.commit()
     progress = b.progress_json or {}
-    if "finalized" in progress and b.status != "overlay_ready":
+    if b.status == "overlay_ready":
+        # Lot TERMINÉ (copies corrigées prêtes) : une erreur résiduelle (ex. une
+        # finalisation concurrente perdante) est simplement effacée — surtout
+        # pas de `process_batch`, qui reprendrait toute la lecture.
+        pass
+    elif "finalized" in progress:
         tasks.add_task(_run_build_overlays, b.id)
     elif (_pending_reviews_query(db, b.assessment_id)
           .filter(GradingDecision.reason_code == "llm_unavailable").count()):
@@ -1223,7 +1234,7 @@ def finalize(batch_id: str, db: Session = Depends(get_db)):
         raise HTTPException(404)
     try:
         result = finalize_batch(db, b)
-    except ValueError as e:
+    except (ValueError, FinalizeInProgress) as e:
         raise HTTPException(409, str(e))
     db.commit()
     return result

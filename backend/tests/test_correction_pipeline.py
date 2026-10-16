@@ -704,3 +704,68 @@ def test_reset_batch_purges_correction(mock_db, tmp_path, monkeypatch):
     assert db.query(StudentResponse).count() == 0
     assert all(c.status == "generated"
                for c in db.query(Copy).filter_by(assessment_id=a.id).all())
+
+
+def test_concurrent_finalize_is_refused_without_marking_batch_blocked(
+        mock_db, tmp_path, monkeypatch):
+    """Les rafraîchissements de la page Corrections relançaient une 2e
+    finalisation pendant la 1re (longue sur le NAS) : UniqueViolation sur
+    copy_results et lot affiché « bloqué » alors que tout avait réussi."""
+    db = mock_db
+    monkeypatch.setattr(cfg, "data_dir", tmp_path)
+    a = _seed_manual(db)
+    batch = scan_intake.get_or_create_batch(db, a.id, None)
+    db.commit()
+    pipeline.process_batch(db, batch)
+    body = scans_router.ResolveIn(action="set_ratio", ratio=1.0)
+    user = User(email="p@x.fr", password_hash="x", role="teacher")
+    db.add(user)
+    db.commit()
+
+    pipeline._FINALIZING.add(batch.id)          # finalisation en cours ailleurs
+    try:
+        for r in scans_router.list_reviews(batch.id, None, db):
+            scans_router.resolve_review(r["review_id"], body, db, user)
+        view = scans_router._batch_view(db, db.get(ScanBatch, batch.id))
+        assert view["error"] is None
+        with pytest.raises(pipeline.FinalizeInProgress):
+            pipeline.finalize_batch(db, batch)
+    finally:
+        pipeline._FINALIZING.discard(batch.id)
+    scans_router._batch_view(db, db.get(ScanBatch, batch.id))   # lot libre
+    assert db.get(ScanBatch, batch.id).status == "overlay_ready"
+
+
+def test_retry_on_finished_batch_only_clears_error(mock_db, tmp_path, monkeypatch):
+    """« Relancer » sur un lot terminé (copies corrigées prêtes) avec une erreur
+    résiduelle : efface l'erreur, ne relance surtout pas toute la lecture."""
+    from fastapi import BackgroundTasks
+
+    db = mock_db
+    monkeypatch.setattr(cfg, "data_dir", tmp_path)
+    a = _seed_manual(db)
+    batch = scan_intake.get_or_create_batch(db, a.id, None)
+    batch.status = "overlay_ready"
+    batch.progress_json = {"finalized": {"done": True}, "overlay_ready": {"done": True}}
+    batch.error = "duplicate key value violates unique constraint"
+    db.commit()
+    tasks = BackgroundTasks()
+    scans_router.retry_batch(batch.id, tasks, db)
+    assert tasks.tasks == []
+    assert db.get(ScanBatch, batch.id).error is None
+
+
+def test_qcm_double_check_rule_matches_the_grader():
+    """Double coche sur un choix UNIQUE -> lecture à confiance nulle (OCRiser :
+    le professeur désigne la case retenue) ; sur un QCM multiple, plusieurs
+    coches restent une réponse ordinaire."""
+    def item(rtype, correct, exclusive=None):
+        g = {"exclusive": exclusive} if exclusive is not None else {}
+        return CopyItem(response_type=rtype, expected_json={"type": "choice", "correct": correct},
+                        grading_json=g)
+
+    assert pipeline._qcm_exclusive(item("qcm_single", [1]))
+    assert pipeline._qcm_exclusive(item("qcm_multiple", [2]))            # ancien contrat
+    assert not pipeline._qcm_exclusive(item("qcm_multiple", [0, 2]))
+    assert not pipeline._qcm_exclusive(item("qcm_multiple", [2], exclusive=False))
+    assert not pipeline._qcm_exclusive(item("table_fill", [1]))

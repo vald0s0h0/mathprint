@@ -11,6 +11,7 @@ Deux chemins :
 """
 import hashlib
 import math
+import threading
 from datetime import datetime, timezone
 from fractions import Fraction
 from pathlib import Path
@@ -170,6 +171,19 @@ def _set_status(db: Session, batch: ScanBatch, status: str, **progress):
     p[status] = {"done": True, **progress}
     batch.progress_json = p
     db.commit()
+
+
+def _qcm_exclusive(item: CopyItem) -> bool:
+    """QCM à choix UNIQUE ? Même règle que le moteur (services.grading) :
+    `exclusive` du contrat, sinon une seule bonne réponse attendue."""
+    if not item.response_type.startswith("qcm"):
+        return False
+    if item.response_type == "qcm_single":
+        return True
+    exclusive = (item.grading_json or {}).get("exclusive")
+    if exclusive is None:
+        exclusive = len((item.expected_json or {}).get("correct", [])) == 1
+    return bool(exclusive)
 
 
 def _decide_and_store(db: Session, *, item: CopyItem, zone: ResponseZone,
@@ -349,7 +363,10 @@ def grade_stored_responses(db: Session, batch: ScanBatch) -> int:
         # professeur la moindre action réelle. On enchaîne directement sur
         # la finalisation (résultats, preuves de compétence) et les copies
         # corrigées, cf. demande du 02/09.
-        finalize_batch(db, batch)
+        try:
+            finalize_batch(db, batch)
+        except FinalizeInProgress:
+            pass   # une requête de la page Corrections finalise déjà ce lot
     return n_review
 
 
@@ -525,11 +542,19 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
                 selected, densities, default_sel = worker_cv.select_qcm(
                     boxes, densities, qcm_thr)
                 cv_conf = worker_cv.qcm_decision_confidence(densities, qcm_thr)
+                double_check = bool(selected) and len(selected) > 1 and _qcm_exclusive(item)
+                if double_check:
+                    # Plusieurs cases cochées sur un choix UNIQUE : l'élève a
+                    # souvent coché, raturé puis coché ailleurs. La lecture CV ne
+                    # sait pas laquelle compte -> OCRiser (le professeur désigne
+                    # la case retenue), jamais une note automatique.
+                    cv_conf = 0.0
                 db.add(OcrAttempt(zone_id=zone.id, provider="cv_local",
                                   raw_json={"densities": densities, "selected": selected,
                                             "threshold": round(qcm_thr.value, 4),
                                             "adapted": qcm_thr.adapted,
-                                            "default_selected": default_sel},
+                                            "default_selected": default_sel,
+                                            "double_check": double_check},
                                   confidence=cv_conf))
                 n_review += _decide_and_store(
                     db, item=item, zone=zone, student=student,
@@ -539,6 +564,8 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
                 boxes = (zone.meta_json or {}).get("boxes", [])
                 selected, _dens = worker_cv.detect_grid(res.warped, boxes, qcm_thr)
                 cv_conf = worker_cv.qcm_decision_confidence(_dens, qcm_thr)
+                if selected is None:
+                    cv_conf = 0.0   # double coche sur une ligne -> OCRiser
                 db.add(OcrAttempt(zone_id=zone.id, provider="cv_local",
                                   raw_json={"grid_selected": selected,
                                             "threshold": round(qcm_thr.value, 4),
@@ -909,11 +936,36 @@ def process_batch(db: Session, batch: ScanBatch):
     grade_stored_responses(db, batch)
 
 
+class FinalizeInProgress(RuntimeError):
+    """Une finalisation du même lot tourne déjà dans ce processus."""
+
+
+# Lots en cours de finalisation (API mono-processus). Sur le NAS, finaliser une
+# classe entière dure assez longtemps pour que les rafraîchissements de la page
+# Corrections (auto-réparation de `_batch_view`) en relancent une 2e en
+# parallèle : double INSERT copy_results -> UniqueViolation, lot « bloqué »
+# alors que la 1re finalisation avait réussi.
+_FINALIZING: set[str] = set()
+_FINALIZING_LOCK = threading.Lock()
+
+
 def finalize_batch(db: Session, batch: ScanBatch) -> dict:
     """Verrouille les décisions, consolide les résultats (points de barème,
     note sur la base choisie — services.scoring), crée les preuves de
     compétence et met à jour la courbe d'oubli (§7.5). Refuse s'il reste des
-    revues ouvertes."""
+    revues ouvertes, ou si une finalisation du même lot est déjà en cours."""
+    with _FINALIZING_LOCK:
+        if batch.id in _FINALIZING:
+            raise FinalizeInProgress("Validation déjà en cours pour ce lot")
+        _FINALIZING.add(batch.id)
+    try:
+        return _finalize_batch(db, batch)
+    finally:
+        with _FINALIZING_LOCK:
+            _FINALIZING.discard(batch.id)
+
+
+def _finalize_batch(db: Session, batch: ScanBatch) -> dict:
     # Un ancien lot peut contenir des décisions automatiques produites avant le
     # seuil à 90 % ou avant la réparation des échelles. L'audit est persisté
     # AVANT de refuser la finalisation, afin que la file manuelle soit visible
