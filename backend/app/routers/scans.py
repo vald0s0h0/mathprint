@@ -1,6 +1,8 @@
 """Lots de scans, machine d'états, file de validation professeur (§6, §9.5)."""
+import functools
 import hashlib
 import math
+import threading
 import uuid
 from datetime import datetime, timezone
 
@@ -65,6 +67,35 @@ def _log_task_error(task: str, batch_id: str, e: Exception) -> None:
                     error=f"{type(e).__name__}: {e}", traceback=traceback.format_exc())
 
 
+# Lots dont une tâche de fond tourne dans CE processus (API mono-processus).
+# Un double clic sur « Relancer » lançait une 2e lecture du même scan en
+# parallèle : mémoire doublée sur le NAS (1,75 Go) et écritures concurrentes.
+_RUNNING: set[str] = set()
+_RUNNING_LOCK = threading.Lock()
+
+
+def _is_running(batch_id: str) -> bool:
+    with _RUNNING_LOCK:
+        return batch_id in _RUNNING
+
+
+def _single_flight(fn):
+    """Une seule tâche de fond à la fois par lot ; un doublon est ignoré."""
+    @functools.wraps(fn)
+    def wrapper(batch_id: str):
+        with _RUNNING_LOCK:
+            if batch_id in _RUNNING:
+                return
+            _RUNNING.add(batch_id)
+        try:
+            return fn(batch_id)
+        finally:
+            with _RUNNING_LOCK:
+                _RUNNING.discard(batch_id)
+    return wrapper
+
+
+@_single_flight
 def _run_pipeline(batch_id: str):
     db = SessionLocal()
     try:
@@ -83,6 +114,7 @@ def _run_pipeline(batch_id: str):
         db.close()
 
 
+@_single_flight
 def _run_grading(batch_id: str):
     """Partie correction seule, déclenchée après l'assistant OCRiser."""
     db = SessionLocal()
@@ -103,6 +135,7 @@ def _run_grading(batch_id: str):
         db.close()
 
 
+@_single_flight
 def _run_build_overlays(batch_id: str):
     """Régénère UNIQUEMENT les copies corrigées d'un lot déjà finalisé (les
     résultats/notes sont acquis) — bouton de déblocage quand seule la génération
@@ -1146,6 +1179,9 @@ def retry_batch(batch_id: str, tasks: BackgroundTasks, db: Session = Depends(get
     b = db.get(ScanBatch, batch_id)
     if not b:
         raise HTTPException(404)
+    if _is_running(b.id):
+        # déjà en cours : ne pas lancer une 2e lecture en parallèle
+        return {"ok": True, "status": b.status, "already_running": True}
     b.error = None
     db.commit()
     progress = b.progress_json or {}

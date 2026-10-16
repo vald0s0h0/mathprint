@@ -197,6 +197,34 @@ def test_retry_clears_error_and_reschedules(mock_db, tmp_path, monkeypatch):
     assert tasks.tasks[0].func is scans_router._run_pipeline
 
 
+def test_retry_while_running_does_not_start_a_second_pipeline(mock_db, tmp_path, monkeypatch):
+    """Double clic sur « Relancer » : une 2e lecture du même scan en parallèle
+    doublait la mémoire sur le NAS. Le doublon n'est ni planifié ni exécuté."""
+    from fastapi import BackgroundTasks
+
+    db = mock_db
+    monkeypatch.setattr(cfg, "data_dir", tmp_path)
+    a = _seed_manual(db)
+    batch = scan_intake.get_or_create_batch(db, a.id, None)
+    db.commit()
+
+    calls = []
+    monkeypatch.setattr(scans_router, "process_batch", lambda _db, b: calls.append(b.id))
+    scans_router._RUNNING.add(batch.id)       # une lecture tourne déjà
+    try:
+        tasks = BackgroundTasks()
+        r = scans_router.retry_batch(batch.id, tasks, db)
+        assert r["already_running"] is True and tasks.tasks == []
+        scans_router._run_pipeline(batch.id)   # tâche en double : ignorée
+        assert calls == []
+    finally:
+        scans_router._RUNNING.discard(batch.id)
+    monkeypatch.setattr(scans_router, "SessionLocal", lambda: db)
+    monkeypatch.setattr(db, "close", lambda: None)
+    scans_router._run_pipeline(batch.id)       # lot libre : exécutée
+    assert calls == [batch.id] and not scans_router._is_running(batch.id)
+
+
 def test_finalize_surfaces_overlay_error(mock_db, tmp_path, monkeypatch):
     """Un échec de génération des copies corrigées n'est plus avalé en silence :
     il est remonté sur batch.error (et dans le résultat), pour que l'UI affiche
