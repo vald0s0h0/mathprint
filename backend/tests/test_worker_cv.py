@@ -239,3 +239,67 @@ def test_detect_matching_two_partners_for_one_dot_goes_to_review():
     ])
     _pairs, conf = W.detect_matching(img, left, right)
     assert conf < 0.9
+
+
+def _qcm_page(marks, outline=175):
+    """3 cases QCM à la géométrie réelle ; `marks` = {index: (couleur BGR, forme)}
+    avec forme 'x' (croix) ou 'fill' (case noircie) ; `outline` = gris du
+    contour imprimé resté visible (saumon restitué sans couleur)."""
+    import cv2
+    from app.services import worker_cv as W
+    from app.services.pdfgen import PAGE_H
+
+    img = np.full((int(PAGE_H * W.SCALE), 1700, 3), 255, dtype=np.uint8)
+    boxes = []
+    for k in range(3):
+        b = {"index": k, "x_pt": 44.2 + 110 * k, "y_pt": 270.0, "w_pt": 5.67, "h_pt": 5.67,
+             "detect": {"x_pt": 41.4 + 110 * k, "y_pt": 267.1, "w_pt": 9.92, "h_pt": 11.34}}
+        boxes.append(b)
+        x0, y0 = W.pt_to_px(b["x_pt"], b["y_pt"] + b["h_pt"])
+        x1, y1 = W.pt_to_px(b["x_pt"] + b["w_pt"], b["y_pt"])
+        cv2.rectangle(img, (int(x0), int(y0)), (int(x1), int(y1)), (outline,) * 3, 1)
+        if k in marks:
+            color, shape = marks[k]
+            if shape == "x":
+                cv2.line(img, (int(x0) - 2, int(y0) - 2), (int(x1) + 2, int(y1) + 2), color, 2)
+                cv2.line(img, (int(x0) - 2, int(y1) + 2), (int(x1) + 2, int(y0) - 2), color, 2)
+            else:
+                cv2.rectangle(img, (int(x0), int(y0)), (int(x1), int(y1)), color, -1)
+    return img, boxes
+
+
+def test_second_pass_reads_a_light_blue_cross():
+    """Croix au stylo BLEU CLAIR (gris ~170) : invisible pour l'encre sombre de
+    la 1re passe, lue par la 2e passe (filtre bleu ET contour exclu concordent)."""
+    from app.services import worker_cv as W
+
+    img, boxes = _qcm_page({1: ((220, 160, 100), "x")})
+    first = W.qcm_densities(img, boxes)
+    assert first[1] < W.QCM_THRESHOLD                       # 1re passe aveugle
+    dc, dr = W.qcm_densities_color(img, boxes), W.qcm_densities_ring(img, boxes)
+    sel = W.second_pass_selection(boxes, False, dc, W.adapt_qcm_threshold(dc),
+                                  dr, W.adapt_qcm_threshold(dr))
+    assert sel == [1]
+
+
+def test_second_pass_confirms_blank_with_light_outline():
+    from app.services import worker_cv as W
+
+    img, boxes = _qcm_page({})
+    dc, dr = W.qcm_densities_color(img, boxes), W.qcm_densities_ring(img, boxes)
+    sel = W.second_pass_selection(boxes, False, dc, W.adapt_qcm_threshold(dc),
+                                  dr, W.adapt_qcm_threshold(dr))
+    assert sel == []
+
+
+def test_second_pass_disagreement_on_dark_printed_outline_goes_to_review():
+    """Contour imprimé resté gris FONCÉ : l'encre sombre croit toutes les cases
+    cochées, la mesure « contour exclu » n'en voit aucune — désaccord, donc
+    aucune lecture devinée (None -> OCRiser)."""
+    from app.services import worker_cv as W
+
+    img, boxes = _qcm_page({}, outline=110)
+    dc, dr = W.qcm_densities_color(img, boxes), W.qcm_densities_ring(img, boxes)
+    sel = W.second_pass_selection(boxes, False, dc, W.adapt_qcm_threshold(dc),
+                                  dr, W.adapt_qcm_threshold(dr))
+    assert sel is None

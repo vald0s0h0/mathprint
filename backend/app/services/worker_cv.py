@@ -530,6 +530,28 @@ def detect_qcm(warped: np.ndarray, boxes: list[dict],
     return selected, densities
 
 
+def grid_selection(boxes: list[dict], densities: list[float], thr: QcmThreshold
+                   ) -> list[int] | None:
+    """Sélection par ligne d'une grille à partir de densités déjà mesurées
+    (cf. `detect_grid`) ; None si une case est ambiguë ou une ligne doublement
+    cochée."""
+    lo, hi = thr.band
+    if any(lo <= d < hi for d in densities):
+        return None
+    rows: dict[int, list[tuple[int, float]]] = {}
+    for b, d in zip(boxes, densities):
+        rows.setdefault(int(b.get("row", 0)), []).append((int(b.get("col", 0)), d))
+    n_rows = (max(rows) + 1) if rows else 0
+    selected = [-1] * n_rows
+    for ri, cells in rows.items():
+        checked = [col for col, d in cells if d >= thr.value]
+        if len(checked) > 1:
+            return None                     # double coche sur une ligne -> revue
+        if checked:
+            selected[ri] = checked[0]
+    return selected
+
+
 def detect_grid(warped: np.ndarray, boxes: list[dict], thr: QcmThreshold
                 ) -> tuple[list[int] | None, list[float]]:
     """Grille cochée (checkbox_grid) : une case cochée PAR LIGNE. Réutilise les
@@ -539,21 +561,100 @@ def detect_grid(warped: np.ndarray, boxes: list[dict], thr: QcmThreshold
     une case est AMBIGUË (densité dans la bande) ou si une ligne porte PLUSIEURS
     coches (choix multiple interdit sur une ligne)."""
     densities = qcm_densities(warped, boxes)
-    lo, hi = thr.band
-    if any(lo <= d < hi for d in densities):
-        return None, densities
-    rows: dict[int, list[tuple[int, float]]] = {}
-    for b, d in zip(boxes, densities):
-        rows.setdefault(int(b.get("row", 0)), []).append((int(b.get("col", 0)), d))
-    n_rows = (max(rows) + 1) if rows else 0
-    selected = [-1] * n_rows
-    for ri, cells in rows.items():
-        checked = [col for col, d in cells if d >= thr.value]
-        if len(checked) > 1:
-            return None, densities          # double coche sur une ligne -> revue
-        if checked:
-            selected[ri] = checked[0]
-    return selected, densities
+    return grid_selection(boxes, densities, thr), densities
+
+
+# --- 2e passe des cases à cocher -------------------------------------------
+# La 1re passe (encre sombre, gris < 128, dans la fenêtre élargie) est prudente
+# mais hésite sur deux cas fréquents relevés sur un vrai contrôle (6e, 29
+# copies) : coche au stylo BLEU CLAIR ou au crayon (plus claire que 128), et
+# contour saumon de la case restitué GRIS par certains copieurs (non retiré par
+# le dropout, il « remplit » les cases vides). Une zone qui hésite repasse par
+# deux mesures INDÉPENDANTES, chacune avec son seuil adaptatif de page :
+#   - filtre bleu : encre sombre OU colorée (stylo bleu clair) ;
+#   - contour exclu : encre sombre hors du contour imprimé (position connue) +
+#     encre claire (crayon) à l'INTÉRIEUR de la case, où le papier est blanc.
+# La lecture n'est acceptée que si les deux sont nettes ET identiques ; sinon
+# OCRiser. Sur les 116 réponses à cases du contrôle : revues 29 -> 23, 0 erreur.
+QCM2_COLOR_SAT = 60
+QCM2_COLOR_VMAX = 235
+QCM2_RING_PX = 4
+QCM2_LIGHT_GRAY = 170
+
+
+def _qcm_window(warped: np.ndarray, b: dict):
+    win = b.get("detect") or _detect_window(b)
+    crop = crop_zone(warped, win["x_pt"], win["y_pt"], win["w_pt"], win["h_pt"],
+                     padding_pt=0)
+    return win, crop
+
+
+def _dark_or_colored(filtered: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    gray = cv2.cvtColor(filtered, cv2.COLOR_BGR2GRAY)
+    hsv = cv2.cvtColor(filtered, cv2.COLOR_BGR2HSV)
+    colored = (hsv[..., 1] > QCM2_COLOR_SAT) & (hsv[..., 2] < QCM2_COLOR_VMAX)
+    return (gray < 128) | colored, gray
+
+
+def qcm_densities_color(warped: np.ndarray, boxes: list[dict]) -> list[float]:
+    """2e passe, filtre bleu : encre sombre OU colorée dans la fenêtre."""
+    out = []
+    for b in boxes:
+        _win, crop = _qcm_window(warped, b)
+        if crop.size == 0:
+            out.append(0.0)
+            continue
+        ink, _gray = _dark_or_colored(dropout_filter(crop))
+        out.append(float(ink.mean()))
+    return out
+
+
+def qcm_densities_ring(warped: np.ndarray, boxes: list[dict]) -> list[float]:
+    """2e passe, contour exclu : encre sombre/colorée HORS du contour imprimé
+    (±QCM2_RING_PX) + encre claire (crayon) à l'intérieur de la case."""
+    out = []
+    for b in boxes:
+        win, crop = _qcm_window(warped, b)
+        if crop.size == 0:
+            out.append(0.0)
+            continue
+        dark, gray = _dark_or_colored(dropout_filter(crop))
+        wx0, wy0 = pt_to_px(win["x_pt"], win["y_pt"] + win["h_pt"])
+        bx0, by0 = pt_to_px(b["x_pt"], b["y_pt"] + b["h_pt"])
+        bx1, by1 = pt_to_px(b["x_pt"] + b["w_pt"], b["y_pt"])
+        p0 = (int(round(bx0 - wx0)), int(round(by0 - wy0)))
+        p1 = (int(round(bx1 - wx0)), int(round(by1 - wy0)))
+        r = QCM2_RING_PX
+        ring = np.zeros(gray.shape, np.uint8)
+        cv2.rectangle(ring, p0, p1, 1, 2 * r + 1)
+        inner = np.zeros(gray.shape, bool)
+        inner[max(0, p0[1] + r + 1):max(0, p1[1] - r),
+              max(0, p0[0] + r + 1):max(0, p1[0] - r)] = True
+        keep = ring == 0
+        ink = (dark & keep) | (inner & (gray < QCM2_LIGHT_GRAY))
+        out.append(float(ink.sum()) / max(1, int(keep.sum())))
+    return out
+
+
+def _qcm_selection(boxes: list[dict], densities: list[float], thr: QcmThreshold,
+                   grid: bool) -> list[int] | None:
+    if grid:
+        return grid_selection(boxes, densities, thr)
+    selected, _d, _default = select_qcm(boxes, densities, thr)
+    return selected
+
+
+def second_pass_selection(boxes: list[dict], grid: bool,
+                          dens_color: list[float], thr_color: QcmThreshold,
+                          dens_ring: list[float], thr_ring: QcmThreshold
+                          ) -> list[int] | None:
+    """Lecture de 2e passe : acceptée seulement si les deux mesures sont
+    nettes et donnent la MÊME sélection ; None sinon (-> OCRiser)."""
+    a = _qcm_selection(boxes, dens_color, thr_color, grid)
+    b = _qcm_selection(boxes, dens_ring, thr_ring, grid)
+    if a is None or b is None:
+        return None
+    return a if (sorted(a) if not grid else a) == (sorted(b) if not grid else b) else None
 
 
 # --- Points à relier : couverture ORIENTÉE du segment de chaque paire --------

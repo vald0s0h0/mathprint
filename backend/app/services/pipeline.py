@@ -511,7 +511,10 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
         # les cases QCM de la page pour caler un seuil unique sur le style de coche
         # de l'élève (trait fin / aplat), quand deux groupes se détachent nettement.
         qcm_meta: dict[str, tuple[list, list[float]]] = {}
+        qcm_meta2: dict[str, tuple[list[float], list[float]]] = {}
         pooled: list[float] = []
+        pooled_color: list[float] = []
+        pooled_ring: list[float] = []
         for zone in zones:
             zitem = db.get(CopyItem, zone.item_id)
             # QCM et grille cochée partagent la même détection de cases : on met en
@@ -521,7 +524,23 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
                 zdens = worker_cv.qcm_densities(res.warped, zboxes)
                 qcm_meta[zone.id] = (zboxes, zdens)
                 pooled.extend(zdens)
+                # mesures de 2e passe (cf. worker_cv.second_pass_selection),
+                # chacune avec son propre seuil adaptatif de page
+                d_color = worker_cv.qcm_densities_color(res.warped, zboxes)
+                d_ring = worker_cv.qcm_densities_ring(res.warped, zboxes)
+                qcm_meta2[zone.id] = (d_color, d_ring)
+                pooled_color.extend(d_color)
+                pooled_ring.extend(d_ring)
         qcm_thr = worker_cv.adapt_qcm_threshold(pooled)
+        thr_color = worker_cv.adapt_qcm_threshold(pooled_color)
+        thr_ring = worker_cv.adapt_qcm_threshold(pooled_ring)
+
+        def second_pass(zone_id: str, zboxes: list, grid: bool) -> list[int] | None:
+            if zone_id not in qcm_meta2:
+                return None
+            d_color, d_ring = qcm_meta2[zone_id]
+            return worker_cv.second_pass_selection(zboxes, grid, d_color, thr_color,
+                                                   d_ring, thr_ring)
         for zone in zones:
             item = db.get(CopyItem, zone.item_id)
             if db.query(StudentResponse).filter_by(copy_item_id=item.id).first():
@@ -542,6 +561,17 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
                 selected, densities, default_sel = worker_cv.select_qcm(
                     boxes, densities, qcm_thr)
                 cv_conf = worker_cv.qcm_decision_confidence(densities, qcm_thr)
+                second = False
+                # 1re passe hésitante, ou AUCUNE coche (rare chez un élève : une
+                # coche bleu clair / crayon peut avoir échappé à l'encre sombre) :
+                # filtre bleu + contour exclu, acceptés s'ils concordent.
+                blank = selected is not None and len(selected) == 0
+                if cv_conf < 0.9 or blank:
+                    sel2 = second_pass(zone.id, boxes, grid=False)
+                    if sel2 is not None:
+                        selected, cv_conf, second = sel2, 0.95, True
+                    elif blank:
+                        cv_conf = 0.5   # vide non confirmé -> OCRiser
                 double_check = bool(selected) and len(selected) > 1 and _qcm_exclusive(item)
                 if double_check:
                     # Plusieurs cases cochées sur un choix UNIQUE : l'élève a
@@ -554,7 +584,8 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
                                             "threshold": round(qcm_thr.value, 4),
                                             "adapted": qcm_thr.adapted,
                                             "default_selected": default_sel,
-                                            "double_check": double_check},
+                                            "double_check": double_check,
+                                            "second_pass": second},
                                   confidence=cv_conf))
                 n_review += _decide_and_store(
                     db, item=item, zone=zone, student=student,
@@ -566,10 +597,19 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
                 cv_conf = worker_cv.qcm_decision_confidence(_dens, qcm_thr)
                 if selected is None:
                     cv_conf = 0.0   # double coche sur une ligne -> OCRiser
+                second = False
+                blank = selected is not None and all(c == -1 for c in selected)
+                if cv_conf < 0.9 or blank:
+                    sel2 = second_pass(zone.id, boxes, grid=True)
+                    if sel2 is not None:
+                        selected, cv_conf, second = sel2, 0.95, True
+                    elif blank:
+                        cv_conf = 0.5   # grille vide non confirmée -> OCRiser
                 db.add(OcrAttempt(zone_id=zone.id, provider="cv_local",
                                   raw_json={"grid_selected": selected,
                                             "threshold": round(qcm_thr.value, 4),
-                                            "adapted": qcm_thr.adapted}, confidence=cv_conf))
+                                            "adapted": qcm_thr.adapted,
+                                            "second_pass": second}, confidence=cv_conf))
                 n_review += _decide_and_store(
                     db, item=item, zone=zone, student=student,
                     ocr_text="", conf=cv_conf, selected=selected, corr_id=corr_id,
