@@ -51,20 +51,36 @@ class PageAnalysis:
     warnings: list[str] = field(default_factory=list)
 
 
-def raster_pdf(path: str, dpi: int = DPI) -> list[np.ndarray]:
-    """Rasterise chaque page du PDF en BGR. Page par page (mémoire NAS, §11.2)."""
+def iter_raster_pdf(path: str, dpi: int = DPI):
+    """Rasterise le PDF une page à la fois (générateur) : une seule page BGR en
+    mémoire. Indispensable sur le NAS (2 Go) — une classe entière rastérisée d'un
+    coup à 200 dpi (~11 Mo/page) suffisait à faire tuer le conteneur API (§11.2)."""
     doc = pdfium.PdfDocument(path)
-    pages = []
     try:
         for i in range(len(doc)):
             # rev_byteorder=True force un rendu RGB(A) quel que soit le défaut natif
             bitmap = doc[i].render(scale=dpi / 72.0, rev_byteorder=True)
             arr = bitmap.to_numpy()
             code = cv2.COLOR_RGBA2BGR if arr.shape[2] == 4 else cv2.COLOR_RGB2BGR
-            pages.append(cv2.cvtColor(arr, code))
+            yield cv2.cvtColor(arr, code)
     finally:
         doc.close()
-    return pages
+
+
+def raster_pdf(path: str, dpi: int = DPI) -> list[np.ndarray]:
+    """Rasterise chaque page du PDF en BGR (liste complète en mémoire)."""
+    return list(iter_raster_pdf(path, dpi))
+
+
+def count_pages(path: str) -> int:
+    """Nombre de pages d'un scan sans le rastériser (1 pour une image)."""
+    if Path(path).suffix.lower() != ".pdf":
+        return 1
+    doc = pdfium.PdfDocument(path)
+    try:
+        return len(doc)
+    finally:
+        doc.close()
 
 
 _HEIF_REGISTERED = False
@@ -78,6 +94,14 @@ def _ensure_heif_opener():
     import pillow_heif
     pillow_heif.register_heif_opener()
     _HEIF_REGISTERED = True
+
+
+def iter_raster_any(path: str):
+    """Version générateur de `raster_any` : une page en mémoire à la fois."""
+    if Path(path).suffix.lower() == ".pdf":
+        yield from iter_raster_pdf(path)
+    else:
+        yield from raster_any(path)
 
 
 def raster_any(path: str) -> list[np.ndarray]:

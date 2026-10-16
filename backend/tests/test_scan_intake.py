@@ -282,3 +282,56 @@ def test_sandbox_same_file_reuploadable_after_correction_deleted(mock_db, tmp_pa
     assert sum(r["pages_added"] for r in out2["results"]) == 1, \
         "le même fichier doit être accepté une fois la correction supprimée"
     assert len(out2["batch_ids"]) == 1
+
+
+def test_real_pipeline_reads_pages_one_at_a_time(mock_db, tmp_path, monkeypatch):
+    """Chemin RÉEL de la lecture (PDF -> raster -> QR -> recalage -> zones) sur
+    un scan de plusieurs copies. La pipeline doit rastériser page par page
+    (générateur) : la liste complète du scan en mémoire faisait tuer le
+    conteneur API sur le NAS (2 Go) et figeait le lot sur « Lecture des copies »."""
+    from reportlab.pdfgen import canvas
+
+    from app.models import CopyItem, ResponseZone, StudentResponse
+    from app.services import pipeline
+
+    db = mock_db
+    a, pages = _seed(db)
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=(pdfgen.PAGE_W, pdfgen.PAGE_H))
+    for page_id in pages.values():
+        page = db.get(DocumentPage, page_id)
+        page.qr_payload = sign_page(page_id)
+        page.hmac_version = "2"
+        item = CopyItem(copy_id=page.copy_id, catalog_id="cat-1", sequence=1,
+                        difficulty=3, response_type="manual_drawing",
+                        statement="Trace la figure.", correction="figure",
+                        expected_json={"type": "manual"},
+                        grading_json={"comparator": "manual", "max_score": 1})
+        db.add(item)
+        db.flush()
+        db.add(ResponseZone(page_id=page_id, item_id=item.id, type="drawing",
+                            x_pt=80, y_pt=200, w_pt=200, h_pt=100, meta_json={}))
+        pdfgen._draw_markers(c, page.qr_payload)
+        pdfgen._draw_header(c, "MARTIN Alex", "5A", "Contrôle 1", "control", "10/08/2026")
+        c.showPage()
+    c.save()
+    db.commit()
+
+    monkeypatch.setattr(scan_intake.settings, "data_dir", tmp_path)
+    out = sandbox.ingest_files(db, [("classe.pdf", ".pdf", buf.getvalue())], "teacher")
+    batch = db.get(ScanBatch, out["batch_ids"][0])
+
+    def _no_full_raster(_path):
+        raise AssertionError("la pipeline ne doit pas rastériser tout le scan d'un coup")
+    monkeypatch.setattr(worker_cv, "raster_any", _no_full_raster)
+    monkeypatch.setattr(worker_cv, "raster_pdf", _no_full_raster)
+
+    pipeline.process_batch(db, batch)
+    db.refresh(batch)
+    assert batch.error is None
+    assert batch.page_count == 2
+    assert "ocr_complete" in (batch.progress_json or {})
+    assert db.query(StudentResponse).count() == 2
+    derived = tmp_path / "assessments" / a.id / "scans" / "derived"
+    for page_id in pages.values():
+        assert (derived / f"page-{page_id}.png").exists()

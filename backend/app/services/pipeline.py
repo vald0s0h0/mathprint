@@ -380,6 +380,8 @@ def _wrong_answer(right: str, h: int) -> str:
 # --------------------------------------------------------------- chemin réel
 
 def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
+    import cv2
+
     from . import worker_cv  # import tardif : OpenCV chargé seulement si nécessaire
 
     # sans clé Mathpix, l'OCR tourne sur son repli déterministe : on lui souffle
@@ -398,9 +400,14 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
              .filter(Copy.assessment_id == assessment.id).all())
     page_index = {p.id: (p, c) for p, c in pages}
 
-    images = worker_cv.raster_any(src.storage_path)
-    batch.page_count = len(images)
-    _set_status(db, batch, "split", pages=len(images))
+    # Pages rastérisées UNE PAR UNE (générateur) et page recalée écrite sur
+    # disque aussitôt : garder tout le scan en mémoire (brut + recalé, ~23 Mo
+    # par page) faisait tuer le conteneur API sur le NAS pour une classe entière,
+    # laissant le lot figé sur « Lecture des copies ».
+    n_pages = worker_cv.count_pages(src.storage_path)
+    images = worker_cv.iter_raster_any(src.storage_path)
+    batch.page_count = n_pages
+    _set_status(db, batch, "split", pages=n_pages)
 
     analyses: list[tuple[int, "worker_cv.PageAnalysis"]] = []
     identified = 0
@@ -439,6 +446,13 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
                 else:
                     seen_page_ids.add(res.page_id)
                     identified += 1
+                    # page recalée persistée : sert de FOND à l'aperçu « copie +
+                    # overlay » (services.pdfgen.render_copy_review) et est
+                    # relue au 2e passage — on ne la garde pas en mémoire.
+                    if res.warped is not None:
+                        (derived_dir / f"page-{res.page_id}.png").write_bytes(
+                            worker_cv.encode_png(res.warped))
+                        res.warped = None
                     analyses.append((i, res))
         else:
             # page inconnue ou d'un autre lot : bloquée, jamais attribuée (RM-001)
@@ -446,7 +460,7 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
             if res.page_id:
                 sp.quality_json = {**sp.quality_json, "warnings":
                                    sp.quality_json["warnings"] + ["page_from_other_assessment"]}
-    _set_status(db, batch, "identified", identified=identified, total=len(images))
+    _set_status(db, batch, "identified", identified=identified, total=n_pages)
     _set_status(db, batch, "registered")
 
     # Aucune page reconnue : ne PAS filer en silence vers un lot « corrigé » vide
@@ -463,14 +477,18 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
 
     n_review = 0
     queue: list[llm_grader.Task] = []
+    prev = None
     for i, res in analyses:
+        if prev is not None:
+            prev.warped = None   # page précédente traitée : libérée
+        prev = res
         page, copy = page_index[res.page_id]
         student = db.get(Student, copy.student_id)
-        # page recalée persistée : sert de FOND à l'aperçu « copie + overlay »
-        # (services.pdfgen.render_copy_review), sans re-rastériser le scan.
-        if res.warped is not None:
-            (derived_dir / f"page-{res.page_id}.png").write_bytes(
-                worker_cv.encode_png(res.warped))
+        # page recalée écrite au 1er passage : relue ici (PNG sans perte), une
+        # seule page en mémoire à la fois.
+        warped_path = derived_dir / f"page-{res.page_id}.png"
+        if warped_path.exists():
+            res.warped = cv2.imread(str(warped_path), cv2.IMREAD_UNCHANGED)
         zones = db.query(ResponseZone).filter_by(page_id=page.id).all()
         # Seuil QCM ADAPTATIF par page : on met en commun les densités de TOUTES
         # les cases QCM de la page pour caler un seuil unique sur le style de coche
