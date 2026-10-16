@@ -13,9 +13,9 @@ import hashlib
 import math
 import threading
 from datetime import datetime, timezone
-from fractions import Fraction
 from pathlib import Path
 
+from reportlab.lib.units import mm
 from sqlalchemy.orm import Session
 
 from ..config import settings
@@ -29,7 +29,7 @@ from . import llm_grader, providers, scoring
 from .runtime_settings import ocr_confidence_threshold
 from .appreciation import build_appreciation
 from .forgetting import apply_evidence, update_level_after_assessment
-from .pdfgen import render_copy_review, render_overlay
+from .pdfgen import CARD_PAD, qcm_answer_rects, render_copy_review, render_overlay
 
 PHASES = ["uploaded", "split", "identified", "registered", "cropped",
           "ocr_complete", "ocr_review_pending", "ocr_confirmed", "graded",
@@ -598,13 +598,16 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
                 if selected is None:
                     cv_conf = 0.0   # double coche sur une ligne -> OCRiser
                 second = False
-                blank = selected is not None and all(c == -1 for c in selected)
+                # une LIGNE sans coche suffit à déclencher la 2e passe : une croix
+                # au crayon très clair y passe inaperçue en 1re passe (cas réel :
+                # élève noté 3/5 au lieu de 5/5, sans aucune revue)
+                blank = selected is not None and any(c == -1 for c in selected)
                 if cv_conf < 0.9 or blank:
                     sel2 = second_pass(zone.id, boxes, grid=True)
                     if sel2 is not None:
                         selected, cv_conf, second = sel2, 0.95, True
                     elif blank:
-                        cv_conf = 0.5   # grille vide non confirmée -> OCRiser
+                        cv_conf = 0.5   # ligne vide non confirmée -> OCRiser
                 db.add(OcrAttempt(zone_id=zone.id, provider="cv_local",
                                   raw_json={"grid_selected": selected,
                                             "threshold": round(qcm_thr.value, 4),
@@ -1109,73 +1112,96 @@ def _latest_ocr(db: Session, zone_id: str) -> OcrAttempt | None:
             .order_by(OcrAttempt.created_at.desc()).first())
 
 
-def _credit_label(credit: float) -> str:
-    """Part des points en fraction LISIBLE pour l'overlay (« ½ », « 2/3 ») :
-    imprimer « 0.67 » à côté d'une coche ne dit rien à un élève de 3e. Les
-    crédits produits par le moteur sont tous des fractions simples (une part
-    par bonne réponse, demi-point d'arrondi)."""
-    f = Fraction(credit).limit_denominator(12)
-    return "½" if f == Fraction(1, 2) else f"{f.numerator}/{f.denominator}"
+def _card_right(zone: ResponseZone) -> float:
+    """Abscisse du bord DROIT du cadre de la carte exercice : la bande de
+    correction (posée sous toute carte simple) est en retrait de CARD_PAD de
+    chaque côté ; à défaut (partie d'un composite), la zone couvre la carte."""
+    strip = (zone.meta_json or {}).get("correction_strip")
+    if strip and strip.get("w_pt"):
+        return float(strip["x_pt"]) + float(strip["w_pt"]) + CARD_PAD
+    return float(zone.x_pt) + float(zone.w_pt)
+
+
+def _center_y(geo: dict) -> float:
+    return float(geo["y_pt"]) + float(geo["h_pt"]) / 2
+
+
+def _rows_by_y(geos: list[dict], tol: float = 3.0) -> list[list[dict]]:
+    """Regroupe des rectangles par LIGNE (centres à moins de `tol` pt), de haut
+    en bas."""
+    rows: list[list[dict]] = []
+    for g in sorted(geos, key=lambda g: -_center_y(g)):
+        if rows and abs(_center_y(rows[-1][0]) - _center_y(g)) <= tol:
+            rows[-1].append(g)
+        else:
+            rows.append([g])
+    return rows
+
+
+def _student_pairs(db: Session, zone: ResponseZone, decision: GradingDecision) -> set:
+    ocr = _latest_ocr(db, zone.id)
+    pairs = (ocr.raw_json or {}).get("pairs") if ocr else None
+    if pairs is None:
+        resp = db.get(StudentResponse, decision.response_id)
+        pairs = resp.selected_pairs if resp else []
+    return {tuple(p) for p in (pairs or []) if isinstance(p, (list, tuple)) and len(p) == 2}
 
 
 def _zone_marks(db: Session, item: CopyItem, zone: ResponseZone,
                 decision: GradingDecision) -> dict | None:
-    """Marques par CHAMP de réponse pour l'overlay, selon le type et la réponse
-    de l'élève (§ améliorations overlay) :
+    """Marques d'overlay d'une réponse — règle UNIQUE pour tous les types : sur
+    le bord droit du cadre de la carte, une petite marque PAR LIGNE de réponse,
+    alignée sur elle — coche (trait fin) si la ligne est juste, croix (trait
+    épais, pour repérer les erreurs d'un coup d'œil) sinon. Plus de récap global
+    par exercice : la note de barème sous la carte suffit.
 
-    - short_text : une coche/croix en haut à droite de la case ;
-    - table_fill / multi_blank : une coche/croix en haut à droite de CHAQUE
-      cellule (toutes marquées) ;
-    - qcm : une colonne de correction attendue (case pleine/vide à gauche de
-      chaque case élève) + un récap coche/croix en bas à droite de la carte ;
-    - matching : si erreur, les traits de correction entre les bons points ;
-    - multiline_text : une coche/croix en bas à droite de la zone.
+    Corrections visibles, uniquement là où c'est faux :
+    - QCM : la bonne réponse ENTOURÉE (case + libellé) et sa case REMPLIE ; en
+      choix multiple, les réponses fausses de l'élève sont en plus BARRÉES ;
+    - grille cochée : la bonne case REMPLIE sur chaque ligne fausse ;
+    - points à relier : le trait attendu en pointillés, seulement pour les
+      liaisons fausses ; marques alignées sur la colonne de DROITE ;
+    - tableaux / réponses écrites : la marque de ligne seule.
+    Une réponse partiellement créditée n'est pas « juste » : croix (les points
+    obtenus restent lisibles dans la note de barème).
 
-    La géométrie vient de zone.meta_json (posée par pdfgen à la génération) ; les
-    copies imprimées AVANT cette évolution n'ont pas ces repères et retombent
-    silencieusement sur « rien à dessiner » (jamais d'erreur)."""
+    Retourne {edge_x, edge: [{y, ok}], circles, strikes, fills, links} ; None si
+    la géométrie manque (copies antérieures aux repères)."""
     rtype = item.response_type
     meta = zone.meta_json or {}
     expected = item.expected_json or {}
     full = decision.score >= decision.max_score
-    # part des points obtenue : sert à distinguer, sur les champs à UNE réponse,
-    # le crédit PARTIEL (arrondi correct, ou crédit accordé par le professeur)
-    # de la réponse fausse — la marque imprimée n'est alors ni coche ni croix.
-    credit = (decision.score / decision.max_score) if decision.max_score else 0.0
+    marks = {"edge_x": _card_right(zone), "edge": [], "circles": [], "strikes": [],
+             "fills": [], "links": []}
 
     if rtype.startswith("qcm"):
+        boxes = meta.get("boxes") or []
+        if not boxes:
+            return None
         correct = set(expected.get("correct", []))
         resp = db.get(StudentResponse, decision.response_id)
         selected = set(resp.selected_choices or []) if resp else set()
-        # crédit plein => la sélection VAUT les bonnes réponses : garantit des
-        # marques cohérentes avec la note même quand la lecture CV a échoué ou
-        # après une validation manuelle « Juste » (qui ne réécrit pas la sélection).
         if full:
+            # crédit plein (y compris « Juste » du professeur, qui ne réécrit pas
+            # la sélection) : la sélection VAUT les bonnes réponses
             selected = set(correct)
-        boxes = []
-        for b in meta.get("boxes", []):
-            i = b.get("index")
-            is_correct, is_sel = i in correct, i in selected
-            if is_sel and is_correct:
-                state = "ok"        # coché à raison -> coche sur la case
-            elif is_sel:
-                state = "wrong"     # coché à tort -> croix sur la case
-            elif is_correct:
-                state = "missed"    # bonne réponse oubliée -> case correction cochée
-            else:
-                state = None        # non coché à raison -> rien
-            boxes.append({"index": i, "x_pt": b.get("x_pt"), "y_pt": b.get("y_pt"),
-                          "w_pt": b.get("w_pt"), "h_pt": b.get("h_pt"),
-                          "correction_box": b.get("correction_box"), "state": state})
-        # le récap de carte porte la PART obtenue : un QCM multiple à moitié
-        # juste ne s'imprime plus comme une réponse entièrement fausse.
-        return {"kind": "qcm", "any_error": not full, "boxes": boxes,
-                "credit": credit, "credit_label": _credit_label(credit)}
+        by_index = {b.get("index"): b for b in boxes}
+        anchor = next((by_index[i] for i in sorted(selected) if i in by_index), boxes[0])
+        marks["edge"].append({"y": _center_y(anchor), "ok": full})
+        if not full:
+            rects = qcm_answer_rects((item.grading_json or {}).get("choices") or [],
+                                     {"x_pt": zone.x_pt, "y_pt": zone.y_pt,
+                                      "w_pt": zone.w_pt, "h_pt": zone.h_pt}, boxes)
+            marks["circles"] = [rects[i] for i in sorted(correct) if i in rects]
+            # bonne case aussi REMPLIE (comme les grilles) : la réponse attendue
+            # est montrée exactement comme l'élève aurait dû la cocher
+            marks["fills"] = [by_index[i] for i in sorted(correct) if i in by_index]
+            if not _qcm_exclusive(item):
+                marks["strikes"] = [rects[i] for i in sorted(selected - correct) if i in rects]
+        return marks
 
     if rtype == "checkbox_grid":
         rows = expected.get("rows") or []
-        # sélection par ligne : dernier OcrAttempt (teacher après set_cells, sinon
-        # cv_local), puis la réponse stockée en repli
         ocr = _latest_ocr(db, zone.id)
         selected = ((ocr.raw_json or {}).get("grid_selected") if ocr else None)
         if selected is None:
@@ -1183,66 +1209,73 @@ def _zone_marks(db: Session, item: CopyItem, zone: ResponseZone,
             selected = list(resp.selected_choices or []) if resp else []
         if full:                        # crédit plein : chaque ligne vaut sa bonne colonne
             selected = [r.get("correct") for r in rows]
-        boxes = []
-        for b in meta.get("boxes", []):
-            ri, ci = b.get("row"), b.get("col")
-            sel = selected[ri] if ri is not None and ri < len(selected) else -1
-            correct = rows[ri].get("correct") if ri is not None and ri < len(rows) else None
-            if sel == ci and correct == ci:
-                state = "ok"            # cochée à raison
-            elif sel == ci:
-                state = "wrong"         # cochée à tort
-            elif correct == ci:
-                state = "missed"        # bonne réponse oubliée
-            else:
-                state = None
-            boxes.append({"x_pt": b.get("x_pt"), "y_pt": b.get("y_pt"),
-                          "w_pt": b.get("w_pt"), "h_pt": b.get("h_pt"), "state": state})
-        return {"kind": "grid", "any_error": not full, "boxes": boxes,
-                "credit": credit, "credit_label": _credit_label(credit)}
+        by_row: dict[int, list[dict]] = {}
+        for b in meta.get("boxes") or []:
+            if b.get("row") is not None:
+                by_row.setdefault(int(b["row"]), []).append(b)
+        if not by_row:
+            return None
+        for ri in sorted(by_row):
+            correct = rows[ri].get("correct") if ri < len(rows) else None
+            sel = selected[ri] if ri < len(selected) else -1
+            ok = sel == correct
+            marks["edge"].append({"y": _center_y(by_row[ri][0]), "ok": ok})
+            if not ok:
+                marks["fills"] += [b for b in by_row[ri] if b.get("col") == correct]
+        return marks
 
     if rtype in ("table_fill", "multi_blank"):
         ocr = _latest_ocr(db, zone.id)
         raw_json = (ocr.raw_json or {}) if ocr else {}
-        cell_texts = raw_json.get("cells") or []
         # verdicts explicites du professeur (correction case par case) : ils
-        # portent le demi-point, que le texte de cellule réécrit ne saurait pas
-        # exprimer — ils font donc foi sur la relecture du texte.
-        credits = grader.cell_marks(item.grading_json, cell_texts,
+        # font foi sur la relecture du texte
+        credits = grader.cell_marks(item.grading_json, raw_json.get("cells") or [],
                                     raw_json.get("cell_credits"))
         exp_cells = expected.get("cells", [])
-        marks, k = [], 0
+        cells, k = [], 0
         for ri, row in enumerate(meta.get("cells", [])):
             for ci, cell in enumerate(row):
                 given = (ri < len(exp_cells) and ci < len(exp_cells[ri])
                          and exp_cells[ri][ci].get("given"))
-                if given:
+                if given or not cell:
                     continue
-                credit = credits[k] if k < len(credits) else 0.0
-                marks.append({**cell, "credit": credit, "ok": credit >= 1.0})
+                credit = 1.0 if full else (credits[k] if k < len(credits) else 0.0)
+                cells.append({**cell, "_ok": credit >= 1.0})
                 k += 1
-        return {"kind": "cells", "cells": marks}
+        if not cells:
+            return None
+        for line in _rows_by_y(cells):
+            marks["edge"].append({"y": _center_y(line[0]), "ok": all(c["_ok"] for c in line)})
+        return marks
 
     if rtype == "matching":
-        if full:
-            return None  # tout relié juste : rien à surcharger
         left = {p.get("index"): p for p in meta.get("left_points", [])}
         right = {p.get("index"): p for p in meta.get("right_points", [])}
-        links = []
-        for pair in expected.get("pairs", []):
-            lp, rp = left.get(pair[0]), right.get(pair[1])
-            if lp and rp:
-                links.append({"x1": lp["x_pt"] + lp["w_pt"] / 2,
-                              "y1": lp["y_pt"] + lp["h_pt"] / 2,
-                              "x2": rp["x_pt"] + rp["w_pt"] / 2,
-                              "y2": rp["y_pt"] + rp["h_pt"] / 2})
-        return {"kind": "matching", "links": links}
+        if not right:
+            return None
+        exp_pairs = [tuple(p) for p in expected.get("pairs", [])]
+        got = set(exp_pairs) if full else _student_pairs(db, zone, decision)
+        by_right = {rj: (li, rj) for li, rj in exp_pairs}
+        for rj in sorted(right, key=lambda j: -_center_y(right[j])):
+            if rj not in by_right:
+                continue
+            pair = by_right[rj]
+            ok = pair in got
+            marks["edge"].append({"y": _center_y(right[rj]), "ok": ok})
+            lp = left.get(pair[0])
+            if not ok and lp:
+                rp = right[rj]
+                marks["links"].append({"x1": lp["x_pt"] + lp["w_pt"] / 2, "y1": _center_y(lp),
+                                       "x2": rp["x_pt"] + rp["w_pt"] / 2, "y2": _center_y(rp)})
+        return marks
 
-    if rtype == "multiline_text":
-        return {"kind": "single_br", "ok": full, "credit": credit}
-    if rtype == "manual_drawing":
-        return None  # tracé libre : pas de champ à marquer automatiquement
-    return {"kind": "single_tr", "ok": full, "credit": credit}  # short_text et repli
+    if rtype in ("multiline_text", "manual_drawing"):
+        # réponse sur plusieurs lignes : marque face à la 1re ligne d'écriture
+        y = float(zone.y_pt) + float(zone.h_pt) - 4.0 * mm
+    else:                                   # short_text (en ligne ou en zone) et repli
+        y = float(zone.y_pt) + float(zone.h_pt) / 2
+    marks["edge"].append({"y": y, "ok": full})
+    return marks
 
 
 def _copies_in_scan_order(db: Session, batch: ScanBatch,

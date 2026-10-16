@@ -155,161 +155,243 @@ def _page(zones: list[dict]) -> dict:
             "page_zones": zones}
 
 
+def _marks(**kw):
+    m = {"edge_x": 160, "edge": [], "circles": [], "strikes": [], "fills": [], "links": []}
+    m.update(kw)
+    return m
+
+
 def test_render_overlay_draws_every_mark_kind_without_error():
     strip = {"x_pt": 40, "y_pt": 100, "w_pt": 250, "h_pt": 11, "fs": 8}
     zones = [
-        {"x_pt": 40, "y_pt": 400, "w_pt": 120, "h_pt": 40, "score": 1, "max_score": 2,
-         "full_credit": False, "strip": strip, "text": "Piège : la retenue.\n$3+4=7$",
-         "marks": {"kind": "single_tr", "ok": False}},
+        {"x_pt": 40, "y_pt": 400, "w_pt": 120, "h_pt": 40, "score": 0, "max_score": 1,
+         "full_credit": False, "strip": strip, "text": "",
+         "marks": _marks(edge=[{"y": 430, "ok": False}, {"y": 415, "ok": True}],
+                         circles=[{"x_pt": 60, "y_pt": 410, "w_pt": 40, "h_pt": 8}],
+                         strikes=[{"x_pt": 60, "y_pt": 425, "w_pt": 40, "h_pt": 8}],
+                         fills=[{"x_pt": 100, "y_pt": 405, "w_pt": 6, "h_pt": 6}],
+                         links=[{"x1": 50, "y1": 420, "x2": 140, "y2": 410}])},
         {"x_pt": 40, "y_pt": 300, "w_pt": 120, "h_pt": 40, "score": 2, "max_score": 2,
-         "full_credit": True, "strip": {**strip, "y_pt": 260}, "text": "",
-         "marks": {"kind": "single_br", "ok": True}},
-        {"x_pt": 40, "y_pt": 200, "w_pt": 120, "h_pt": 40, "score": 1, "max_score": 2,
-         "full_credit": False, "strip": {**strip, "y_pt": 160},
-         "text": "Compare cellule par cellule.",
-         "marks": {"kind": "cells", "cells": [
-             {"x_pt": 50, "y_pt": 210, "w_pt": 20, "h_pt": 8, "ok": True},
-             {"x_pt": 80, "y_pt": 210, "w_pt": 20, "h_pt": 8, "ok": False}]}},
-        {"x_pt": 300, "y_pt": 400, "w_pt": 120, "h_pt": 40, "score": 0, "max_score": 1,
-         "full_credit": False, "strip": {**strip, "x_pt": 300, "y_pt": 360},
-         "text": "Relis la bonne réponse.",
-         "marks": {"kind": "qcm", "any_error": True, "boxes": [
-             {"x_pt": 310, "y_pt": 425, "w_pt": 5.7, "h_pt": 5.7, "state": "wrong",
-              "correction_box": {"x_pt": 300, "y_pt": 425, "w_pt": 5.7, "h_pt": 5.7}},
-             {"x_pt": 310, "y_pt": 415, "w_pt": 5.7, "h_pt": 5.7, "state": "missed",
-              "correction_box": {"x_pt": 300, "y_pt": 415, "w_pt": 5.7, "h_pt": 5.7}},
-             {"x_pt": 310, "y_pt": 405, "w_pt": 5.7, "h_pt": 5.7, "state": "ok",
-              "correction_box": {"x_pt": 300, "y_pt": 405, "w_pt": 5.7, "h_pt": 5.7}},
-             {"x_pt": 310, "y_pt": 395, "w_pt": 5.7, "h_pt": 5.7, "state": None,
-              "correction_box": {"x_pt": 300, "y_pt": 395, "w_pt": 5.7, "h_pt": 5.7}}]}},
-        {"x_pt": 300, "y_pt": 200, "w_pt": 120, "h_pt": 60, "score": 1, "max_score": 3,
-         "full_credit": False, "strip": {**strip, "x_pt": 300, "y_pt": 160},
-         "text": "Refais les liaisons.",
-         "marks": {"kind": "matching", "links": [
-             {"x1": 305, "y1": 250, "x2": 405, "y2": 240},
-             {"x1": 305, "y1": 230, "x2": 405, "y2": 210}]}},
+         "full_credit": True, "strip": {**strip, "y_pt": 260}, "text": "", "marks": None},
     ]
     out = Path(tempfile.mkdtemp()) / "overlay.pdf"
     pdfgen.render_overlay(str(out), copies_annotations=[_page(zones)], color="#D32F2F")
     assert out.exists() and out.stat().st_size > 800
 
 
-def test_zone_marks_qcm_shows_correct_boxes_only_on_error():
+def _overlay_db():
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
 
     from app.db import Base
-    from app.models import (Assessment, Copy, CopyItem, DocumentPage,
-                            GradingDecision, ResponseZone, SchoolClass, Student,
-                            StudentResponse)
-    from app.services import pipeline
+    from app.models import Assessment, Copy, DocumentPage, SchoolClass, Student
 
     db = sessionmaker(bind=create_engine("sqlite:///:memory:"))()
     Base.metadata.create_all(db.bind)
     cls = SchoolClass(name="5A", grade_level="5e"); db.add(cls); db.flush()
-    stu = Student(class_id=cls.id, name="A B", llm_pseudonym="p")
-    db.add(stu); db.flush()
+    stu = Student(class_id=cls.id, name="A B", llm_pseudonym="p"); db.add(stu); db.flush()
     a = Assessment(class_id=cls.id, title="C", type="control"); db.add(a); db.flush()
     copy = Copy(assessment_id=a.id, student_id=stu.id); db.add(copy); db.flush()
     page = DocumentPage(copy_id=copy.id, page_no=1); db.add(page); db.flush()
-    item = CopyItem(copy_id=copy.id, catalog_id="cat", sequence=1, difficulty=4,
-                    response_type="qcm_single", statement="Coche.",
-                    correction="Piège.", expected_json={"type": "choice", "correct": [1]},
-                    grading_json={"comparator": "qcm", "max_score": 1, "bareme_points": 1})
+    return db, copy, page
+
+
+def _answer(db, copy, page, rtype, expected, grading, meta, **resp_kw):
+    from app.models import CopyItem, ResponseZone, StudentResponse
+
+    item = CopyItem(copy_id=copy.id, catalog_id="cat", sequence=1, difficulty=3,
+                    response_type=rtype, statement="Q.", correction="",
+                    expected_json=expected, grading_json=grading)
     db.add(item); db.flush()
-    meta = {"boxes": [
-        {"index": 0, "correction_box": {"x_pt": 40, "y_pt": 400, "w_pt": 5, "h_pt": 5}},
-        {"index": 1, "correction_box": {"x_pt": 40, "y_pt": 390, "w_pt": 5, "h_pt": 5}}]}
-    zone = ResponseZone(page_id=page.id, item_id=item.id, type="qcm_single",
-                        x_pt=40, y_pt=380, w_pt=100, h_pt=30, meta_json=meta)
+    strip = {"x_pt": 40 + 7.37, "y_pt": 360, "w_pt": 200 - 2 * 7.37, "h_pt": 10}
+    zone = ResponseZone(page_id=page.id, item_id=item.id, type=rtype, x_pt=40, y_pt=380,
+                        w_pt=200, h_pt=60, meta_json={**meta, "correction_strip": strip})
     db.add(zone); db.flush()
-    resp = StudentResponse(copy_item_id=item.id, zone_id=zone.id, selected_choices=[0])
+    resp = StudentResponse(copy_item_id=item.id, zone_id=zone.id, **resp_kw)
     db.add(resp); db.flush()
+    return item, zone, resp
 
-    # élève a coché l'index 0 (faux) ; la bonne réponse est l'index 1
-    wrong = GradingDecision(response_id=resp.id, source="deterministic", score=0,
-                            max_score=1, status="auto", tier="A")
-    marks = pipeline._zone_marks(db, item, zone, wrong)
-    assert marks["kind"] == "qcm" and marks["any_error"] is True
-    # case 0 cochée à tort -> croix ; case 1 (bonne réponse) oubliée -> correction
-    assert [b["state"] for b in marks["boxes"]] == ["wrong", "missed"]
 
-    # crédit plein : la sélection est forcée aux bonnes réponses -> que des coches,
-    # jamais de croix (corrige le bug « tout juste mais croix partout »)
-    right = GradingDecision(response_id=resp.id, source="deterministic", score=1,
-                            max_score=1, status="auto", tier="A")
-    rmarks = pipeline._zone_marks(db, item, zone, right)
-    assert rmarks["any_error"] is False
-    assert [b["state"] for b in rmarks["boxes"]] == [None, "ok"]
-    assert "wrong" not in {b["state"] for b in rmarks["boxes"]}
+def _decision(resp, score, max_score):
+    from app.models import GradingDecision
+    return GradingDecision(response_id=resp.id, source="deterministic", score=score,
+                           max_score=max_score, status="auto", tier="A")
 
-    # QCM multiple à moitié juste : le récap porte la PART obtenue, lisible en
-    # fraction — jamais une croix « tout faux » sur une réponse qui a des points
-    partial = GradingDecision(response_id=resp.id, source="deterministic",
-                              score=2 / 3, max_score=1, status="auto", tier="A")
-    pmarks = pipeline._zone_marks(db, item, zone, partial)
-    assert pmarks["any_error"] is True
-    assert pmarks["credit_label"] == "2/3"
-    assert pipeline._credit_label(0.5) == "½"
+
+def _qcm_boxes(n, y0=420):
+    return [{"index": i, "x_pt": 60 + 50 * i, "y_pt": y0, "w_pt": 5.7, "h_pt": 5.7,
+             "label": {"x_pt": 70 + 50 * i, "y_pt": y0 - 1, "w_pt": 30, "h_pt": 8}}
+            for i in range(n)]
+
+
+def test_marks_sit_on_the_card_right_border_aligned_with_the_answer_line():
+    from app.services import pipeline
+
+    db, copy, page = _overlay_db()
+    item, zone, resp = _answer(db, copy, page, "qcm_single",
+                               {"type": "choice", "correct": [1]},
+                               {"comparator": "qcm", "max_score": 1}, {"boxes": _qcm_boxes(3)},
+                               selected_choices=[0])
+    m = pipeline._zone_marks(db, item, zone, _decision(resp, 1, 1))
+    assert abs(m["edge_x"] - 240) < 0.5                 # bord droit du cadre (x + w)
+    assert m["edge"] == [{"y": 420 + 5.7 / 2, "ok": True}]
+    assert not (m["circles"] or m["strikes"] or m["fills"] or m["links"])  # tout juste : rien d'autre
+
+
+def test_qcm_single_wrong_circles_only_the_right_answer():
+    from app.services import pipeline
+
+    db, copy, page = _overlay_db()
+    item, zone, resp = _answer(db, copy, page, "qcm_single",
+                               {"type": "choice", "correct": [1]},
+                               {"comparator": "qcm", "max_score": 1}, {"boxes": _qcm_boxes(3)},
+                               selected_choices=[0])
+    m = pipeline._zone_marks(db, item, zone, _decision(resp, 0, 1))
+    assert [e["ok"] for e in m["edge"]] == [False]
+    # case + libellé de la bonne réponse (index 1) entourés, rien de barré
+    assert m["circles"] == [{"x_pt": 110, "y_pt": 419, "w_pt": 30 + 10, "h_pt": 8}]
+    assert [b["index"] for b in m["fills"]] == [1]       # et sa case remplie
+    assert m["strikes"] == []
+
+
+def test_qcm_multiple_wrong_strikes_wrong_choices_and_circles_all_right_ones():
+    from app.services import pipeline
+
+    db, copy, page = _overlay_db()
+    item, zone, resp = _answer(db, copy, page, "qcm_multiple",
+                               {"type": "choice", "correct": [0, 2]},
+                               {"comparator": "qcm", "max_score": 1, "exclusive": False},
+                               {"boxes": _qcm_boxes(4)}, selected_choices=[0, 1])
+    m = pipeline._zone_marks(db, item, zone, _decision(resp, 0.5, 1))
+    assert [e["ok"] for e in m["edge"]] == [False]       # partiel = pas juste
+    assert [round(r["x_pt"]) for r in m["circles"]] == [60, 160]
+    assert [b["index"] for b in m["fills"]] == [0, 2]
+    assert [round(r["x_pt"]) for r in m["strikes"]] == [110]
+
+
+def test_grid_marks_each_row_and_fills_the_right_box_on_wrong_rows():
+    from app.services import pipeline
+
+    db, copy, page = _overlay_db()
+    rows = [{"label": "a", "correct": 1}, {"label": "b", "correct": 0}]
+    boxes = [{"row": r, "col": c, "index": 2 * r + c, "x_pt": 150 + 20 * c,
+              "y_pt": 420 - 15 * r, "w_pt": 9, "h_pt": 9} for r in range(2) for c in range(2)]
+    item, zone, resp = _answer(db, copy, page, "checkbox_grid",
+                               {"type": "grid", "rows": rows},
+                               {"comparator": "grid", "max_score": 2}, {"boxes": boxes},
+                               selected_choices=[1, 1])
+    m = pipeline._zone_marks(db, item, zone, _decision(resp, 1, 2))
+    assert [(round(e["y"], 1), e["ok"]) for e in m["edge"]] == [(424.5, True), (409.5, False)]
+    assert [(b["row"], b["col"]) for b in m["fills"]] == [(1, 0)]
+
+
+def test_matching_marks_follow_the_right_column_and_dash_only_wrong_links():
+    from app.services import pipeline
+
+    db, copy, page = _overlay_db()
+    pt = lambda i, x: {"index": i, "x_pt": x, "y_pt": 430 - 15 * i, "w_pt": 6, "h_pt": 6}
+    meta = {"left_points": [pt(i, 60) for i in range(3)],
+            "right_points": [pt(i, 180) for i in range(3)]}
+    item, zone, resp = _answer(db, copy, page, "matching",
+                               {"type": "matching", "pairs": [[0, 1], [1, 0], [2, 2]]},
+                               {"comparator": "matching", "max_score": 3}, meta,
+                               selected_pairs=[[0, 1], [1, 2], [2, 0]])
+    m = pipeline._zone_marks(db, item, zone, _decision(resp, 1, 3))
+    # de haut en bas sur la colonne de droite : R0 (attendu L1) faux, R1 (L0) juste, R2 (L2) faux
+    assert [(round(e["y"]), e["ok"]) for e in m["edge"]] == [(433, False), (418, True), (403, False)]
+    assert len(m["links"]) == 2                           # seulement les liaisons fausses
+
+
+def test_table_fill_one_mark_per_row_without_per_cell_marks():
+    from app.services import pipeline
+    from app.models import OcrAttempt
+
+    db, copy, page = _overlay_db()
+    cell = lambda r, c: {"x_pt": 60 + 40 * c, "y_pt": 420 - 14 * r, "w_pt": 30, "h_pt": 10}
+    meta = {"cells": [[cell(0, 0), cell(0, 1)], [cell(1, 0), cell(1, 1)]]}
+    grading = {"comparator": "table", "max_score": 4,
+               "cells": [[{"value": "1"}, {"value": "2"}], [{"value": "3"}, {"value": "4"}]]}
+    item, zone, resp = _answer(db, copy, page, "table_fill",
+                               {"type": "table", "cells": [[{}, {}], [{}, {}]]}, grading, meta)
+    db.add(OcrAttempt(zone_id=zone.id, provider="teacher_ocr", confidence=1.0,
+                      raw_json={"cells": ["1", "2", "3", "9"],
+                                "cell_credits": [1.0, 1.0, 1.0, 0.0]}))
+    db.flush()
+    m = pipeline._zone_marks(db, item, zone, _decision(resp, 3, 4))
+    assert [e["ok"] for e in m["edge"]] == [True, False]
+    assert not (m["circles"] or m["fills"])
 
 
 class _FakeCanvas:
-    """Canvas espion : enregistre les rect (avec leur remplissage) et compte les
-    line() — assez pour vérifier CE QUI est dessiné, sans rendre de PDF."""
+    """Canvas espion : enregistre rect / roundRect / line avec l'épaisseur de
+    trait courante — assez pour vérifier CE QUI est dessiné, sans rendre de PDF."""
     def __init__(self):
-        self.rects = []      # (x, y, w, h, fill)
-        self.lines = 0
+        self.rects, self.round_rects, self.lines = [], [], []
+        self.lw = 1.0
     def saveState(self): pass
     def restoreState(self): pass
     def setStrokeColor(self, *a, **k): pass
     def setFillColor(self, *a, **k): pass
-    def setLineWidth(self, *a, **k): pass
+    def setLineCap(self, *a, **k): pass
     def setDash(self, *a, **k): pass
+    def setLineWidth(self, w): self.lw = w
     def rect(self, x, y, w, h, stroke=1, fill=0):
         self.rects.append((x, y, w, h, fill))
-    def line(self, *a, **k):
-        self.lines += 1
+    def roundRect(self, x, y, w, h, r, stroke=1, fill=0):
+        self.round_rects.append((x, y, w, h))
+    def line(self, x1, y1, x2, y2):
+        self.lines.append((x1, y1, x2, y2, self.lw))
 
 
-def test_qcm_overlay_fills_correct_boxes_and_marks_card_once():
-    # 3 cases : index 1 = bonne réponse oubliée (missed), index 0 coché à tort
-    # (wrong), index 2 ni coché ni correct (None). Carte en erreur.
-    z = {"x_pt": 300, "y_pt": 400, "w_pt": 120, "h_pt": 40,
-         "marks": {"kind": "qcm", "any_error": True, "boxes": [
-             {"state": "wrong", "correction_box": {"x_pt": 300, "y_pt": 425, "w_pt": 5, "h_pt": 5}},
-             {"state": "missed", "correction_box": {"x_pt": 300, "y_pt": 415, "w_pt": 5, "h_pt": 5}},
-             {"state": None, "correction_box": {"x_pt": 300, "y_pt": 405, "w_pt": 5, "h_pt": 5}}]}}
+def test_check_is_thin_and_cross_is_thick_centered_on_the_border():
     fc = _FakeCanvas()
-    pdfgen._draw_zone_marks(fc, z, pdfgen.black)
-    # une case correction par choix (colonne de gauche), aucune marque par-dessus
-    # les cases de l'élève -> les seules lignes sont le récap unique de la carte.
-    assert len(fc.rects) == 3
-    fills = {round(x): f for (x, y, w, h, f) in fc.rects}
-    # seule la bonne réponse (index 1, missed) est REMPLIE (saturée)
-    assert [f for (_x, _y, _w, _h, f) in fc.rects] == [0, 1, 0]
-    assert fc.lines > 0            # récap juste/faux dessiné (une fois)
+    pdfgen._draw_zone_marks(fc, {"marks": _marks(edge_x=200, edge=[
+        {"y": 400, "ok": True}, {"y": 380, "ok": False}])}, pdfgen.black)
+    check = [ln for ln in fc.lines if ln[1] > 395]
+    cross = [ln for ln in fc.lines if ln[1] < 390]
+    assert check and all(ln[4] == pdfgen.CHECK_LW for ln in check)
+    assert cross and all(ln[4] == pdfgen.CROSS_LW for ln in cross)
+    assert pdfgen.CROSS_LW > 2 * pdfgen.CHECK_LW
+    xs = [x for ln in fc.lines for x in (ln[0], ln[2])]
+    assert min(xs) < 200 < max(xs)                    # à cheval sur le cadre
 
 
-def test_qcm_overlay_keeps_expected_column_when_all_correct():
-    z = {"x_pt": 300, "y_pt": 400, "w_pt": 120, "h_pt": 40,
-         "marks": {"kind": "qcm", "any_error": False, "boxes": [
-             {"state": "ok", "correction_box": {"x_pt": 300, "y_pt": 425, "w_pt": 5, "h_pt": 5}},
-             {"state": None, "correction_box": {"x_pt": 300, "y_pt": 415, "w_pt": 5, "h_pt": 5}}]}}
+def test_circle_strike_fill_and_dashed_link_are_drawn():
     fc = _FakeCanvas()
-    pdfgen._draw_zone_marks(fc, z, pdfgen.black)
-    # Le corrigé attendu reste visible même si l'élève a tout juste : bonne
-    # réponse pleine à gauche de sa coche, mauvaise réponse vide.
-    assert [f for (_x, _y, _w, _h, f) in fc.rects] == [1, 0]
-    assert fc.lines > 0            # récap (coche) également dessiné
+    pdfgen._draw_zone_marks(fc, {"marks": _marks(
+        circles=[{"x_pt": 60, "y_pt": 410, "w_pt": 40, "h_pt": 8}],
+        strikes=[{"x_pt": 60, "y_pt": 425, "w_pt": 40, "h_pt": 8}],
+        fills=[{"x_pt": 100, "y_pt": 405, "w_pt": 6, "h_pt": 6}],
+        links=[{"x1": 50, "y1": 420, "x2": 140, "y2": 410}])}, pdfgen.black)
+    assert len(fc.round_rects) == 1                    # bonne réponse entourée
+    assert fc.rects == [(100, 405, 6, 6, 1)]           # bonne case remplie
+    assert len(fc.lines) == 2                          # rature + liaison pointillée
 
 
 def test_render_copy_review_smoke_no_background():
     strip = {"x_pt": 40, "y_pt": 100, "w_pt": 250, "h_pt": 11, "fs": 8}
     zones = [{"x_pt": 40, "y_pt": 400, "w_pt": 120, "h_pt": 40, "score": 0,
-              "max_score": 1, "full_credit": False, "strip": strip,
-              "text": "Vérifie l'unité.", "marks": {"kind": "single_tr", "ok": False}}]
+              "max_score": 1, "full_credit": False, "strip": strip, "text": "",
+              "marks": _marks(edge=[{"y": 420, "ok": False}])}]
     out = Path(tempfile.mkdtemp()) / "review.pdf"
     pdfgen.render_copy_review(str(out), review_pages=[{
         "student": "A B", "assessment_type": "training", "page_zones": zones,
         "background": None}], color="#2E7D32")
     assert out.exists() and out.stat().st_size > 500
+
+
+def test_qcm_labels_of_old_copies_are_recovered_from_the_layout():
+    """Copies imprimées avant l'enregistrement des libellés : la géométrie est
+    retrouvée en rejouant la mise en page (case + libellé entourés)."""
+    from reportlab.pdfgen import canvas as rl_canvas
+
+    choices = ["2, 4, 3, 1", "4, 2, 3, 1", "1, 3, 4, 2"]
+    c = rl_canvas.Canvas(str(Path(tempfile.mkdtemp()) / "q.pdf"))
+    meta = pdfgen._draw_answer_zone(c, 40, 300, 250, 20, "qcm_single", choices, 10)
+    stored = [b["label"] for b in meta["boxes"]]
+    old = [{k: v for k, v in b.items() if k != "label"} for b in meta["boxes"]]
+    rects = pdfgen.qcm_answer_rects(choices, {"x_pt": 40, "y_pt": 300, "w_pt": 250,
+                                              "h_pt": 20}, old)
+    for b, lab in zip(old, stored):
+        r = rects[b["index"]]
+        assert abs((r["x_pt"] + r["w_pt"]) - (lab["x_pt"] + lab["w_pt"])) < 0.5

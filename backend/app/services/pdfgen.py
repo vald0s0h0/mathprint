@@ -1320,10 +1320,8 @@ QCM_CORR_RESERVE = QCM_BOX + QCM_CORR_GAP
 # à droite de la case). Le corps de la coche, capté à gauche, suffit à décider.
 QCM_DETECT_MARGIN = 1.0 * mm
 QCM_DETECT_MARGIN_R = 0.5 * mm
-# Marqueurs d'overlay : les marques QCM (coche/croix par case + récap de carte)
-# sont volontairement 2 mm plus grandes que les marques de cellule (§ demande).
+# Taille des marques d'overlay (coche/croix de ligne sur le bord de la carte).
 CELL_MARK_SIZE = 1.9 * mm
-QCM_MARK_SIZE = CELL_MARK_SIZE + 2.0 * mm
 
 
 def _qcm_ncols_cap(choices: list[str]) -> int:
@@ -1930,6 +1928,67 @@ def _draw_grid_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float,
     return {"boxes": boxes, "ncols": ncols}
 
 
+QCM_LABEL_GAP = 1.6 * mm     # blanc entre la case élève et son libellé
+
+
+def _qcm_label_geo(bx: float, box: float, row_top: float, lay: dict) -> dict:
+    lw = max((ln["w"] for ln in lay["lines"]), default=0.0)
+    return {"x_pt": bx + box + QCM_LABEL_GAP, "y_pt": row_top - lay["height"],
+            "w_pt": lw, "h_pt": lay["height"]}
+
+
+def _infer_qcm_labels(choices: list[str], zone: dict, boxes: list[dict]) -> dict:
+    """Libellés QCM d'une copie imprimée AVANT l'enregistrement de leur
+    géométrie : on rejoue `_qcm_layout` (même code que l'impression) et on
+    retient le corps de texte qui replace EXACTEMENT les cases enregistrées."""
+    by_index = {b.get("index"): b for b in boxes}
+    top = zone["y_pt"] + zone["h_pt"] - 2 * mm
+    best, best_err = None, None
+    for fs10 in range(60, 145, 5):
+        fs = fs10 / 10
+        try:
+            items, _h, _n = _qcm_layout(choices, zone["w_pt"] - 2 * CARD_PAD, fs)
+        except Exception:  # noqa: BLE001 — une police introuvable ne doit rien casser
+            continue
+        err, geo = 0.0, {}
+        for it in items:
+            b = by_index.get(it["index"])
+            if b is None:
+                continue
+            bx = zone["x_pt"] + CARD_PAD + it["dx"] + QCM_CORR_RESERVE
+            row_top = top - it["dy"]
+            first_asc = it["lay"]["lines"][0]["asc"] if it["lay"]["lines"] else fs * 0.78
+            by = row_top - first_asc + fs * 0.35 - it["box"] / 2
+            err += abs(bx - b["x_pt"]) + abs(by - b["y_pt"])
+            geo[it["index"]] = _qcm_label_geo(bx, it["box"], row_top, it["lay"])
+        if geo and (best_err is None or err < best_err):
+            best, best_err = geo, err
+    # au-delà d'1 pt d'écart moyen par case, la disposition n'est pas retrouvée
+    if best is None or best_err > 1.0 * max(1, len(best)):
+        return {}
+    return best
+
+
+def qcm_answer_rects(choices: list[str], zone: dict, boxes: list[dict]) -> dict:
+    """Rectangle englobant case + libellé de chaque choix QCM (index -> rect),
+    pour ENTOURER une bonne réponse ou BARRER une réponse fausse à l'overlay.
+    Libellé enregistré à la génération, sinon retrouvé (`_infer_qcm_labels`),
+    sinon la case seule."""
+    inferred = (_infer_qcm_labels(choices, zone, boxes)
+                if choices and any(not b.get("label") for b in boxes) else {})
+    rects = {}
+    for b in boxes:
+        x0, y0 = b["x_pt"], b["y_pt"]
+        x1, y1 = x0 + b["w_pt"], y0 + b["h_pt"]
+        lab = b.get("label") or inferred.get(b.get("index"))
+        if lab:
+            x1 = max(x1, lab["x_pt"] + lab["w_pt"])
+            y0 = min(y0, lab["y_pt"])
+            y1 = max(y1, lab["y_pt"] + lab["h_pt"])
+        rects[b.get("index")] = {"x_pt": x0, "y_pt": y0, "w_pt": x1 - x0, "h_pt": y1 - y0}
+    return rects
+
+
 def _draw_answer_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float,
                       response_type: str, choices: list[str], font_size: int,
                       grading: dict | None = None,
@@ -1958,7 +2017,7 @@ def _draw_answer_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float,
             by = y_base + font_size * 0.35 - it["box"] / 2
             c.setStrokeColor(DROPOUT)
             c.rect(bx, by, it["box"], it["box"])
-            _draw_rich(c, bx + it["box"] + 1.6 * mm, row_top, it["lay"])
+            _draw_rich(c, bx + it["box"] + QCM_LABEL_GAP, row_top, it["lay"])
             c.setStrokeColor(DROPOUT)
             box = it["box"]
             corr_x = bx - QCM_CORR_GAP - box   # case correction (overlay), à gauche
@@ -1973,7 +2032,10 @@ def _draw_answer_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float,
                           "detect": {"x_pt": bx - dm, "y_pt": by - dm,
                                      "w_pt": box + dm + dmr, "h_pt": box + 2 * dm},
                           "correction_box": {"x_pt": corr_x, "y_pt": by,
-                                             "w_pt": box, "h_pt": box}})
+                                             "w_pt": box, "h_pt": box},
+                          # libellé du choix : l'overlay ENTOURE case + libellé
+                          # de la bonne réponse (cf. qcm_answer_rects)
+                          "label": _qcm_label_geo(bx, box, row_top, it["lay"])})
         meta["boxes"] = boxes
     elif response_type == "checkbox_grid":
         meta = _draw_grid_zone(c, x, y, w, h, grading.get("cols") or [],
@@ -2693,113 +2755,64 @@ def _render_copy(pdf_canvas: canvas.Canvas, *, student_name: str, class_name: st
 
 # ------------------------------------------------------------------ overlay
 
-def _mark(c: canvas.Canvas, x: float, y: float, ok: bool, size: float = 2.4 * mm,
-          credit: float | None = None, credit_label: str | None = None):
-    """Marque vectorielle d'un champ (fiable quel que soit le lecteur PDF) :
-    coche si juste, croix si faux, et **coche suivie de la part obtenue** pour un
-    crédit PARTIEL (arrondi correct cf. grading.numeric_credit, QCM multiple à
-    moitié coché cf. grading.qcm_credit) — l'élève doit voir d'un coup d'œil ce
-    qu'il a gagné, jamais une croix là où il a des points. `credit_label` porte
-    la fraction lisible (« ½ », « 2/3 ») ; à défaut, le demi."""
-    half = credit is not None and 0.0 < credit < 1.0
+EDGE_MARK_SIZE = CELL_MARK_SIZE   # même taille que les marques de tableau
+CHECK_LW = 0.6                     # coche : trait FIN
+CROSS_LW = 1.6                     # croix : trait ÉPAIS (les erreurs sautent aux yeux)
+CIRCLE_PAD = 0.9 * mm              # marge du rectangle qui entoure une bonne réponse
+CIRCLE_RADIUS = 1.4 * mm
+
+
+def _edge_mark(c: canvas.Canvas, xc: float, yc: float, ok: bool,
+               size: float = EDGE_MARK_SIZE):
+    """Coche (fine) ou croix (épaisse) CENTRÉE en (xc, yc) — posée sur le bord
+    droit du cadre de la carte, face à la ligne de réponse."""
+    x, y = xc - size / 2, yc - size / 2
     c.saveState()
-    c.setLineWidth(1.1)
-    if ok or half:
-        c.line(x, y + size * 0.35, x + size * 0.35, y)
-        c.line(x + size * 0.35, y, x + size, y + size * 0.9)
+    c.setLineCap(1)
+    if ok:
+        c.setLineWidth(CHECK_LW)
+        c.line(x, y + size * 0.45, x + size * 0.38, y + size * 0.08)
+        c.line(x + size * 0.38, y + size * 0.08, x + size, y + size * 0.95)
     else:
-        c.line(x, y, x + size * 0.8, y + size * 0.8)
-        c.line(x, y + size * 0.8, x + size * 0.8, y)
-    if half:
-        # part obtenue collée à la coche : sans ambiguïté possible
-        c.setLineWidth(0.7)
-        c.setFont("Helvetica-Bold", size * 0.95 / mm * 2.0)
-        c.drawString(x + size * 1.05, y + size * 0.05, credit_label or "½")
-    c.restoreState()
-
-
-def _draw_corr_checkbox(c: canvas.Canvas, b: dict, col):
-    """Case « correction » QCM imprimée par l'overlay à gauche de la case élève :
-    REMPLIE (saturée) si le choix est une bonne réponse — elle affiche la réponse
-    ET montre à l'élève comment saturer la case pour une meilleure lecture — sinon
-    simple contour vide. Elle est imprimée pour CHAQUE choix afin que la colonne
-    constitue toujours le corrigé complet, même lorsque l'élève a tout juste."""
-    x, y, w, h = b["x_pt"], b["y_pt"], b["w_pt"], b["h_pt"]
-    c.saveState()
-    c.setStrokeColor(col)
-    c.setFillColor(col)
-    c.setLineWidth(0.9)
-    c.rect(x, y, w, h, stroke=1, fill=1 if b.get("should_check") else 0)
+        c.setLineWidth(CROSS_LW)
+        c.line(x, y, x + size, y + size)
+        c.line(x, y + size, x + size, y)
     c.restoreState()
 
 
 def _draw_zone_marks(c: canvas.Canvas, z: dict, col):
-    """Marques par CHAMP de réponse (coche/croix, cases correction, traits de
-    liaison) selon `z["marks"]` (posé par services.pipeline._zone_marks). Dessin
-    partagé par l'overlay (fond blanc) et l'aperçu copie+overlay (fond scanné)."""
+    """Marques d'une réponse selon `z["marks"]` (services.pipeline._zone_marks) :
+    marques de ligne sur le bord droit de la carte, bonnes réponses QCM
+    entourées, réponses fausses barrées (QCM multiple), bonne case remplie
+    (grille), liaisons attendues en pointillés (points à relier). Dessin partagé
+    par l'overlay (fond blanc) et l'aperçu copie + overlay (fond scanné)."""
     marks = z.get("marks")
     if not marks:
         return
+    c.saveState()
     c.setStrokeColor(col)
     c.setFillColor(col)
-    kind = marks.get("kind")
-    m = 0.6 * mm
-    if kind == "single_tr":       # short_text : coche/croix en HAUT à droite
-        _mark(c, z["x_pt"] + z["w_pt"] - m - 2.4 * mm,
-              z["y_pt"] + z["h_pt"] - m - 2.4 * mm, marks["ok"],
-              credit=marks.get("credit"))
-    elif kind == "single_br":     # multiline_text : en BAS à droite de la zone
-        _mark(c, z["x_pt"] + z["w_pt"] - m - 2.4 * mm, z["y_pt"] + m, marks["ok"],
-              credit=marks.get("credit"))
-    elif kind == "cells":         # table_fill/multi_blank : chaque cellule marquée
-        for cell in marks["cells"]:
-            _mark(c, cell["x_pt"] + cell["w_pt"] - 0.4 * mm - CELL_MARK_SIZE,
-                  cell["y_pt"] + cell["h_pt"] - 0.4 * mm - CELL_MARK_SIZE,
-                  cell["ok"], size=CELL_MARK_SIZE, credit=cell.get("credit"))
-    elif kind == "qcm":
-        # AUCUNE marque par-dessus les cases de l'élève : sa copie reste intacte
-        # (coches et cases vides visibles). À gauche, la colonne « correction »
-        # AFFICHE LA RÉPONSE : case REMPLIE (saturée) pour une bonne réponse,
-        # contour vide sinon. Le verdict
-        # juste/faux n'apparaît qu'UNE fois par carte (récap en bas à droite).
-        for b in marks.get("boxes", []):
-            cb = b.get("correction_box")
-            if not cb:
-                continue
-            is_correct = b.get("state") in ("ok", "missed")
-            _draw_corr_checkbox(c, {**cb, "should_check": is_correct}, col)
-        # récap de la CARTE en bas à droite : coche si zéro erreur, croix si tout
-        # est faux, coche + part obtenue (« 2/3 ») si le QCM multiple est
-        # partiellement juste.
-        _mark(c, z["x_pt"] + z["w_pt"] - QCM_MARK_SIZE - m, z["y_pt"] + m,
-              not marks.get("any_error"), size=QCM_MARK_SIZE,
-              credit=marks.get("credit"), credit_label=marks.get("credit_label"))
-    elif kind == "grid":
-        # grille cochée : sur CHAQUE case, coche (cochée à raison) / croix (cochée
-        # à tort) ; une bonne réponse OUBLIÉE est montrée en case REMPLIE (comme la
-        # correction QCM). Récap juste/faux une seule fois, en bas à droite.
-        for b in marks.get("boxes", []):
-            state = b.get("state")
-            box = {"x_pt": b["x_pt"], "y_pt": b["y_pt"], "w_pt": b["w_pt"], "h_pt": b["h_pt"]}
-            if state in ("ok", "wrong"):
-                _mark(c, box["x_pt"] + (box["w_pt"] - CELL_MARK_SIZE) / 2,
-                      box["y_pt"] + (box["h_pt"] - CELL_MARK_SIZE) / 2,
-                      state == "ok", size=CELL_MARK_SIZE)
-            elif state == "missed" and marks.get("any_error"):
-                _draw_corr_checkbox(c, {**box, "should_check": True}, col)
-        _mark(c, z["x_pt"] + z["w_pt"] - QCM_MARK_SIZE - m, z["y_pt"] + m,
-              not marks.get("any_error"), size=QCM_MARK_SIZE,
-              credit=marks.get("credit"), credit_label=marks.get("credit_label"))
-        c.setFillColor(col)
-    elif kind == "matching":
-        c.saveState()
-        c.setStrokeColor(col)
-        c.setLineWidth(1.0)
-        c.setDash(2.2, 1.8)
-        for ln in marks.get("links", []):
-            c.line(ln["x1"], ln["y1"], ln["x2"], ln["y2"])
-        c.restoreState()
-    c.setFillColor(col)
+    c.setLineWidth(1.0)
+    for r in marks.get("circles", []):
+        c.roundRect(r["x_pt"] - CIRCLE_PAD, r["y_pt"] - CIRCLE_PAD,
+                    r["w_pt"] + 2 * CIRCLE_PAD, r["h_pt"] + 2 * CIRCLE_PAD,
+                    CIRCLE_RADIUS, stroke=1, fill=0)
+    c.setLineWidth(1.2)
+    for r in marks.get("strikes", []):
+        ym = r["y_pt"] + r["h_pt"] / 2
+        c.line(r["x_pt"] - 0.6 * mm, ym, r["x_pt"] + r["w_pt"] + 0.6 * mm, ym)
+    for b in marks.get("fills", []):
+        c.rect(b["x_pt"], b["y_pt"], b["w_pt"], b["h_pt"], stroke=1, fill=1)
+    c.setLineWidth(1.0)
+    c.setDash(2.2, 1.8)
+    for ln in marks.get("links", []):
+        c.line(ln["x1"], ln["y1"], ln["x2"], ln["y2"])
+    c.setDash()
+    edge_x = marks.get("edge_x")
+    if edge_x is not None:
+        for e in marks.get("edge", []):
+            _edge_mark(c, edge_x, e["y"], e["ok"])
+    c.restoreState()
 
 
 def _draw_correction_strip(c: canvas.Canvas, z: dict, col):
