@@ -15,6 +15,7 @@ page), que le pipeline existant (`process_batch`) reprend sans modification —
 idempotent, il ne re-corrige pas une copie déjà notée et note les nouvelles."""
 import hashlib
 import io
+from collections.abc import Iterable
 
 import cv2
 import numpy as np
@@ -29,16 +30,27 @@ from . import worker_cv
 from .security import verify_page_payload
 
 
-def encode_pages_to_pdf(images: list[np.ndarray]) -> bytes:
-    """Réencode des pages déjà rastérisées en un PDF A4, une image par page —
-    format commun réinjecté dans le pipeline de correction quelle que soit la
-    provenance (PDF, photo isolée, bac à sable mélangé)."""
+def as_png(img: "np.ndarray | bytes") -> bytes:
+    """Page en PNG (sans perte). Les dépôts gardent leurs pages sous cette forme
+    COMPRESSÉE (~1,3 Mo contre ~11 Mo brut à 200 dpi) : une classe entière en
+    tableaux bruts (scan + page recalée) saturait la mémoire du NAS au dépôt."""
+    if isinstance(img, (bytes, bytearray)):
+        return bytes(img)
+    ok, png = cv2.imencode(".png", img)
+    if not ok:
+        raise RuntimeError("Échec encodage PNG")
+    return png.tobytes()
+
+
+def encode_pages_to_pdf(images: "list[np.ndarray | bytes]") -> bytes:
+    """Réencode des pages déjà rastérisées (tableaux BGR ou PNG) en un PDF A4,
+    une image par page — format commun réinjecté dans le pipeline de correction
+    quelle que soit la provenance (PDF, photo isolée, bac à sable mélangé)."""
     buf = io.BytesIO()
     c = rl_canvas.Canvas(buf, pagesize=A4)
     pw, ph = A4
     for img in images:
-        ok, png = cv2.imencode(".png", img)
-        c.drawImage(ImageReader(io.BytesIO(png.tobytes())), 0, 0, width=pw, height=ph)
+        c.drawImage(ImageReader(io.BytesIO(as_png(img))), 0, 0, width=pw, height=ph)
         c.showPage()
     c.save()
     return buf.getvalue()
@@ -58,7 +70,7 @@ def page_assessment(db: Session, page_id: str) -> str | None:
     return copy.assessment_id if copy else None
 
 
-def detect_assessment(db: Session, images: list[np.ndarray]) -> str | None:
+def detect_assessment(db: Session, images: "Iterable[np.ndarray]") -> str | None:
     """Identifie le sujet depuis le QR signé de la première page reconnue : le
     QR suffit, aucun choix manuel d'évaluation n'est nécessaire au dépôt (§5.3)."""
     for img in images:
@@ -106,7 +118,7 @@ def get_or_create_batch(db: Session, assessment_id: str,
 
 
 def append_pages(db: Session, batch: ScanBatch, assessment_id: str,
-                 images: list[np.ndarray]) -> None:
+                 images: "list[np.ndarray | bytes]") -> None:
     """Fusionne de nouvelles pages dans le PDF accumulé du batch (append), met à
     jour le FileObject source. Les pages existantes ne sont pas rerastérisées :
     fusion PDF (pypdf) des pages déjà là + nouvelles."""
@@ -144,7 +156,7 @@ def append_pages(db: Session, batch: ScanBatch, assessment_id: str,
     fo.size = len(combined)
 
 
-def attach_scan(db: Session, assessment_id: str, images: list[np.ndarray],
+def attach_scan(db: Session, assessment_id: str, images: "Iterable[np.ndarray]",
                 uploaded_by: str | None) -> dict:
     """Attache des pages scannées (un seul fichier, un sujet connu) à l'unique
     batch du sujet. Une page illisible reste dans le PDF à sa position : elle
@@ -153,7 +165,8 @@ def attach_scan(db: Session, assessment_id: str, images: list[np.ndarray],
     dépôt ANTÉRIEUR restent rejetées comme redépôts. Retourne un résumé
     {batch_id, pages_added, duplicates_rejected, blocked_pages}."""
     batch = get_or_create_batch(db, assessment_id, uploaded_by)
-    kept: list[np.ndarray] = []
+    # pages lues UNE À UNE (itérable) et gardées en PNG compressé
+    kept: list[bytes] = []
     seen: set[str] = set()
     n_dup = n_blocked = 0
     for img in images:
@@ -162,7 +175,7 @@ def attach_scan(db: Session, assessment_id: str, images: list[np.ndarray],
             # Le sujet est connu par le dépôt ciblé / les autres pages du PDF :
             # on conserve physiquement cette place sans lui attribuer d'élève.
             n_blocked += 1
-            kept.append(img)
+            kept.append(as_png(img))
             continue
         if page_already_registered(db, page_id):
             n_dup += 1
@@ -171,12 +184,12 @@ def attach_scan(db: Session, assessment_id: str, images: list[np.ndarray],
             # Doublon DANS le lot physique courant : il doit occuper une place
             # dans le PDF de sortie, sinon toutes les feuilles après lui glissent.
             n_dup += 1
-            kept.append(warped if warped is not None else img)
+            kept.append(as_png(warped if warped is not None else img))
             continue
         seen.add(page_id)
         # on stocke l'image RECALÉE (canonique), pas la photo brute : le pipeline
         # la reprend fidèlement, sans risque d'échec de ré-identification.
-        kept.append(warped if warped is not None else img)
+        kept.append(as_png(warped if warped is not None else img))
     append_pages(db, batch, assessment_id, kept)
     return {"batch_id": batch.id, "pages_added": len(kept),
             "duplicates_rejected": n_dup, "blocked_pages": n_blocked}

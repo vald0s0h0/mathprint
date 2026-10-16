@@ -487,7 +487,24 @@ export default function Corrections() {
     try {
       const fd = new FormData()
       for (const f of files) fd.append('files', f)
-      const r = await api.post<{ results: SandboxResult[] }>('/api/scans/sandbox', fd)
+      // Dépôt ASYNCHRONE : la réponse arrive dès la réception du fichier
+      // (job_id), l'identification d'une classe entière tourne en tâche de
+      // fond — sinon le proxy du NAS coupait la requête au bout d'une minute
+      // (504). On suit le job jusqu'à son terme (15 min max).
+      type SandboxJob = { job_id: string; status: string; results: SandboxResult[]; error?: string | null }
+      let job = await api.post<SandboxJob>('/api/scans/sandbox', fd)
+      if (job.status === 'running') {
+        notifications.show({ color: 'blue', message: 'Fichier reçu — identification des copies en cours…' })
+      }
+      const deadline = Date.now() + 15 * 60_000
+      while (job.status === 'running' && Date.now() < deadline) {
+        await new Promise((ok) => setTimeout(ok, 3000))
+        job = await api.get<SandboxJob>(`/api/scans/sandbox/jobs/${job.job_id}`)
+      }
+      if (job.status !== 'done') {
+        throw new Error(job.error || 'Le dépôt n’a pas abouti — le fichier reste dans les scans originaux (Paramètres → Données)')
+      }
+      const r = job
       setSandboxResults(r.results)
       const pages = r.results.reduce((n, x) => n + x.pages_added, 0)
       const dups = r.results.reduce((n, x) => n + x.duplicates_rejected +

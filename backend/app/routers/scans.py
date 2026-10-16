@@ -157,9 +157,12 @@ def _run_build_overlays(batch_id: str):
         db.close()
 
 
-def _raster_bytes(ext: str, content: bytes):
-    """Rastérise un fichier déposé (PDF page par page, ou image isolée) en une
-    liste d'images BGR, via un fichier temporaire (worker_cv lit un chemin)."""
+def _attach_upload(db: Session, assessment_id: str | None, ext: str, content: bytes,
+                   user_id: str) -> tuple[str | None, dict | None]:
+    """Dépôt ciblé : sujet (QR, sauf s'il est donné) puis attache des pages au
+    lot. Le fichier passe par un temporaire relu page À PAGE (worker_cv lit un
+    chemin) : jamais toute la classe en mémoire. (sujet, résumé) ; (None, None)
+    si aucun QR MathPrint n'est reconnu."""
     from ..services import worker_cv
 
     tmp_dir = settings.data_dir / "scans" / "tmp"
@@ -167,7 +170,14 @@ def _raster_bytes(ext: str, content: bytes):
     tmp = tmp_dir / f"in-{uuid.uuid4().hex}{ext}"
     tmp.write_bytes(content)
     try:
-        return worker_cv.raster_any(str(tmp))
+        if not assessment_id:
+            assessment_id = scan_intake.detect_assessment(db, worker_cv.iter_raster_any(str(tmp)))
+            if not assessment_id:
+                return None, None
+        if not db.get(Assessment, assessment_id):
+            raise HTTPException(404, "Évaluation inconnue")
+        return assessment_id, scan_intake.attach_scan(
+            db, assessment_id, worker_cv.iter_raster_any(str(tmp)), user_id)
     finally:
         tmp.unlink(missing_ok=True)
 
@@ -193,22 +203,19 @@ async def create_batch(tasks: BackgroundTasks, assessment_id: str | None = None,
     scan_originals.archive(content, file.filename or f"scan{ext}")   # tel quel, 30 jours
     # rastérisation + identification = travail CV lourd et SYNCHRONE : on le sort
     # de la boucle d'événements (threadpool) pour ne pas geler l'API (la liste des
-    # corrections doit rester réactive pendant le traitement du scan).
-    images = await run_in_threadpool(_raster_bytes, ext, content)
-    if not images:
-        raise HTTPException(422, "Scan illisible")
-
-    # sujet identifié par le QR signé d'une page (sauf dépôt ciblé « en attente
-    # de scan » où le sujet est déjà connu)
-    if not assessment_id:
-        assessment_id = await run_in_threadpool(scan_intake.detect_assessment, db, images)
-        if not assessment_id:
-            raise HTTPException(422, "Aucun QR MathPrint reconnu dans ce scan — "
-                                     "vérifier qu'il s'agit bien de copies générées ici")
-    if not db.get(Assessment, assessment_id):
-        raise HTTPException(404, "Évaluation inconnue")
-
-    r = await run_in_threadpool(scan_intake.attach_scan, db, assessment_id, images, user.id)
+    # corrections doit rester réactive pendant le traitement du scan). Le sujet
+    # est identifié par le QR signé d'une page, sauf dépôt ciblé « en attente de
+    # scan » où il est déjà connu.
+    try:
+        assessment_id, r = await run_in_threadpool(
+            _attach_upload, db, assessment_id, ext, content, user.id)
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001 — PDF corrompu, image illisible…
+        raise HTTPException(422, f"Scan illisible : {e}")
+    if r is None:
+        raise HTTPException(422, "Aucun QR MathPrint reconnu dans ce scan — "
+                                 "vérifier qu'il s'agit bien de copies générées ici")
     batch = db.get(ScanBatch, r["batch_id"])
     if not batch.source_file_id:
         # aucune page reconnue et batch vierge : ne pas laisser un lot fantôme
@@ -224,6 +231,62 @@ async def create_batch(tasks: BackgroundTasks, assessment_id: str | None = None,
             "blocked_pages": r["blocked_pages"]}
 
 
+SANDBOX_JOB = "sandbox_ingest"
+# Un seul dépôt traité à la fois (identification + pipeline) : deux dépôts
+# simultanés doublaient la mémoire sur le NAS, et le même fichier déposé deux
+# fois ajoutait ses pages deux fois au lot. Le second attend la fin du premier
+# — ses pages sont alors reconnues comme déjà enregistrées (doublon).
+_SANDBOX_LOCK = threading.Lock()
+
+
+def _run_sandbox_ingest(job_id: str, recognized: list[tuple[str, str, bytes]],
+                        user_id: str | None) -> None:
+    from ..models import Job
+
+    with _SANDBOX_LOCK:
+        db = SessionLocal()
+        batch_ids: list[str] = []
+        try:
+            out = sandbox_service.ingest_files(db, recognized, user_id)
+            batch_ids = out["batch_ids"]
+            job = db.get(Job, job_id)
+            payload = dict(job.payload_json or {})
+            payload["results"] = list(payload.get("results") or []) + out["results"]
+            payload["batch_ids"] = batch_ids
+            job.payload_json = payload
+            job.status = "done"
+            job.updated_at = datetime.now(timezone.utc)
+            db.commit()
+        except Exception as e:  # noqa: BLE001
+            _log_task_error("sandbox", job_id, e)
+            db.rollback()
+            job = db.get(Job, job_id)
+            if job is not None:
+                job.status = "failed"
+                job.error_code = str(e)[:400]
+                db.commit()
+            return
+        finally:
+            db.close()
+        for batch_id in batch_ids:
+            _run_pipeline(batch_id)
+
+
+def fail_interrupted_sandbox_jobs(db: Session) -> int:
+    """Au démarrage : un dépôt resté « running » a été interrompu (redémarrage
+    de l'API) — marqué en échec plutôt que suivi indéfiniment par l'interface.
+    Le fichier reçu reste dans les scans originaux (services.scan_originals)."""
+    from ..models import Job
+
+    n = 0
+    for job in db.query(Job).filter_by(type=SANDBOX_JOB, status="running").all():
+        job.status = "failed"
+        job.error_code = "Dépôt interrompu (redémarrage du serveur) — redéposez le fichier"
+        n += 1
+    db.commit()
+    return n
+
+
 @router.post("/sandbox")
 async def sandbox_upload(tasks: BackgroundTasks, files: list[UploadFile],
                          db: Session = Depends(get_db),
@@ -231,7 +294,14 @@ async def sandbox_upload(tasks: BackgroundTasks, files: list[UploadFile],
     """Bac à sable (§5c) : dépôt en vrac de PDFs/images mélangés. Traité page
     par page, mais REGROUPÉ GLOBALEMENT par sujet sur tout le dépôt (plusieurs
     fichiers d'un même sujet → une seule correction) ; doublons rejetés
-    silencieusement. Réinjecté dans le pipeline existant sans modification."""
+    silencieusement. Réinjecté dans le pipeline existant sans modification.
+
+    ASYNCHRONE : la réponse part dès la réception (job_id) et l'identification
+    tourne en tâche de fond — une classe entière dépassait la minute, et le
+    proxy inverse du NAS coupait la requête (504) en plein traitement. Suivi
+    via GET /sandbox/jobs/{job_id}."""
+    from ..models import Job
+
     if providers.offline(db, "mathpix"):
         raise HTTPException(400, MATHPIX_REQUIRED)
     recognized: list[tuple[str, str, bytes]] = []
@@ -246,14 +316,26 @@ async def sandbox_upload(tasks: BackgroundTasks, files: list[UploadFile],
             continue
         ext, _mime = sniffed
         recognized.append((f.filename or "scan", ext, content))
-    # ingestion = raster + identification de chaque page (CV lourd, synchrone) :
-    # threadpool pour ne pas bloquer la boucle d'événements pendant le dépôt en
-    # vrac (sinon l'UI n'affiche plus rien le temps du traitement).
-    out = await run_in_threadpool(sandbox_service.ingest_files, db, recognized, user.id)
-    results.extend(out["results"])
-    for batch_id in out["batch_ids"]:
-        tasks.add_task(_run_pipeline, batch_id)
-    return {"results": results}
+    job = Job(type=SANDBOX_JOB, status="running" if recognized else "done",
+              payload_json={"results": results,
+                            "files": [name for name, _e, _c in recognized]})
+    db.add(job)
+    db.commit()
+    if recognized:
+        tasks.add_task(_run_sandbox_ingest, job.id, recognized, user.id)
+    return {"job_id": job.id, "status": job.status, "results": results}
+
+
+@router.get("/sandbox/jobs/{job_id}")
+def sandbox_job(job_id: str, db: Session = Depends(get_db)):
+    from ..models import Job
+
+    job = db.get(Job, job_id)
+    if job is None or job.type != SANDBOX_JOB:
+        raise HTTPException(404, "Dépôt inconnu")
+    payload = job.payload_json or {}
+    return {"job_id": job.id, "status": job.status,
+            "results": payload.get("results") or [], "error": job.error_code}
 
 
 @router.get("/batches")

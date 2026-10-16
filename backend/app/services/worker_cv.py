@@ -59,11 +59,22 @@ def iter_raster_pdf(path: str, dpi: int = DPI):
     doc = pdfium.PdfDocument(path)
     try:
         for i in range(len(doc)):
-            # rev_byteorder=True force un rendu RGB(A) quel que soit le défaut natif
-            bitmap = doc[i].render(scale=dpi / 72.0, rev_byteorder=True)
-            arr = bitmap.to_numpy()
-            code = cv2.COLOR_RGBA2BGR if arr.shape[2] == 4 else cv2.COLOR_RGB2BGR
-            yield cv2.cvtColor(arr, code)
+            # Page et bitmap FERMÉS aussitôt : pdfium garde sinon chaque page
+            # (et son image décodée) en cache jusqu'à la fermeture du document —
+            # +650 Mo pour une classe de 29 pages, malgré la lecture page à page.
+            page = doc[i]
+            try:
+                # rev_byteorder=True force un rendu RGB(A) quel que soit le défaut natif
+                bitmap = page.render(scale=dpi / 72.0, rev_byteorder=True)
+                try:
+                    arr = bitmap.to_numpy()
+                    code = cv2.COLOR_RGBA2BGR if arr.shape[2] == 4 else cv2.COLOR_RGB2BGR
+                    out = cv2.cvtColor(arr, code)     # copie : indépendante du bitmap
+                finally:
+                    bitmap.close()
+            finally:
+                page.close()
+            yield out
     finally:
         doc.close()
 

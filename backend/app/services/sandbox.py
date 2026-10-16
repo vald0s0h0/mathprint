@@ -70,8 +70,22 @@ def ingest_files(db: Session, files: list[tuple[str, str, bytes]],
         tmp_dir.mkdir(parents=True, exist_ok=True)
         tmp = tmp_dir / f"{uuid.uuid4().hex}{ext}"
         tmp.write_bytes(content)
+        # Pages lues UNE À UNE et gardées en PNG compressé (page recalée si
+        # identifiée, sinon la page brute) : garder scan + page recalée en
+        # tableaux bruts pour toute une classe saturait la mémoire du NAS.
+        classified = []
         try:
-            images = worker_cv.raster_any(str(tmp))
+            for img in worker_cv.iter_raster_any(str(tmp)):
+                page_id, aid, warped = scan_intake.classify_page(db, img)
+                identified = bool(page_id and aid)
+                keep = warped if (identified and warped is not None) else img
+                classified.append({
+                    "png": scan_intake.as_png(keep), "page_id": page_id,
+                    "assessment_id": aid,
+                    "already_registered": bool(
+                        page_id and scan_intake.page_already_registered(db, page_id)),
+                })
+                del img, warped, keep
         except Exception as e:
             upload.status = "error"
             records.append({"filename": filename, "file_kind": file_kind,
@@ -79,16 +93,6 @@ def ingest_files(db: Session, files: list[tuple[str, str, bytes]],
             continue
         finally:
             tmp.unlink(missing_ok=True)
-
-        classified = []
-        for img in images:
-            page_id, aid, warped = scan_intake.classify_page(db, img)
-            classified.append({
-                "image": img, "page_id": page_id, "assessment_id": aid,
-                "warped": warped,
-                "already_registered": bool(
-                    page_id and scan_intake.page_already_registered(db, page_id)),
-            })
         records.append({"filename": filename, "file_kind": file_kind,
                         "upload": upload, "error": None, "pages": classified})
 
@@ -133,13 +137,12 @@ def ingest_files(db: Session, files: list[tuple[str, str, bytes]],
                     n_dup += 1
                 else:
                     seen_page_ids.add(page_id)
-                kept_by_assessment[aid].append(
-                    page["warped"] if page["warped"] is not None else page["image"])
+                kept_by_assessment[aid].append(page["png"])
                 n_added += 1
                 continue
             n_blocked += 1
             if fallback_aid:
-                kept_by_assessment[fallback_aid].append(page["image"])
+                kept_by_assessment[fallback_aid].append(page["png"])
                 n_added += 1
 
         # Un fichier n'est un « doublon » que si toutes ses pages appartenaient

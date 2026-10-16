@@ -335,3 +335,62 @@ def test_real_pipeline_reads_pages_one_at_a_time(mock_db, tmp_path, monkeypatch)
     derived = tmp_path / "assessments" / a.id / "scans" / "derived"
     for page_id in pages.values():
         assert (derived / f"page-{page_id}.png").exists()
+
+
+def test_sandbox_keeps_pages_as_compressed_png_not_raw_arrays(mock_db, tmp_path, monkeypatch):
+    """Une classe entière gardée en tableaux bruts (scan + page recalée,
+    ~23 Mo/page) saturait la mémoire du NAS au dépôt : les pages sont lues une
+    à une et conservées en PNG jusqu'à l'écriture du PDF du lot."""
+    db = mock_db
+    a, pages = _seed(db)
+    monkeypatch.setattr(scan_intake.settings, "data_dir", tmp_path)
+    _patch_classify(monkeypatch, db, pages)
+    monkeypatch.setattr(sandbox.worker_cv, "iter_raster_any",
+                        lambda _path: iter([_img(1), _img(2)]))
+    captured = []
+    real_append = scan_intake.append_pages
+
+    def spy(db_, batch, aid, imgs):
+        captured.extend(imgs)
+        return real_append(db_, batch, aid, imgs)
+    monkeypatch.setattr(sandbox.scan_intake, "append_pages", spy)
+    out = sandbox.ingest_files(db, [("classe.pdf", ".pdf", b"%PDF")], "prof")
+    assert out["results"][0]["pages_added"] == 2
+    assert captured and all(isinstance(x, bytes) and x[:4] == b"\x89PNG" for x in captured)
+
+
+def test_async_sandbox_job_reports_results_then_runs_the_pipeline(mock_db, tmp_path, monkeypatch):
+    """Dépôt asynchrone : la requête répond tout de suite (job), l'ingestion
+    tourne en tâche de fond et publie ses résultats — plus de 504 du proxy du
+    NAS pendant l'identification d'une classe entière."""
+    from app.models import Job
+    from app.routers import scans as scans_router
+
+    db = mock_db
+    a, pages = _seed(db)
+    monkeypatch.setattr(scan_intake.settings, "data_dir", tmp_path)
+    _patch_classify(monkeypatch, db, pages)
+    monkeypatch.setattr(sandbox.worker_cv, "iter_raster_any", lambda _path: iter([_img(1)]))
+    monkeypatch.setattr(scans_router, "SessionLocal", lambda: db)
+    monkeypatch.setattr(db, "close", lambda: None)
+    ran = []
+    monkeypatch.setattr(scans_router, "_run_pipeline", lambda bid: ran.append(bid))
+    job = Job(type=scans_router.SANDBOX_JOB, status="running", payload_json={"results": []})
+    db.add(job); db.commit()
+
+    scans_router._run_sandbox_ingest(job.id, [("classe.pdf", ".pdf", b"%PDF")], "prof")
+    view = scans_router.sandbox_job(job.id, db)
+    assert view["status"] == "done"
+    assert view["results"][0]["pages_added"] == 1
+    assert ran == [db.query(ScanBatch).one().id]          # pipeline lancé après l'ingestion
+
+
+def test_interrupted_sandbox_job_is_marked_failed_at_startup(mock_db):
+    from app.models import Job
+    from app.routers import scans as scans_router
+
+    db = mock_db
+    job = Job(type=scans_router.SANDBOX_JOB, status="running", payload_json={})
+    db.add(job); db.commit()
+    assert scans_router.fail_interrupted_sandbox_jobs(db) == 1
+    assert scans_router.sandbox_job(job.id, db)["status"] == "failed"

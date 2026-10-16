@@ -54,6 +54,7 @@ def startup():
         indigo.seed_published(db)   # exercices Indigo publiés -> banque (tous déploiements)
         job_worker.resume_stuck_jobs(db)
         indigo.resume_stuck(db)
+        scans.fail_interrupted_sandbox_jobs(db)
     finally:
         db.close()
     scan_originals.prune()      # scans déposés : conservés 30 jours, pas plus

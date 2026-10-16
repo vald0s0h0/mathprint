@@ -53,7 +53,7 @@ def test_sandbox_deposit_archives_the_received_file(tmp_path, monkeypatch):
     from app.services import sandbox
 
     monkeypatch.setattr(settings, "data_dir", tmp_path)
-    monkeypatch.setattr(sandbox.worker_cv, "raster_any", lambda _path: [])
+    monkeypatch.setattr(sandbox.worker_cv, "iter_raster_any", lambda _path: iter([]))
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     db = sessionmaker(bind=engine)()
