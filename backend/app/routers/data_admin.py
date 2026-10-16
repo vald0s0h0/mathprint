@@ -9,13 +9,14 @@ La vue est COMPACTÉE par classe (des centaines d'élèves/sujets attendus) :
 `/orphans` recense les données pointant vers un parent disparu, pour un ménage
 propre de la base."""
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..deps import require_role
 from ..models import (Assessment, Copy, GeneratedExercise, ScanBatch,
                       SchoolClass, SchoolYear, Student)
-from ..services import data_admin
+from ..services import data_admin, scan_originals
 
 router = APIRouter(prefix="/api/data", tags=["data-admin"],
                    dependencies=[Depends(require_role("admin"))])
@@ -198,3 +199,20 @@ def delete_correction(batch_id: str, purge_tracking: bool = False,
     result = data_admin.delete_scan_batch(db, b, purge_tracking=purge_tracking)
     db.commit()
     return {"ok": True, **result}
+
+
+# ------------------------------------------------- scans originaux (30 jours)
+
+@router.get("/scan-originals")
+def list_scan_originals():
+    """Fichiers de scan reçus, conservés tels quels 30 jours (services.scan_originals)."""
+    return {"retention_days": scan_originals.RETENTION_DAYS,
+            "files": scan_originals.list_originals()}
+
+
+@router.get("/scan-originals/{name}")
+def download_scan_original(name: str):
+    path = scan_originals.path_of(name)
+    if path is None:
+        raise HTTPException(404, "Scan original introuvable (ou déjà purgé après 30 jours)")
+    return FileResponse(path, filename=name.split("-", 3)[3])

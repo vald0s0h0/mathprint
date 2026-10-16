@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..models import SandboxUpload
-from . import scan_intake, worker_cv
+from . import scan_intake, scan_originals, worker_cv
 
 
 def scan_filename_key(filename: str) -> tuple:
@@ -61,6 +61,7 @@ def ingest_files(db: Session, files: list[tuple[str, str, bytes]],
     for filename, ext, content in ordered_files:
         file_kind = "pdf" if ext.lower() == ".pdf" else "image"
         sha = hashlib.sha256(content).hexdigest()
+        scan_originals.archive(content, filename)   # fichier reçu, tel quel, 30 jours
         upload = SandboxUpload(uploaded_by=uploaded_by, original_filename=filename, sha256=sha)
         db.add(upload)
         db.flush()

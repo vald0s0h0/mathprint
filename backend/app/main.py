@@ -11,7 +11,7 @@ from .routers import (
     users_admin,
 )
 from .seed import seed
-from .services import errorlog, indigo, job_worker, mail_intake
+from .services import errorlog, indigo, job_worker, mail_intake, scan_originals
 from .services.bootstrap import ensure_strong_secrets
 
 app = FastAPI(title="MathPrint", version="0.9.0",
@@ -56,6 +56,7 @@ def startup():
         indigo.resume_stuck(db)
     finally:
         db.close()
+    scan_originals.prune()      # scans déposés : conservés 30 jours, pas plus
     job_worker.start_worker()
     indigo.start_worker()
     mail_intake.start_worker()

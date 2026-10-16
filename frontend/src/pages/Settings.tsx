@@ -8,7 +8,7 @@ import {
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
 import {
-  AlertTriangle, Database, FileText, FlaskConical, KeyRound, Mail, Printer,
+  AlertTriangle, Database, Download, FileText, FlaskConical, KeyRound, Mail, Printer,
   RefreshCw, Ruler, ScrollText, Save, SlidersHorizontal, Trash2, UserRound, Users,
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
@@ -45,6 +45,7 @@ type Overview = {
 type ClassDetail = { students: StudentRow[]; assessments: AssessmentRow[]
   corrections: CorrectionRow[] }
 type DeleteKind = 'classes' | 'students' | 'assessments' | 'corrections'
+type ScanOriginal = { name: string; filename: string; size: number; created: string; expires: string }
 type SystemStatus = {
   version: string; build?: Build
   database: { ok: boolean; url_scheme: string }
@@ -81,6 +82,7 @@ export default function SettingsPage() {
   // validation y a propagé (preuves de compétence, courbe d'oubli, niveaux,
   // appréciations) — sinon ce suivi survit à la correction supprimée
   const [purgeTracking, setPurgeTracking] = useState(true)
+  const [scanOriginals, setScanOriginals] = useState<ScanOriginal[]>([])
   const [purgeConfirmOpen, setPurgeConfirmOpen] = useState(false)
   const [purging, setPurging] = useState(false)
   const [orphansPurgeOpen, setOrphansPurgeOpen] = useState(false)
@@ -124,6 +126,22 @@ export default function SettingsPage() {
     api.get<Overview>('/api/data/overview')
       .then((o) => { setOverview(o); reopen.forEach(loadClassDetail) })
       .catch(() => {})
+    api.get<{ retention_days: number; files: ScanOriginal[] }>('/api/data/scan-originals')
+      .then((r) => setScanOriginals(r.files)).catch(() => {})
+  }
+
+  // scan original tel que reçu (copieur, mail, bac à sable), conservé 30 jours
+  async function downloadScanOriginal(f: ScanOriginal) {
+    const res = await fetch(`/api/data/scan-originals/${encodeURIComponent(f.name)}`,
+      { headers: { Authorization: `Bearer ${getToken()}` } })
+    if (!res.ok) {
+      notifications.show({ color: 'red', message: 'Scan introuvable (purgé après 30 jours ?)' })
+      return
+    }
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(await res.blob())
+    a.download = f.filename
+    a.click()
   }
 
   function loadClassDetail(classId: string) {
@@ -701,6 +719,36 @@ export default function SettingsPage() {
                 ))}
               </SimpleGrid>
             )}
+
+            <Card withBorder>
+              <Text fw={600} mb={2}>Scans originaux</Text>
+              <Text size="xs" c="dimmed" mb="xs">
+                Chaque fichier déposé (bac à sable, dépôt ciblé, mail) est conservé tel quel
+                pendant 30 jours, même si sa correction est supprimée — puis effacé
+                automatiquement : ce sont des copies d'élèves.
+              </Text>
+              {scanOriginals.length === 0 ? (
+                <Text size="sm" c="dimmed">Aucun scan conservé.</Text>
+              ) : (
+                <Table>
+                  <Table.Tbody>
+                    {scanOriginals.map((f) => (
+                      <Table.Tr key={f.name}>
+                        <Table.Td>{f.filename}</Table.Td>
+                        <Table.Td w={90}>{(f.size / 1e6).toFixed(1)} Mo</Table.Td>
+                        <Table.Td w={150}>{new Date(f.created).toLocaleString('fr-FR')}</Table.Td>
+                        <Table.Td w={170}><Text size="xs" c="dimmed">
+                          effacé le {new Date(f.expires).toLocaleDateString('fr-FR')}</Text></Table.Td>
+                        <Table.Td w={36}>
+                          <ActionIcon variant="subtle" aria-label="Télécharger le scan original"
+                            onClick={() => downloadScanOriginal(f)}><Download size={14} /></ActionIcon>
+                        </Table.Td>
+                      </Table.Tr>
+                    ))}
+                  </Table.Tbody>
+                </Table>
+              )}
+            </Card>
 
             <Card withBorder style={overview && overview.totals.orphans > 0
               ? { borderColor: 'var(--mantine-color-orange-5)' } : undefined}>

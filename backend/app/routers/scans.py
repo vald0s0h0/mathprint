@@ -23,7 +23,7 @@ from ..models import (
 from ..services import grading
 from ..services import providers
 from ..services import sandbox as sandbox_service
-from ..services import scan_intake, scoring
+from ..services import scan_intake, scan_originals, scoring
 from ..services.file_sniff import sniff_file as _sniff_file
 from ..services.pipeline import (
     FinalizeInProgress, build_overlays, effective_reading, finalize_batch,
@@ -190,6 +190,7 @@ async def create_batch(tasks: BackgroundTasks, assessment_id: str | None = None,
     if sniffed is None:
         raise HTTPException(400, "Format non reconnu — PDF, JPEG, PNG ou HEIC uniquement")
     ext, _mime = sniffed
+    scan_originals.archive(content, file.filename or f"scan{ext}")   # tel quel, 30 jours
     # rastérisation + identification = travail CV lourd et SYNCHRONE : on le sort
     # de la boucle d'événements (threadpool) pour ne pas geler l'API (la liste des
     # corrections doit rester réactive pendant le traitement du scan).
