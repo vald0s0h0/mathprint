@@ -2,7 +2,7 @@
 // Documents (éditeur de templates), Système, Journaux, Données, Utilisateurs
 // (admin). `?onglet=<valeur>` ouvre directement un onglet.
 import {
-  Accordion, ActionIcon, Alert, Badge, Box, Button, Card, ColorInput, FileButton,
+  Accordion, ActionIcon, Alert, Badge, Box, Button, Card, Checkbox, ColorInput, FileButton,
   Group, Loader, Modal, NumberInput, PasswordInput, SimpleGrid, Stack, Switch, Table, Tabs, Text,
   TextInput, Title,
 } from '@mantine/core'
@@ -77,6 +77,10 @@ export default function SettingsPage() {
   const [openClasses, setOpenClasses] = useState<string[]>([])
   const [confirmTarget, setConfirmTarget] = useState<{ kind: DeleteKind; id: string; label: string } | null>(null)
   const [deleting, setDeleting] = useState(false)
+  // suppression d'une correction : retirer AUSSI du suivi des élèves ce que sa
+  // validation y a propagé (preuves de compétence, courbe d'oubli, niveaux,
+  // appréciations) — sinon ce suivi survit à la correction supprimée
+  const [purgeTracking, setPurgeTracking] = useState(true)
   const [purgeConfirmOpen, setPurgeConfirmOpen] = useState(false)
   const [purging, setPurging] = useState(false)
   const [orphansPurgeOpen, setOrphansPurgeOpen] = useState(false)
@@ -170,7 +174,8 @@ export default function SettingsPage() {
     if (!confirmTarget) return
     setDeleting(true)
     try {
-      await api.del(`/api/data/${confirmTarget.kind}/${confirmTarget.id}`)
+      const q = confirmTarget.kind === 'corrections' && purgeTracking ? '?purge_tracking=true' : ''
+      await api.del(`/api/data/${confirmTarget.kind}/${confirmTarget.id}${q}`)
       notifications.show({ color: 'green', message: 'Supprimé définitivement' })
       setConfirmTarget(null)
       refreshData()
@@ -857,6 +862,12 @@ export default function SettingsPage() {
         title={<Text fw={650}>Confirmer la suppression</Text>}>
         <Stack>
           <Text size="sm">Supprimer définitivement {confirmTarget?.label} ?</Text>
+          {confirmTarget?.kind === 'corrections' && (
+            <Checkbox checked={purgeTracking}
+              onChange={(e) => setPurgeTracking(e.currentTarget.checked)}
+              label="Supprimer aussi les données de suivi des élèves issues de cette correction"
+              description="Preuves de compétence, courbe d'oubli, niveaux calculés et appréciations : les élèves reviennent à leur suivi d'avant cette correction." />
+          )}
           <Text size="xs" c="dimmed">Cette action est irréversible, y compris les fichiers stockés.</Text>
           <Group justify="flex-end">
             <Button variant="subtle" onClick={() => setConfirmTarget(null)}>Annuler</Button>

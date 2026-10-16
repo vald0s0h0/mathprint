@@ -195,3 +195,68 @@ def test_delete_class_removes_connector_print_jobs(tmp_path, monkeypatch):
     assert db.query(Assessment).count() == 0
     assert db.query(ConnectorPrintJob).count() == 0
     assert not pdf.exists()
+
+
+# ------------------------------------- purge du suivi élève issu d'une correction
+
+def test_purge_correction_tracking_removes_only_that_assessment_and_rebuilds_states():
+    """Supprimer une correction laissait preuves de compétence, courbe d'oubli,
+    niveaux et appréciations (cas réel : 1er sujet de l'année). La purge retire
+    ce que CE sujet a propagé, et reconstruit l'état de compétence à partir des
+    preuves restantes d'un autre sujet."""
+    from app.models import (CompetencyEvidence, CompetencyStateHistory,
+                            StudentCompetencyState, StudentLevel)
+    from app.services.forgetting import apply_evidence
+
+    db = _plain_db()
+    fw = CompetencyFramework(grade_level="6e", name="6e"); db.add(fw); db.flush()
+    comp = Competency(framework_id=fw.id, code="G1", short_id="G1", label="Angles",
+                      domain_code="G", domain_name="Géométrie", chapter_code="G1",
+                      chapter_name="Angles", order_index=0)
+    db.add(comp)
+    cls = SchoolClass(name="6e3", grade_level="6e"); db.add(cls); db.flush()
+    stu = Student(class_id=cls.id, name="A B", llm_pseudonym="p"); db.add(stu); db.flush()
+
+    def assessment_with_evidence(title, when, ratio):
+        a = Assessment(class_id=cls.id, type="control", title=title); db.add(a); db.flush()
+        c = Copy(assessment_id=a.id, student_id=stu.id, status="generated",
+                 appreciation_json={"synthesis": "Bien."})
+        db.add(c); db.flush()
+        it = CopyItem(copy_id=c.id, catalog_id="x", sequence=1, difficulty=3,
+                      response_type="qcm_single", statement="Q", correction="",
+                      expected_json={}, grading_json={})
+        db.add(it); db.flush()
+        ev = CompetencyEvidence(student_id=stu.id, competency_id=comp.id, item_id=it.id,
+                                mode="control", score_ratio=ratio, difficulty=3,
+                                weight=1.0, observed_at=when)
+        db.add(ev); db.flush()
+        apply_evidence(db, ev)
+        db.add(StudentLevel(student_id=stu.id, assessment_id=a.id, level=5))
+        db.flush()
+        return a, c
+
+    other, _ = assessment_with_evidence("Autre", datetime(2026, 9, 1, tzinfo=timezone.utc), 0.5)
+    s0 = db.query(StudentCompetencyState).one()
+    ref = (s0.mastery, s0.stability, s0.confidence)        # état issu de l'autre sujet seul
+    first, first_copy = assessment_with_evidence("Angles", datetime(2026, 10, 15, tzinfo=timezone.utc), 1.0)
+    db.commit()
+    assert db.query(CompetencyEvidence).count() == 2
+
+    out = data_admin.purge_correction_tracking(db, first)
+    db.commit()
+
+    assert out["evidence"] == 1 and out["levels"] == 1 and out["evidence_replayed"] == 1
+    assert db.query(CompetencyEvidence).count() == 1                     # celle de l'autre sujet
+    assert db.query(StudentLevel).filter_by(assessment_id=first.id).count() == 0
+    assert db.query(StudentLevel).filter_by(assessment_id=other.id).count() == 1
+    assert db.get(Copy, first_copy.id).appreciation_json is None
+    # l'état = exactement celui produit par la SEULE preuve restante, rejouée
+    state = db.query(StudentCompetencyState).one()
+    assert (state.mastery, state.stability, state.confidence) == pytest.approx(ref)
+    assert db.query(CompetencyStateHistory).count() == 1
+    # sans autre sujet : plus aucune donnée de suivi pour l'élève
+    data_admin.purge_correction_tracking(db, other)
+    db.commit()
+    assert db.query(StudentCompetencyState).count() == 0
+    assert db.query(CompetencyStateHistory).count() == 0
+    assert data_admin.find_orphans(db) == []

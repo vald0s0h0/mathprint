@@ -138,11 +138,60 @@ def delete_class(db: Session, cls: SchoolClass) -> dict:
             "copies": n_copies, "scan_batches": n_batches}
 
 
-def delete_scan_batch(db: Session, batch: ScanBatch) -> dict:
+def purge_correction_tracking(db: Session, assessment: Assessment) -> dict:
+    """Retire du SUIVI DES ÉLÈVES tout ce que la validation de ce sujet y a
+    propagé (pipeline.finalize_batch) : preuves de compétence et leur
+    historique, niveaux posés par ce sujet, appréciations des copies. Les états
+    de compétence des élèves touchés sont RECONSTRUITS en rejouant, dans
+    l'ordre, leurs preuves restantes (autres sujets) — supprimés s'il n'en
+    reste aucune. Le sujet et ses copies générées sont conservés."""
+    from .forgetting import apply_evidence
+
+    copies = db.query(Copy).filter_by(assessment_id=assessment.id).all()
+    copy_ids = [c.id for c in copies]
+    item_ids = ([i for (i,) in db.query(CopyItem.id).filter(CopyItem.copy_id.in_(copy_ids)).all()]
+                if copy_ids else [])
+    evidence = (db.query(CompetencyEvidence).filter(CompetencyEvidence.item_id.in_(item_ids)).all()
+                if item_ids else [])
+    ev_ids = [e.id for e in evidence]
+    student_ids = sorted({e.student_id for e in evidence})
+    if ev_ids:
+        db.query(CompetencyEvidence).filter(
+            CompetencyEvidence.id.in_(ev_ids)).delete(synchronize_session=False)
+    rebuilt = 0
+    if student_ids:
+        # reconstruction complète des élèves touchés : état + historique
+        # repartent de zéro, puis leurs preuves RESTANTES sont rejouées
+        db.query(CompetencyStateHistory).filter(
+            CompetencyStateHistory.student_id.in_(student_ids)).delete(synchronize_session=False)
+        db.query(StudentCompetencyState).filter(
+            StudentCompetencyState.student_id.in_(student_ids)).delete(synchronize_session=False)
+        db.flush()
+        remaining = (db.query(CompetencyEvidence)
+                     .filter(CompetencyEvidence.student_id.in_(student_ids))
+                     .order_by(CompetencyEvidence.observed_at, CompetencyEvidence.id).all())
+        for ev in remaining:
+            apply_evidence(db, ev)
+            db.flush()
+            rebuilt += 1
+    levels = (db.query(StudentLevel).filter_by(assessment_id=assessment.id)
+              .delete(synchronize_session=False))
+    for c in copies:
+        c.appreciation_json = None
+    return {"evidence": len(ev_ids), "students": len(student_ids),
+            "evidence_replayed": rebuilt, "levels": levels}
+
+
+def delete_scan_batch(db: Session, batch: ScanBatch, purge_tracking: bool = False) -> dict:
     """Supprime un seul lot de scans (une « correction ») sans toucher au
     sujet ni aux autres lots : réponses, décisions, revues et fichiers
     (scan original + recadrages) de ce lot uniquement. Les copies
-    concernées repassent au statut "generated"."""
+    concernées repassent au statut "generated".
+
+    `purge_tracking` : quand le sujet n'a plus aucun lot, retire aussi du suivi
+    des élèves ce que sa validation y avait propagé (purge_correction_tracking)
+    — sans cela, preuves de compétence, courbe d'oubli et niveaux survivent à
+    la correction supprimée."""
     assessment = db.get(Assessment, batch.assessment_id)
     scanned_pages = db.query(ScannedPage).filter_by(batch_id=batch.id).all()
     page_ids = [sp.page_id for sp in scanned_pages if sp.page_id]
@@ -199,9 +248,17 @@ def delete_scan_batch(db: Session, batch: ScanBatch) -> dict:
                 assessment.status = "printed"
             shutil.rmtree(settings.data_dir / "assessments" / assessment.id / "overlays",
                           ignore_errors=True)
+            tracking = purge_correction_tracking(db, assessment) if purge_tracking else None
+        else:
+            tracking = None
+    else:
+        tracking = None
 
     db.delete(batch)
-    return {"pages": len(scanned_pages), "responses": len(response_ids)}
+    out = {"pages": len(scanned_pages), "responses": len(response_ids)}
+    if tracking is not None:
+        out["tracking"] = tracking
+    return out
 
 
 # ============================================================ données orphelines

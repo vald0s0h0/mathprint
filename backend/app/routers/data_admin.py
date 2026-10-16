@@ -188,10 +188,13 @@ def list_corrections(class_id: str | None = None, db: Session = Depends(get_db))
 
 
 @router.delete("/corrections/{batch_id}")
-def delete_correction(batch_id: str, db: Session = Depends(get_db)):
+def delete_correction(batch_id: str, purge_tracking: bool = False,
+                      db: Session = Depends(get_db)):
+    """`purge_tracking` : retire aussi du suivi des élèves les preuves de
+    compétence, niveaux et appréciations issus de cette correction."""
     b = db.get(ScanBatch, batch_id)
     if not b:
         raise HTTPException(404, "Lot de correction inconnu")
-    result = data_admin.delete_scan_batch(db, b)
+    result = data_admin.delete_scan_batch(db, b, purge_tracking=purge_tracking)
     db.commit()
     return {"ok": True, **result}
