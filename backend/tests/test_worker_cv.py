@@ -167,3 +167,27 @@ def test_select_qcm_adaptive_overrides_default():
     selected, _, default_sel = select_qcm(boxes, dens, thr)
     assert default_sel == []                             # le défaut rate les coches fines
     assert selected == [3, 4, 5]                          # l'adaptatif les prend
+
+
+def test_detect_matching_reads_a_straight_drawn_line():
+    """Un trait droit relie la pastille gauche 0 à la droite 1. Régression
+    OpenCV 5 : HoughLinesP renvoie (N, 4) et non plus (N, 1, 4) — la lecture
+    plantait (« cannot unpack non-iterable numpy.int32 ») sur toute copie
+    contenant un exercice « relier »."""
+    import cv2
+    from app.services import worker_cv as W
+    from app.services.pdfgen import PAGE_H
+
+    img = np.full((int(PAGE_H * W.SCALE), 1700, 3), 255, dtype=np.uint8)
+
+    def dot(x_pt, y_pt):
+        return {"x_pt": x_pt, "y_pt": y_pt, "w_pt": 6, "h_pt": 6}
+
+    left = [dot(100, 600), dot(100, 540)]
+    right = [dot(300, 600), dot(300, 540)]
+    a = tuple(int(v) for v in W.pt_to_px(103, 603))
+    b = tuple(int(v) for v in W.pt_to_px(303, 543))
+    cv2.line(img, a, b, (20, 20, 20), 3)
+    pairs, conf = W.detect_matching(img, left, right)
+    assert pairs == [[0, 1]]
+    assert conf == 0.5

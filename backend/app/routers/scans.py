@@ -54,12 +54,24 @@ def scan_config(db: Session = Depends(get_db)):
             "correction_llm_configured": not providers.offline(db, llm_provider)}
 
 
+def _log_task_error(task: str, batch_id: str, e: Exception) -> None:
+    """Trace complète d'une tâche de fond dans Paramètres → Journaux : le lot ne
+    garde que le message, insuffisant pour diagnostiquer (ex. « cannot unpack
+    non-iterable numpy.int32 object » sans la ligne fautive)."""
+    import traceback
+
+    from ..services import errorlog
+    errorlog.record(method="TASK", path=f"scans/{task}/{batch_id}",
+                    error=f"{type(e).__name__}: {e}", traceback=traceback.format_exc())
+
+
 def _run_pipeline(batch_id: str):
     db = SessionLocal()
     try:
         batch = db.get(ScanBatch, batch_id)
         process_batch(db, batch)
     except Exception as e:
+        _log_task_error("pipeline", batch_id, e)
         # rollback AVANT toute autre requête : si l'échec vient d'une écriture,
         # la transaction est avortée (Postgres) et le db.get/commit qui suit
         # re-lèverait, laissant le lot sans message d'erreur (cf. piège SQLite/PG).
@@ -81,6 +93,7 @@ def _run_grading(batch_id: str):
             batch.error = None
             db.commit()
     except Exception as e:
+        _log_task_error("grading", batch_id, e)
         db.rollback()
         batch = db.get(ScanBatch, batch_id)
         if batch:
@@ -101,6 +114,7 @@ def _run_build_overlays(batch_id: str):
         batch.error = None
         db.commit()
     except Exception as e:
+        _log_task_error("overlays", batch_id, e)
         db.rollback()  # transaction possiblement avortée (cf. piège SQLite/PG)
         batch = db.get(ScanBatch, batch_id)
         batch.error = f"Copies corrigées non générées : {e}"

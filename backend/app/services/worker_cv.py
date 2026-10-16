@@ -610,8 +610,9 @@ def detect_matching(warped: np.ndarray, left_points: list[dict], right_points: l
 
     lines = cv2.HoughLinesP(ink_mask, 1, np.pi / 180, threshold=25,
                             minLineLength=30, maxLineGap=8)
-    for seg in (lines if lines is not None else []):
-        x_a, y_a, x_b, y_b = seg[0]
+    # reshape : OpenCV 4 renvoie (N, 1, 4), OpenCV 5 (N, 4) — `seg[0]` sur ce
+    # dernier donnait un entier seul (« cannot unpack non-iterable numpy.int32 »).
+    for x_a, y_a, x_b, y_b in (lines.reshape(-1, 4) if lines is not None else []):
         _register(float(x_a), float(y_a), float(x_b), float(y_b))
 
     contours, _ = cv2.findContours(ink_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
