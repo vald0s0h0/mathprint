@@ -248,6 +248,10 @@ def delete_scan_batch(db: Session, batch: ScanBatch, purge_tracking: bool = Fals
                 assessment.status = "printed"
             shutil.rmtree(settings.data_dir / "assessments" / assessment.id / "overlays",
                           ignore_errors=True)
+            # images de pages par POSITION de scan (source-{i}.png, aperçu de la
+            # page de sécurité) : ni zone ni page ne les nomme, elles
+            # survivaient au lot supprimé — tout le dossier dérivé part avec lui
+            shutil.rmtree(derived_dir, ignore_errors=True)
             tracking = purge_correction_tracking(db, assessment) if purge_tracking else None
         else:
             tracking = None

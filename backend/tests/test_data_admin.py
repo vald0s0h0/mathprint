@@ -260,3 +260,22 @@ def test_purge_correction_tracking_removes_only_that_assessment_and_rebuilds_sta
     assert db.query(StudentCompetencyState).count() == 0
     assert db.query(CompetencyStateHistory).count() == 0
     assert data_admin.find_orphans(db) == []
+
+
+def test_deleting_last_batch_removes_scan_page_images(tmp_path, monkeypatch):
+    """Les images de pages par position de scan (source-{i}.png) survivaient à
+    la correction supprimée : ce sont des scans de copies d'élèves."""
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    db = _plain_db()
+    cls = SchoolClass(name="6e3", grade_level="6e"); db.add(cls); db.flush()
+    a = Assessment(class_id=cls.id, type="control", title="Angles", status="finalized")
+    db.add(a); db.flush()
+    batch = ScanBatch(assessment_id=a.id); db.add(batch); db.commit()
+    derived = tmp_path / "assessments" / a.id / "scans" / "derived"
+    derived.mkdir(parents=True)
+    (derived / "source-0.png").write_bytes(b"png")
+
+    data_admin.delete_scan_batch(db, batch)
+    db.commit()
+    assert not derived.exists()
+    assert db.get(Assessment, a.id).status == "printed"
