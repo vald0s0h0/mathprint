@@ -359,7 +359,11 @@ function OcrScan({ item, cellIndex, selectedChoices, selectedPairs, matchStart,
             left: `${box.x * 100}%`, top: `${box.y * 100}%`,
             width: `${Math.max(box.w, .018) * 100}%`, height: `${Math.max(box.h, .025) * 100}%`,
             minWidth: 12, minHeight: 12, padding: 0,
-            border: '2px solid #1971c2', background: chosen(box) ? '#1971c2' : '#fff' }} />
+            // fond TRANSPARENT : la coche de l'élève doit rester visible sous la
+            // case cliquable (un fond blanc la masquait, cf. grilles/tableaux) ;
+            // case retenue = voile bleu translucide, pas un aplat opaque.
+            border: '2px solid #1971c2',
+            background: chosen(box) ? 'rgba(25, 113, 194, 0.35)' : 'transparent' }} />
       ))}
       {url && controls?.kind === 'matching' && (
         <>
@@ -367,8 +371,12 @@ function OcrScan({ item, cellIndex, selectedChoices, selectedPairs, matchStart,
             pointerEvents: 'none' }}>
             {selectedPairs.map(([li, ri], i) => {
               const a = point('left', li), b = point('right', ri)
+              // ORANGE épais et translucide : l'encre de l'élève (souvent bleue)
+              // reste visible PAR-DESSOUS — un trait élève manquant se voit
+              // tout de suite, au lieu de se confondre avec la reprise.
               return a && b ? <line key={i} x1={`${a.x * 100}%`} y1={`${a.y * 100}%`}
-                x2={`${b.x * 100}%`} y2={`${b.y * 100}%`} stroke="#1971c2" strokeWidth="4" /> : null
+                x2={`${b.x * 100}%`} y2={`${b.y * 100}%`} stroke="#fd7e14" strokeWidth="10"
+                strokeOpacity="0.4" strokeLinecap="round" /> : null
             })}
           </svg>
           {[...left.map((p) => ({ ...p, side: 'left' as const })),
@@ -378,8 +386,9 @@ function OcrScan({ item, cellIndex, selectedChoices, selectedPairs, matchStart,
                 onClick={() => onMatchPoint(p.side, p.index)} style={{ position: 'absolute',
                   left: `${p.x * 100}%`, top: `${p.y * 100}%`, transform: 'translate(-50%, -50%)',
                   width: 18, height: 18, borderRadius: '50%', cursor: 'pointer', padding: 0,
-                  border: '3px solid #1971c2',
-                  background: p.side === 'left' && matchStart === p.index ? '#1971c2' : '#fff' }} />
+                  border: '3px solid #fd7e14',
+                  background: p.side === 'left' && matchStart === p.index
+                    ? 'rgba(253, 126, 20, 0.5)' : 'transparent' }} />
             ))}
         </>
       )}
