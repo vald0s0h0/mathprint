@@ -169,11 +169,11 @@ def test_select_qcm_adaptive_overrides_default():
     assert selected == [3, 4, 5]                          # l'adaptatif les prend
 
 
-def test_detect_matching_reads_a_straight_drawn_line():
-    """Un trait droit relie la pastille gauche 0 à la droite 1. Régression
-    OpenCV 5 : HoughLinesP renvoie (N, 4) et non plus (N, 1, 4) — la lecture
-    plantait (« cannot unpack non-iterable numpy.int32 ») sur toute copie
-    contenant un exercice « relier »."""
+def _matching_page(lines, n=4):
+    """Page blanche + pastilles 4×4 à la géométrie réelle d'une copie 6e
+    (pastilles 6,2 pt, colonnes à 46 pt, lignes à 18,4 pt) ; `lines` = traits
+    ((i, j), (dx1, dy1), (dx2, dy2)) tracés de la pastille gauche i (+ décalage
+    px) à la droite j (+ décalage px)."""
     import cv2
     from app.services import worker_cv as W
     from app.services.pdfgen import PAGE_H
@@ -181,13 +181,61 @@ def test_detect_matching_reads_a_straight_drawn_line():
     img = np.full((int(PAGE_H * W.SCALE), 1700, 3), 255, dtype=np.uint8)
 
     def dot(x_pt, y_pt):
-        return {"x_pt": x_pt, "y_pt": y_pt, "w_pt": 6, "h_pt": 6}
+        return {"x_pt": x_pt, "y_pt": y_pt, "w_pt": 6.24, "h_pt": 6.24}
 
-    left = [dot(100, 600), dot(100, 540)]
-    right = [dot(300, 600), dot(300, 540)]
-    a = tuple(int(v) for v in W.pt_to_px(103, 603))
-    b = tuple(int(v) for v in W.pt_to_px(303, 543))
-    cv2.line(img, a, b, (20, 20, 20), 3)
+    left = [dot(393.0, 557.0 - 18.4 * k) for k in range(n)]
+    right = [dot(438.9, 557.0 - 18.4 * k) for k in range(n)]
+
+    def c(p):
+        return W.pt_to_px(p["x_pt"] + p["w_pt"] / 2, p["y_pt"] + p["h_pt"] / 2)
+    for (i, j), (ax, ay), (bx, by) in lines:
+        (lx, ly), (rx, ry) = c(left[i]), c(right[j])
+        cv2.line(img, (int(lx + ax), int(ly + ay)), (int(rx + bx), int(ry + by)),
+                 (40, 30, 20), 3)
+    return img, left, right
+
+
+def test_detect_matching_reads_a_straight_drawn_line():
+    """Régression OpenCV 5 (HoughLinesP en (N, 4)) : la lecture plantait
+    (« cannot unpack non-iterable numpy.int32 ») sur tout exercice « relier »."""
+    from app.services import worker_cv as W
+
+    img, left, right = _matching_page([((0, 1), (0, 0), (0, 0))], n=2)
     pairs, conf = W.detect_matching(img, left, right)
-    assert pairs == [[0, 1]]
-    assert conf == 0.5
+    assert pairs == [[0, 1]] and conf >= 0.9
+
+
+def test_detect_matching_crossing_lines_drawn_off_the_dots():
+    """Cas réels : traits qui se croisent, partent à côté de la pastille ou la
+    dépassent — l'ancienne heuristique (extrémités près des pastilles) les
+    envoyait presque tous en revue."""
+    from app.services import worker_cv as W
+
+    img, left, right = _matching_page([
+        ((0, 1), (6, -5), (12, 4)),      # arrive en dépassant la pastille
+        ((1, 3), (8, 6), (-14, -3)),     # s'arrête avant la pastille
+        ((2, 0), (5, 4), (4, -6)),
+        ((3, 2), (0, 0), (0, 0)),
+    ])
+    pairs, conf = W.detect_matching(img, left, right)
+    assert sorted(pairs) == [[0, 1], [1, 3], [2, 0], [3, 2]]
+    assert conf >= 0.9
+
+
+def test_detect_matching_blank_answer_is_read_with_confidence():
+    from app.services import worker_cv as W
+
+    img, left, right = _matching_page([])
+    assert W.detect_matching(img, left, right) == ([], 0.97)
+
+
+def test_detect_matching_two_partners_for_one_dot_goes_to_review():
+    """L'élève relie la même pastille à deux réponses : jamais un choix deviné."""
+    from app.services import worker_cv as W
+
+    img, left, right = _matching_page([
+        ((0, 1), (0, 0), (0, 0)), ((0, 3), (0, 0), (0, 0)),
+        ((2, 0), (0, 0), (0, 0)), ((3, 2), (0, 0), (0, 0)),
+    ])
+    _pairs, conf = W.detect_matching(img, left, right)
+    assert conf < 0.9

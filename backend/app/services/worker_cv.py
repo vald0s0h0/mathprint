@@ -9,6 +9,7 @@ Le scan original n'est jamais modifié (RM-002) ; tous les dérivés sont
 reproductibles. Une page non identifiée est bloquée, jamais devinée (RM-001).
 """
 import io
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -555,91 +556,156 @@ def detect_grid(warped: np.ndarray, boxes: list[dict], thr: QcmThreshold
     return selected, densities
 
 
+# --- Points à relier : couverture ORIENTÉE du segment de chaque paire --------
+# Calibré sur 58 réponses réelles (contrôle 6e « Angles », 29 copies, traits à
+# la règle ou à main levée, stylo bleu/noir et crayon) : 53 lues justes en
+# automatique, 0 erreur, 5 en revue (traits ondulés au crayon) — contre 49 en
+# revue avec l'ancienne heuristique « extrémités de traits près des pastilles »,
+# qui échouait dès qu'un trait s'arrêtait avant la pastille, la dépassait, ou
+# était coupé par un croisement.
+MATCH_INK_GRAY = 190        # niveau de gris sous lequel un pixel est de l'encre
+MATCH_TOL_PX = 10           # décalage perpendiculaire toléré (~1,3 mm à 200 dpi)
+MATCH_KERNEL_PX = 31        # longueur du noyau linéaire orienté
+MATCH_RESP_MIN = 0.7        # réponse orientée mini pour « encre alignée »
+MATCH_T_RANGE = (0.10, 0.90)  # portion du segment mesurée (hors pastilles)
+MATCH_STEP_PX = 2.0         # pas d'échantillonnage le long du segment
+MATCH_GAP_PX = 8            # trou toléré dans un trait (stylo qui saute)
+MATCH_ACCEPT = 0.75         # score mini d'une liaison retenue
+MATCH_AMBIGUOUS = 0.45      # une paire écartée au-dessus -> revue
+MATCH_BLANK_PX = 40         # traces (même pâles) sous ce total -> copie blanche
+MATCH_UNEXPLAINED_PX = 350  # encre hors liaisons retenues au-delà -> revue
+
+
+def _line_kernel(theta: float, k: int) -> np.ndarray:
+    ker = np.zeros((k, k), np.float32)
+    c = (k - 1) / 2
+    dx, dy = math.cos(theta) * c, math.sin(theta) * c
+    cv2.line(ker, (int(round(c - dx)), int(round(c - dy))),
+             (int(round(c + dx)), int(round(c + dy))), 1.0, 1)
+    return ker / ker.sum()
+
+
+def _longest_run(covered: np.ndarray, max_gap: int) -> float:
+    """Plus longue portion CONTINUE couverte (fraction des échantillons), en
+    tolérant des trous de `max_gap` échantillons au plus."""
+    best = run = gap = 0
+    for c in covered:
+        if c:
+            run = run + 1 + gap if run else 1
+            gap = 0
+        elif run:
+            gap += 1
+            if gap > max_gap:
+                best, run, gap = max(best, run), 0, 0
+    return max(best, run) / max(1, len(covered))
+
+
+def matching_scores(warped: np.ndarray, left_points: list[dict],
+                    right_points: list[dict]) -> tuple[np.ndarray, dict]:
+    """Score de chaque paire (gauche i, droite j) ∈ [0, 1] : plus longue portion
+    continue du segment théorique i→j bordée d'encre ALIGNÉE sur ce segment.
+
+    L'encre est filtrée par un noyau linéaire orienté selon la paire : un trait
+    aligné répond ~1, un trait qui croise sous l'angle α ne remplit qu'environ
+    largeur/(K·sin α) du noyau — même un voisin à 20° reste sous le seuil. La
+    réponse est cherchée dans ±MATCH_TOL_PX perpendiculairement : un trait qui
+    part ou arrive un peu à côté de la pastille compte. Les extrémités (pastilles,
+    départs/arrivées imprécis) sont exclues. Retourne aussi la géométrie (repère
+    de la bande) pour les contrôles « copie blanche » / « encre inexpliquée »."""
+    def center(p: dict) -> tuple[float, float]:
+        return pt_to_px(p["x_pt"] + p["w_pt"] / 2, p["y_pt"] + p["h_pt"] / 2)
+
+    L = [center(p) for p in left_points]
+    R = [center(p) for p in right_points]
+    xs = [c[0] for c in L + R]
+    ys = [c[1] for c in L + R]
+    x0, y0 = max(0, int(min(xs) - 30)), max(0, int(min(ys) - 30))
+    x1, y1 = int(max(xs) + 30), int(max(ys) + 30)
+    band = warped[y0:y1, x0:x1]
+    scores = np.zeros((len(L), len(R)))
+    geo = {"L": L, "R": R, "x0": x0, "y0": y0, "gray": None}
+    if band.size == 0:
+        return scores, geo
+    gray = cv2.cvtColor(dropout_filter(band), cv2.COLOR_BGR2GRAY) if band.ndim == 3 else band
+    geo["gray"] = gray
+    ink = (gray < MATCH_INK_GRAY).astype(np.float32)
+    h, w = ink.shape
+    offs = np.arange(-MATCH_TOL_PX, MATCH_TOL_PX + 1)
+    max_gap = int(round(MATCH_GAP_PX / MATCH_STEP_PX))
+    for i, (lx, ly) in enumerate(L):
+        for j, (rx, ry) in enumerate(R):
+            length = math.hypot(rx - lx, ry - ly)
+            if length < 1:
+                continue
+            ux, uy = (rx - lx) / length, (ry - ly) / length
+            resp = cv2.filter2D(ink, -1, _line_kernel(math.atan2(uy, ux), MATCH_KERNEL_PX),
+                                borderType=cv2.BORDER_CONSTANT)
+            ts = np.arange(MATCH_T_RANGE[0] * length, MATCH_T_RANGE[1] * length, MATCH_STEP_PX)
+            px = np.rint(lx - x0 + ux * ts[:, None] - uy * offs[None, :]).astype(int)
+            py = np.rint(ly - y0 + uy * ts[:, None] + ux * offs[None, :]).astype(int)
+            ok = (px >= 0) & (py >= 0) & (px < w) & (py < h)
+            vals = np.zeros(px.shape, np.float32)
+            vals[ok] = resp[py[ok], px[ok]]
+            scores[i, j] = _longest_run(vals.max(axis=1) >= MATCH_RESP_MIN, max_gap)
+    return scores, geo
+
+
+def _matching_ink_outside(geo: dict, pairs: list[list[int]]) -> tuple[int, int]:
+    """(traces même pâles, encre NON expliquée par `pairs`) entre les deux
+    colonnes de pastilles — étiquettes et pastilles exclues."""
+    gray, L, R = geo["gray"], geo["L"], geo["R"]
+    if gray is None:
+        return 0, 0
+    xl = int(max(p[0] for p in L) + 12 - geo["x0"])
+    xr = int(min(p[0] for p in R) - 12 - geo["x0"])
+    if xr <= xl:
+        return 0, 0
+    inner = gray[:, max(0, xl):max(0, xr)]
+    mask = np.zeros(gray.shape, np.uint8)
+    for i, j in pairs:
+        cv2.line(mask, (int(L[i][0] - geo["x0"]), int(L[i][1] - geo["y0"])),
+                 (int(R[j][0] - geo["x0"]), int(R[j][1] - geo["y0"])), 255,
+                 2 * MATCH_TOL_PX + 1)
+    inner_mask = mask[:, max(0, xl):max(0, xr)]
+    faint = int((inner < 225).sum())
+    unexplained = int(((inner < MATCH_INK_GRAY) & (inner_mask == 0)).sum())
+    return faint, unexplained
+
+
 def detect_matching(warped: np.ndarray, left_points: list[dict], right_points: list[dict]
                     ) -> tuple[list[list[int]] | None, float]:
-    """Détection heuristique v1 du trait manuscrit reliant une pastille gauche
-    à une pastille droite (§ points à relier). Combine segments Hough (traits
-    droits) et extrémités de composantes connexes (approximation des traits
-    courbes) ; toute pastille dont la connexion est ambiguë (plusieurs
-    partenaires détectés côté gauche ou côté droit) est EXCLUE du résultat
-    plutôt que devinée (RM-005). Retourne (paires acceptées, confiance) ;
-    None si rien d'exploitable. À affiner une fois de vrais scans manuscrits
-    disponibles — le seuil d'accroche (snap_radius) et le filtrage des petits
-    contours sont les premiers paramètres à recalibrer."""
+    """Lecture d'un exercice « points à relier » (§ points à relier).
+
+    Liaisons retenues par score décroissant (cf. `matching_scores`), chaque
+    pastille au plus une fois. Confiance HAUTE (0,97) seulement si la lecture est
+    nette : aucune paire écartée dans la zone grise (pastille à deux partenaires,
+    trait ambigu), aucune encre notable hors des liaisons retenues (trait
+    ondulé manqué, rature). Sinon 0,5 -> OCRiser, avec la meilleure lecture
+    pré-remplie pour le professeur. Une zone sans aucune trace est une copie
+    blanche lue avec certitude ([] , 0,97) — jamais une liaison devinée (RM-005)."""
     if not left_points or not right_points:
         return None, 0.0
-
-    def _center_px(pt: dict) -> tuple[float, float]:
-        return pt_to_px(pt["x_pt"] + pt["w_pt"] / 2, pt["y_pt"] + pt["h_pt"] / 2)
-
-    left_centers = [_center_px(p) for p in left_points]
-    right_centers = [_center_px(p) for p in right_points]
-    xs = [c[0] for c in left_centers + right_centers]
-    ys = [c[1] for c in left_centers + right_centers]
-    margin = 40
-    x0, x1 = max(0, int(min(xs) - margin)), int(max(xs) + margin)
-    y0, y1 = max(0, int(min(ys) - margin)), int(max(ys) + margin)
-    band = warped[y0:y1, x0:x1]
-    if band.size == 0:
-        return None, 0.0
-
-    gray = cv2.cvtColor(dropout_filter(band), cv2.COLOR_BGR2GRAY)
-    ink_mask = (gray < 150).astype(np.uint8) * 255
-
-    snap_radius = 22.0  # px, tolérance d'accroche sur une pastille
-
-    def _nearest(px: float, py: float, centers: list[tuple[float, float]]) -> int | None:
-        best_i, best_d = None, snap_radius
-        for i, (cx, cy) in enumerate(centers):
-            d = ((px - (cx - x0)) ** 2 + (py - (cy - y0)) ** 2) ** 0.5
-            if d < best_d:
-                best_i, best_d = i, d
-        return best_i
-
-    candidates: dict[tuple[int, int], int] = {}
-
-    def _register(ax: float, ay: float, bx: float, by: float) -> None:
-        li = _nearest(ax, ay, left_centers)
-        ri = _nearest(bx, by, right_centers)
-        if li is None or ri is None:
-            li = _nearest(bx, by, left_centers)
-            ri = _nearest(ax, ay, right_centers)
-        if li is None or ri is None:
-            return
-        candidates[(li, ri)] = candidates.get((li, ri), 0) + 1
-
-    lines = cv2.HoughLinesP(ink_mask, 1, np.pi / 180, threshold=25,
-                            minLineLength=30, maxLineGap=8)
-    # reshape : OpenCV 4 renvoie (N, 1, 4), OpenCV 5 (N, 4) — `seg[0]` sur ce
-    # dernier donnait un entier seul (« cannot unpack non-iterable numpy.int32 »).
-    for x_a, y_a, x_b, y_b in (lines.reshape(-1, 4) if lines is not None else []):
-        _register(float(x_a), float(y_a), float(x_b), float(y_b))
-
-    contours, _ = cv2.findContours(ink_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    for cnt in contours:
-        if cv2.contourArea(cnt) < 15:
+    scores, geo = matching_scores(warped, left_points, right_points)
+    pairs: list[list[int]] = []
+    used_l: set[int] = set()
+    used_r: set[int] = set()
+    for i, j in sorted(np.ndindex(scores.shape), key=lambda ij: -scores[ij]):
+        if scores[i, j] < MATCH_ACCEPT:
+            break
+        if i in used_l or j in used_r:
             continue
-        pts = cnt.reshape(-1, 2)
-        leftmost = pts[pts[:, 0].argmin()]
-        rightmost = pts[pts[:, 0].argmax()]
-        _register(float(leftmost[0]), float(leftmost[1]),
-                  float(rightmost[0]), float(rightmost[1]))
-
-    if not candidates:
-        return None, 0.0
-
-    left_partner: dict[int, set[int]] = {}
-    right_partner: dict[int, set[int]] = {}
-    for li, ri in candidates:
-        left_partner.setdefault(li, set()).add(ri)
-        right_partner.setdefault(ri, set()).add(li)
-
-    pairs = [[li, ri] for li, ri in candidates
-             if len(left_partner[li]) == 1 and len(right_partner[ri]) == 1]
+        pairs.append([int(i), int(j)])
+        used_l.add(i)
+        used_r.add(j)
+    faint, unexplained = _matching_ink_outside(geo, pairs)
     if not pairs:
-        return None, 0.0
-    confidence = len(pairs) / max(len(left_points), len(right_points))
-    return pairs, confidence
+        return ([], 0.97) if faint < MATCH_BLANK_PX else (None, 0.0)
+    accepted = {(a, b) for a, b in pairs}
+    ambiguous = any(scores[ij] >= MATCH_AMBIGUOUS
+                    for ij in np.ndindex(scores.shape) if ij not in accepted)
+    if ambiguous or unexplained > MATCH_UNEXPLAINED_PX:
+        return pairs, 0.5
+    return pairs, 0.97
 
 
 def encode_png(img: np.ndarray) -> bytes:
