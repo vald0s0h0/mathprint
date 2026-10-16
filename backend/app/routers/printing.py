@@ -390,6 +390,14 @@ def print_file(body: PrintIn, db: Session = Depends(get_db),
             ALLOWED_FILES[body.file] / body.file)
     if not Path(path).exists():
         raise HTTPException(404, "Fichier non encore généré")
+    if body.file == "correction_overlay.pdf" and (
+            db.query(ScanBatch).filter(ScanBatch.assessment_id == body.assessment_id,
+                                       ScanBatch.refine_rev > ScanBatch.overlay_rev)
+            .count()):
+        # corrections affinées pas encore reportées (services.refine) : imprimer
+        # maintenant distribuerait des notes périmées
+        raise HTTPException(409, "L'overlay n'est pas à jour des dernières corrections : "
+                                 "régénérez-le avant d'imprimer (Corrections → Affiner).")
 
     profile = db.query(Printer).filter_by(name=body.printer, active=True).first()
     _assert_profile_access(db, profile, user)

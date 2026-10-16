@@ -2952,24 +2952,64 @@ def render_overlay(path: str, *, copies_annotations: list[dict],
     c.save()
 
 
+def _review_background_jpeg(background: str | None) -> bytes | None:
+    """Scan recalé ré-encodé en JPEG pour l'aperçu écran (le PNG d'origine
+    pèse ~3 Mo par page). None si absent ou illisible."""
+    if not background or not Path(background).exists():
+        return None
+    image = cv2.imread(background, cv2.IMREAD_COLOR)
+    if image is None:
+        return None
+    ok, encoded = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    return encoded.tobytes() if ok else None
+
+
 def render_copy_review(path: str, *, review_pages: list[dict],
                        color: str | None = None):
     """Aperçu « copie + overlay » : chaque page porte en FOND l'image scannée
     recalée de l'élève (canonique A4, mêmes coordonnées que l'overlay) puis les
     marques de correction par-dessus — pour vérifier d'un coup d'œil ce qui a
-    été identifié et corrigé. Repli page blanche si pas de scan (lot simulé)."""
+    été identifié et corrigé. Repli page blanche si pas de scan (lot simulé).
+
+    Les marques sont dessinées par reportlab (même dessin que l'overlay), puis
+    PyMuPDF les pose en vectoriel sur le scan embarqué tel quel en JPEG :
+    reportlab ré-encodait chaque scan en Python pur (~2 s et ~6 Mo par page),
+    ce qui rendait chaque régénération d'une classe entière interminable."""
+    import fitz  # PyMuPDF
+
     col = HexColor(color or settings.correction_color)
-    c = canvas.Canvas(path, pagesize=A4)
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
     for page in review_pages:
-        bg = page.get("background")
-        if bg and Path(bg).exists():
-            try:
-                c.drawImage(ImageReader(bg), 0, 0, width=PAGE_W, height=PAGE_H)
-            except Exception:
-                pass
         _draw_correction_marks(c, page, col)
         c.showPage()
     c.save()
+    with fitz.open(stream=buf.getvalue(), filetype="pdf") as marks, fitz.open() as out:
+        for i, page in enumerate(review_pages):
+            target = out.new_page(width=PAGE_W, height=PAGE_H)
+            jpeg = _review_background_jpeg(page.get("background"))
+            if jpeg:
+                try:
+                    target.insert_image(target.rect, stream=jpeg, keep_proportion=False)
+                except Exception:
+                    pass
+            target.show_pdf_page(target.rect, marks, i)
+        if not review_pages:
+            out.new_page(width=PAGE_W, height=PAGE_H)
+        out.save(path, garbage=3, deflate=True)
+
+
+def render_page_marks(page: dict, color: str | None = None) -> bytes:
+    """UNE page d'overlay (marques seules, fond transparent) en PDF mémoire —
+    rastérisée puis posée sur le scan par l'aperçu « Affiner la correction »
+    (services.refine). Même dessin que render_overlay : l'écran montre ce qui
+    sera imprimé."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    _draw_correction_marks(c, page, HexColor(color or settings.correction_color))
+    c.showPage()
+    c.save()
+    return buf.getvalue()
 
 
 def write_manifest(path: str, manifest: dict):

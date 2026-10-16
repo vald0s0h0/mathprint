@@ -11,7 +11,7 @@ import {
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
 import {
-  AlertTriangle, ChevronLeft, ChevronRight, Eye, Inbox, RefreshCw, ScanLine,
+  AlertTriangle, ChevronLeft, ChevronRight, Eye, Inbox, PencilLine, RefreshCw, ScanLine,
   Trash2, Upload,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -19,6 +19,7 @@ import { api, getToken } from '../api'
 import { MathAnswer } from '../components/MathText'
 import PdfPreviewModal from '../components/PdfPreview'
 import PrintButton from '../components/PrintButton'
+import RefineCorrectionModal from '../components/RefineCorrectionModal'
 import { useAppState } from '../state/AppState'
 
 type SegState = 'green' | 'orange' | 'blue' | 'gray' | 'red'
@@ -30,6 +31,9 @@ type Batch = {
   note_base: number | null
   class_name: string; class_id: string | null; grade_level: string
   overlay_printed: boolean; overlay_distributed: boolean
+  // corrections affinées pas encore reportées sur l'overlay imprimable
+  // (« Affiner la correction », backend services.refine), et sa régénération
+  overlay_stale: boolean; overlay_rebuilding: boolean
   error: string | null; pending_reviews: number; pending_ocr: number; pending_llm: number
   // élèves jamais revenus à la finalisation (jamais pénalisés, cf. services
   // .pipeline.finalize_batch) — le prof doit savoir combien manquent sur ce sujet
@@ -430,6 +434,7 @@ export default function Corrections() {
   const [mathpixOk, setMathpixOk] = useState(true)
   const [llmOk, setLlmOk] = useState(true)
   const [previewId, setPreviewId] = useState<string | null>(null)
+  const [refineBatchId, setRefineBatchId] = useState<string | null>(null)
   const [idx, setIdx] = useState(0)
   // file APLATIE en unités (une case / un QCM / une réponse rédigée), regroupées
   // par réponse attendue ; + verdicts Juste(true)/Faux(false)/à trancher(null)
@@ -824,6 +829,19 @@ export default function Corrections() {
     }
   }
 
+  // Reporte sur l'overlay imprimable des corrections affinées (régénération
+  // interrompue, ou modale fermée sans régénérer). Tâche de fond : la carte
+  // suit son avancement par le rafraîchissement périodique.
+  async function regenerateOverlay(b: Batch) {
+    try {
+      await api.post(`/api/scans/batches/${b.id}/refine/regenerate`)
+      notifications.show({ color: 'blue', message: 'Régénération de l’overlay lancée' })
+      refresh()
+    } catch (e) {
+      notifications.show({ color: 'red', message: (e as Error).message })
+    }
+  }
+
   async function setDistributed(b: Batch, value: boolean) {
     await api.patch(`/api/scans/batches/${b.id}`, { overlay_distributed: value })
     refresh()
@@ -1010,7 +1028,9 @@ export default function Corrections() {
               const stage = stageOf(b)
               const overlayReady = b.status === 'overlay_ready'
               const done = stage === 'done' && b.overlay_distributed
-              const badge = done ? { label: 'terminé', color: 'gray' } : STAGE_BADGE[stage]
+              const stale = stage === 'done' && b.overlay_stale
+              const badge = done ? { label: 'terminé', color: 'gray' }
+                : stale ? { label: 'overlay à régénérer', color: 'orange' } : STAGE_BADGE[stage]
               return (
                 <Card key={b.id} withBorder padding="md" style={done ? {
                   opacity: 0.55, background: 'var(--mp-surface-muted)',
@@ -1144,9 +1164,25 @@ export default function Corrections() {
 
                       {stage === 'done' && (
                         <>
-                          {overlayReady && (
+                          {overlayReady && stale && (
+                            <Tooltip label="Des corrections affinées ne sont pas encore sur l'overlay : régénérez-le avant d'imprimer">
+                              <Button size="xs" color="orange" leftSection={<RefreshCw size={14} />}
+                                loading={b.overlay_rebuilding} onClick={() => regenerateOverlay(b)}>
+                                Régénérer l'overlay
+                              </Button>
+                            </Tooltip>
+                          )}
+                          {overlayReady && !stale && (
                             <PrintButton assessmentId={b.assessment_id}
                               file="correction_overlay.pdf" label="Imprimer l'overlay" />
+                          )}
+                          {overlayReady && !b.overlay_distributed && (
+                            <Tooltip label="Relire chaque copie avec son overlay et corriger une note en modifiant la réponse de l'élève">
+                              <Button size="xs" variant="light" leftSection={<PencilLine size={14} />}
+                                onClick={() => setRefineBatchId(b.id)}>
+                                Affiner
+                              </Button>
+                            </Tooltip>
                           )}
                           <Button size="xs" variant="subtle" leftSection={<Eye size={14} />}
                             onClick={() => setPreviewId(b.assessment_id)}>
@@ -1174,6 +1210,9 @@ export default function Corrections() {
 
       <PdfPreviewModal assessmentId={previewId} opened={!!previewId} initialMode="review"
         onClose={() => setPreviewId(null)} />
+
+      <RefineCorrectionModal batchId={refineBatchId} opened={!!refineBatchId}
+        onClose={() => { setRefineBatchId(null); refresh() }} />
 
       <Modal opened={!!resetTarget} onClose={() => setResetTarget(null)}
         title={<Text fw={650}>Effacer la correction</Text>}>

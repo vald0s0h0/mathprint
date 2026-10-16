@@ -22,6 +22,7 @@ from ..models import (
 )
 from ..services import grading
 from ..services import providers
+from ..services import refine
 from ..services import sandbox as sandbox_service
 from ..services import scan_intake, scan_originals, scoring
 from ..services.file_sniff import sniff_file as _sniff_file
@@ -136,11 +137,12 @@ def _run_grading(batch_id: str):
         db.close()
 
 
-@_single_flight
-def _run_build_overlays(batch_id: str):
+def _rebuild_overlays(batch_id: str):
     """Régénère UNIQUEMENT les copies corrigées d'un lot déjà finalisé (les
     résultats/notes sont acquis) — bouton de déblocage quand seule la génération
-    des overlays a échoué. Ne repasse pas par l'OCR."""
+    des overlays a échoué, ou après « Affiner la correction ». Ne repasse pas
+    par l'OCR. Un échec laisse intacts les PDF déjà générés (écriture atomique,
+    cf. pipeline.build_overlays)."""
     db = SessionLocal()
     try:
         batch = db.get(ScanBatch, batch_id)
@@ -155,6 +157,30 @@ def _run_build_overlays(batch_id: str):
         db.commit()
     finally:
         db.close()
+
+
+_run_build_overlays = _single_flight(_rebuild_overlays)
+
+
+def _start_overlay_rebuild(batch_id: str) -> bool:
+    """Lance la régénération des copies corrigées dans un fil dédié, en
+    réservant le lot AVANT de rendre la main : un sondage d'état immédiat voit
+    déjà « en cours » (une BackgroundTask ne démarre qu'après la réponse).
+    False si une tâche tourne déjà sur ce lot."""
+    with _RUNNING_LOCK:
+        if batch_id in _RUNNING:
+            return False
+        _RUNNING.add(batch_id)
+
+    def work():
+        try:
+            _rebuild_overlays(batch_id)
+        finally:
+            with _RUNNING_LOCK:
+                _RUNNING.discard(batch_id)
+
+    threading.Thread(target=work, name=f"overlays-{batch_id[:8]}", daemon=True).start()
+    return True
 
 
 def _attach_upload(db: Session, assessment_id: str | None, ext: str, content: bytes,
@@ -377,6 +403,7 @@ def _awaiting_scan_rows(db: Session) -> list[dict]:
             "pending_llm": 0, "absent_count": 0,
             "ocr_threshold": ocr_confidence_threshold(db), "segments": [],
             "overlay_printed": False, "overlay_distributed": False,
+            "overlay_stale": False, "overlay_rebuilding": False,
             "created_at": str(a.created_at),
         })
     return out
@@ -393,7 +420,9 @@ def get_batch(batch_id: str, db: Session = Depends(get_db)):
 def _business_steps(status: str, progress: dict | None, pending: int,
                     pending_ocr: int,
                     error: str | None,
-                    overlay_printed: bool = False) -> list[dict]:
+                    overlay_printed: bool = False,
+                    overlay_stale: bool = False,
+                    overlay_rebuilding: bool = False) -> list[dict]:
     """Étapes MÉTIER de la correction, pour un visualiseur lisible par le
     professeur — pas les 10 phases techniques internes. La règle de couleur est
     simple et cohérente avec les actions proposées :
@@ -435,8 +464,12 @@ def _business_steps(status: str, progress: dict | None, pending: int,
         {"phase": "correct", "label": "Correction", "state": correct},
         {"phase": "validate", "label": "Validation",
          "state": "green" if finalized else ("blue" if (graded and not pending) else "gray")},
-        {"phase": "done", "label": "Copies corrigées",
-         "state": "green" if overlay else ("blue" if finalized else "gray")},
+        # copies affinées après coup (services.refine) : l'overlay imprimable
+        # ne reflète plus les notes tant qu'il n'est pas régénéré
+        {"phase": "done",
+         "label": "Overlay à régénérer" if overlay and overlay_stale else "Copies corrigées",
+         "state": ("blue" if overlay_rebuilding else "orange") if overlay and overlay_stale
+                  else "green" if overlay else ("blue" if finalized else "gray")},
         {"phase": "overlay_print",
          "label": "Overlay imprimé" if overlay_printed else "Overlay à imprimer",
          "state": "green" if overlay_printed else ("blue" if overlay else "gray")},
@@ -471,8 +504,10 @@ def _batch_view(db: Session, b: ScanBatch) -> dict:
                    .filter(GradingDecision.reason_code == "llm_unavailable").count())
     pending_ocr = len(pending_ocr_responses(db, b.assessment_id)) if (
         b.status == "ocr_review_pending") else 0
+    stale = refine.overlay_stale(b)
+    rebuilding = stale and _is_running(b.id)
     segments = _business_steps(b.status, b.progress_json, pending, pending_ocr,
-                               b.error, b.overlay_printed)
+                               b.error, b.overlay_printed, stale, rebuilding)
     assessment = db.get(Assessment, b.assessment_id)
     cls = db.get(SchoolClass, assessment.class_id) if assessment else None
     # Absents = copies jamais revenues à la finalisation (services.pipeline
@@ -496,6 +531,7 @@ def _batch_view(db: Session, b: ScanBatch) -> dict:
             "pending_llm": pending_llm, "absent_count": absent_count,
             "ocr_threshold": ocr_confidence_threshold(db), "segments": segments,
             "overlay_printed": b.overlay_printed, "overlay_distributed": b.overlay_distributed,
+            "overlay_stale": stale, "overlay_rebuilding": rebuilding,
             "created_at": str(b.created_at)}
 
 
@@ -1277,8 +1313,11 @@ def retry_batch(batch_id: str, tasks: BackgroundTasks, db: Session = Depends(get
     if b.status == "overlay_ready":
         # Lot TERMINÉ (copies corrigées prêtes) : une erreur résiduelle (ex. une
         # finalisation concurrente perdante) est simplement effacée — surtout
-        # pas de `process_batch`, qui reprendrait toute la lecture.
-        pass
+        # pas de `process_batch`, qui reprendrait toute la lecture. Seule
+        # exception : des corrections affinées pas encore reportées sur
+        # l'overlay (régénération échouée ou interrompue) — on le régénère.
+        if refine.overlay_stale(b):
+            tasks.add_task(_run_build_overlays, b.id)
     elif "finalized" in progress:
         tasks.add_task(_run_build_overlays, b.id)
     elif (_pending_reviews_query(db, b.assessment_id)
@@ -1361,6 +1400,188 @@ def update_batch_flags(batch_id: str, body: BatchFlagsIn, db: Session = Depends(
         b.overlay_distributed = body.overlay_distributed
     db.commit()
     return _batch_view(db, b)
+
+
+# ------------------------------------------------- affiner la correction
+#
+# Lot terminé, overlay prêt à imprimer : le professeur relit chaque copie
+# scannée AVEC son overlay et corrige une note en réécrivant la réponse de
+# l'élève (services.refine). Les modifications marquent l'overlay « à
+# régénérer » ; la régénération reconstruit tout le lot à l'identique, seules
+# les pages des copies affinées changent.
+
+def _refinable_batch(db: Session, batch_id: str) -> ScanBatch:
+    b = db.get(ScanBatch, batch_id)
+    if not b:
+        raise HTTPException(404)
+    if not refine.batch_is_refinable(b):
+        raise HTTPException(409, "La correction de ce lot n'est pas encore terminée")
+    return b
+
+
+def _refine_status(db: Session, b: ScanBatch) -> dict:
+    db.refresh(b)   # sessions sans expire_on_commit : relire les compteurs
+    return {"stale": refine.overlay_stale(b), "rebuilding": _is_running(b.id),
+            "error": b.error, "overlay_printed": b.overlay_printed}
+
+
+def _copy_batch(db: Session, copy: Copy) -> ScanBatch:
+    """Lot de scans (le plus récent) de la copie, affinable."""
+    b = (db.query(ScanBatch).filter_by(assessment_id=copy.assessment_id)
+         .order_by(ScanBatch.created_at.desc()).first())
+    if not b:
+        raise HTTPException(404, "Aucun lot de scans pour cette copie")
+    if not refine.batch_is_refinable(b):
+        raise HTTPException(409, "La correction de ce lot n'est pas encore terminée")
+    return b
+
+
+def _refine_response(db: Session, response_id: str):
+    resp = db.get(StudentResponse, response_id)
+    item = db.get(CopyItem, resp.copy_item_id) if resp else None
+    copy = db.get(Copy, item.copy_id) if item else None
+    if not copy:
+        raise HTTPException(404, "Réponse introuvable")
+    return resp, item, copy, _copy_batch(db, copy)
+
+
+@router.get("/batches/{batch_id}/refine")
+def refine_overview(batch_id: str, db: Session = Depends(get_db)):
+    """Copies scannées du lot (ordre de la pile), pages et réponses cliquables."""
+    b = _refinable_batch(db, batch_id)
+    return {**refine.batch_overview(db, b), **_refine_status(db, b)}
+
+
+@router.get("/batches/{batch_id}/refine/status")
+def refine_status(batch_id: str, db: Session = Depends(get_db)):
+    b = db.get(ScanBatch, batch_id)
+    if not b:
+        raise HTTPException(404)
+    return _refine_status(db, b)
+
+
+@router.post("/batches/{batch_id}/refine/regenerate")
+def refine_regenerate(batch_id: str, db: Session = Depends(get_db)):
+    """Régénère l'overlay (et l'aperçu copie + overlay) du lot, en tâche de fond
+    — une classe entière dépasse le délai du proxy du NAS. L'état se suit par
+    `/refine/status` : terminé quand rien ne tourne et que rien n'est périmé."""
+    b = _refinable_batch(db, batch_id)
+    _start_overlay_rebuild(b.id)
+    return {**_refine_status(db, b), "rebuilding": True}
+
+
+@router.get("/refine/copies/{copy_id}")
+def refine_copy(copy_id: str, db: Session = Depends(get_db)):
+    copy = db.get(Copy, copy_id)
+    if not copy:
+        raise HTTPException(404)
+    view = refine.single_copy_view(db, _copy_batch(db, copy), copy)
+    if view is None:
+        raise HTTPException(404, "Copie non scannée")
+    return view
+
+
+@router.get("/refine/copies/{copy_id}/pages/{page_id}/preview")
+def refine_page_preview(copy_id: str, page_id: str, v: str | None = None,
+                        db: Session = Depends(get_db)):
+    """Page scannée + overlay, rendue depuis l'état courant (JPEG). `v` : version
+    attendue (copy_view) — réponse alors cachable sans limite, la version
+    changeant dès que la page change."""
+    copy = db.get(Copy, copy_id)
+    if not copy:
+        raise HTTPException(404)
+    out = refine.page_preview(db, _copy_batch(db, copy), copy, page_id)
+    if out is None:
+        raise HTTPException(404, "Page sans correction")
+    jpeg, version = out
+    cache = "private, max-age=86400, immutable" if v == version else "no-store"
+    return Response(content=jpeg, media_type="image/jpeg",
+                    headers={"Cache-Control": cache, "X-Page-Version": version})
+
+
+@router.get("/refine/responses/{response_id}")
+def refine_response_detail(response_id: str, db: Session = Depends(get_db)):
+    """Réponse cliquée : énoncé de correction, réponse lue, note, et l'éditeur
+    à proposer (`edit_kind`) avec ses libellés (choix, lignes, colonnes...)."""
+    resp, item, copy, _ = _refine_response(db, response_id)
+    student = db.get(Student, copy.student_id)
+    detail = _review_unit(db, resp, item, copy, student,
+                          review=_open_review_for_response(db, resp.id))
+    policy, expected = item.grading_json or {}, item.expected_json or {}
+    kind = refine.edit_kind(item)
+    detail.update({"edit_kind": kind, "answer": refine.current_answer(db, resp, item),
+                   "choices": [], "grid": None, "matching": None})
+    if kind == "qcm":
+        detail["choices"] = policy.get("choices") or []
+    elif kind == "grid":
+        rows = policy.get("rows") or expected.get("rows") or []
+        detail["grid"] = {"rows": [str(r.get("label", "")) for r in rows],
+                          "correct": [r.get("correct") for r in rows],
+                          "cols": policy.get("cols") or expected.get("cols") or []}
+    elif kind == "matching":
+        detail["matching"] = {"left": policy.get("left") or expected.get("left") or [],
+                              "right": policy.get("right") or expected.get("right") or [],
+                              "pairs": expected.get("pairs") or []}
+    return detail
+
+
+class RefineAnswerIn(BaseModel):
+    selected_choices: list[int] | None = None
+    selected_pairs: list[list[int]] | None = None
+    cells: list[str] | None = None
+    text: str | None = None
+
+
+def _after_refine(db: Session, batch: ScanBatch, copy: Copy, extra: dict) -> dict:
+    return {**extra, "copy": refine.single_copy_view(db, batch, copy),
+            **_refine_status(db, batch)}
+
+
+@router.post("/refine/responses/{response_id}/answer")
+def refine_answer(response_id: str, body: RefineAnswerIn,
+                  db: Session = Depends(get_db),
+                  user: User = Depends(current_user)):
+    """Réécrit la réponse de l'élève et la renote (moteur déterministe), puis
+    reconsolide la copie. Renvoie la copie à jour (nouvelles versions de page)."""
+    resp, item, copy, batch = _refine_response(db, response_id)
+    zone = db.get(ResponseZone, resp.zone_id) if resp.zone_id else None
+    if zone is None:
+        raise HTTPException(409, "Réponse non scannée")
+    try:
+        out = refine.apply_answer(db, resp, item, zone, body.model_dump())
+        refine.refresh_copy(db, copy, item, out["decision"])
+        refine.mark_changed(db, batch.id)
+        db.commit()
+    except refine.RefineError as e:
+        db.rollback()
+        raise HTTPException(422, str(e))
+    return _after_refine(db, batch, copy,
+                         {"uncertain": out["uncertain"], "reason": out["reason"]})
+
+
+class RefinePointsIn(BaseModel):
+    points: float
+
+
+@router.post("/refine/responses/{response_id}/points")
+def refine_points(response_id: str, body: RefinePointsIn,
+                  db: Session = Depends(get_db),
+                  user: User = Depends(current_user)):
+    """Note directe (points de barème) — raisonnements, tracés, ou réponse que
+    le moteur ne sait pas reconnaître."""
+    resp, item, copy, batch = _refine_response(db, response_id)
+    bareme = scoring.item_bareme(item.grading_json, item.response_type)
+    if not bareme:
+        raise HTTPException(422, "Exercice sans barème")
+    try:
+        decision = refine.apply_points(db, resp, item, body.points / bareme)
+        refine.refresh_copy(db, copy, item, decision)
+        refine.mark_changed(db, batch.id)
+        db.commit()
+    except refine.RefineError as e:
+        db.rollback()
+        raise HTTPException(422, str(e))
+    return _after_refine(db, batch, copy, {"uncertain": False, "reason": "teacher_set_ratio"})
 
 
 # --------------------------------------------------- résolution des scans bloqués

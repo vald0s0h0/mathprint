@@ -466,6 +466,11 @@ class ScanBatch(Base):
     # grise alors la carte dans Sujets comme dans Corrections.
     overlay_printed: Mapped[bool] = mapped_column(Boolean, default=False)
     overlay_distributed: Mapped[bool] = mapped_column(Boolean, default=False)
+    # « Affiner la correction » (services.refine) : chaque réponse modifiée
+    # incrémente `refine_rev` ; un rendu d'overlay retient dans `overlay_rev` la
+    # version qu'il couvre. refine_rev > overlay_rev = overlay à régénérer.
+    refine_rev: Mapped[int] = mapped_column(Integer, default=0)
+    overlay_rev: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
 

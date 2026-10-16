@@ -14,7 +14,7 @@ import {
 import { notifications } from '@mantine/notifications'
 import {
   AlertTriangle, ArrowDownRight, ArrowRight, ArrowUpRight, CheckCircle2, CircleDollarSign,
-  ClipboardList, Eye, FileText, Hourglass, Library, Loader2, Minus, Plus, Printer,
+  ClipboardList, Eye, FileText, Hourglass, Library, Loader2, Minus, Plus, Printer, RefreshCw,
   ScanLine, Send, Sparkles, Upload, Wand2,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
@@ -48,6 +48,8 @@ type Batch = {
   id: string; assessment_id: string; status: string
   assessment_title: string; class_name: string; grade_level: string
   overlay_printed: boolean; overlay_distributed: boolean
+  // corrections affinées pas encore reportées sur l'overlay (impression bloquée)
+  overlay_stale: boolean
   error: string | null; pending_reviews: number; pending_ocr: number
   created_at: string
 }
@@ -563,6 +565,10 @@ export default function Dashboard() {
         out.push({ key: `ocr-${b.id}`, tone: 'blue', weight: 2, icon: <Eye size={18} />,
           title: 'Lecture des copies à vérifier', detail: where,
           action: go('/corrections', 'Vérifier') })
+      } else if (b.status === 'overlay_ready' && b.overlay_stale && !b.overlay_distributed) {
+        out.push({ key: `stale-${b.id}`, tone: 'orange', weight: 3, icon: <RefreshCw size={18} />,
+          title: 'Overlay à régénérer après correction affinée', detail: where,
+          action: go('/corrections', 'Régénérer', 'orange') })
       } else if (b.status === 'overlay_ready' && !b.overlay_printed) {
         out.push({ key: `ovl-${b.id}`, tone: 'green', weight: 3, icon: <CheckCircle2 size={18} />,
           title: 'Copies corrigées prêtes à imprimer', detail: where,
@@ -1039,10 +1045,16 @@ export default function Dashboard() {
                         <Group gap={6}>
                           <Text size="xs" c="dimmed">{b.class_name}</Text>
                           {b.overlay_printed && <Badge size="xs" variant="dot" color="cyan">imprimé</Badge>}
+                          {b.overlay_stale && <Badge size="xs" variant="dot" color="orange">à régénérer</Badge>}
                         </Group>
                       </div>
-                      <PrintButton assessmentId={b.assessment_id} file="correction_overlay.pdf"
-                        label="Imprimer l'overlay" />
+                      {b.overlay_stale ? (
+                        <Button size="xs" variant="light" color="orange"
+                          onClick={() => navigate('/corrections')}>Régénérer</Button>
+                      ) : (
+                        <PrintButton assessmentId={b.assessment_id} file="correction_overlay.pdf"
+                          label="Imprimer l'overlay" />
+                      )}
                     </Group>
                   </Paper>
                 ))}

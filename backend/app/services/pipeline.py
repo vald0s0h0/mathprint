@@ -11,6 +11,8 @@ Deux chemins :
 """
 import hashlib
 import math
+import os
+import tempfile
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,7 +22,7 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..models import (
-    Annotation, Assessment, Copy, CopyItem, DocumentPage, FileObject,
+    Annotation, Assessment, Copy, CopyItem, CopyResult, DocumentPage, FileObject,
     GradingDecision, ManualReview, OcrAttempt, ResponseZone, ScanBatch,
     ScannedPage, Student, StudentResponse, CompetencyEvidence, ExerciseCompetency,
 )
@@ -1311,14 +1313,154 @@ def _scan_page_positions(db: Session, batch: ScanBatch) -> dict[str, int]:
                       ScannedPage.page_id.is_not(None)).all()}
 
 
+def copy_overlay_pages(db: Session, assessment: Assessment, copy: Copy,
+                       scan_page_positions: dict[str, int], *,
+                       persist: bool = True) -> list[dict]:
+    """Pages de correction d'UNE copie, dans l'ordre ADF : une entrée par page
+    scannée portant au moins une réponse notée, l'en-tête (note, appréciation)
+    sur la première. Liste vide pour une copie non scannée.
+
+    Source unique du contenu imprimé : `build_overlays` l'assemble pour tout le
+    lot, l'aperçu « Affiner la correction » (services.refine) le rend page par
+    page — l'écran montre donc exactement ce que l'overlay imprimera.
+
+    `persist=False` (aperçu) : aucune écriture en base et jamais d'appel LLM —
+    l'appréciation en cache est reprise telle quelle.
+
+    Chaque page porte `page_id`, `background` (scan recalé, ou None) et les clés
+    d'ordre `_scan_index` / `_page_no`, que l'appelant retire avant le rendu."""
+    derived_dir = settings.data_dir / "assessments" / assessment.id / "scans" / "derived"
+    student = db.get(Student, copy.student_id)
+    items = db.query(CopyItem).filter_by(copy_id=copy.id).order_by(CopyItem.sequence).all()
+    # zones regroupées par page du document (pour l'aperçu copie+overlay,
+    # une page PDF = une page scannée), et n° de page pour l'ordre
+    zones_by_page: dict[str, list] = {}
+    page_no: dict[str, int] = {}
+    for item in items:
+        resp = db.query(StudentResponse).filter_by(copy_item_id=item.id).first()
+        zone = db.query(ResponseZone).filter_by(item_id=item.id).first()
+        if not resp or not zone:
+            continue
+        decision = (db.query(GradingDecision).filter_by(response_id=resp.id)
+                    .order_by(GradingDecision.created_at.desc()).first())
+        if not decision:
+            continue
+        # Points affichés à côté de l'exercice = points de BARÈME, pas le
+        # score interne du moteur (3/4 cellules justes n'est pas « 3 points »
+        # si l'exercice en vaut 2) : c'est ce qui rend l'overlay lisible,
+        # les points des exercices s'additionnant alors exactement jusqu'à
+        # la note de l'en-tête.
+        bareme = scoring.item_bareme(item.grading_json, item.response_type)
+        earned = scoring.earned_points(decision.score, decision.max_score, bareme)
+        full = decision.score >= decision.max_score
+        zdict = {"x_pt": zone.x_pt, "y_pt": zone.y_pt, "w_pt": zone.w_pt,
+                 "h_pt": zone.h_pt, "score": earned,
+                 "max_score": bareme, "full_credit": full,
+                 "response_type": item.response_type,
+                 "strip": (zone.meta_json or {}).get("correction_strip"),
+                 # plus de guide à l'overlay : les guides sont des encadrés
+                 # de l'énoncé, imprimés (ou non) dès le sujet
+                 "text": "",
+                 "marks": _zone_marks(db, item, zone, decision),
+                 # repères de l'aperçu interactif, ignorés par le rendu PDF
+                 "response_id": resp.id, "sequence": item.sequence}
+        zones_by_page.setdefault(zone.page_id, []).append(zdict)
+        if zone.page_id not in page_no:
+            dp = db.get(DocumentPage, zone.page_id)
+            page_no[zone.page_id] = dp.page_no if dp else 0
+        if persist:
+            db.add(Annotation(copy_id=copy.id, page_id=zone.page_id, zone_id=zone.id,
+                              content="",
+                              color=settings.correction_color,
+                              geometry_json={"x_pt": zone.x_pt, "y_pt": zone.y_pt}))
+    if not zones_by_page:
+        return []  # copie non scannée : pas d'overlay
+
+    # Résultats consolidés à la finalisation (services.scoring) : la note
+    # imprimée est CELLE STOCKÉE, jamais un second calcul — deux formules
+    # pour une même note finiraient par diverger.
+    result = (scoring.copy_result(db, copy, assessment) if persist
+              else db.query(CopyResult).filter_by(copy_id=copy.id).first())
+    note = None
+    note_raw = None
+    if result is not None and result.note is not None:
+        note = f"{scoring.format_points(result.note)}/{result.note_base}"
+        note_raw = (f"{scoring.format_points(result.points_earned)}/"
+                    f"{scoring.format_points(result.points_total)}")
+
+    if copy.appreciation_json is None and persist:
+        appreciation = build_appreciation(db, assessment.id, student)
+        copy.appreciation_json = appreciation
+        db.add(copy)
+    else:
+        appreciation = copy.appreciation_json or {}
+
+    # l'appréciation imprimée rejoint le résultat consolidé : le suivi d'un
+    # élève tient alors dans une seule ligne (points, note, appréciation)
+    if result is not None and persist:
+        result.appreciation = appreciation.get("synthesis") or ""
+        result.progress_json = {"progress": appreciation.get("progress") or []}
+        db.add(result)
+
+    comment = ""
+    if result is not None:
+        comment = (f"Score {scoring.format_points(result.points_earned)}/"
+                   f"{scoring.format_points(result.points_total)} points")
+    header = {"note": note, "note_raw": note_raw, "progress": appreciation.get("progress"),
+              "synthesis": appreciation.get("synthesis"), "comment": comment}
+    # Une page d'overlay PAR page scannée — indispensable en recto-verso et
+    # sur les sujets longs. L'ordre interne suit lui aussi l'ADF ; page_no
+    # n'est qu'un repli pour les anciens lots sans positions persistées.
+    ordered_page_ids = sorted(zones_by_page, key=lambda p: (
+        0 if p in scan_page_positions else 1,
+        scan_page_positions.get(p, page_no.get(p, 0)),
+        page_no.get(p, 0),
+    ))
+    pages = []
+    for k, page_id in enumerate(ordered_page_ids):
+        bg = derived_dir / f"page-{page_id}.png"
+        pages.append({
+            "page_id": page_id, "student": student.name,
+            "assessment_type": assessment.type,
+            "page_zones": zones_by_page[page_id],
+            "background": str(bg) if bg.exists() else None,
+            **(header if k == 0 else {}),
+            "_scan_index": scan_page_positions.get(page_id),
+            "_page_no": page_no.get(page_id, 0),
+        })
+    return pages
+
+
+def _publish(path: Path, render) -> None:
+    """Rend dans un fichier temporaire voisin, puis le substitue à `path`
+    (os.replace, atomique) : un rendu interrompu ne laisse jamais un PDF tronqué
+    à la place de l'overlay imprimable, et deux rendus concurrents ne se
+    marchent pas dessus."""
+    fd, raw = tempfile.mkstemp(prefix=f".{path.stem}-", suffix=".tmp", dir=path.parent)
+    os.close(fd)
+    tmp = Path(raw)
+    try:
+        render(str(tmp))
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
 def build_overlays(db: Session, batch: ScanBatch) -> str:
     """Génère, après finalisation (§5.6) :
     - correction_overlay.pdf : pages blanches, marques seules (à imprimer et
       surimposer physiquement sur la copie via les fiduciels) ;
     - correction_review.pdf : scan recalé de l'élève EN FOND + marques (aperçu
       « copie + overlay », pour relire la correction à l'écran).
+
+    Reconstruit TOUT le lot depuis la base : une copie affinée change seulement
+    ses propres pages, les autres sont rendues à l'identique, à la même place.
     """
     assessment = db.get(Assessment, batch.assessment_id)
+    # Version des corrections affinées couverte par ce rendu, relue en base (un
+    # affinage concurrent pendant le rendu laisse le lot marqué « à régénérer »).
+    refine_rev = (db.query(ScanBatch.refine_rev).filter(ScanBatch.id == batch.id)
+                  .scalar() or 0)
     out_dir = settings.data_dir / "assessments" / assessment.id / "overlays"
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "correction_overlay.pdf"
@@ -1333,115 +1475,23 @@ def build_overlays(db: Session, batch: ScanBatch) -> str:
 
     copies = _copies_in_scan_order(db, batch, assessment.id)
     scan_page_positions = _scan_page_positions(db, batch)
+    # Une annotation par zone et par rendu : sans purge, chaque régénération
+    # (relance, affinage) empilait des doublons.
+    if copies:
+        (db.query(Annotation).filter(Annotation.copy_id.in_([c.id for c in copies]))
+         .delete(synchronize_session=False))
     # Autorité d'ordre : la séquence des pages réellement produite par l'ADF.
     # Elle peut être totalement différente de l'ordre de classe. Le QR fait le
     # lien avec l'élève ; il ne doit jamais servir de prétexte à retrier la pile.
     pages_annotations = []
     review_pages = []
     for copy in copies:
-        student = db.get(Student, copy.student_id)
-        items = db.query(CopyItem).filter_by(copy_id=copy.id).order_by(CopyItem.sequence).all()
-        zones = []
-        # zones regroupées par page du document (pour l'aperçu copie+overlay,
-        # une page PDF = une page scannée), et n° de page pour l'ordre
-        zones_by_page: dict[str, list] = {}
-        page_no: dict[str, int] = {}
-        for item in items:
-            resp = db.query(StudentResponse).filter_by(copy_item_id=item.id).first()
-            zone = db.query(ResponseZone).filter_by(item_id=item.id).first()
-            if not resp or not zone:
-                continue
-            decision = (db.query(GradingDecision).filter_by(response_id=resp.id)
-                        .order_by(GradingDecision.created_at.desc()).first())
-            if not decision:
-                continue
-            # Points affichés à côté de l'exercice = points de BARÈME, pas le
-            # score interne du moteur (3/4 cellules justes n'est pas « 3 points »
-            # si l'exercice en vaut 2) : c'est ce qui rend l'overlay lisible,
-            # les points des exercices s'additionnant alors exactement jusqu'à
-            # la note de l'en-tête.
-            bareme = scoring.item_bareme(item.grading_json, item.response_type)
-            earned = scoring.earned_points(decision.score, decision.max_score, bareme)
-            full = decision.score >= decision.max_score
-            zdict = {"x_pt": zone.x_pt, "y_pt": zone.y_pt, "w_pt": zone.w_pt,
-                     "h_pt": zone.h_pt, "score": earned,
-                     "max_score": bareme, "full_credit": full,
-                     "response_type": item.response_type,
-                     "strip": (zone.meta_json or {}).get("correction_strip"),
-                     # plus de guide à l'overlay : les guides sont des encadrés
-                     # de l'énoncé, imprimés (ou non) dès le sujet
-                     "text": "",
-                     "marks": _zone_marks(db, item, zone, decision)}
-            zones.append(zdict)
-            zones_by_page.setdefault(zone.page_id, []).append(zdict)
-            if zone.page_id not in page_no:
-                dp = db.get(DocumentPage, zone.page_id)
-                page_no[zone.page_id] = dp.page_no if dp else 0
-            db.add(Annotation(copy_id=copy.id, page_id=zone.page_id, zone_id=zone.id,
-                              content="",
-                              color=settings.correction_color,
-                              geometry_json={"x_pt": zone.x_pt, "y_pt": zone.y_pt}))
-        if not zones:
-            continue  # copie non scannée : pas d'overlay
-
-        # Résultats consolidés à la finalisation (services.scoring) : la note
-        # imprimée est CELLE STOCKÉE, jamais un second calcul — deux formules
-        # pour une même note finiraient par diverger.
-        result = scoring.copy_result(db, copy, assessment)
-        note = None
-        note_raw = None
-        if result is not None and result.note is not None:
-            note = f"{scoring.format_points(result.note)}/{result.note_base}"
-            note_raw = (f"{scoring.format_points(result.points_earned)}/"
-                        f"{scoring.format_points(result.points_total)}")
-
-        if copy.appreciation_json is None:
-            appreciation = build_appreciation(db, assessment.id, student)
-            copy.appreciation_json = appreciation
-            db.add(copy)
-        else:
-            appreciation = copy.appreciation_json
-
-        # l'appréciation imprimée rejoint le résultat consolidé : le suivi d'un
-        # élève tient alors dans une seule ligne (points, note, appréciation)
-        if result is not None:
-            result.appreciation = appreciation.get("synthesis") or ""
-            result.progress_json = {"progress": appreciation.get("progress") or []}
-            db.add(result)
-
-        comment = ""
-        if result is not None:
-            comment = (f"Score {scoring.format_points(result.points_earned)}/"
-                       f"{scoring.format_points(result.points_total)} points")
-        header = {"note": note, "note_raw": note_raw, "progress": appreciation.get("progress"),
-                  "synthesis": appreciation.get("synthesis"), "comment": comment}
-        student_name = student.name
-        # Une page d'overlay PAR page scannée — indispensable en recto-verso et
-        # sur les sujets longs. L'ordre interne suit lui aussi l'ADF ; page_no
-        # n'est qu'un repli pour les anciens lots sans positions persistées.
-        ordered_page_ids = sorted(zones_by_page, key=lambda p: (
-            0 if p in scan_page_positions else 1,
-            scan_page_positions.get(p, page_no.get(p, 0)),
-            page_no.get(p, 0),
-        ))
-        for k, page_id in enumerate(ordered_page_ids):
-            order_meta = {
-                "_scan_index": scan_page_positions.get(page_id),
-                "_copy_index": len(pages_annotations),
-                "_page_no": page_no.get(page_id, 0),
-            }
-            pages_annotations.append({
-                "student": student_name, "assessment_type": assessment.type,
-                "page_zones": zones_by_page[page_id],
-                **(header if k == 0 else {}), **order_meta,
-            })
-            bg = derived_dir / f"page-{page_id}.png"
-            review_pages.append({
-                "student": student_name, "assessment_type": assessment.type,
-                "page_zones": zones_by_page[page_id],
-                "background": str(bg) if bg.exists() else None,
-                **(header if k == 0 else {}), **order_meta,
-            })
+        for page in copy_overlay_pages(db, assessment, copy, scan_page_positions):
+            page.pop("page_id")
+            background = page.pop("background")
+            page["_copy_index"] = len(pages_annotations)
+            pages_annotations.append(page)
+            review_pages.append({**page, "background": background})
 
     # INVARIANT PHYSIQUE : une page entrée ADF = une page overlay, à la même
     # position. Tout scan bloqué, doublon dans le lot, QR illisible ou page
@@ -1498,9 +1548,35 @@ def build_overlays(db: Session, batch: ScanBatch) -> str:
         page.pop("_copy_index", None)
         page.pop("_page_no", None)
 
-    from .runtime_settings import get_setting
-    color = (get_setting(db, "correction_color") or {}).get("value")
-    render_overlay(str(path), copies_annotations=pages_annotations, color=color)
-    render_copy_review(str(review_path), review_pages=review_pages, color=color)
+    color = correction_ink(db)
+    # Annotations et appréciations écrites : on valide AVANT le rendu pour ne
+    # pas garder la base verrouillée pendant que le professeur continue
+    # d'affiner d'autres copies.
+    db.commit()
+    # 1) L'overlay IMPRIMABLE d'abord (marques seules, rapide) : dès qu'il est
+    # publié, il fait foi et l'impression est débloquée.
+    _publish(path, lambda p: render_overlay(
+        p, copies_annotations=pages_annotations, color=color))
+    # Un overlay régénéré APRÈS affinage remplace une impression devenue fausse :
+    # l'étape repasse « à imprimer ». Rendu initial ou simple relance : inchangé.
+    previous_rev = (db.query(ScanBatch.overlay_rev).filter(ScanBatch.id == batch.id)
+                    .scalar() or 0)
+    changes = {ScanBatch.overlay_rev: refine_rev}
+    if refine_rev > previous_rev:
+        changes[ScanBatch.overlay_printed] = False
+        batch.overlay_printed = False
+    db.query(ScanBatch).filter(ScanBatch.id == batch.id).update(
+        changes, synchronize_session=False)
+    batch.overlay_rev = refine_rev
+    db.commit()
+    # 2) Puis l'aperçu écran « copie + overlay » (scans en fond, plus lourd).
+    _publish(review_path, lambda p: render_copy_review(
+        p, review_pages=review_pages, color=color))
     _set_status(db, batch, "overlay_ready", path=str(path))
     return str(path)
+
+
+def correction_ink(db: Session) -> str | None:
+    """Couleur d'encre de correction réglée (Paramètres), None = défaut."""
+    from .runtime_settings import get_setting
+    return (get_setting(db, "correction_color") or {}).get("value")

@@ -110,6 +110,17 @@ médiane / plus difficile), lot complet et overlay.
 Décisions par tiers A–E, file de validation clavier, finalisation → preuves de
 compétence + courbe d'oubli, overlay rouge #C62828 avec nom de l'élève.
 
+**Affiner la correction** — lot corrigé, overlay pas encore distribué :
+Corrections → « Affiner » ouvre chaque copie scannée avec son overlay (une page
+ou recto-verso côte à côte, recherche par nom, ←/→ d'un élève à l'autre, copies
+voisines préchargées). Le professeur corrige une note en réécrivant la réponse
+de l'élève (cases cochées, liaisons, cases d'un tableau, réponse courte) : le
+moteur la renote, la note de la copie, ses preuves de compétence et sa courbe
+d'oubli sont reconsolidées (`services/refine.py`). Raisonnements et tracés se
+notent en points. L'overlay passe « à régénérer » (impression bloquée) jusqu'à
+« OK » / « Régénérer », qui reconstruit tout le lot à l'identique — seules les
+pages des copies affinées changent, à la même place dans la pile.
+
 **Compétences** — grilles officielles extraites des programmes
 (`scripts/extract_competencies.py` sur les PDF du dossier `context/`) :
 **332 objectifs d'apprentissage** — 6e = cycle 3 (année Sixième uniquement,
@@ -140,6 +151,7 @@ backend/app/
     forgetting.py       # courbe d'oubli sans LLM
     pdfgen.py           # gabarits A4, marqueurs, overlay
     pipeline.py         # machine d'états scan réel + mock
+    refine.py           # « Affiner la correction » : renotation, aperçus
     providers.py        # Mathpix/DeepSeek/Claude + budgets + mock
   routers/              # + printing.py (CUPS/IPP), system.py (backup/calibration)
   scripts/
@@ -147,6 +159,7 @@ backend/app/
     make_synthetic_scan.py    # scan de test (encre simulée + rotation)
 frontend/src/
   components/PdfPreview.tsx   # modale aperçu PDF multi-copies
+  components/RefineCorrectionModal.tsx  # affiner la correction avant impression
   components/PrintButton.tsx  # impression CUPS/IPP
   pages/                # 6 écrans
 ```

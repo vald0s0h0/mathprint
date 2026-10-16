@@ -36,7 +36,8 @@ def get_db():
 # notion de base de notation étaient tous notés sur 20).
 _ADDED_COLUMNS: dict[str, list[tuple[str, ...]]] = {
     "users": [("subscription_plan", "TEXT")],
-    "scan_batches": [("overlay_printed", "BOOLEAN"), ("overlay_distributed", "BOOLEAN")],
+    "scan_batches": [("overlay_printed", "BOOLEAN"), ("overlay_distributed", "BOOLEAN"),
+                     ("refine_rev", "INTEGER", "0"), ("overlay_rev", "INTEGER", "0")],
     "scanned_pages": [("manual_page_id", "TEXT"), ("dismissed", "BOOLEAN")],
     "copies": [("appreciation_json", "JSON"), ("variant_key", "TEXT")],
     "generated_exercises": [
