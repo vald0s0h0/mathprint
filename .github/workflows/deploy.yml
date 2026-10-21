@@ -14,6 +14,10 @@ name: Deploy latest images
 on:
   push:
     branches: [main]
+    # documents commerciaux : rien à tester ni à déployer (et pas de minutes
+    # Actions consommées une fois le dépôt privé)
+    paths-ignore:
+      - 'entreprise/**'
   workflow_dispatch: {}   # relance manuelle (reconstruit tout)
 
 permissions:

@@ -33,6 +33,10 @@ produit dans Corrections.
 Le NAS ne construit rien localement : il tire les images depuis GHCR.
 
 **Publier une mise à jour = `git push` sur `main`, c'est tout.**
+En pratique : `scripts/ship.sh "message"` enchaîne tests, contrôle qu'aucune
+correction ne tourne sur le NAS (Tailscale actif), sauvegarde de la base,
+nouvelle version, commit, tag annoté et push (`--help` pour les options).
+Les commits qui ne touchent que `entreprise/` ne déclenchent pas la CI.
 `.github/workflows/deploy.yml` lance les tests puis publie sur
 `ghcr.io/vald0s0h0/` les images qui ont changé (`mathprint-api`,
 `mathprint-web`) sous deux tags : `latest` et

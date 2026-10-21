@@ -1,5 +1,19 @@
 # Instructions pour les agents (Codex)
 
+## Dossier `entreprise/` : hors du code
+
+`entreprise/` contient des documents commerciaux (arguments de vente, bilans PDF
+de démonstration et leurs scripts de génération). Ce n'est pas du code de
+l'application. Pour toute tâche de code (backend, frontend, scripts, CI,
+déploiement, pipeline Astra) :
+
+- ne lis pas, ne cherche pas et ne modifie pas `entreprise/` ; exclus-le de tes
+  recherches (ex. `rg --glob '!entreprise/**'`) ;
+- ne t'appuie pas sur son contenu (chiffres, noms, données de démonstration) :
+  il ne décrit pas le comportement réel de l'application.
+
+N'y travaille que si l'utilisateur le demande explicitement.
+
 ## Commande « astra »
 
 Quand l'utilisateur écrit `astra <chapitre>` (ex. `astra "Fonctions affines"`,

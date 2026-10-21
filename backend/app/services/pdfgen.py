@@ -2063,16 +2063,20 @@ def _draw_answer_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float,
 
 
 def _correction_strip_layout(correction: str, w: float, statement_fs: float,
-                             guides: str = GUIDES_INCLUDE) -> dict:
-    """Bande sous une carte : elle ne porte plus que la NOTE de barème, que
-    l'overlay de correction imprime à droite (STRIP_MIN_H). Le guide de bas de
-    carte a disparu — les guides vivent DANS l'énoncé (encadrés « {{aide}} »).
-    `correction` et `guides` restent en paramètres pour les appelants, sans
-    effet sur la géométrie. Retourne {height, fs, text_w, lay, guides}."""
+                             guides: str = GUIDES_INCLUDE, *, feedback: str = "") -> dict:
+    """Bande de note, avec retour personnalisé optionnel mesuré avant placement.
+
+    Le corrigé de banque `correction` reste ignoré ; seul `feedback` réserve
+    du texte. Les guides vivent dans l'énoncé (encadrés « {{aide}} »).
+    Retourne {height, fs, text_w, lay, guides}.
+    """
     fs = max(6.0, statement_fs - CORR_FS_DELTA)
     text_w = max(10 * mm, w - 2 * CARD_PAD - STRIP_NOTE_W)
-    return {"height": STRIP_MIN_H, "fs": fs, "text_w": text_w,
-            "lay": _rich_layout("", text_w, fs), "guides": guides}
+    # Retour personnalisé optionnel, distinct du corrigé de banque : les
+    # appelants historiques conservent exactement leur géométrie.
+    lay = _rich_layout(feedback, text_w, fs)
+    return {"height": max(STRIP_MIN_H, lay["height"] + STRIP_PAD_TOP + STRIP_PAD_BOT),
+            "fs": fs, "text_w": text_w, "lay": lay, "guides": guides}
 
 
 def item_guides_mode(item: dict) -> str:
@@ -2212,8 +2216,12 @@ def _draw_exercise_card(c: canvas.Canvas, x: float, y_top: float, w: float,
     # les case(s) font déjà partie de l'énoncé (inline_blanks), pas de zone
     # dédiée sous le texte
     guide_lay = layout.get("guides") or {"height": 0, "lines": []}
-    zone_y = card_bottom + CARD_PAD + guide_lay["height"]
-    _draw_rich(c, x + CARD_PAD, zone_y, guide_lay)
+    if layout.get("guides_before_answer"):
+        zone_y = card_bottom + CARD_PAD
+        _draw_rich(c, x + CARD_PAD, zone_y + zone_h + guide_lay["height"], guide_lay)
+    else:
+        zone_y = card_bottom + CARD_PAD + guide_lay["height"]
+        _draw_rich(c, x + CARD_PAD, zone_y, guide_lay)
     if response_type == "short_text" and inline_blanks:
         b = inline_blanks[0]
         zone_geo = {"x_pt": b["x_pt"], "y_pt": b["y_pt"], "w_pt": b["w_pt"], "h_pt": b["h_pt"]}
@@ -2455,13 +2463,14 @@ def _exercise_layout(item: dict, font_size: int,
                                fraction_blank_indices=_inline_fraction_indices(
                                    rtype, item.get("expected")))
     layout["guides"] = _rich_layout(guides, COL_W - 2 * CARD_PAD, font_size)
+    layout["guides_before_answer"] = item.get("guides_position") == "before_answer"
     layout["height"] += layout["guides"]["height"]
     zone_fs = _zone_font_size(rtype, font_size)
     zone_h = _zone_height(rtype, item.get("choices", []), COL_W, zone_fs,
                           item.get("grading"), item.get("inline", False),
                           sub_color, item.get("expected"))
     strip = _correction_strip_layout(item.get("correction", ""), COL_W, font_size,
-                                     item_guides_mode(item))
+                                     item_guides_mode(item), feedback=item.get("feedback", ""))
     return layout, zone_fs, zone_h, strip
 
 
@@ -2529,8 +2538,10 @@ def _composite_layout(item: dict, font_size: int, math_fs: int) -> dict:
         body_h += (_COMPOSITE_PART_GAP + before_lay["height"] + figure_h + frag["height"]
                    + _COMPOSITE_FRAG_GAP + zone_h + aid["height"])
     body_h += tail["height"]
-    strip = _correction_strip_layout(item.get("correction", ""), COL_W, font_size, mode)
+    strip = _correction_strip_layout(item.get("correction", ""), COL_W, font_size, mode,
+                                     feedback=item.get("feedback", ""))
     return {"stmt": stmt, "parts": laid, "tail": tail, "body_h": body_h, "strip": strip,
+            "guides_before_answer": item.get("guides_position") == "before_answer",
             "badge_color": sub_color, "numbered": numbered}
 
 
@@ -2573,6 +2584,9 @@ def _draw_composite_card(c: canvas.Canvas, x: float, y_top: float, w: float, seq
                         forbidden=(item.get("calc") == "interdite"))
 
     line_y = ty - stmt["height"]
+    guides_before = cl.get("guides_before_answer", False)
+    if guides_before:
+        line_y = _draw_rich(c, x + CARD_PAD, line_y, cl["tail"])
     part_zones = []
     for k, p in enumerate(cl["parts"]):
         if numbered or k:
@@ -2584,6 +2598,8 @@ def _draw_composite_card(c: canvas.Canvas, x: float, y_top: float, w: float, seq
             c.drawImage(fimg, x + (w - fw) / 2, line_y - fh, width=fw, height=fh, mask="auto")
             line_y -= fh + _FIG_MARKER_GAP
         line_y = _draw_rich(c, x + CARD_PAD, line_y, p["frag"])
+        if guides_before:
+            line_y = _draw_rich(c, x + CARD_PAD, line_y, p["guides"])
         line_y -= _COMPOSITE_FRAG_GAP
         zone_y = line_y - p["zone_h"]
         meta = _draw_answer_zone(c, x, zone_y, w, p["zone_h"], p["response_type"],
@@ -2591,8 +2607,11 @@ def _draw_composite_card(c: canvas.Canvas, x: float, y_top: float, w: float, seq
         part_zones.append({"item_id": p["item_id"], "response_type": p["response_type"],
                            "zone_geo": {"x_pt": x, "y_pt": zone_y, "w_pt": w, "h_pt": p["zone_h"]},
                            "meta": meta})
-        line_y = _draw_rich(c, x + CARD_PAD, zone_y, p["guides"])
-    _draw_rich(c, x + CARD_PAD, line_y, cl["tail"])
+        line_y = zone_y if guides_before else _draw_rich(c, x + CARD_PAD, zone_y, p["guides"])
+    if not guides_before:
+        _draw_rich(c, x + CARD_PAD, line_y, cl["tail"])
+    if part_zones:
+        part_zones[0]["meta"]["group_correction_strip"] = _strip_meta(c, x, y, w, cl["strip"])
     c.setFillColor(black)
     return card_h, part_zones
 
@@ -2808,6 +2827,14 @@ def _draw_zone_marks(c: canvas.Canvas, z: dict, col):
     for ln in marks.get("links", []):
         c.line(ln["x1"], ln["y1"], ln["x2"], ln["y2"])
     c.setDash()
+    # Primitives vectorielles ciblées : seules les parties erronées sont
+    # fournies par l'appelant, sans redessiner les côtés déjà corrects.
+    c.setLineWidth(1.2)
+    for ln in marks.get("segments", []):
+        c.line(ln["x1"], ln["y1"], ln["x2"], ln["y2"])
+    for label in marks.get("labels", []):
+        c.setFont("Helvetica-Bold", 7)
+        c.drawString(label["x"], label["y"], _pdf_safe(label["text"]))
     edge_x = marks.get("edge_x")
     if edge_x is not None:
         for e in marks.get("edge", []):
@@ -2816,9 +2843,13 @@ def _draw_zone_marks(c: canvas.Canvas, z: dict, col):
 
 
 def _draw_correction_strip(c: canvas.Canvas, z: dict, col):
-    """Bande de correction sous une carte : la note de barème à DROITE, en gros
-    et gras. Plus aucun texte de guide : les guides sont des encadrés intégrés
-    à l'énoncé (statement.GUIDE_TOKEN), imprimés — ou non — dès le sujet."""
+    """Note à droite et, si réservé au placement, retour personnalisé à gauche.
+
+    Les sous-questions peuvent partager une seule bande via suppress_score.
+    Les guides pédagogiques restent imprimés dans l'énoncé.
+    """
+    if z.get("suppress_score"):
+        return
     strip = z.get("strip")
     score_txt = (f"{scoring.format_points(z['score'])}/"
                  f"{scoring.format_points(z['max_score'])}")
@@ -2830,6 +2861,11 @@ def _draw_correction_strip(c: canvas.Canvas, z: dict, col):
                           score_txt)
         return
     sx, sy, sw, sh = strip["x_pt"], strip["y_pt"], strip["w_pt"], strip["h_pt"]
+    if z.get("feedback"):
+        lay = _rich_layout(z["feedback"], sw - STRIP_NOTE_W, strip.get("fs", 8))
+        if lay["height"] > sh + 0.1:
+            raise ValueError("Retour personnalisé trop haut pour la bande de correction")
+        _draw_rich(c, sx, sy + sh, lay, color=col)
     c.setFillColor(col)
     c.setFont("Helvetica-Bold", 11)
     c.drawRightString(sx + sw, sy + sh / 2 - 11 * 0.34, score_txt)
@@ -2840,7 +2876,7 @@ PROGRESS_TRACK = HexColor("#DCE7DC")
 
 
 def _draw_appreciation_content(c: canvas.Canvas, geo: dict, progress: list[dict],
-                               synthesis: str):
+                               synthesis: str, *, font_size: float | None = None):
     """Barres de progrès (vert uniquement, jamais de rouge) + synthèse Haiku,
     dessinées dans le rect Appréciation de header_geometry(). Les progrès sont
     répartis horizontalement : trois compétences ne rallongent donc jamais la
@@ -2877,6 +2913,21 @@ def _draw_appreciation_content(c: canvas.Canvas, geo: dict, progress: list[dict]
             c.roundRect(x, bar_y - bar_h, fill_w, bar_h, bar_h / 2, stroke=0, fill=1)
     if synthesis:
         c.setFillColor(HexColor("#37474F"))
+        if font_size is not None and not visible:
+            # Mode lisible : mesure du texte complet dans la place disponible,
+            # sans troncature. Les rendus historiques restent inchangés.
+            top = ay + ah - HEADER_LABEL_DY - 4 * mm
+            available = top - (ay + 2 * mm)
+            fs = max(7.5, min(10.0, float(font_size)))
+            lay = _rich_layout(synthesis, inner_w, fs)
+            while lay["height"] > available and fs > 7.5:
+                fs = max(7.5, fs - 0.25)
+                lay = _rich_layout(synthesis, inner_w, fs)
+            if lay["height"] > available:
+                raise ValueError("Appréciation trop longue : raccourcir la synthèse")
+            _draw_rich(c, inner_x, top, lay, color=HexColor("#37474F"))
+            c.setFillColor(black)
+            return
         c.setFont("Helvetica-Oblique", 5.8)
         y = ay + (5.8 * mm if visible else 13.0 * mm)
         max_lines = 2 if visible else 3
@@ -2920,7 +2971,8 @@ def _draw_correction_marks(c: canvas.Canvas, page: dict, col):
                             str(page["note"]))
     if page.get("progress") or page.get("synthesis"):
         _draw_appreciation_content(c, geo, page.get("progress") or [],
-                                   page.get("synthesis") or "")
+                                   page.get("synthesis") or "",
+                                   font_size=page.get("appreciation_font_size"))
     elif page.get("comment"):
         ax, ay, aw, ah = geo["appreciation"]["x"], geo["appreciation"]["y"], \
             geo["appreciation"]["w"], geo["appreciation"]["h"]
