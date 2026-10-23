@@ -25,7 +25,7 @@ Modèles : **Sonnet** (découpage), **Sonnet** (génération), **Opus** (vérifi
 
 ## Lancer (depuis la racine du repo)
 
-Le script importe le backend MathPrint (OCR, géométrie, base) : lance-le avec le
+Le script importe le backend Kiro & Nina (OCR, géométrie, base) : lance-le avec le
 **Python du venv backend** (`backend/.venv/bin/python`), pas le Python système.
 
 ```bash

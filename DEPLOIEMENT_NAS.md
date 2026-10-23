@@ -1,4 +1,4 @@
-# Déployer MathPrint sur un NAS Synology (Container Manager)
+# Déployer Kiro & Nina sur un NAS Synology (Container Manager)
 
 Guide pas-à-pas, **priorité à l'interface graphique** (File Station +
 Container Manager) : aucune connexion SSH n'est nécessaire, sauf une étape
@@ -91,7 +91,7 @@ Dans Container Manager → **Projet** → `mathprint`, les 4 conteneurs
 **Détails** → onglet **Journal** affiche ses logs sans passer par SSH.
 
 Tester ensuite dans un navigateur : `http://<IP-du-NAS>:7070` doit afficher
-l'écran de connexion MathPrint.
+l'écran de connexion Kiro & Nina.
 
 ## 5. Exposer l'application en HTTPS (reverse proxy Synology)
 
@@ -100,7 +100,7 @@ Recommandé plutôt que d'utiliser directement le port 7070 en HTTP.
 1. **Panneau de configuration** → **Portail de connexion** (ou « Application
    Portal » selon la version DSM) → onglet **Avancé** → **Reverse Proxy** →
    **Créer**.
-2. Description : `MathPrint`.
+2. Description : `Kiro & Nina`.
 3. Bloc **Source** : Protocole `HTTPS`, Nom d'hôte : celui que vous utilisez
    pour ce NAS (ex. `mathprint.votre-nom.synology.me` ou un nom local),
    Port `443`.
@@ -278,7 +278,7 @@ jamais touchés, et le projet reste géré par Container Manager.
    `/docker/mathprint/` via File Station (à côté du `docker-compose.yml`).
 2. **Panneau de configuration** → **Planificateur de tâches** → **Créer** →
    **Tâche planifiée** → **Script défini par l'utilisateur**.
-3. Onglet **Général** : nom `MathPrint update`, utilisateur **root**
+3. Onglet **Général** : nom `Kiro & Nina update`, utilisateur **root**
    (indispensable pour la commande docker).
 4. Onglet **Programmer** : Quotidien, puis « Exécuter à la même fréquence
    dans la journée » → toutes les **1 heure** (ou 15 min si vous voulez des
@@ -294,7 +294,7 @@ jamais touchés, et le projet reste géré par Container Manager.
 
 ### Vérifier qu'une mise à jour a bien été appliquée
 
-- Dans MathPrint : **Paramètres → Système** affiche « API build `abc1234` »
+- Dans Kiro & Nina : **Paramètres → Système** affiche « API build `abc1234` »
   et « Web build `abc1234` » — le sha du commit publié. S'il change après un
   push + une exécution de la tâche, la chaîne fonctionne de bout en bout.
 - Sur le NAS : `/docker/mathprint/update.log` (File Station) journalise
@@ -333,7 +333,7 @@ rester active : elle ne trouvera jamais rien de plus récent qu'un tag figé.
 
 Deux niveaux complémentaires :
 
-- **Applicatif** : dans MathPrint, Paramètres → Système → **Sauvegarder
+- **Applicatif** : dans Kiro & Nina, Paramètres → Système → **Sauvegarder
   maintenant** (dump de la base dans `/data/backups`, rétention 30 fichiers).
 - **NAS** : pour survivre à une panne de disque, sauvegarder le dossier
   `/docker/mathprint/volumes` en entier (contient la base Postgres, Redis, les
@@ -347,7 +347,7 @@ Deux niveaux complémentaires :
 L'image `mathprint-api` ne contient pas de client CUPS : la détection des
 imprimantes **locales** (`lpstat`) ne fonctionnera donc pas telle quelle dans
 ce déploiement conteneurisé. Pour imprimer depuis le NAS, utiliser l'écran
-**Paramètres → Imprimantes** de MathPrint pour enregistrer une **imprimante
+**Paramètres → Imprimantes** de Kiro & Nina pour enregistrer une **imprimante
 réseau IPP** (`ipp://<ip-imprimante>/ipp/print`) plutôt que de compter sur une
 file CUPS locale.
 

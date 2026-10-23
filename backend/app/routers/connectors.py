@@ -9,7 +9,7 @@ import secrets
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -18,6 +18,7 @@ from ..config import settings
 from ..db import get_db
 from ..models import (Assessment, AuditLog, ConnectorPrintJob, PrintConnector,
                       Printer, ScanBatch, User)
+from ..services import login_throttle
 from ..services.print_connectors import expire_stale_queued_jobs
 from ..services.security import verify_password
 
@@ -57,10 +58,15 @@ class ConnectorLoginIn(BaseModel):
 
 
 @router.post("/login")
-def login_connector(body: ConnectorLoginIn, db: Session = Depends(get_db)):
-    user = db.query(User).filter_by(email=body.email.lower().strip()).first()
+def login_connector(body: ConnectorLoginIn, db: Session = Depends(get_db),
+                    request: Request = None):
+    email, ip = body.email.lower().strip(), login_throttle.client_ip(request)
+    login_throttle.check_allowed(email, ip)
+    user = db.query(User).filter_by(email=email).first()
     if not user or not user.active or not verify_password(body.password, user.password_hash):
+        login_throttle.record_failure(email, ip)
         raise HTTPException(401, "Identifiants invalides")
+    login_throttle.record_success(email)
 
     connector = db.query(PrintConnector).filter_by(
         installation_id=body.installation_id).first()
@@ -278,7 +284,7 @@ def download_job(job_id: str,
     if not path.exists() or path.stat().st_size != job.document_size:
         raise HTTPException(404, "Document d'impression absent")
     return FileResponse(path, media_type="application/pdf",
-                        filename=f"mathprint-{job.id}.pdf",
+                        filename=f"kironina-{job.id}.pdf",
                         headers={"X-Content-SHA256": job.document_sha256})
 
 

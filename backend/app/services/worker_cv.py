@@ -668,155 +668,642 @@ def second_pass_selection(boxes: list[dict], grid: bool,
     return a if (sorted(a) if not grid else a) == (sorted(b) if not grid else b) else None
 
 
-# --- Points à relier : couverture ORIENTÉE du segment de chaque paire --------
-# Calibré sur 58 réponses réelles (contrôle 6e « Angles », 29 copies, traits à
-# la règle ou à main levée, stylo bleu/noir et crayon) : 53 lues justes en
-# automatique, 0 erreur, 5 en revue (traits ondulés au crayon) — contre 49 en
-# revue avec l'ancienne heuristique « extrémités de traits près des pastilles »,
-# qui échouait dès qu'un trait s'arrêtait avant la pastille, la dépassait, ou
-# était coupé par un croisement.
-MATCH_INK_GRAY = 190        # niveau de gris sous lequel un pixel est de l'encre
-MATCH_TOL_PX = 10           # décalage perpendiculaire toléré (~1,3 mm à 200 dpi)
-MATCH_KERNEL_PX = 31        # longueur du noyau linéaire orienté
-MATCH_RESP_MIN = 0.7        # réponse orientée mini pour « encre alignée »
-MATCH_T_RANGE = (0.10, 0.90)  # portion du segment mesurée (hors pastilles)
-MATCH_STEP_PX = 2.0         # pas d'échantillonnage le long du segment
-MATCH_GAP_PX = 8            # trou toléré dans un trait (stylo qui saute)
-MATCH_ACCEPT = 0.75         # score mini d'une liaison retenue
-MATCH_AMBIGUOUS = 0.45      # une paire écartée au-dessus -> revue
+# --- Points à relier : courbe ajustée par paire + lecture globale ----------
+# Un trait d'élève n'est pas une droite : à main levée il est bancal, ondulé,
+# part ou arrive à côté du point, peut être repassé deux fois, et un trait
+# effacé au blanco laisse des mini-traits aux croisements. Pour chaque paire
+# candidate (point gauche/haut i, point droit/bas j — colonnes ou rangées), on
+# redresse une bande de ±MATCH_BAND_PX autour de la corde i→j et on y cherche,
+# par programmation dynamique, la courbe LISSE qui suit au mieux l'encre
+# (équivalent d'un RANSAC « ancré » aux deux points, mais qui tolère la
+# courbure : pente latérale bornée, écart à la corde pénalisé). Une liaison
+# n'est retenue que si cette courbe est encrée presque partout, sans trou.
+# La lecture est ensuite GLOBALE : affectation un-pour-un de meilleur score.
+# Elle n'est certaine que si (1) elle explique toute l'encre — un second
+# passage le long d'une liaison retenue est un trait doublé ; un trait le long
+# d'une AUTRE paire (deux partenaires, trait en trop), une tache étendue ou une
+# rature envoient en revue ; les mini-traits isolés (restes de blanco aux
+# croisements) sont ignorés — et (2) aucune autre lecture complète, presque
+# aussi bonne, n'explique aussi toute l'encre. Au croisement de deux traits
+# (trois droites concourantes comprises), une lecture qui « tourne » d'un trait
+# à l'autre quitte un trait qui, lui, continue tout droit : elle est pénalisée
+# (bonne continuation). Deux traits bancals qui se frôlent ou se confondent se
+# lisent des deux façons : revue.
+# Les points imprimés sont des disques noirs : repérés par leur rayon inscrit
+# (un trait de stylo ne fait pas 1,6 mm d'épaisseur), ils recalent localement
+# la lecture puis sont effacés de l'encre. Les anciennes pastilles saumon sont
+# déjà supprimées par le dropout : on garde alors leur position théorique.
+# Seuils réglés sur un banc synthétique (traits règle/main levée/ondulés/crayon,
+# doublés, blanco, concourants, recalage décalé, ratures ; points noirs,
+# pastilles saumon ou grises, colonnes ou rangées) : aucune lecture fausse sur
+# les cas légitimes. À recaler sur copies réelles : scripts/calibrate_matching.py.
+MATCH_INK_HI = 220          # gris au-dessus : papier (liseré de blanco compris)
+MATCH_INK_LO = 160          # gris en dessous : encre franche (stylo, crayon appuyé)
+MATCH_DOT_DARK = 128        # un point imprimé est franchement noir
+MATCH_DOT_SEARCH_PX = 14    # recherche du point autour de sa position (recalage ≤ 1,5 mm)
+MATCH_DOT_MIN_R = 4.5       # rayon inscrit mini d'un point imprimé (~6 px ; un trait : ≤ 2,5,
+                            # deux traits qui se rejoignent : ≤ 4)
+MATCH_DOT_OUTLIER_PX = 5    # point trouvé trop loin du décalage commun -> ignoré
+MATCH_DOT_QUORUM = 0.5      # recalage local seulement si au moins cette part des points...
+MATCH_DOT_SPREAD_PX = 3     # ... est trouvée avec des décalages cohérents
+MATCH_END_PX = 12           # extrémités ignorées (point imprimé, départ/arrivée imprécis)
+MATCH_HALO_PX = 16          # tache isolée autour d'un point (anneau saumon photocopié en
+                            # gris, halo) : effacée ; un trait qui en part déborde et reste
+MATCH_BAND_PX = 24          # écart latéral maxi d'un trait bancal (~3 mm à 200 dpi)
+MATCH_SMOOTH = 0.15         # coût d'un pas latéral de 1 px (préférence pour le droit)
+MATCH_CENTER = 0.3          # coût d'un écart à la corde (départage, au carré)
+MATCH_COVER = 0.85          # couverture mini d'une liaison retenue
+MATCH_GAP_PX = 10           # plus long trou toléré (~1,3 mm : stylo qui saute)
+MATCH_TURN_SKIP_PX = 12     # test de continuation : on ignore la tache du croisement...
+MATCH_TURN_ARM_PX = 20      # ... et on compare les bras de part et d'autre
+MATCH_TURN_DEG = 20.0       # la courbe tourne de plus que ça entre ses deux bras ...
+MATCH_TURN_INK = 0.7        # ... alors que l'encre continue tout droit : changement de trait
+MATCH_TURN_TOL_PX = 2       # tolérance latérale du prolongement
+MATCH_TURN_RETURN_PX = 3    # la courbe revient sur le trait quitté : simple écart
+MATCH_TURN_COST = 0.25      # pénalité de score d'une courbe qui change de trait
+MATCH_MARGIN = 0.35         # avance mini sur toute lecture concurrente complète
+MATCH_CENTROID_PX = 3       # recentrage de la courbe sur l'encre (± px)
+MATCH_MAX_READINGS = 4000   # lectures énumérées (au-delà : revue)
+MATCH_MAX_ALTERNATIVES = 64  # lectures alternatives vérifiées (au-delà : revue)
+MATCH_OWN_COVER = 0.3       # encre propre mini d'une liaison (hors autres traits)...
+MATCH_OWN_RUN = 0.2         # ... ou portion continue propre : sinon liaison « fantôme »
+MATCH_CORRIDOR_PX = 4       # demi-largeur d'encre expliquée par une liaison retenue
+MATCH_LANE_PX = 10          # le couloir déborde des rangées de points (pas des étiquettes)...
+MATCH_LANE_V_PX = 30        # ... et des points extrêmes de chaque rangée (trait bombé, ~4 mm)
+MATCH_DUP_BRIDGE = 0.6      # un second passage peut emprunter le premier trait (gain réduit)
+MATCH_DUP_FRESH = 0.15      # ... mais doit suivre sa propre encre sur cette fraction
+MATCH_DUP_END_PX = 10       # ... rejoindre le premier trait aux deux bouts
+MATCH_DUP_NEAR_PX = 10      # ... ne jamais s'en écarter de plus (~1,3 mm)
+MATCH_DUP_SPILL_PX = 15     # ... et expliquer TOUTE l'encre nouvelle qu'il emprunte
+MATCH_DUP_CORRIDOR_PX = 7   # couloir d'un doublon : couvre aussi l'entre-deux traits
+MATCH_RES_SHARE = 0.25      # trait inexpliqué : portion d'une autre paire hors couloirs ...
+MATCH_RES_COVER = 0.5       # ... encrée à ce point -> revue
+MATCH_RES_BLOB_PX = 36      # tache résiduelle plus étendue (~4,5 mm) -> revue
+MATCH_RES_MASS_PX = 120     # ... ou plus encrée -> revue
+MATCH_OVERDRAW_PX = 16      # rature : encre à moins de ça d'une liaison retenue ...
+MATCH_OVERDRAW_WIN = 30     # ... sur une fenêtre de cette longueur ...
+MATCH_OVERDRAW = 3.0        # ... au-delà de tant de largeurs de trait (doublé : ~2)
+MATCH_HATCH_TRACKS = (5, 8, 11)  # pistes parallèles à une liaison (px de part et d'autre)
+MATCH_HATCH_WIN = 40        # rature : sur une fenêtre de cette longueur ...
+MATCH_HATCH_RUNS = 3        # ... au moins tant de petits traits traversent une piste
+MATCH_DENSE_WIN = 41        # tache : encre en excès sur l'attendu, fenêtre de ce côté ...
+MATCH_DENSE_PX = 130        # ... au-delà de tant de pixels -> revue (rature dense)
 MATCH_BLANK_PX = 40         # traces (même pâles) sous ce total -> copie blanche
-MATCH_UNEXPLAINED_PX = 350  # encre hors liaisons retenues au-delà -> revue
 
 
-def _line_kernel(theta: float, k: int) -> np.ndarray:
-    ker = np.zeros((k, k), np.float32)
-    c = (k - 1) / 2
-    dx, dy = math.cos(theta) * c, math.sin(theta) * c
-    cv2.line(ker, (int(round(c - dx)), int(round(c - dy))),
-             (int(round(c + dx)), int(round(c + dy))), 1.0, 1)
-    return ker / ker.sum()
+def _ink_strength(gray: np.ndarray) -> np.ndarray:
+    """Encre ∈ [0, 1] : 0 sur le papier, 1 sur un trait franc. Progressif pour
+    garder le crayon pâle sans seuil dur."""
+    ink = (MATCH_INK_HI - gray.astype(np.float32)) / (MATCH_INK_HI - MATCH_INK_LO)
+    return np.clip(ink, 0.0, 1.0)
 
 
-def _longest_run(covered: np.ndarray, max_gap: int) -> float:
-    """Plus longue portion CONTINUE couverte (fraction des échantillons), en
-    tolérant des trous de `max_gap` échantillons au plus."""
-    best = run = gap = 0
-    for c in covered:
-        if c:
-            run = run + 1 + gap if run else 1
-            gap = 0
-        elif run:
-            gap += 1
-            if gap > max_gap:
-                best, run, gap = max(best, run), 0, 0
-    return max(best, run) / max(1, len(covered))
+def _locate_dots(gray: np.ndarray, nominal: list[np.ndarray]) -> tuple[list[np.ndarray], int]:
+    """Centres réels des points noirs imprimés, cherchés autour de leur position
+    théorique : le maximum de la distance au fond (rayon inscrit) désigne le
+    disque, jamais un trait fin qui y aboutit. Un décalage commun (recalage de
+    page imparfait) est appliqué aux points introuvables ; un point aberrant
+    (tache d'encre voisine) est ramené à ce décalage. Sans quorum de points
+    trouvés et cohérents (anciennes copies à pastilles saumon, où seule une
+    jonction de traits ressemble à un point), positions théoriques. Retourne
+    aussi le nombre de points retenus pour le recalage."""
+    dark = (gray < MATCH_DOT_DARK).astype(np.uint8)
+    h, w = gray.shape
+    s = MATCH_DOT_SEARCH_PX
+    found: list[np.ndarray | None] = []
+    for c in nominal:
+        x0, y0 = max(0, int(c[0]) - s), max(0, int(c[1]) - s)
+        x1, y1 = min(w, int(c[0]) + s + 1), min(h, int(c[1]) + s + 1)
+        if x1 - x0 < 3 or y1 - y0 < 3:
+            found.append(None)
+            continue
+        dist = cv2.distanceTransform(dark[y0:y1, x0:x1], cv2.DIST_L2, 5)
+        peak = float(dist.max())
+        if peak < MATCH_DOT_MIN_R:
+            found.append(None)
+            continue
+        ys, xs = np.nonzero(dist >= peak - 1.0)
+        found.append(np.array([x0 + xs.mean(), y0 + ys.mean()]))
+    shifts = [f - c for f, c in zip(found, nominal) if f is not None]
+    if len(shifts) < max(3, math.ceil(MATCH_DOT_QUORUM * len(nominal))):
+        return [c.copy() for c in nominal], 0     # anciennes pastilles saumon, ou faux points
+    common = np.median(np.array(shifts), axis=0)
+    spread = np.median(np.linalg.norm(np.array(shifts) - common, axis=1))
+    if spread > MATCH_DOT_SPREAD_PX:
+        return [c.copy() for c in nominal], 0
+    out = []
+    for f, c in zip(found, nominal):
+        if f is None or np.linalg.norm(f - c - common) > MATCH_DOT_OUTLIER_PX:
+            out.append(c + common)
+        else:
+            out.append(f)
+    return out, len(shifts)
 
 
-def matching_scores(warped: np.ndarray, left_points: list[dict],
-                    right_points: list[dict]) -> tuple[np.ndarray, dict]:
-    """Score de chaque paire (gauche i, droite j) ∈ [0, 1] : plus longue portion
-    continue du segment théorique i→j bordée d'encre ALIGNÉE sur ce segment.
+@dataclass
+class _Link:
+    """Courbe ajustée le long d'une paire (repère redressé de la corde)."""
+    cover: float                 # fraction de la portion mesurée bordée d'encre
+    gap: int                     # plus long trou (px)
+    run: float                   # plus longue portion continue encrée (fraction)
+    offset: float                # écart moyen à la corde (px)
+    end_offset: float            # écart moyen aux deux bouts (px)
+    path: np.ndarray             # points (x, y) de la courbe
 
-    L'encre est filtrée par un noyau linéaire orienté selon la paire : un trait
-    aligné répond ~1, un trait qui croise sous l'angle α ne remplit qu'environ
-    largeur/(K·sin α) du noyau — même un voisin à 20° reste sous le seuil. La
-    réponse est cherchée dans ±MATCH_TOL_PX perpendiculairement : un trait qui
-    part ou arrive un peu à côté de la pastille compte. Les extrémités (pastilles,
-    départs/arrivées imprécis) sont exclues. Retourne aussi la géométrie (repère
-    de la bande) pour les contrôles « copie blanche » / « encre inexpliquée »."""
-    def center(p: dict) -> tuple[float, float]:
-        return pt_to_px(p["x_pt"] + p["w_pt"] / 2, p["y_pt"] + p["h_pt"] / 2)
+    @property
+    def score(self) -> float:
+        return (self.cover - 0.5 * self.offset / MATCH_BAND_PX
+                - 0.25 * self.end_offset / MATCH_BAND_PX)
 
-    L = [center(p) for p in left_points]
-    R = [center(p) for p in right_points]
-    xs = [c[0] for c in L + R]
-    ys = [c[1] for c in L + R]
-    x0, y0 = max(0, int(min(xs) - 30)), max(0, int(min(ys) - 30))
-    x1, y1 = int(max(xs) + 30), int(max(ys) + 30)
-    band = warped[y0:y1, x0:x1]
-    scores = np.zeros((len(L), len(R)))
-    geo = {"L": L, "R": R, "x0": x0, "y0": y0, "gray": None}
-    if band.size == 0:
-        return scores, geo
-    gray = cv2.cvtColor(dropout_filter(band), cv2.COLOR_BGR2GRAY) if band.ndim == 3 else band
-    geo["gray"] = gray
-    ink = (gray < MATCH_INK_GRAY).astype(np.float32)
+    @property
+    def present(self) -> bool:
+        return self.cover >= MATCH_COVER and self.gap <= MATCH_GAP_PX
+
+
+def _runs(flags: np.ndarray) -> tuple[int, int]:
+    """(plus longue suite de vrais, plus longue suite de faux)."""
+    best = {True: 0, False: 0}
+    cur, prev = 0, None
+    for f in flags.tolist():
+        cur = cur + 1 if f == prev else 1
+        prev = f
+        best[f] = max(best[f], cur)
+    return best[True], best[False]
+
+
+def _turns_off_a_stroke(path: np.ndarray, ink: np.ndarray) -> bool:
+    """Vrai si la courbe change de trait à un croisement : entre ses bras
+    d'entrée et de sortie (pris hors de la tache du croisement, où plusieurs
+    traits se confondent), elle tourne de plus de MATCH_TURN_DEG alors que
+    l'encre continue tout droit des DEUX côtés — le trait qu'elle quitte se
+    poursuit devant, celui qu'elle rejoint existait derrière — et elle ne
+    revient jamais sur le trait quitté. Un trait bancal tourne moins ; un trait
+    ondulé tourne, mais rien ne le prolonge ; une fourche (reste de blanco au
+    départ d'un point) n'a qu'un côté ; une liaison qui emprunte un instant
+    l'autre trait d'un croisement serré revient ensuite sur le sien."""
+    skip, arm = MATCH_TURN_SKIP_PX, MATCH_TURN_ARM_PX
+    reach = skip + arm
+    n = len(path)
+    if n < 2 * reach + 1:
+        return False
+    inked = cv2.dilate(ink, np.ones((3, 3), np.uint8)) >= 0.5   # ±1 px
+    near = cv2.dilate(ink, np.ones((2 * MATCH_TURN_TOL_PX + 1,) * 2, np.uint8)) >= 0.5
+    hgt, wid = inked.shape
+
+    def inked_along(pts: np.ndarray, where: np.ndarray = inked) -> float:
+        pts = np.rint(pts).astype(int)
+        ok = (pts[:, 0] >= 0) & (pts[:, 1] >= 0) & (pts[:, 0] < wid) & (pts[:, 1] < hgt)
+        return float(where[pts[ok, 1], pts[ok, 0]].sum()) / len(pts)
+
+    def unit(v: np.ndarray) -> np.ndarray:
+        return v / max(float(np.linalg.norm(v)), 1e-6)
+
+    def meets(pts: np.ndarray, origin: np.ndarray, direction: np.ndarray, ahead: bool) -> bool:
+        rel = pts - origin[None, :]
+        along = rel @ direction
+        across = np.abs(rel[:, 0] * direction[1] - rel[:, 1] * direction[0])
+        return bool(np.any(((along > 0) if ahead else (along < 0))
+                           & (across <= MATCH_TURN_RETURN_PX)))
+
+    beyond = np.arange(2 * skip, 2 * skip + arm + 1, dtype=np.float64)[:, None]
+    cos_max = math.cos(math.radians(MATCH_TURN_DEG))
+    for c in range(reach, n - reach):
+        d_in = unit(path[c - skip] - path[c - reach])
+        d_out = unit(path[c + reach] - path[c + skip])
+        if float(d_in @ d_out) > cos_max:
+            continue
+        if (inked_along(path[c - reach:c - skip + 1]) < MATCH_TURN_INK
+                or inked_along(path[c + skip:c + reach + 1]) < MATCH_TURN_INK):
+            continue                          # bras dans un trou : rien à prolonger
+        if (inked_along(path[c - skip] + d_in * beyond, near) < MATCH_TURN_INK
+                or inked_along(path[c + skip] - d_out * beyond, near) < MATCH_TURN_INK):
+            continue
+        if (meets(path[c + reach:], path[c - skip], d_in, ahead=True)
+                or meets(path[:c - reach + 1], path[c + skip], d_out, ahead=False)):
+            continue                          # aller-retour sur l'autre trait
+        return True
+    return False
+
+
+def _fit_links(ink: np.ndarray, segments: list[tuple[np.ndarray, np.ndarray]]
+               ) -> list[_Link | None]:
+    """Ajuste une courbe lisse le long de chaque segment (a, b) — toutes les
+    paires en une passe de programmation dynamique vectorisée.
+
+    Repère redressé : t le long de la corde (pas 1 px, extrémités exclues), d
+    en travers (±MATCH_BAND_PX). La courbe garde un d par t, se décale d'au plus
+    1 px par pas (pente ≤ 45° par rapport à la corde : un trait qui croise ne se
+    suit pas) et maximise l'encre traversée, moins un coût par décalage et par
+    écart à la corde."""
+    ds = np.arange(-MATCH_BAND_PX, MATCH_BAND_PX + 1, dtype=np.float32)
+    K = len(ds)
+    gains, covers, geos, inks = [], [], [], []
+    for a, b in segments:
+        length = float(np.hypot(*(b - a)))
+        ts = np.arange(MATCH_END_PX, length - MATCH_END_PX + 1e-6, 1.0, dtype=np.float32)
+        if len(ts) < 8:
+            gains.append(None)
+            covers.append(None)
+            geos.append(None)
+            inks.append(None)
+            continue
+        u = (b - a) / length
+        nv = np.array([-u[1], u[0]])
+        mx = (a[0] + u[0] * ts[:, None] + nv[0] * ds[None, :]).astype(np.float32)
+        my = (a[1] + u[1] * ts[:, None] + nv[1] * ds[None, :]).astype(np.float32)
+        m = cv2.remap(ink, mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT,
+                      borderValue=0)
+        tol = m.copy()               # ±1 px en travers pour juger « encré »
+        tol[:, 1:] = np.maximum(tol[:, 1:], m[:, :-1])
+        tol[:, :-1] = np.maximum(tol[:, :-1], m[:, 1:])
+        gains.append(m - MATCH_CENTER * (ds / MATCH_BAND_PX) ** 2)
+        covers.append(tol >= 0.5)
+        geos.append((a, u, nv, ts))
+        inks.append(m)
+    live = [k for k, g in enumerate(gains) if g is not None]
+    out: list[_Link | None] = [None] * len(segments)
+    if not live:
+        return out
+    T = max(len(gains[k]) for k in live)
+    P = len(live)
+    G = np.zeros((P, T, K), np.float32)
+    for p, k in enumerate(live):
+        G[p, :len(gains[k])] = gains[k]
+    back = np.zeros((P, T, K), np.int8)
+    last = {p: len(gains[k]) - 1 for p, k in enumerate(live)}
+    finals = {p: G[p, 0].copy() for p in last if last[p] == 0}
+    V = G[:, 0].copy()
+    neg = np.full((P, 1), -np.inf, np.float32)
+    for t in range(1, T):
+        from_lo = np.concatenate([neg, V[:, :-1]], axis=1) - MATCH_SMOOTH   # depuis d-1
+        from_hi = np.concatenate([V[:, 1:], neg], axis=1) - MATCH_SMOOTH    # depuis d+1
+        stack = np.stack([from_lo, V, from_hi])
+        arg = stack.argmax(axis=0)
+        V = np.take_along_axis(stack, arg[None], axis=0)[0] + G[:, t]
+        back[:, t] = (arg - 1).astype(np.int8)   # -1 : venu de d-1, +1 : de d+1
+        for p in [p for p, e in last.items() if e == t]:
+            finals[p] = V[p].copy()
+    for p, k in enumerate(live):
+        n_t = last[p] + 1
+        idx = np.empty(n_t, np.int64)
+        j = int(np.argmax(finals[p]))
+        for t in range(n_t - 1, -1, -1):
+            idx[t] = j
+            j += int(back[p, t, j])
+        cov = covers[k][np.arange(n_t), idx]
+        on, off = _runs(cov)
+        # recentrage sur l'encre : le coût d'écart à la corde tire la courbe
+        # vers le bord du trait, les tests géométriques veulent son milieu
+        r = MATCH_CENTROID_PX
+        win = np.clip(idx[:, None] + np.arange(-r, r + 1)[None, :], 0, K - 1)
+        wts = inks[k][np.arange(n_t)[:, None], win]
+        wts = np.where(wts >= 0.5, wts, 0.0)
+        tot = wts.sum(axis=1)
+        offs = np.where(tot > 0, (wts * ds[win]).sum(axis=1) / np.maximum(tot, 1e-6), ds[idx])
+        a, u, nv, ts = geos[k]
+        path = a[None, :] + u[None, :] * ts[:, None] + nv[None, :] * offs[:, None]
+        out[k] = _Link(cover=float(cov.mean()), gap=off, run=on / n_t,
+                       offset=float(np.abs(offs[cov]).mean()) if cov.any() else MATCH_BAND_PX,
+                       end_offset=float((abs(offs[0]) + abs(offs[-1])) / 2), path=path)
+    return out
+
+
+def _matchings(weights: dict[tuple[int, int], float]
+               ) -> list[tuple[float, list[tuple[int, int]]]] | None:
+    """Toutes les affectations un-pour-un parmi les paires candidates, par
+    poids total décroissant (quelques paires par exercice : exhaustif). None
+    au-delà de MATCH_MAX_READINGS (dessin trop chargé pour être certain)."""
+    cands = sorted(weights, key=lambda p: -weights[p])
+    found: list[tuple[float, list[tuple[int, int]]]] = []
+
+    def walk(k: int, used_l: frozenset, used_r: frozenset, total: float, chosen: list):
+        if len(found) > MATCH_MAX_READINGS:
+            return
+        if k == len(cands):
+            found.append((total, list(chosen)))
+            return
+        i, j = cands[k]
+        if i not in used_l and j not in used_r:
+            chosen.append((i, j))
+            walk(k + 1, used_l | {i}, used_r | {j}, total + weights[(i, j)], chosen)
+            chosen.pop()
+        walk(k + 1, used_l, used_r, total, chosen)
+
+    walk(0, frozenset(), frozenset(), 0.0, [])
+    if len(found) > MATCH_MAX_READINGS:
+        return None
+    return sorted(found, key=lambda f: -f[0])
+
+
+def _corridor(shape: tuple[int, int], paths: list[np.ndarray],
+              half: int = MATCH_CORRIDOR_PX) -> np.ndarray:
+    mask = np.zeros(shape, np.uint8)
+    for path in paths:
+        cv2.polylines(mask, [np.round(path).astype(np.int32)], False, 255, 2 * half + 1)
+    return mask > 0
+
+
+def _doubled(ink: np.ndarray, base: np.ndarray, explained: np.ndarray, first: np.ndarray,
+             a: np.ndarray, b: np.ndarray) -> np.ndarray | None:
+    """Second passage le long d'une liaison retenue (trait repassé) : courbe
+    qui suit de l'encre NOUVELLE et peut emprunter le premier trait là où les
+    deux se confondent, mais reste près de lui, le rejoint aux deux bouts et
+    explique toute l'encre nouvelle qu'elle touche — un trait vers un autre
+    point (second partenaire) qui longe la liaison puis s'en écarte n'est pas
+    un doublon. `base` : couloirs des seules liaisons retenues (l'encre
+    « nouvelle » s'y mesure, pour que deux doublons ne se partagent pas un
+    trait en trop) ; `explained` : couloirs déjà expliqués (doublons compris)."""
+    bridged = ink.copy()
+    bridged[explained] *= MATCH_DUP_BRIDGE
+    lk = _fit_links(bridged, [(a, b)])[0]
+    if lk is None or not lk.present:
+        return None
+    gaps = np.linalg.norm(lk.path[:, None, :] - first[None, :, :], axis=2).min(axis=1)
+    if gaps.max() > MATCH_DUP_NEAR_PX or max(gaps[0], gaps[-1]) > MATCH_DUP_END_PX:
+        return None
+    fresh = ink.copy()
+    fresh[explained] = 0.0
+    pts = np.rint(lk.path).astype(int)
     h, w = ink.shape
-    offs = np.arange(-MATCH_TOL_PX, MATCH_TOL_PX + 1)
-    max_gap = int(round(MATCH_GAP_PX / MATCH_STEP_PX))
-    for i, (lx, ly) in enumerate(L):
-        for j, (rx, ry) in enumerate(R):
-            length = math.hypot(rx - lx, ry - ly)
-            if length < 1:
+    ok = (pts[:, 0] >= 0) & (pts[:, 1] >= 0) & (pts[:, 0] < w) & (pts[:, 1] < h)
+    on_fresh = np.zeros(len(pts), bool)
+    on_fresh[ok] = cv2.dilate(fresh, np.ones((3, 3), np.uint8))[pts[ok, 1], pts[ok, 0]] >= 0.5
+    if on_fresh.mean() < MATCH_DUP_FRESH:
+        return None
+    unexplained = ink.copy()
+    unexplained[base] = 0.0
+    strokes = (unexplained >= 0.5).astype(np.uint8)
+    _n, labels = cv2.connectedComponents(strokes, connectivity=8)
+    along = _corridor(ink.shape, [lk.path], MATCH_DUP_CORRIDOR_PX)
+    for c in np.unique(labels[along & (strokes > 0)]):
+        if c == 0:
+            continue
+        ys, xs = np.nonzero((labels == c) & ~along)
+        if len(ys) and np.hypot(np.ptp(xs), np.ptp(ys)) > MATCH_DUP_SPILL_PX:
+            return None
+    return lk.path
+
+
+def _across(ink: np.ndarray, path: np.ndarray) -> np.ndarray:
+    """Pixels d'encre en travers d'une liaison (±MATCH_OVERDRAW_PX), point par
+    point le long de sa courbe."""
+    chord = path[-1] - path[0]
+    nv = np.array([-chord[1], chord[0]]) / max(float(np.linalg.norm(chord)), 1e-6)
+    offs = np.arange(-MATCH_OVERDRAW_PX, MATCH_OVERDRAW_PX + 1, dtype=np.float64)
+    pts = path[:, None, :] + offs[None, :, None] * nv[None, None, :]
+    vals = cv2.remap(ink, pts[..., 0].astype(np.float32), pts[..., 1].astype(np.float32),
+                     cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+    return (vals >= 0.5).sum(axis=1).astype(np.float64)
+
+
+def _overdraw(profiles: list[np.ndarray]) -> float:
+    """Densité d'encre maximale sur une fenêtre glissante, en largeurs de
+    trait : ~1 pour un trait, ~2 pour un trait repassé, bien plus sous une
+    rature (gribouillis, hachures). La largeur de référence est la médiane sur
+    TOUTES les liaisons : une rature qui couvre la moitié d'un trait court ne
+    la gonfle pas."""
+    if not profiles:
+        return 0.0
+    width = max(float(np.median(np.concatenate(profiles))), 2.5)
+    worst = 0.0
+    for across in profiles:
+        win = min(MATCH_OVERDRAW_WIN, len(across))
+        worst = max(worst, float((np.convolve(across, np.ones(win), mode="valid")
+                                  / (win * width)).max()))
+    return worst
+
+
+def _hatches(ink: np.ndarray, path: np.ndarray, crossers: list[np.ndarray]) -> int:
+    """Traits en trop qui barrent une liaison : sur des pistes parallèles à
+    elle, nombre maximal de traversées d'encre sur MATCH_HATCH_WIN px, moins
+    les autres liaisons retenues qui y passent (un croisement normal compte
+    pour 0). ~0 pour un trait seul ou croisé, 1 pour un reste de blanco ou une
+    petite marque, plusieurs sous des hachures ou un gribouillis — y compris
+    posé sur un croisement, où les couloirs des autres traits l'effaceraient.
+    `ink` est privée de la liaison elle-même (et de ses doublons) ; `crossers`
+    : couloirs des autres liaisons retenues."""
+    chord = path[-1] - path[0]
+    nv = np.array([-chord[1], chord[0]]) / max(float(np.linalg.norm(chord)), 1e-6)
+    hgt, wid = ink.shape
+    worst = 0
+    for off in MATCH_HATCH_TRACKS:
+        for side in (-1, 1):
+            track = path + side * off * nv[None, :]
+            vals = cv2.remap(ink, track[:, 0].astype(np.float32)[None, :],
+                             track[:, 1].astype(np.float32)[None, :], cv2.INTER_LINEAR,
+                             borderMode=cv2.BORDER_CONSTANT, borderValue=0)[0]
+            inked = vals >= 0.5
+            inked[1:-1] |= inked[:-2] & inked[2:]          # bouche les trous d'1 px
+            starts = np.nonzero(inked & ~np.concatenate([[False], inked[:-1]]))[0]
+            if len(starts) <= worst:
                 continue
-            ux, uy = (rx - lx) / length, (ry - ly) / length
-            resp = cv2.filter2D(ink, -1, _line_kernel(math.atan2(uy, ux), MATCH_KERNEL_PX),
-                                borderType=cv2.BORDER_CONSTANT)
-            ts = np.arange(MATCH_T_RANGE[0] * length, MATCH_T_RANGE[1] * length, MATCH_STEP_PX)
-            px = np.rint(lx - x0 + ux * ts[:, None] - uy * offs[None, :]).astype(int)
-            py = np.rint(ly - y0 + uy * ts[:, None] + ux * offs[None, :]).astype(int)
-            ok = (px >= 0) & (py >= 0) & (px < w) & (py < h)
-            vals = np.zeros(px.shape, np.float32)
-            vals[ok] = resp[py[ok], px[ok]]
-            scores[i, j] = _longest_run(vals.max(axis=1) >= MATCH_RESP_MIN, max_gap)
-    return scores, geo
+            pts = np.clip(np.rint(track).astype(int), 0, [wid - 1, hgt - 1])
+            passes = [np.concatenate([[0], np.cumsum(m[pts[:, 1], pts[:, 0]])]) for m in crossers]
+            n = len(track)
+            for a, first in enumerate(starts):
+                last = min(n, first + MATCH_HATCH_WIN)
+                runs = int(np.searchsorted(starts, last) - a)
+                crossed = sum(1 for cs in passes if cs[last] - cs[first] > 0)
+                worst = max(worst, runs - crossed)
+    return worst
 
 
-def _matching_ink_outside(geo: dict, pairs: list[list[int]]) -> tuple[int, int]:
-    """(traces même pâles, encre NON expliquée par `pairs`) entre les deux
-    colonnes de pastilles — étiquettes et pastilles exclues."""
-    gray, L, R = geo["gray"], geo["L"], geo["R"]
-    if gray is None:
-        return 0, 0
-    xl = int(max(p[0] for p in L) + 12 - geo["x0"])
-    xr = int(min(p[0] for p in R) - 12 - geo["x0"])
-    if xr <= xl:
-        return 0, 0
-    inner = gray[:, max(0, xl):max(0, xr)]
-    mask = np.zeros(gray.shape, np.uint8)
-    for i, j in pairs:
-        cv2.line(mask, (int(L[i][0] - geo["x0"]), int(L[i][1] - geo["y0"])),
-                 (int(R[j][0] - geo["x0"]), int(R[j][1] - geo["y0"])), 255,
-                 2 * MATCH_TOL_PX + 1)
-    inner_mask = mask[:, max(0, xl):max(0, xr)]
-    faint = int((inner < 225).sum())
-    unexplained = int(((inner < MATCH_INK_GRAY) & (inner_mask == 0)).sum())
-    return faint, unexplained
+def _unexplained(ink: np.ndarray, lane: np.ndarray, L: list, R: list,
+                 links: dict, reading: list[tuple[int, int]]) -> dict:
+    """Encre que `reading` n'explique pas : on retire le couloir de chaque
+    liaison et de ses seconds passages (traits doublés). Mesure ensuite le plus
+    fort trait résiduel le long d'une AUTRE paire, la plus grande tache
+    résiduelle — morceaux recollés par-dessus les couloirs retirés — en étendue
+    et en encre (un mini-trait isolé, reste de blanco à un croisement, passe
+    sous les deux seuils), et l'encre accumulée sur une liaison (rature)."""
+    owned = [(p, links[p].path) for p in reading]
+    base = mask = _corridor(ink.shape, [path for _p, path in owned])
+    for p in reading:
+        for _ in range(2):
+            again = _doubled(ink, base, mask, links[p].path, L[p[0]], R[p[1]])
+            if again is None:
+                break
+            owned.append((p, again))
+            mask = mask | _corridor(ink.shape, [again], MATCH_DUP_CORRIDOR_PX)
+    residual = ink.copy()
+    residual[mask] = 0.0
+    residual[~lane] = 0.0
+    hatches = 0
+    for p in reading:
+        own = np.zeros(ink.shape, bool)
+        crossers = []
+        for q, path in owned:
+            half = MATCH_CORRIDOR_PX if path is links[q].path else MATCH_DUP_CORRIDOR_PX
+            corr = _corridor(ink.shape, [path], half)
+            if q == p:
+                own |= corr
+            else:
+                crossers.append(corr)
+        rest = ink.copy()
+        rest[own | ~lane] = 0.0
+        hatches = max(hatches, _hatches(rest, links[p].path, crossers))
+    # trait le long d'une AUTRE paire : on juge sa courbe sur ses seules
+    # portions libres (hors couloirs) — un trait croisé trois fois n'y perd rien
+    loose = cv2.dilate(residual, np.ones((3, 3), np.uint8)) >= 0.5
+    hgt, wid = ink.shape
+    line_cover = 0.0
+    for k, lk in links.items():
+        if k in reading:
+            continue
+        pts = np.rint(lk.path).astype(int)
+        pts = pts[(pts[:, 0] >= 0) & (pts[:, 1] >= 0) & (pts[:, 0] < wid) & (pts[:, 1] < hgt)]
+        free = ~mask[pts[:, 1], pts[:, 0]]
+        if len(pts) and free.mean() >= MATCH_RES_SHARE:
+            line_cover = max(line_cover, float(loose[pts[free, 1], pts[free, 0]].mean()))
+    inked = (residual >= 0.5).astype(np.uint8)
+    marks = cv2.dilate(inked, np.ones((2 * MATCH_CORRIDOR_PX + 3,) * 2, np.uint8))
+    n_cc, labels, stats, _cent = cv2.connectedComponentsWithStats(marks, connectivity=8)
+    mass = np.bincount(labels[inked > 0], minlength=n_cc)
+    pad = 2 * (MATCH_CORRIDOR_PX + 1)   # la dilatation élargit chaque tache
+    blob = max((float(np.hypot(stats[k, cv2.CC_STAT_WIDTH] - pad,
+                               stats[k, cv2.CC_STAT_HEIGHT] - pad))
+                for k in range(1, n_cc)), default=0.0)
+    heavy = int(mass[1:].max()) if n_cc > 1 else 0
+    profiles = []
+    for p in reading:
+        alone = ink.copy()       # sans les autres liaisons (leurs croisements)
+        alone[_corridor(ink.shape, [path for q, path in owned if q != p])] = 0.0
+        profiles.append(_across(alone, links[p].path))
+    overdraw = _overdraw(profiles)
+    # encre en excès sur l'attendu : chaque liaison (et ses doublons) redessinée
+    # à la largeur de trait mesurée. Un gribouillis posé sur un croisement est
+    # noyé dans les couloirs (les courbes errent dans la tache), pas ici.
+    width = max(2, int(round(float(np.median(np.concatenate(profiles))))) if profiles else 2)
+    expected = np.zeros(ink.shape, np.uint8)
+    for _q, path in owned:
+        cv2.polylines(expected, [np.round(path).astype(np.int32)], False, 255, width + 2)
+    excess = ((ink >= 0.5) & (expected == 0) & lane).astype(np.float32)
+    dense = float(cv2.boxFilter(excess, -1, (MATCH_DENSE_WIN,) * 2, normalize=False,
+                                borderType=cv2.BORDER_CONSTANT).max()) if excess.any() else 0.0
+    return {"line_cover": line_cover, "blob": blob, "mass": heavy,
+            "overdraw": overdraw, "hatches": hatches, "dense": dense,
+            "traces": int((residual > 0).sum()),
+            "clear": (line_cover < MATCH_RES_COVER and blob < MATCH_RES_BLOB_PX and heavy < MATCH_RES_MASS_PX
+                      and overdraw < MATCH_OVERDRAW and hatches < MATCH_HATCH_RUNS
+                      and dense < MATCH_DENSE_PX)}
 
 
-def detect_matching(warped: np.ndarray, left_points: list[dict], right_points: list[dict]
-                    ) -> tuple[list[list[int]] | None, float]:
+def detect_matching(warped: np.ndarray, left_points: list[dict], right_points: list[dict],
+                    diag: dict | None = None) -> tuple[list[list[int]] | None, float]:
     """Lecture d'un exercice « points à relier » (§ points à relier).
 
-    Liaisons retenues par score décroissant (cf. `matching_scores`), chaque
-    pastille au plus une fois. Confiance HAUTE (0,97) seulement si la lecture est
-    nette : aucune paire écartée dans la zone grise (pastille à deux partenaires,
-    trait ambigu), aucune encre notable hors des liaisons retenues (trait
-    ondulé manqué, rature). Sinon 0,5 -> OCRiser, avec la meilleure lecture
-    pré-remplie pour le professeur. Une zone sans aucune trace est une copie
-    blanche lue avec certitude ([] , 0,97) — jamais une liaison devinée (RM-005)."""
+    Confiance HAUTE (0,97) seulement si la lecture est nette : chaque liaison
+    retenue est une courbe encrée de bout en bout, toute l'encre est expliquée
+    et aucune autre lecture ne l'explique aussi bien. Sinon 0,5 -> OCRiser,
+    avec la meilleure lecture pré-remplie pour le professeur. Une zone sans
+    aucune trace est une copie blanche lue avec certitude ([], 0,97) — jamais
+    une liaison devinée (RM-005). `diag` reçoit, si fourni, le motif de la
+    décision (journalisé avec la tentative, pour les recalibrages)."""
+    diag = diag if diag is not None else {}
     if not left_points or not right_points:
         return None, 0.0
-    scores, geo = matching_scores(warped, left_points, right_points)
-    pairs: list[list[int]] = []
-    used_l: set[int] = set()
-    used_r: set[int] = set()
-    for i, j in sorted(np.ndindex(scores.shape), key=lambda ij: -scores[ij]):
-        if scores[i, j] < MATCH_ACCEPT:
-            break
-        if i in used_l or j in used_r:
-            continue
-        pairs.append([int(i), int(j)])
-        used_l.add(i)
-        used_r.add(j)
-    faint, unexplained = _matching_ink_outside(geo, pairs)
-    if not pairs:
-        return ([], 0.97) if faint < MATCH_BLANK_PX else (None, 0.0)
-    accepted = {(a, b) for a, b in pairs}
-    ambiguous = any(scores[ij] >= MATCH_AMBIGUOUS
-                    for ij in np.ndindex(scores.shape) if ij not in accepted)
-    if ambiguous or unexplained > MATCH_UNEXPLAINED_PX:
+
+    def center(p: dict) -> np.ndarray:
+        return np.array(pt_to_px(p["x_pt"] + p["w_pt"] / 2, p["y_pt"] + p["h_pt"] / 2))
+
+    nominal = [center(p) for p in left_points + right_points]
+    xs = [c[0] for c in nominal]
+    ys = [c[1] for c in nominal]
+    pad = max(MATCH_BAND_PX, MATCH_LANE_V_PX) + MATCH_DOT_SEARCH_PX + 8
+    x0, y0 = max(0, int(min(xs) - pad)), max(0, int(min(ys) - pad))
+    x1, y1 = int(max(xs) + pad), int(max(ys) + pad)
+    band = warped[y0:y1, x0:x1]
+    if band.size == 0:
+        return None, 0.0
+    gray = cv2.cvtColor(dropout_filter(band), cv2.COLOR_BGR2GRAY) if band.ndim == 3 else band
+    origin = np.array([x0, y0], dtype=float)
+    dots, n_found = _locate_dots(gray, [c - origin for c in nominal])
+    L, R = dots[:len(left_points)], dots[len(left_points):]
+    ink = _ink_strength(gray)
+    dot_mask = np.zeros(gray.shape, np.uint8)
+    halo = np.zeros(gray.shape, np.uint8)
+    for c in dots:
+        cv2.circle(dot_mask, (int(round(c[0])), int(round(c[1]))), MATCH_END_PX, 255, -1)
+        cv2.circle(halo, (int(round(c[0])), int(round(c[1]))), MATCH_HALO_PX, 255, -1)
+    ink[dot_mask > 0] = 0.0
+    traced = (ink > 0).astype(np.uint8)
+    _n, labels = cv2.connectedComponents(traced, connectivity=8)
+    escaping = np.unique(labels[(traced > 0) & (halo == 0)])
+    trapped = (traced > 0) & ~np.isin(labels, escaping)
+    ink[trapped] = 0.0
+    # couloir de tracé : entre les deux rangées de points (colonnes gauche/droite
+    # ou rangées haut/bas), hors étiquettes, posées au-delà de chaque rangée
+    axis = np.mean(R, axis=0) - np.mean(L, axis=0)
+    axis = axis / max(float(np.linalg.norm(axis)), 1e-6)
+    across = np.array([-axis[1], axis[0]])
+    a0 = min(float(c @ axis) for c in L) - MATCH_LANE_PX
+    a1 = max(float(c @ axis) for c in R) + MATCH_LANE_PX
+    s0 = min(float(c @ across) for c in dots) - MATCH_LANE_V_PX
+    s1 = max(float(c @ across) for c in dots) + MATCH_LANE_V_PX
+    corners = [axis * a + across * b for a, b in ((a0, s0), (a1, s0), (a1, s1), (a0, s1))]
+    lane_u8 = np.zeros(gray.shape, np.uint8)
+    if a1 > a0:
+        cv2.fillConvexPoly(lane_u8, np.round(np.array(corners)).astype(np.int32), 1)
+    lane = lane_u8 > 0
+    diag["dots_found"] = n_found
+
+    keys = [(i, j) for i in range(len(L)) for j in range(len(R))]
+    links = {k: lk for k, lk in zip(keys, _fit_links(ink, [(L[i], R[j]) for i, j in keys]))
+             if lk is not None}
+    # une courbe qui change de trait à un croisement est pénalisée, jamais
+    # exclue d'office : là où deux traits se confondent, le test se trompe
+    weights = {k: lk.score - (MATCH_TURN_COST if _turns_off_a_stroke(lk.path, ink) else 0.0)
+               for k, lk in links.items() if lk.present and lk.score > 0}
+    readings = _matchings(weights)
+    if readings is None:
+        diag["reason"] = "too_many_readings"
+        return None, 0.0
+    chosen = readings[0][1]
+    pairs = [[int(i), int(j)] for i, j in sorted(chosen)]
+    check = _unexplained(ink, lane, L, R, links, chosen)
+    diag.update(residual_cover=round(check["line_cover"], 3),
+                residual_blob=round(check["blob"], 1), residual_mass=check["mass"],
+                overdraw=round(check["overdraw"], 2), hatches=check["hatches"],
+                dense=round(check["dense"]))
+
+    if not chosen:
+        blank = check["traces"] < MATCH_BLANK_PX
+        diag["reason"] = "blank" if blank else "unread_ink"
+        return ([], 0.97) if blank else (None, 0.0)
+    if not check["clear"]:
+        diag["reason"] = ("unexplained_line" if check["line_cover"] >= MATCH_RES_COVER
+                          else "unexplained_mark")
         return pairs, 0.5
+    # liaison « fantôme » : toute son encre appartient déjà aux autres traits
+    # (traits qui frôlent deux points libres) — l'élève ne l'a pas tracée
+    for p in chosen:
+        others = [links[q].path for q in chosen if q != p]
+        own = ink.copy()
+        own[_corridor(ink.shape, others)] = 0.0
+        lk = _fit_links(own, [(L[p[0]], R[p[1]])])[0]
+        if lk is None or (lk.cover < MATCH_OWN_COVER and lk.run < MATCH_OWN_RUN):
+            diag["reason"] = "borrowed_ink"
+            return pairs, 0.5
+    # une autre lecture complète, presque aussi bonne, qui explique aussi toute
+    # l'encre ? (traits bancals qui se frôlent ou se confondent : chacun peut se
+    # lire comme la suite de l'autre). Au croisement franc de deux traits, la
+    # lecture qui « tourne » cumule écart à la corde et changement de trait.
+    best = readings[0][0]
+    checked = 0
+    for total, alt in readings[1:]:
+        if best - total >= MATCH_MARGIN:
+            break                             # lectures triées : toutes les suivantes aussi
+        if len(alt) < len(chosen) or set(alt) == set(chosen):
+            continue
+        checked += 1
+        if checked > MATCH_MAX_ALTERNATIVES:
+            diag["reason"] = "too_many_readings"
+            return pairs, 0.5
+        if _unexplained(ink, lane, L, R, links, alt)["clear"]:
+            diag.update(reason="ambiguous_reading",
+                        alternative=[[int(i), int(j)] for i, j in sorted(alt)])
+            return pairs, 0.5
+    diag["reason"] = "clear"
     return pairs, 0.97
 
 

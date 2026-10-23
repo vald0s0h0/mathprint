@@ -28,7 +28,7 @@ repo** ; d'autres agents du même type viendront s'ajouter ici.
 - **Prompts = fichiers texte** dans chaque pipeline (`prompts/*.txt`), **uniques**
   à chaque pipeline et **éditables** directement (pas d'UI). On peut donc régler
   les prompts d'une pipeline sans toucher à ceux d'une autre ni à ceux d'Indigo.
-- **Réutilise l'app.** Les orchestrateurs importent le backend MathPrint
+- **Réutilise l'app.** Les orchestrateurs importent le backend Kiro & Nina
   (`backend/app`) pour l'OCR, le découpage géométrique, les crops, la
   persistance et la publication — rien n'est ré-implémenté là où l'app fait déjà
   bien.

@@ -215,4 +215,4 @@ def start_worker() -> None:
     if _started:
         return
     _started = True
-    threading.Thread(target=_loop, daemon=True, name="mathprint-mail-intake").start()
+    threading.Thread(target=_loop, daemon=True, name="kironina-mail-intake").start()

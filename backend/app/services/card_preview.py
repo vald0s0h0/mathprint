@@ -10,7 +10,7 @@ import fitz
 from reportlab.pdfgen import canvas
 from reportlab.lib.colors import HexColor
 
-from . import blocks, pdfgen
+from . import blocks, generation, pdfgen
 
 _LOCK = RLock()
 
@@ -20,7 +20,11 @@ def shape(ex: dict, guides: bool = True) -> dict:
     grading = {**{k: v for k, v in expected.items() if k in
                  ('left', 'right', 'pairs', 'cols', 'rows', 'cells')}, **(ex.get('grading') or {})}
     if ex.get('response_type') == 'composite':
-        grading['parts'] = expected.get('parts') or grading.get('parts') or []
+        grading['parts'] = [_legible_part(p) for p in
+                            expected.get('parts') or grading.get('parts') or []]
+    elif ex.get('response_type') == 'matching':
+        # même ordre que la copie imprimée (generation.render_shape)
+        grading, expected = generation.legible_matching(grading, expected)
     statement = ex.get('statement') or ''
     problem = ex.get('badge_type') in ('probleme', 'enigme') or ex.get('kind') == 'probleme' or ex.get('is_problem', False)
     if problem and ex.get('title'):
@@ -33,6 +37,14 @@ def shape(ex: dict, guides: bool = True) -> dict:
             'level3': ex.get('difficulty') or ex.get('level') or 2,
             'guides': pdfgen.GUIDES_INCLUDE if guides else pdfgen.GUIDES_NONE,
             'inline': bool(expected.get('inline'))}
+
+
+def _legible_part(part: dict) -> dict:
+    if part.get('response_type') != 'matching':
+        return part
+    grading, expected = generation.legible_matching(part.get('grading') or {},
+                                                    part.get('expected') or {})
+    return {**part, 'grading': grading, 'expected': expected}
 
 
 def _answers(c, meta: dict, expected: dict, rtype: str):
@@ -56,7 +68,13 @@ def _answers(c, meta: dict, expected: dict, rtype: str):
                     continue
                 p = points[index]
                 c.setFont('Helvetica', 5)
-                c.drawCentredString(p['x_pt'] + p['w_pt'] / 2, p['y_pt'] + 1, str(i + 1))
+                # à côté du point noir (illisible dessus) : au-dessus en colonnes,
+                # à droite en disposition horizontale (les étiquettes y sont dessus)
+                if meta.get('orientation') == 'horizontal':
+                    c.drawString(p['x_pt'] + p['w_pt'] + 0.6, p['y_pt'] + 0.4, str(i + 1))
+                else:
+                    c.drawCentredString(p['x_pt'] + p['w_pt'] / 2, p['y_pt'] + p['h_pt'] + 0.6,
+                                        str(i + 1))
 
 
 def render(ex: dict, guides: bool = True, show_answers: bool = False) -> bytes:

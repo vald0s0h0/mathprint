@@ -202,4 +202,4 @@ UNE famille par graphique :
   {"label": "B", "prob": "$\\frac{3}{5}$", "children": [...]}]}}}
 ```
 
-Toutes les étiquettes : texte + formules `$...$` (liste blanche MathPrint).
+Toutes les étiquettes : texte + formules `$...$` (liste blanche Kiro & Nina).

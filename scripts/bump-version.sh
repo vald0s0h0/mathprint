@@ -5,7 +5,7 @@
 # lit, l'incrémente (patch par défaut ; « minor » / « major » possibles) et
 # réécrit les 3 emplacements qui doivent rester synchronisés :
 #   - backend/app/version.py      (API : /system, dashboard)
-#   - frontend/src/version.ts     (affichage « MathPrint vX.Y.Z » en bas à gauche)
+#   - frontend/src/version.ts     (affichage « Kiro & Nina vX.Y.Z » en bas à gauche)
 #   - frontend/package.json       (métadonnée build web)
 # puis stage ces fichiers et crée le tag « vX.Y.Z ».
 #
@@ -57,4 +57,4 @@ echo "Fichiers stagés. Après ton commit, pose le tag :"
 # pousse que les tags ANNOTÉS. C'est ce qui a fait que v1.0.8 à v1.0.12 sont
 # restés locaux et que release.yml (déclenché par le push d'un tag v*.*.*) n'a
 # jamais construit leur image épinglable. D'où « git tag -a ».
-echo "  git tag -a v${new} -m \"MathPrint ${new}\" && git push --follow-tags"
+echo "  git tag -a v${new} -m \"Kiro & Nina ${new}\" && git push --follow-tags"

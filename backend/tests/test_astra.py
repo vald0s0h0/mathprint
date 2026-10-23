@@ -1,5 +1,5 @@
 """Pipeline Astra (agents/astra) : ce qui transforme la sortie de l'agent Codex en
-brouillons MathPrint.
+brouillons Kiro & Nina.
 
   • les EXEMPLES du prompt (ASTRA.md) passent la validation — un prompt qui
     enseignerait un format refusé ferait échouer chaque run ;

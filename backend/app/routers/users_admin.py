@@ -1,4 +1,4 @@
-"""Administration des comptes MathPrint — API réservée aux admins."""
+"""Administration des comptes Kiro & Nina — API réservée aux admins."""
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import func

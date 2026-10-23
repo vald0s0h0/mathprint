@@ -72,6 +72,89 @@ def test_matching_lane_narrows_before_a_label_wraps():
     assert all(len(lay['lines'])==1 for side in geo['layouts'] for lay in side)
 
 
+def test_matching_points_are_printed_as_black_dots():
+    left=['a','b']; right=['c','d']
+    geo=pdfgen._matching_geometry(left,right,9,pdfgen.COL_W)
+    buf=io.BytesIO();c=canvas.Canvas(buf)
+    meta=pdfgen._draw_matching_zone(c,20,100,pdfgen.COL_W,geo['height'],left,right,9)
+    c.save()
+    with fitz.open(stream=buf.getvalue(),filetype='pdf') as doc:
+        pix=doc[0].get_pixmap(dpi=200)
+    zoom=200/72
+    for p in meta['left_points']+meta['right_points']:
+        x=(p['x_pt']+p['w_pt']/2)*zoom; y=(pdfgen.PAGE_H-p['y_pt']-p['h_pt']/2)*zoom
+        assert max(pix.pixel(int(x),int(y))) < 80     # plein et noir, pas un anneau saumon
+
+
+def test_matching_goes_horizontal_only_when_short_labels_make_it_more_compact():
+    short_l=['$2^3$','$3^2$','$10^2$','$5^0$','$2^{-1}$','$4^1$']
+    short_r=['$9$','$1$','$8$','$0{,}5$','$100$','$4$']
+    geo=pdfgen._matching_layout(short_l,short_r,9,pdfgen.COL_W)
+    assert geo['orientation'] == 'horizontal'
+    assert geo['height'] <= 0.85*pdfgen._matching_geometry(short_l,short_r,9,pdfgen.COL_W)['height']
+    # peu d'éléments : les colonnes restent plus compactes
+    assert pdfgen._matching_layout(['2','3','4','5'],['4','9','16','25'],9,
+                                   pdfgen.COL_W)['orientation'] == 'vertical'
+    # étiquettes longues : jamais repliées pour tenir en rangée
+    long_l=['Triangle rectangle','Triangle isocèle','Losange','Carré','Trapèze','Cerf-volant']
+    assert pdfgen._matching_layout(long_l,short_r,9,pdfgen.COL_W)['orientation'] == 'vertical'
+
+
+def test_horizontal_matching_draws_two_rows_of_black_dots():
+    l=['$2^3$','$3^2$','$10^2$','$5^0$','$2^{-1}$','$4^1$']; r=['$9$','$1$','$8$','$0{,}5$','$100$']
+    geo=pdfgen._matching_layout(l,r,9,pdfgen.COL_W)
+    buf=io.BytesIO();c=canvas.Canvas(buf)
+    meta=pdfgen._draw_matching_zone(c,20,100,pdfgen.COL_W,geo['height'],l,r,9)
+    assert meta['orientation'] == 'horizontal'
+    top,bottom=meta['left_points'],meta['right_points']
+    assert len({p['y_pt'] for p in top}) == len({p['y_pt'] for p in bottom}) == 1
+    assert top[0]['y_pt'] > bottom[0]['y_pt']
+    assert [p['index'] for p in top] == list(range(6)) and len(bottom) == 5
+    assert min(b['x_pt']-a['x_pt'] for a,b in zip(top,top[1:])) >= pdfgen._MATCHING_H_PITCH_MIN-0.001
+
+
+def test_legible_matching_breaks_concurrent_lines_and_keeps_the_answer():
+    # Banque Indigo : 0→2, 1→1, 2→0 se croisent au même point (rangées égales)
+    # et 3→3 est horizontal (l'élément est en face de sa réponse).
+    left=['a','b','c','d']; right=['$-3$','$196$','$120$','$20$']
+    pairs=[[0,2],[1,1],[2,0],[3,3]]
+    new_right,new_pairs=pdfgen.legible_matching(left,right,pairs)
+    assert {(left[i],new_right[j]) for i,j in new_pairs} == {(left[i],right[j]) for i,j in pairs}
+    assert all(i != j for i,j in new_pairs)
+    geo=pdfgen._matching_layout(left,new_right,9,pdfgen.COL_W)
+    lpos,rpos,lane=pdfgen._matching_positions(geo,None,len(left),len(new_right))
+    assert pdfgen._matching_flaws(lpos,rpos,lane,[(i,j) for i,j in new_pairs]) == 0
+
+
+def test_legible_matching_also_applies_to_the_horizontal_layout():
+    # 0→0, 1→1, 2→2 : trois traits droits verticaux donneraient la réponse
+    left=['$2^3$','$3^2$','$10^2$','$5^0$','$2^{-1}$','$4^1$']
+    right=['$8$','$9$','$100$','$1$','$0{,}5$','$4$']
+    pairs=[[i,i] for i in range(6)]
+    new_right,new_pairs=pdfgen.legible_matching(left,right,pairs)
+    assert pdfgen._matching_layout(left,new_right,9,pdfgen.COL_W)['orientation'] == 'horizontal'
+    assert {(left[i],new_right[j]) for i,j in new_pairs} == {(left[i],right[j]) for i,j in pairs}
+    assert sum(1 for i,j in new_pairs if i == j) <= 1
+
+
+def test_legible_matching_keeps_an_already_legible_order():
+    left=['a','b','c']; right=['x','y','z']; pairs=[[0,1],[1,2],[2,0]]
+    assert pdfgen.legible_matching(left,right,pairs) == (right,pairs)
+
+
+def test_legible_matching_reorders_the_snapshot_and_the_answer_together():
+    from app.services import generation
+    grading={'comparator':'matching','left':['a','b','c'],'right':['1','2','3'],
+             'pairs':[[0,2],[1,1],[2,0]],'max_score':3}
+    expected={'type':'matching','left':['a','b','c'],'right':['1','2','3'],
+              'pairs':[[0,2],[1,1],[2,0]]}
+    g,e=generation.legible_matching(grading,expected)
+    assert g['right'] == e['right'] != grading['right']
+    assert g['pairs'] == e['pairs']
+    assert {('abc'[i],g['right'][j]) for i,j in g['pairs']} == {('a','3'),('b','2'),('c','1')}
+    assert grading['right'] == ['1','2','3']            # la banque n'est pas modifiée
+
+
 def test_qcm_number_list_stays_inline_next_to_its_box():
     # « 2, 4, 3, 1 » ressemble à une série de valeurs : un choix de QCM reste
     # pourtant un libellé en ligne, collé à sa case, pas une grille étalée.

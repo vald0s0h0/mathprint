@@ -42,7 +42,7 @@ export default function Setup({ onDone }: { onDone: () => void }) {
         email: email.trim(), display_name: displayName.trim(), password, providers,
       })
       setToken(r.token)
-      notifications.show({ color: 'green', message: `Bienvenue ${displayName.trim()}, MathPrint est prêt` })
+      notifications.show({ color: 'green', message: `Bienvenue ${displayName.trim()}, Kiro & Nina est prêt` })
       onDone()
       navigate('/')
     } catch (e) {
@@ -56,7 +56,7 @@ export default function Setup({ onDone }: { onDone: () => void }) {
     <Center h="100vh" p="md">
       <Card w={460} shadow="md" padding="xl" withBorder>
         <Stack>
-          <Title order={2}>Bienvenue sur MathPrint</Title>
+          <Title order={2}>Bienvenue sur Kiro & Nina</Title>
           <Text c="dimmed" size="sm">
             Premier démarrage : créez votre compte administrateur pour commencer.
             C'est le seul écran de ce type — il disparaît une fois le compte créé.

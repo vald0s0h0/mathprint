@@ -14,7 +14,7 @@ from .seed import seed
 from .services import errorlog, indigo, job_worker, mail_intake, scan_originals
 from .services.bootstrap import ensure_strong_secrets
 
-app = FastAPI(title="MathPrint", version="0.9.0",
+app = FastAPI(title="Kiro & Nina", version="0.9.0",
               description="Plateforme NAS de génération, correction automatisée "
                           "et suivi adaptatif en mathématiques")
 

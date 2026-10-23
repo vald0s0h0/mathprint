@@ -44,7 +44,7 @@ def setup_status(db: Session = Depends(get_db)):
 @router.post("")
 def create_first_admin(body: SetupIn, db: Session = Depends(get_db)):
     if _already_configured(db):
-        raise HTTPException(409, "MathPrint est déjà configuré")
+        raise HTTPException(409, "Kiro & Nina est déjà configuré")
     email = body.email.strip().lower()
     if not email or "@" not in email:
         raise HTTPException(422, "E-mail invalide")

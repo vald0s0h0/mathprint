@@ -36,7 +36,7 @@ export default function Login() {
               <GraduationCap size={26} />
             </ThemeIcon>
             <div>
-              <Title order={2}>MathPrint</Title>
+              <Title order={2}>Kiro & Nina</Title>
               <Text c="dimmed" size="xs">
                 Génération, correction automatisée et suivi adaptatif
               </Text>

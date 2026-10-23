@@ -31,7 +31,8 @@ from . import llm_grader, providers, scoring
 from .runtime_settings import ocr_confidence_threshold
 from .appreciation import build_appreciation
 from .forgetting import apply_evidence, update_level_after_assessment
-from .pdfgen import CARD_PAD, qcm_answer_rects, render_copy_review, render_overlay
+from .pdfgen import (CARD_PAD, EDGE_MARK_SIZE, qcm_answer_rects, render_copy_review,
+                     render_overlay)
 
 PHASES = ["uploaded", "split", "identified", "registered", "cropped",
           "ocr_complete", "ocr_review_pending", "ocr_confirmed", "graded",
@@ -490,7 +491,7 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
             "Aucune page reconnue sur ce scan : le QR ou les repères de coin sont "
             "illisibles. Rescannez les copies bien à plat, nettes et bien "
             "éclairées (ou vérifiez qu'il s'agit de copies imprimées depuis "
-            "MathPrint), puis re-déposez.")
+            "Kiro & Nina), puis re-déposez.")
         db.commit()
         return 0
 
@@ -631,9 +632,12 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
             elif item.response_type == "matching":
                 left_pts = (zone.meta_json or {}).get("left_points", [])
                 right_pts = (zone.meta_json or {}).get("right_points", [])
-                pairs, conf_m = worker_cv.detect_matching(res.warped, left_pts, right_pts)
+                # `cv` : motif de la décision (revue ou non) — sert aux recalibrages
+                cv_diag: dict = {}
+                pairs, conf_m = worker_cv.detect_matching(res.warped, left_pts, right_pts,
+                                                          diag=cv_diag)
                 db.add(OcrAttempt(zone_id=zone.id, provider="cv_local",
-                                  raw_json={"pairs": pairs}, confidence=conf_m))
+                                  raw_json={"pairs": pairs, "cv": cv_diag}, confidence=conf_m))
                 n_review += _decide_and_store(
                     db, item=item, zone=zone, student=student,
                     ocr_text="", conf=conf_m, selected=None, corr_id=corr_id,
@@ -1258,12 +1262,20 @@ def _zone_marks(db: Session, item: CopyItem, zone: ResponseZone,
         exp_pairs = [tuple(p) for p in expected.get("pairs", [])]
         got = set(exp_pairs) if full else _student_pairs(db, zone, decision)
         by_right = {rj: (li, rj) for li, rj in exp_pairs}
+        horizontal = meta.get("orientation") == "horizontal"
         for rj in sorted(right, key=lambda j: -_center_y(right[j])):
             if rj not in by_right:
                 continue
             pair = by_right[rj]
             ok = pair in got
-            marks["edge"].append({"y": _center_y(right[rj]), "ok": ok})
+            rp = right[rj]
+            if horizontal:
+                # rangée du bas : marque à droite de chaque point (une seule
+                # ordonnée pour toutes les réponses, le bord de carte ne suffit pas)
+                marks["edge"].append({"x": rp["x_pt"] + rp["w_pt"] + EDGE_MARK_SIZE / 2 + 0.6 * mm,
+                                      "y": _center_y(rp), "ok": ok})
+            else:
+                marks["edge"].append({"y": _center_y(rp), "ok": ok})
             lp = left.get(pair[0])
             if not ok and lp:
                 rp = right[rj]

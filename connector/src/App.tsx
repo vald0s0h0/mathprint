@@ -190,7 +190,7 @@ export default function App() {
     <main>
       <header>
         <div className="mark">M</div>
-        <div><h1>MathPrint Connector</h1><p>Actif en arrière-plan</p></div>
+        <div><h1>Kiro et Nina Connector</h1><p>Actif en arrière-plan</p></div>
       </header>
 
       {updating && <div className="update">
@@ -242,7 +242,7 @@ export default function App() {
           </span>
         </div>
         <ol>
-          <li>Dans MathPrint, copiez la colonne depuis l’onglet Notes.</li>
+          <li>Dans Kiro & Nina, copiez la colonne depuis l’onglet Notes.</li>
           <li>Dans ProNote, sélectionnez la première cellule de la colonne.</li>
           <li>Lancez le raccourci et ne touchez plus au clavier pendant la saisie.</li>
         </ol>

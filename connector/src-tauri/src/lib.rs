@@ -30,7 +30,9 @@ use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
 use wait_timeout::ChildExt;
 
-const KEYRING_SERVICE: &str = "MathPrint Connector";
+const KEYRING_SERVICE: &str = "Kiro et Nina Connector";
+// Nom du service avant le renommage (1.0.x) : relu une fois puis migré.
+const LEGACY_KEYRING_SERVICE: &str = "MathPrint Connector";
 const MAX_PDF_BYTES: usize = 200 * 1024 * 1024;
 const SERVER_URL: &str = "https://mathprint.fabrelexos.synology.me";
 const DEFAULT_PRONOTE_SHORTCUT: &str = "CmdOrCtrl+Alt+Shift+N";
@@ -257,6 +259,10 @@ fn token_entry(installation_id: &str) -> Result<keyring::Entry, String> {
     keyring::Entry::new(KEYRING_SERVICE, installation_id).map_err(|e| e.to_string())
 }
 
+fn legacy_token_entry(installation_id: &str) -> Option<keyring::Entry> {
+    keyring::Entry::new(LEGACY_KEYRING_SERVICE, installation_id).ok()
+}
+
 fn save_token(installation_id: &str, token: &str) -> Result<(), String> {
     token_entry(installation_id)?
         .set_password(token)
@@ -267,11 +273,24 @@ fn read_token(installation_id: &str) -> Option<String> {
     if installation_id.is_empty() {
         return None;
     }
-    token_entry(installation_id).ok()?.get_password().ok()
+    if let Some(token) = token_entry(installation_id).ok().and_then(|e| e.get_password().ok()) {
+        return Some(token);
+    }
+    // Jeton enregistré par une version antérieure au renommage : on le recopie
+    // sous le nouveau nom pour éviter une reconnexion, puis on efface l'ancien.
+    let legacy = legacy_token_entry(installation_id)?;
+    let token = legacy.get_password().ok()?;
+    if save_token(installation_id, &token).is_ok() {
+        let _ = legacy.delete_credential();
+    }
+    Some(token)
 }
 
 fn delete_token(installation_id: &str) {
     if let Ok(entry) = token_entry(installation_id) {
+        let _ = entry.delete_credential();
+    }
+    if let Some(entry) = legacy_token_entry(installation_id) {
         let _ = entry.delete_credential();
     }
 }
@@ -280,7 +299,7 @@ async fn response_error(response: reqwest::Response) -> String {
     let status = response.status();
     let text = response.text().await.unwrap_or_default();
     if status == reqwest::StatusCode::NOT_FOUND {
-        return "404 : le service Connecteur n'est pas encore disponible sur le serveur MathPrint. L'administrateur doit mettre à jour l'image API du NAS.".into();
+        return "404 : le service Connecteur n'est pas encore disponible sur le serveur Kiro & Nina. L'administrateur doit mettre à jour l'image API du NAS.".into();
     }
     if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
         if let Some(detail) = value.get("detail").and_then(|v| v.as_str()) {
@@ -474,7 +493,7 @@ fn enter_pronote_notes(app: &AppHandle) -> Result<usize, String> {
     let mut enigo = Enigo::new(&Settings::default()).map_err(|e| {
         if cfg!(target_os = "macos") {
             format!(
-                "Autorisez MathPrint Connector dans Réglages Système > Confidentialité et sécurité > Accessibilité, puis relancez le raccourci ({e})"
+                "Autorisez Kiro et Nina Connector dans Réglages Système > Confidentialité et sécurité > Accessibilité, puis relancez le raccourci ({e})"
             )
         } else {
             format!("Accès au clavier impossible : {e}")
@@ -1101,7 +1120,7 @@ pub fn run() {
             fs::create_dir_all(&config_dir)?;
             let config_path = config_dir.join("connector.json");
             let mut config = load_config(&config_path);
-            // Le connecteur MathPrint est dédié à cette instance. Écraser aussi
+            // Le connecteur Kiro & Nina est dédié à cette instance. Écraser aussi
             // l'ancienne valeur lors d'une mise à jour évite de conserver une
             // adresse saisie dans une version antérieure.
             config.server_url = SERVER_URL.into();
@@ -1153,7 +1172,7 @@ pub fn run() {
             let open = MenuItem::with_id(
                 app,
                 "open",
-                "Ouvrir MathPrint Connector",
+                "Ouvrir Kiro et Nina Connector",
                 true,
                 None::<&str>,
             )?;
@@ -1162,7 +1181,7 @@ pub fn run() {
             let mut tray = TrayIconBuilder::with_id("mathprint-connector")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
-                .tooltip("MathPrint Connector — actif en arrière-plan")
+                .tooltip("Kiro et Nina Connector — actif en arrière-plan")
                 .icon_as_template(cfg!(target_os = "macos"))
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "open" => show_main_window(app),
@@ -1204,7 +1223,7 @@ pub fn run() {
             set_pronote_shortcut
         ])
         .run(tauri::generate_context!())
-        .expect("échec du lancement de MathPrint Connector");
+        .expect("échec du lancement de Kiro et Nina Connector");
 }
 
 #[cfg(test)]

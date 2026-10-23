@@ -1,6 +1,6 @@
 import { createTheme, rem, type CSSVariablesResolver } from '@mantine/core'
 
-// Thème MathPrint : indigo sobre, coins doux, typographie système propre.
+// Thème Kiro & Nina : indigo sobre, coins doux, typographie système propre.
 export const theme = createTheme({
   primaryColor: 'indigo',
   defaultRadius: 'md',

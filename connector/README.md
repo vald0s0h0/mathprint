@@ -1,6 +1,6 @@
-# MathPrint Connector
+# Kiro et Nina Connector
 
-Application Tauri minimale qui relie un compte MathPrint aux imprimantes déjà
+Application Tauri minimale qui relie un compte Kiro & Nina aux imprimantes déjà
 configurées sur le Mac ou le PC. Elle démarre avec la session, reste dans la
 zone de notification et ne conserve jamais le mot de passe. Le jeton de poste
 est stocké dans le trousseau macOS ou le gestionnaire d’identifiants Windows.
@@ -47,6 +47,19 @@ du système.
 Sous Windows, SumatraPDF 3.6.1 portable est embarqué comme processus séparé.
 Son archive est vérifiée par SHA-256 pendant la CI et ses sources GPLv3 sont
 jointes à la release.
+
+## Migration depuis « MathPrint Connector » (1.0.x → 1.1.0)
+
+La 1.1.0 renomme l’application en « Kiro et Nina Connector ». L’identifiant
+`fr.mathprint.connector` est conservé : même dossier de données, même
+installation. Le jeton de poste enregistré sous l’ancien nom de trousseau est
+relu puis recopié sous le nouveau nom : pas de reconnexion.
+
+- macOS : la mise à jour automatique remplace l’application en place.
+- Windows : le nom de produit fixe le dossier d’installation, la mise à jour
+  installe donc « Kiro et Nina Connector » à côté de l’ancienne application.
+  Désinstaller ensuite « MathPrint Connector » (Paramètres → Applications),
+  sinon son lancement automatique continue de démarrer l’ancienne version.
 
 ## Développement
 

@@ -1,4 +1,4 @@
-# MathPrint sur Synology DS224+ (§11.1).
+# Kiro & Nina sur Synology DS224+ (§11.1).
 # Le reverse-proxy HTTPS est assuré par Synology (portail d'applications).
 # En V1, worker-cv / worker-doc / scheduler tournent dans le processus API
 # (BackgroundTasks + table jobs) ; ils seront extraits en services dédiés

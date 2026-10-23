@@ -50,3 +50,13 @@ backend/app/data/prompts/
 # Sorties locales (PDF générés, caches matplotlib) — jamais versionnées
 /output/
 /tmp/
+
+# Twenty (CRM local, entreprise/twenty) : code tiers compilé, fichiers joints,
+# journaux et sauvegardes de la base — jamais versionnés.
+/entreprise/twenty/app/
+/entreprise/twenty/storage/
+/entreprise/twenty/logs/
+/entreprise/twenty/backups/
+
+# Documents commerciaux, prospects et CRM : hors du dépôt (public).
+/entreprise/

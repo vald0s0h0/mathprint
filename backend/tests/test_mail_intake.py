@@ -1,6 +1,6 @@
 """Tests : relève automatique des scans par mail (IMAP). Réutilise le même
 chemin d'ingestion que le bac à sable (services.sandbox.ingest_files) — cf.
-test_scan_intake.py pour la génération d'une vraie page MathPrint signée
+test_scan_intake.py pour la génération d'une vraie page Kiro & Nina signée
 (PDF -> raster -> QR OpenCV -> HMAC), reprise ici telle quelle. Seule la
 « tuyauterie » IMAP (extraction des pièces jointes, liste blanche
 d'expéditeurs, watermark last_uid) est spécifique à ce module."""

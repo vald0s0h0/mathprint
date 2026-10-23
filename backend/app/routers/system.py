@@ -133,7 +133,7 @@ def calibration_page():
     _draw_markers(c, sign_page("calibration-page"))
     c.setFont("Helvetica", 10)
     c.drawString(MARGIN, A4[1] / 2,
-                 "Page de calibration MathPrint — imprimer à taille réelle (100 %), "
+                 "Page de calibration Kiro & Nina — imprimer à taille réelle (100 %), "
                  "puis scanner et déposer le fichier dans Paramètres > Calibration.")
     # règle de contrôle : trait de 100 mm
     y = A4[1] / 2 - 20 * mm

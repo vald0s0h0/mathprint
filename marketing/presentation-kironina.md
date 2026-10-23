@@ -1,6 +1,6 @@
-# MathPrint — la plateforme qui corrige, suit et différencie pour vous
+# Kiro & Nina — la plateforme qui corrige, suit et différencie pour vous
 
-MathPrint est une plateforme conçue pour les professeurs de mathématiques du
+Kiro & Nina est une plateforme conçue pour les professeurs de mathématiques du
 collège (cycles 3 et 4, de la 6e à la 3e). Elle prend en charge trois choses
 qui dévorent le temps d'un enseignant : la création de sujets différenciés,
 la correction des copies, et le suivi individuel de la progression de chaque
@@ -33,7 +33,7 @@ involontaire qui fausserait les repères de correction), avec journal des
 impressions.
 
 ### ✅ Correction automatisée des copies
-Le cœur de MathPrint : déposez le PDF scanné d'un paquet de copies, la
+Le cœur de Kiro & Nina : déposez le PDF scanné d'un paquet de copies, la
 plateforme fait le reste.
 - **Reconnaissance et recalage automatique** de chaque page, même scannée de
   travers ou au smartphone.
@@ -72,7 +72,7 @@ utilisent une banque déjà constituée et vérifiée.)*
   manuelle : le professeur valide et arbitre, il ne recopie plus.
 - **Une différenciation qui ne demande aucun travail supplémentaire.**
   Préparer 25 versions adaptées d'un contrôle serait irréaliste à la main ;
-  MathPrint le fait à chaque génération de sujet, sans coût de temps
+  Kiro & Nina le fait à chaque génération de sujet, sans coût de temps
   additionnel pour l'enseignant.
 - **Des décisions pédagogiques appuyées sur des données**, et non sur une
   impression générale : on sait précisément quelle compétence est fragile,
@@ -93,7 +93,7 @@ moyenne :
 - **Maîtrise par compétence, pas seulement par note.** Chaque objectif du
   programme est suivi individuellement, avec un taux de maîtrise qui évolue
   à chaque évaluation.
-- **Courbe de l'oubli.** MathPrint modélise la probabilité qu'un élève se
+- **Courbe de l'oubli.** Kiro & Nina modélise la probabilité qu'un élève se
   souvienne encore d'une notion selon le temps écoulé depuis sa dernière
   évaluation réussie — une compétence « acquise » il y a six mois n'est pas
   traitée comme fraîche. Les notions qui risquent d'être oubliées remontent
@@ -135,7 +135,7 @@ plateforme :
 
 ---
 
-*MathPrint est développé en priorisant la fiabilité de la correction et la
+*Kiro & Nina est développé en priorisant la fiabilité de la correction et la
 protection des données des élèves : hébergement maîtrisé, données
 pseudonymisées avant tout traitement par un modèle de langage, et
 suppression définitive possible à tout moment.*

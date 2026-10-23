@@ -12,5 +12,5 @@ moteur local d'impression PDF. SumatraPDF est distribué sous licence GPLv3.
 - SHA-256 archive source :
   `67bcd66f9d25fa5338ef7c4d882ce7597dc94083b5d7fe4d44da392640c8dec1`.
 
-MathPrint ne modifie pas SumatraPDF et le lance comme processus séparé avec
+Kiro & Nina ne modifie pas SumatraPDF et le lance comme processus séparé avec
 des arguments documentés (`noscale`, `paper=A4`, `simplex`/`duplexlong`).

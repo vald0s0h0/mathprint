@@ -1,5 +1,5 @@
 #!/bin/sh
-# Mise à jour MathPrint sur le NAS Synology — à lancer par une tâche planifiée
+# Mise à jour Kiro & Nina sur le NAS Synology — à lancer par une tâche planifiée
 # DSM (Panneau de configuration → Planificateur de tâches → script défini par
 # l'utilisateur, exécuté en root). Voir DEPLOIEMENT_NAS.md §7 pour le
 # clic-par-clic.

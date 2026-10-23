@@ -1,4 +1,4 @@
-# Publie les images Docker MathPrint sur GHCR à chaque tag "vX.Y.Z"
+# Publie les images Docker Kiro & Nina sur GHCR à chaque tag "vX.Y.Z"
 # (version jalonnée, épinglable via MATHPRINT_VERSION). Le déploiement
 # continu du quotidien passe par deploy.yml (push sur main → "latest") ;
 # le NAS se met à jour via la tâche planifiée DSM (scripts/nas-update.sh).
@@ -38,7 +38,7 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout MathPrint
+      - name: Checkout Kiro & Nina
         uses: actions/checkout@v4
 
       - name: Version (sans le "v" initial)

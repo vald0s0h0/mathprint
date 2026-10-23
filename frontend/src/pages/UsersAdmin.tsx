@@ -73,7 +73,7 @@ export default function UsersAdmin() {
       <div>
         <Title order={4}>Utilisateurs</Title>
         <Text size="sm" c="dimmed">
-          Comptes, rôles et niveaux d'abonnement de MathPrint.
+          Comptes, rôles et niveaux d'abonnement de Kiro & Nina.
         </Text>
       </div>
 

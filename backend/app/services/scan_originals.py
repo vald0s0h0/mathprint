@@ -2,7 +2,7 @@
 
 Le dépôt remplace le fichier reçu par des pages recalées et blanchies (cf.
 services.scan_intake) : sans copie de l'original, impossible de savoir après
-coup si une anomalie d'image vient du copieur ou de MathPrint, ni de relancer
+coup si une anomalie d'image vient du copieur ou de Kiro & Nina, ni de relancer
 une correction supprimée par erreur (cas réel : 29 copies d'un contrôle, fichier
 du copieur introuvable). Chaque fichier reçu — bac à sable, dépôt ciblé,
 réception par mail — est donc copié octet pour octet dans data/scans/originals,

@@ -242,7 +242,7 @@ def start_worker() -> None:
     # niveau INFO sur le package app : nécessaire pour que _JobLogHandler
     # reçoive les messages de progression (le root logger est à WARNING)
     logging.getLogger("app").setLevel(logging.INFO)
-    threading.Thread(target=_loop, daemon=True, name="mathprint-job-worker").start()
+    threading.Thread(target=_loop, daemon=True, name="kironina-job-worker").start()
 
 
 def resume_stuck_jobs(db: Session, max_attempts: int = 3) -> int:

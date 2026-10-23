@@ -188,7 +188,7 @@ def _attach_upload(db: Session, assessment_id: str | None, ext: str, content: by
     """Dépôt ciblé : sujet (QR, sauf s'il est donné) puis attache des pages au
     lot. Le fichier passe par un temporaire relu page À PAGE (worker_cv lit un
     chemin) : jamais toute la classe en mémoire. (sujet, résumé) ; (None, None)
-    si aucun QR MathPrint n'est reconnu."""
+    si aucun QR Kiro & Nina n'est reconnu."""
     from ..services import worker_cv
 
     tmp_dir = settings.data_dir / "scans" / "tmp"
@@ -240,7 +240,7 @@ async def create_batch(tasks: BackgroundTasks, assessment_id: str | None = None,
     except Exception as e:  # noqa: BLE001 — PDF corrompu, image illisible…
         raise HTTPException(422, f"Scan illisible : {e}")
     if r is None:
-        raise HTTPException(422, "Aucun QR MathPrint reconnu dans ce scan — "
+        raise HTTPException(422, "Aucun QR Kiro & Nina reconnu dans ce scan — "
                                  "vérifier qu'il s'agit bien de copies générées ici")
     batch = db.get(ScanBatch, r["batch_id"])
     if not batch.source_file_id:
@@ -248,7 +248,7 @@ async def create_batch(tasks: BackgroundTasks, assessment_id: str | None = None,
         # (qui basculerait à tort sur le chemin sans-scan)
         db.delete(batch)
         db.commit()
-        raise HTTPException(422, "Aucune page MathPrint reconnue dans ce scan")
+        raise HTTPException(422, "Aucune page Kiro & Nina reconnue dans ce scan")
     db.commit()
     tasks.add_task(_run_pipeline, batch.id)
     return {"id": batch.id, "assessment_id": assessment_id,

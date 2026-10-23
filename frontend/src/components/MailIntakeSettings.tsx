@@ -164,7 +164,7 @@ export default function MailIntakeSettings() {
         </Group>
 
         <Alert color="blue" icon={<Info size={16} />} mt="md" variant="light">
-          Seuls les mails avec une pièce jointe PDF/JPEG/PNG/HEIC contenant une copie MathPrint
+          Seuls les mails avec une pièce jointe PDF/JPEG/PNG/HEIC contenant une copie Kiro & Nina
           déjà générée (QR reconnu) sont pris en compte — les autres pièces jointes sont ignorées.
         </Alert>
       </Card>

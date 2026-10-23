@@ -302,6 +302,141 @@ def test_matching_marks_follow_the_right_column_and_dash_only_wrong_links():
     assert len(m["links"]) == 2                           # seulement les liaisons fausses
 
 
+def test_horizontal_matching_marks_sit_beside_each_bottom_point():
+    """Disposition horizontale : toutes les réponses sont sur une même
+    rangée, une marque au bord de carte les empilerait — chacune se pose à
+    droite de son point."""
+    from app.services import pipeline
+
+    db, copy, page = _overlay_db()
+    pt = lambda i, y: {"index": i, "x_pt": 60 + 40 * i, "y_pt": y, "w_pt": 6, "h_pt": 6}
+    meta = {"orientation": "horizontal", "left_points": [pt(i, 440) for i in range(3)],
+            "right_points": [pt(i, 395) for i in range(3)]}
+    item, zone, resp = _answer(db, copy, page, "matching",
+                               {"type": "matching", "pairs": [[0, 1], [1, 0], [2, 2]]},
+                               {"comparator": "matching", "max_score": 3}, meta,
+                               selected_pairs=[[0, 1], [1, 2], [2, 0]])
+    m = pipeline._zone_marks(db, item, zone, _decision(resp, 1, 3))
+    marks = sorted((round(e["x"]), round(e["y"]), e["ok"]) for e in m["edge"])
+    assert [(ok, y) for _x, y, ok in marks] == [(False, 398), (True, 398), (False, 398)]
+    assert all(x > 60 + 40 * i + 6 for i, (x, _y, _ok) in enumerate(marks))
+    assert len(m["links"]) == 2
+
+
+def _printed_matching(render):
+    """Dessine la carte comme à l'impression (depuis l'instantané du barème)
+    et relit dans le PDF le TEXTE imprimé à côté de chaque point : la
+    vérification ne fait confiance à aucun indice."""
+    import io
+
+    import fitz
+    from reportlab.pdfgen import canvas
+
+    from app.services import pdfgen
+
+    g = render["grading"]
+    geo = pdfgen._matching_layout(g["left"], g["right"], 9, pdfgen.COL_W)
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=pdfgen.A4)
+    meta = pdfgen._draw_matching_zone(c, 40, 380, pdfgen.COL_W, geo["height"],
+                                      g["left"], g["right"], 9)
+    c.save()
+    with fitz.open(stream=buf.getvalue(), filetype="pdf") as doc:
+        words = doc[0].get_text("words")          # repère haut-gauche, y vers le bas
+    horizontal = meta.get("orientation") == "horizontal"
+
+    def label(p, first_row):
+        cx, cy = p["x_pt"] + p["w_pt"] / 2, pdfgen.PAGE_H - (p["y_pt"] + p["h_pt"] / 2)
+        if horizontal:      # étiquette au-dessus (rangée du haut) ou en dessous
+            near = [w for w in words if abs((w[0] + w[2]) / 2 - cx) < 4
+                    and (w[3] < cy if first_row else w[1] > cy)]
+            return min(near, key=lambda w: abs((w[1] + w[3]) / 2 - cy))[4]
+        near = [w for w in words if abs((w[1] + w[3]) / 2 - cy) < 4
+                and (w[2] < cx if first_row else w[0] > cx)]
+        return min(near, key=lambda w: abs((w[0] + w[2]) / 2 - cx))[4]
+    return (meta, [label(p, True) for p in meta["left_points"]],
+            [label(p, False) for p in meta["right_points"]])
+
+
+def _check_matching_wiring(left, right, bank_pairs, orientation):
+    """Ordre de la colonne de droite changé à la génération : ce qui est
+    imprimé, la note et les marques de l'overlay restent câblés sur le CONTENU
+    (l'élément « alpha » va avec la réponse « trois », où qu'elle soit imprimée)."""
+    from types import SimpleNamespace
+
+    from app.services import generation, pipeline
+    from app.services import grading as grader
+
+    row = SimpleNamespace(
+        id="bank-1", response_type="matching", statement="Relier.", correction="",
+        difficulty_level=1,
+        figure_json=None, source="generated", raw_extract_json={},
+        grading_json={"comparator": "matching", "max_score": len(bank_pairs),
+                      "left": left, "right": right, "pairs": bank_pairs},
+        expected_json={"type": "matching", "left": left, "right": right, "pairs": bank_pairs})
+    from app.models import CopyItem
+
+    db, copy, page = _overlay_db()
+    # création réelle de la copie : la carte à imprimer ET l'instantané en base
+    render = generation.build_render_item(db, row=row, copy_id=copy.id, catalog_id="cat", seq=1)
+    stored = db.get(CopyItem, render["item_id"])
+    assert stored.grading_json == render["grading"] and stored.expected_json == render["expected"]
+    assert render["grading"]["right"] != right            # l'ordre a bien changé
+    meta, printed_left, printed_right = _printed_matching(render)
+    assert meta.get("orientation", "vertical") == orientation
+    # 1. la carte imprimée EST l'instantané stocké (barème et réponse attendue)
+    assert printed_left == left
+    assert printed_right == render["grading"]["right"] == render["expected"]["right"]
+    key = {left[i]: right[j] for i, j in bank_pairs}     # clé de la banque, par contenu
+    # 2. l'élève qui relie juste, sur le papier, a tout juste
+    good = [[i, printed_right.index(key[printed_left[i]])] for i in range(len(left))]
+    verdict = grader.grade(stored.expected_json, stored.grading_json, "", 0.99,
+                           selected_pairs=good)
+    assert verdict["score"] == verdict["max_score"] == len(bank_pairs)
+    # 3. deux réponses échangées : chaque ✓/✗ face au point de SA réponse
+    wrong = [list(p) for p in good]
+    wrong[0][1], wrong[1][1] = good[1][1], good[0][1]
+    item, zone, resp = _answer(db, copy, page, "matching", stored.expected_json,
+                               stored.grading_json, meta, selected_pairs=wrong)
+    m = pipeline._zone_marks(db, item, zone, _decision(resp, len(left) - 2, len(left)))
+    points = meta["right_points"]
+    chosen = {printed_left[i]: printed_right[k] for i, k in wrong}
+    assert len(m["edge"]) == len(bank_pairs)
+    for e in m["edge"]:
+        if orientation == "horizontal":   # à droite de son point, même rangée
+            k = min(range(len(points)), key=lambda q: abs(e["x"] - (points[q]["x_pt"] + 6)))
+            assert e["x"] > points[k]["x_pt"] + points[k]["w_pt"]
+        else:                              # bord de carte, à la hauteur de son point
+            k = min(range(len(points)), key=lambda q: abs(e["y"] - pipeline._center_y(points[q])))
+        assert abs(e["y"] - pipeline._center_y(points[k])) < 0.01
+        answer = printed_right[k]
+        item_label = next(lab for lab, ans in key.items() if ans == answer)
+        assert e["ok"] == (chosen[item_label] == answer)
+    assert sorted(e["ok"] for e in m["edge"]).count(False) == 2
+    # pointillés : de l'élément faux vers le point où est imprimée SA réponse
+    for ln in m["links"]:
+        i = min(range(len(left)), key=lambda q: abs(
+            ln["x1"] - meta["left_points"][q]["x_pt"] - 3.1) + abs(
+            ln["y1"] - pipeline._center_y(meta["left_points"][q])))
+        k = min(range(len(points)), key=lambda q: abs(
+            ln["x2"] - points[q]["x_pt"] - 3.1) + abs(ln["y2"] - pipeline._center_y(points[q])))
+        assert printed_right[k] == key[printed_left[i]]
+    assert len(m["links"]) == 2
+
+
+def test_reordered_matching_keeps_print_grade_and_overlay_wired_by_content():
+    # 3 droites concourantes dans la banque -> réordonné à la génération
+    _check_matching_wiring(["alpha", "beta", "gamma"], ["un", "deux", "trois"],
+                           [[0, 2], [1, 1], [2, 0]], "vertical")
+
+
+def test_reordered_horizontal_matching_keeps_overlay_wired_by_content():
+    # chaque élément en face de sa réponse (réponse donnée) -> réordonné, horizontal
+    left = ["aa", "bb", "cc", "dd", "ee", "ff"]
+    right = ["u1", "u2", "u3", "u4", "u5", "u6"]
+    _check_matching_wiring(left, right, [[i, i] for i in range(6)], "horizontal")
+
+
 def test_table_fill_one_mark_per_row_without_per_cell_marks():
     from app.services import pipeline
     from app.models import OcrAttempt

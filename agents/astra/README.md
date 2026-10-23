@@ -40,7 +40,7 @@ PY=backend/.venv/bin/python
 $PY agents/astra/run.py chapters                          # chapitres, pages, compétences (tous niveaux)
 $PY agents/astra/run.py prepare --chapter "Fonctions affines" [--pages 76-78] [--lesson 74-75]
 $PY agents/astra/run.py figures  [RUN]                    # PNG des figures à vérifier
-$PY agents/astra/run.py validate [RUN]                    # contrat MathPrint + règles Astra
+$PY agents/astra/run.py validate [RUN]                    # contrat Kiro & Nina + règles Astra
 $PY agents/astra/run.py preview  [RUN] --variant base|facile|original [--no-guides]  # sujet séparé, sur demande
 $PY agents/astra/run.py persist  [RUN] [--replace]        # brouillons onglet Exercices
 ```

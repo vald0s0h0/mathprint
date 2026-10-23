@@ -1,8 +1,8 @@
 [package]
 name = "mathprint-connector"
-version = "1.0.5"
-description = "Connecteur d'impression locale MathPrint"
-authors = ["MathPrint"]
+version = "1.1.0"
+description = "Connecteur d'impression locale Kiro & Nina"
+authors = ["Kiro & Nina"]
 edition = "2021"
 
 [lib]

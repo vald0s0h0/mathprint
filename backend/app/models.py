@@ -1,4 +1,4 @@
-"""Modèle de données MathPrint — cf. cahier des charges §10.
+"""Modèle de données Kiro & Nina — cf. cahier des charges §10.
 
 Conventions :
 - clés primaires UUID (stockées en texte pour compatibilité SQLite/PostgreSQL) ;
@@ -766,7 +766,7 @@ class Printer(Base):
     uri: Mapped[str] = mapped_column(String, default="")
     protocol: Mapped[str] = mapped_column(String, default="ipp")
     capabilities_json: Mapped[dict] = mapped_column(JSON, default=dict)
-    # Profil matériel MathPrint. Une ligne peut représenter une file CUPS locale
+    # Profil matériel Kiro & Nina. Une ligne peut représenter une file CUPS locale
     # (protocol="cups", uri vide) ou une imprimante IPP enregistrée. Ces
     # réglages sont volontairement explicites : ils pilotent le chemin physique
     # des feuilles et ne doivent pas se perdre dans des options de pilote CUPS.
@@ -791,7 +791,7 @@ class PrintConnector(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
     installation_id: Mapped[str] = mapped_column(String, unique=True)
-    name: Mapped[str] = mapped_column(String, default="MathPrint Connector")
+    name: Mapped[str] = mapped_column(String, default="Kiro et Nina Connector")
     token_hash: Mapped[str] = mapped_column(String, unique=True)
     platform: Mapped[str] = mapped_column(String, default="")
     arch: Mapped[str] = mapped_column(String, default="")
@@ -816,7 +816,7 @@ class ConnectorPrintJob(Base):
     printer_id: Mapped[str] = mapped_column(ForeignKey("printers.id"))
     assessment_id: Mapped[str | None] = mapped_column(
         ForeignKey("assessments.id"), nullable=True)
-    title: Mapped[str] = mapped_column(String, default="Impression MathPrint")
+    title: Mapped[str] = mapped_column(String, default="Impression Kiro & Nina")
     file_name: Mapped[str] = mapped_column(String, default="")
     pass_side: Mapped[str] = mapped_column(String, default="all")
     native_printer_name: Mapped[str] = mapped_column(String)

@@ -1,4 +1,4 @@
-# Landing page France — MathPrint
+# Landing page France — Kiro & Nina
 
 > Document de rédaction. Le texte ci-dessous est destiné à la landing page
 > française. Les blocs entre crochets décrivent l’emplacement et le contenu des
@@ -13,22 +13,22 @@
 ## Métadonnées de la page
 
 **Balise title**  
-MathPrint — Créez, corrigez et suivez vos évaluations de maths
+Kiro & Nina — Créez, corrigez et suivez vos évaluations de maths
 
 **Méta-description**  
-MathPrint aide les professeurs de mathématiques au collège à créer des sujets
+Kiro & Nina aide les professeurs de mathématiques au collège à créer des sujets
 différenciés, corriger les copies papier et suivre les compétences de chaque
 élève, de la 6e à la 3e.
 
 **Libellé de partage**  
-MathPrint — Moins de temps sur les copies. Plus de temps pour enseigner.
+Kiro & Nina — Moins de temps sur les copies. Plus de temps pour enseigner.
 
 ---
 
 ## En-tête
 
 **Logo**  
-MathPrint
+Kiro & Nina
 
 **Navigation**  
 Comment ça marche · Fonctionnalités · Pour les établissements · Données et
@@ -46,11 +46,11 @@ Pour les professeurs de mathématiques au collège
 
 # Le papier reste. La pile de copies, beaucoup moins.
 
-MathPrint vous aide à créer des évaluations adaptées à vos élèves, à corriger
+Kiro & Nina vous aide à créer des évaluations adaptées à vos élèves, à corriger
 les copies scannées et à suivre les compétences réellement maîtrisées — de la
 6e à la 3e.
 
-Vous gardez la main sur chaque décision pédagogique. MathPrint prend en charge
+Vous gardez la main sur chaque décision pédagogique. Kiro & Nina prend en charge
 le travail répétitif.
 
 **Bouton principal**  
@@ -69,7 +69,7 @@ de correction avec une progression simple : « Scan reçu », « Réponses lues 
 « 4 réponses à vérifier », « Corrections prêtes ». Faire apparaître en second
 plan une copie de mathématiques annotée en rouge et, en petit, une carte de
 maîtrise par compétence. Le visuel doit permettre de comprendre en un regard le
-cycle papier → correction → suivi. Utiliser de vraies captures de MathPrint,
+cycle papier → correction → suivi. Utiliser de vraies captures de Kiro & Nina,
 sans données d’élèves réels.
 
 ---
@@ -85,18 +85,18 @@ Préparer un sujet, produire plusieurs variantes, corriger chaque réponse,
 reporter les résultats puis décider quoi retravailler : l’évaluation mobilise
 bien plus de temps que l’heure passée en classe.
 
-MathPrint relie toutes ces étapes dans un même outil, sans vous demander de
+Kiro & Nina relie toutes ces étapes dans un même outil, sans vous demander de
 renoncer au papier ni à votre jugement.
 
 ### Préparer sans repartir de zéro
 
 Composez un sujet à partir des compétences et objectifs que vous souhaitez
-évaluer. MathPrint sélectionne et met en page des exercices adaptés, que vous
+évaluer. Kiro & Nina sélectionne et met en page des exercices adaptés, que vous
 pouvez vérifier avant impression.
 
 ### Corriger sans tout relire à la main
 
-Déposez le scan de vos copies. MathPrint identifie les pages, lit les réponses
+Déposez le scan de vos copies. Kiro & Nina identifie les pages, lit les réponses
 et corrige automatiquement les cas sûrs.
 
 ### Suivre sans multiplier les tableaux
@@ -106,7 +106,7 @@ est maîtrisé, ce qui reste fragile et ce qu’il devient utile de revoir.
 
 **[VISUEL — bandeau pleine largeur sous les trois bénéfices]**  
 Photo documentaire d’un bureau de professeur de mathématiques en France : une
-petite pile de copies papier, un stylo et un ordinateur affichant MathPrint.
+petite pile de copies papier, un stylo et un ordinateur affichant Kiro & Nina.
 Ambiance réaliste, calme et lumineuse, sans mise en scène futuriste. Aucun nom
 d’élève ni établissement identifiable. L’écran doit rester lisible et montrer
 le produit, pas une interface inventée.
@@ -139,7 +139,7 @@ De la 6e à la 3e · Difficulté ajustable · Aperçu avant impression
 
 ### 3 — Scannez les copies
 
-Une fois les copies rendues, déposez le PDF issu de votre scanner. MathPrint
+Une fois les copies rendues, déposez le PDF issu de votre scanner. Kiro & Nina
 reconnaît chaque page, même si le lot est mélangé, puis lit les QCM, les cases,
 les tableaux et les réponses manuscrites.
 
@@ -149,14 +149,14 @@ Identification automatique · Recalage des pages · Original conservé
 ### 4 — Validez, puis exploitez les résultats
 
 Les réponses sûres sont traitées automatiquement. Les ambiguïtés vous sont
-présentées dans une file de validation rapide. Une fois le lot validé, MathPrint
+présentées dans une file de validation rapide. Une fois le lot validé, Kiro & Nina
 prépare les copies corrigées et met à jour le suivi des compétences.
 
 **Microtexte**  
 Vous tranchez les cas incertains · Décisions modifiables · Historique conservé
 
 **Bouton**  
-Voir MathPrint en démonstration
+Voir Kiro & Nina en démonstration
 
 **[VISUEL — frise horizontale sur ordinateur, verticale sur mobile]**  
 Quatre captures produit reliées par une ligne discrète : sélection des
@@ -171,7 +171,7 @@ numéro d’étape. Privilégier les captures réelles plutôt que des illustrat
 **Surligne**  
 Corriger plus vite, sans corriger à l’aveugle
 
-## MathPrint automatise les réponses évidentes. Il vous montre le reste.
+## Kiro & Nina automatise les réponses évidentes. Il vous montre le reste.
 
 Le système lit les zones de réponse, compare les résultats attendus et attribue
 les points lorsque le niveau de confiance est suffisant. Une rature, une double
@@ -195,7 +195,7 @@ Une confiance insuffisante ne devient jamais une correction silencieuse.
 
 **[VISUEL — à gauche du texte]**  
 Capture rapprochée de la file de correction. Montrer la zone scannée d’une
-réponse, la réponse attendue, la proposition de MathPrint et les choix de
+réponse, la réponse attendue, la proposition de Kiro & Nina et les choix de
 validation du professeur. Utiliser une copie entièrement fictive. Faire
 ressortir visuellement que le professeur prend la décision finale.
 
@@ -209,12 +209,12 @@ La différenciation devient praticable
 ## Une même compétence. Le bon niveau de difficulté pour chaque élève.
 
 Préparer plusieurs versions d’un sujet demande habituellement un temps que peu
-d’enseignants ont réellement. MathPrint peut générer, dans le même lot, des
+d’enseignants ont réellement. Kiro & Nina peut générer, dans le même lot, des
 exercices adaptés au niveau de chaque élève tout en conservant les objectifs
 pédagogiques choisis.
 
 Pour une évaluation commune, utilisez des variantes de difficulté équivalente.
-Pour un entraînement, laissez MathPrint ajuster plus finement le niveau. Vous
+Pour un entraînement, laissez Kiro & Nina ajuster plus finement le niveau. Vous
 choisissez le degré de personnalisation adapté à votre séance.
 
 **Points clés**
@@ -229,7 +229,7 @@ choisissez le degré de personnalisation adapté à votre séance.
 Trois aperçus A4 du même sujet, légèrement superposés et étiquetés « Niveau
 consolidation », « Niveau attendu » et « Niveau approfondissement ». Montrer une
 même compétence travaillée avec des données ou une complexité différentes. Le
-design des copies doit reprendre le vrai gabarit MathPrint : cartes
+design des copies doit reprendre le vrai gabarit Kiro & Nina : cartes
 d’exercices, zones de réponse saumon clair, case note et bande d’appréciation.
 
 ---
@@ -244,7 +244,7 @@ Au-delà de la moyenne
 Une note résume une copie. Elle ne dit pas toujours quelle notion bloque, ni
 depuis combien de temps elle n’a pas été mobilisée.
 
-MathPrint rattache les résultats aux objectifs d’apprentissage du programme de
+Kiro & Nina rattache les résultats aux objectifs d’apprentissage du programme de
 mathématiques du collège. Le tableau de bord fait ressortir les compétences
 solides, fragiles ou à revoir, à l’échelle de la classe comme de l’élève.
 
@@ -310,10 +310,10 @@ externes.
 Échanger sur un déploiement
 
 **[VISUEL — deux cartes côte à côte]**  
-Carte « Professeur » : photo naturelle d’un enseignant utilisant MathPrint sur
+Carte « Professeur » : photo naturelle d’un enseignant utilisant Kiro & Nina sur
 un ordinateur portable, avec une copie papier à proximité. Carte
 « Établissement » : petit groupe de professeurs de mathématiques en réunion
-devant un écran affichant un tableau de bord MathPrint. Diversité réaliste des
+devant un écran affichant un tableau de bord Kiro & Nina. Diversité réaliste des
 âges et des profils ; aucun logo d’établissement ni donnée réelle.
 
 ---
@@ -325,7 +325,7 @@ Les données des élèves ne sont pas un détail
 
 ## Une architecture conçue pour limiter leur exposition.
 
-MathPrint peut être installé sur l’infrastructure maîtrisée par votre
+Kiro & Nina peut être installé sur l’infrastructure maîtrisée par votre
 organisation. Les scans complets et les noms des élèves y restent conservés.
 Lorsqu’un service externe est nécessaire pour lire ou analyser une réponse, il
 ne reçoit que la zone utile et des informations pseudonymisées — jamais la
@@ -348,7 +348,7 @@ moyens techniques de mettre en œuvre sa politique de protection des données.
 Parler de votre contexte technique
 
 **[VISUEL — schéma explicatif simple]**  
-Schéma en trois blocs : « Dans votre établissement » contient MathPrint, les
+Schéma en trois blocs : « Dans votre établissement » contient Kiro & Nina, les
 copies et les identités ; une flèche intitulée « Zone de réponse isolée » mène
 vers « Service de lecture » ; une seconde flèche intitulée « Données
 pseudonymisées » mène vers « Service d’analyse ». Aucun nom ni scan complet ne
@@ -359,7 +359,7 @@ vocabulaire d’architecture complexe.
 
 ## 9. Principe produit
 
-> MathPrint ne remplace pas le jugement du professeur. Il lui rend du temps et
+> Kiro & Nina ne remplace pas le jugement du professeur. Il lui rend du temps et
 > lui apporte les informations nécessaires pour mieux décider.
 
 **[VISUEL — optionnel, portrait éditorial]**  
@@ -372,19 +372,19 @@ qu’aucun témoignage client réel n’est disponible.
 
 ## 10. FAQ
 
-### MathPrint s’adresse à quels niveaux ?
+### Kiro & Nina s’adresse à quels niveaux ?
 
-MathPrint est conçu pour les mathématiques au collège, de la 6e à la 3e. Les
+Kiro & Nina est conçu pour les mathématiques au collège, de la 6e à la 3e. Les
 objectifs d’apprentissage sont organisés par niveau, domaine et thème afin de
 faciliter la création des sujets et le suivi des acquis.
 
 ### Faut-il abandonner les copies papier ?
 
-Non. MathPrint est justement conçu pour conserver le papier dans le parcours.
+Non. Kiro & Nina est justement conçu pour conserver le papier dans le parcours.
 Vous imprimez les sujets, les élèves répondent à la main, puis vous scannez les
 copies pour lancer la correction.
 
-### MathPrint corrige-t-il toutes les réponses sans intervention ?
+### Kiro & Nina corrige-t-il toutes les réponses sans intervention ?
 
 Non, et c’est volontaire. Les réponses suffisamment claires peuvent être
 traitées automatiquement. Les cas ambigus — rature, double coche, écriture peu
@@ -399,7 +399,7 @@ les entraînements.
 
 ### Puis-je vérifier les sujets avant de les imprimer ?
 
-Oui. MathPrint propose un aperçu avant impression, y compris des versions les
+Oui. Kiro & Nina propose un aperçu avant impression, y compris des versions les
 plus accessibles, médianes et les plus avancées lorsqu’un sujet est différencié.
 
 ### Comment sont suivies les compétences ?
@@ -411,21 +411,21 @@ ainsi plus faciles à repérer.
 
 ### Où sont stockées les copies et les identités des élèves ?
 
-Les scans complets et les identités restent sur l’installation MathPrint
+Les scans complets et les identités restent sur l’installation Kiro & Nina
 maîtrisée par votre organisation. Les services externes éventuellement
 sollicités ne reçoivent que les extraits nécessaires, accompagnés de données
 pseudonymisées.
 
-### MathPrint peut-il être déployé pour plusieurs enseignants ?
+### Kiro & Nina peut-il être déployé pour plusieurs enseignants ?
 
-Oui. MathPrint prévoit des comptes et rôles distincts, une administration
+Oui. Kiro & Nina prévoit des comptes et rôles distincts, une administration
 centralisée, des sauvegardes et le suivi des services utilisés. Nous étudions
 avec chaque établissement ou groupe scolaire le contexte de déploiement et les
 besoins de ses équipes.
 
 ### Quel matériel faut-il prévoir ?
 
-MathPrint s’utilise depuis un navigateur et s’intègre à un parcours
+Kiro & Nina s’utilise depuis un navigateur et s’intègre à un parcours
 d’impression et de numérisation. Les modalités d’installation dépendent de
 votre infrastructure, de vos imprimantes et de votre scanner ; elles sont
 vérifiées lors de la démonstration technique.
@@ -436,7 +436,7 @@ vérifiées lors de la démonstration technique.
 
 ## Et si votre prochaine pile de copies demandait surtout votre jugement — pas votre soirée ?
 
-Découvrez comment MathPrint peut s’intégrer à votre manière d’évaluer, dans une
+Découvrez comment Kiro & Nina peut s’intégrer à votre manière d’évaluer, dans une
 classe ou à l’échelle de plusieurs établissements.
 
 **Bouton principal**  
@@ -457,7 +457,7 @@ mathématique générique surchargé, aucune photo de banque d’images.
 
 ## 12. Pied de page
 
-**MathPrint**  
+**Kiro & Nina**  
 Créer, corriger et mieux suivre les apprentissages en mathématiques.
 
 **Liens**  
@@ -468,7 +468,7 @@ Mentions légales · Politique de confidentialité
 France
 
 **Mention de bas de page**  
-© MathPrint — Tous droits réservés.
+© Kiro & Nina — Tous droits réservés.
 
 ---
 
@@ -490,7 +490,7 @@ plus pertinentes pour votre classe ou votre organisation.
 - Votre besoin principal (facultatif)
 
 **Case de consentement**  
-J’accepte que MathPrint utilise ces informations pour répondre à ma demande.
+J’accepte que Kiro & Nina utilise ces informations pour répondre à ma demande.
 
 **Bouton**  
 Envoyer ma demande

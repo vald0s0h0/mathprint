@@ -333,7 +333,7 @@ def _queue_connector_job(*, db: Session, user: User, profile: Printer,
         raise HTTPException(
             409,
             f"Le poste « {connector.name} » est hors ligne. "
-            "Ouvrez MathPrint Connector sur ce poste avant d'imprimer.",
+            "Ouvrez Kiro et Nina Connector sur ce poste avant d'imprimer.",
         )
     caps = profile.capabilities_json or {}
     native_name = caps.get("native_name")
@@ -418,7 +418,7 @@ def print_file(body: PrintIn, db: Session = Depends(get_db),
                     if body.pass_side != "all" else Path(path).read_bytes())
         job = _queue_connector_job(
             db=db, user=user, profile=profile,
-            title=f"{assessment.title if assessment else 'MathPrint'} — "
+            title=f"{assessment.title if assessment else 'Kiro & Nina'} — "
                   f"{body.pass_side if body.pass_side != 'all' else body.file}",
             file_name=body.file, pass_side=body.pass_side, document=document,
             assessment_id=body.assessment_id, copies=body.copies,
@@ -432,7 +432,7 @@ def print_file(body: PrintIn, db: Session = Depends(get_db),
     temp_path: Path | None = None
     try:
         if body.pass_side != "all":
-            fd, raw_path = tempfile.mkstemp(prefix=f"mathprint-{body.pass_side}-", suffix=".pdf")
+            fd, raw_path = tempfile.mkstemp(prefix=f"kironina-{body.pass_side}-", suffix=".pdf")
             temp_path = Path(raw_path)
             stream = os.fdopen(fd, "wb")
             with stream:
@@ -503,7 +503,7 @@ def _test_pages_pdf() -> bytes:
         c.drawCentredString(width / 2, height / 2 - 25, str(number))
         c.setFont("Helvetica", 16)
         c.drawCentredString(width / 2, height / 2 - 52,
-                            f"PAGE {number} SUR 2 — TEST MATHPRINT")
+                            f"PAGE {number} SUR 2 — TEST KIRO & NINA")
         c.setFont("Helvetica-Bold", 34)
         c.drawCentredString(width / 2, 18 * mm, "BAS")
         c.showPage()
@@ -525,7 +525,7 @@ def print_test_pages(body: TestPrintIn, db: Session = Depends(get_db),
     _assert_profile_access(db, profile, user)
     if profile and profile.protocol == "connector":
         job = _queue_connector_job(
-            db=db, user=user, profile=profile, title="Test MathPrint 1–2",
+            db=db, user=user, profile=profile, title="Test Kiro & Nina 1–2",
             file_name="printer_test.pdf", pass_side="all",
             document=_test_pages_pdf(), assessment_id=None, copies=1,
             duplex=False, reverse=False)
@@ -533,7 +533,7 @@ def print_test_pages(body: TestPrintIn, db: Session = Depends(get_db),
         return {"ok": True, "queued": True, "job_id": job.id,
                 "lp_output": f"Test en attente sur {connector.name if connector else 'le connecteur'}"}
     local_names = {p["name"] for p in _local_printers()}
-    fd, raw_path = tempfile.mkstemp(prefix="mathprint-order-", suffix=".pdf")
+    fd, raw_path = tempfile.mkstemp(prefix="kironina-order-", suffix=".pdf")
     path = Path(raw_path)
     try:
         stream = os.fdopen(fd, "wb")

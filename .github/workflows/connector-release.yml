@@ -1,4 +1,4 @@
-name: Release MathPrint Connector
+name: Release Kiro et Nina Connector
 
 # Le connecteur a son propre cycle de publication. Un push sur main, un dump
 # ou une release Docker ne déclenche jamais la fabrication des installateurs.
@@ -93,7 +93,7 @@ jobs:
         with:
           projectPath: connector
           tagName: connector-v__VERSION__
-          releaseName: MathPrint Connector v__VERSION__
+          releaseName: Kiro et Nina Connector v__VERSION__
           releaseBody: Installateurs macOS Apple Silicon, macOS Intel (10.13+) et Windows x64. Les installateurs OS ne sont pas certifiés Apple/Microsoft, mais les mises à jour automatiques sont signées et vérifiées par le connecteur.
           releaseDraft: false
           prerelease: false
@@ -123,6 +123,6 @@ jobs:
           gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --pattern latest.json --dir updater
           gh release delete connector-latest --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes || true
           gh release create connector-latest updater/latest.json --repo "$GITHUB_REPOSITORY" \
-            --title "MathPrint Connector — canal stable" \
+            --title "Kiro et Nina Connector — canal stable" \
             --notes "Manifeste stable signé ; les installateurs sont dans $GITHUB_REF_NAME." \
             --latest=false

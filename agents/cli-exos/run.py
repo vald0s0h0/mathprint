@@ -190,7 +190,7 @@ def main() -> int:
         try:
             db.query(CompetencyFramework).first()   # sonde : la base existe-t-elle ?
         except Exception:
-            print("Base MathPrint introuvable ou non initialisée. Démarre l'application "
+            print("Base Kiro & Nina introuvable ou non initialisée. Démarre l'application "
                   "au moins une fois (elle crée/migrera la base), puis relance.",
                   file=sys.stderr)
             return 2

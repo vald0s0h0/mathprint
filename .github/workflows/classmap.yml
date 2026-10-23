@@ -1,6 +1,6 @@
 name: ClassMap (Windows)
 
-# ClassMap est indépendant de MathPrint : ce workflow ne regarde que ClassMap/.
+# ClassMap est indépendant de Kiro & Nina : ce workflow ne regarde que ClassMap/.
 # - push / PR touchant ClassMap/ : compilation + autotest, .zip en artefact ;
 # - tag « classmap-vX.Y.Z » : idem + publication d'une release GitHub.
 on:

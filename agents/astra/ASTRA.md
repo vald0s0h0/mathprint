@@ -1,4 +1,4 @@
-# ASTRA — exercices du manuel Indigo dans MathPrint
+# ASTRA — exercices du manuel Indigo dans Kiro & Nina
 
 Lis entièrement ce fichier puis `schema.md`. Lis toi-même les images du manuel.
 Travaille dans `RUN/astra_output.json` ; ne modifie l’application que si l’utilisateur

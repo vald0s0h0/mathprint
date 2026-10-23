@@ -241,6 +241,178 @@ def test_detect_matching_two_partners_for_one_dot_goes_to_review():
     assert conf < 0.9
 
 
+def _scan_matching(n, strokes, *, dots=True, after=None):
+    """Copie « points à relier » à la géométrie réelle (points noirs de 1,6 mm,
+    rangées de 6,5 mm, couloir de 14 mm), traits d'élève en polylignes
+    (`strokes` : [((i, j), bombé_px, décalage_px)], courbe en arc), puis flou
+    et bruit de scan. `after(img, centre_gauche, centre_droit)` dessine en plus
+    (blanco, rature)."""
+    import cv2
+    from app.services import worker_cv as W
+    from app.services.pdfgen import PAGE_H
+
+    img = np.full((int(PAGE_H * W.SCALE), 1700, 3), 255, dtype=np.uint8)
+    p = 6.24
+
+    def dot(x_pt, k):
+        return {"index": k, "x_pt": x_pt, "y_pt": 557.0 - 18.4 * k, "w_pt": p, "h_pt": p}
+
+    left = [dot(393.0, k) for k in range(n)]
+    right = [dot(393.0 + p + 39.7, k) for k in range(n)]
+
+    def c(q):
+        return np.array(W.pt_to_px(q["x_pt"] + p / 2, q["y_pt"] + p / 2))
+
+    if dots:
+        for q in left + right:
+            x, y = c(q)
+            cv2.circle(img, (int(round(x)), int(round(y))), 6, (25, 25, 25), -1, cv2.LINE_AA)
+    for (i, j), bow, shift in strokes:
+        a, b = c(left[i]), c(right[j])
+        t = np.linspace(0, 1, 60)[:, None]
+        nrm = np.array([-(b - a)[1], (b - a)[0]]) / np.linalg.norm(b - a)
+        pts = a + t * (b - a) + (bow * np.sin(np.pi * t) + shift) * nrm
+        cv2.polylines(img, [np.round(pts).astype(np.int32)], False, (150, 70, 35), 3, cv2.LINE_AA)
+    if after:
+        after(img, [c(q) for q in left], [c(q) for q in right])
+    img = cv2.GaussianBlur(img, (0, 0), 0.7)
+    noise = np.random.default_rng(0).normal(0, 3, img.shape)
+    img = np.clip(img + noise, 0, 255).astype(np.uint8)
+    return W.flatten_background(img), left, right
+
+
+def test_detect_matching_reads_hand_drawn_bowed_lines_through_black_dots():
+    """Traits à main levée bancals (bombés de ~1,3 mm, crossing compris) et
+    points noirs imprimés : lecture certaine, les points ne gênent pas."""
+    from app.services import worker_cv as W
+
+    img, left, right = _scan_matching(4, [((0, 2), 10, 0), ((1, 0), -9, 2),
+                                          ((2, 3), 7, -2), ((3, 1), -6, 0)])
+    diag = {}
+    pairs, conf = W.detect_matching(img, left, right, diag=diag)
+    assert sorted(pairs) == [[0, 2], [1, 0], [2, 3], [3, 1]]
+    assert conf >= 0.9 and diag["reason"] == "clear"
+    assert diag["dots_found"] == 8
+
+
+def test_detect_matching_three_concurrent_lines_are_read():
+    """3 droites concourantes (rangées régulières, ordre inversé) : la lecture
+    qui « tourne » au croisement forme un V et ne fait pas douter."""
+    from app.services import worker_cv as W
+
+    img, left, right = _scan_matching(3, [((0, 2), 0, 0), ((1, 1), 0, 0), ((2, 0), 0, 0)])
+    pairs, conf = W.detect_matching(img, left, right)
+    assert sorted(pairs) == [[0, 2], [1, 1], [2, 0]] and conf >= 0.9
+
+
+def test_detect_matching_retraced_line_is_one_link():
+    """Un trait repassé deux fois (second passage à ~0,4 mm) reste une liaison."""
+    from app.services import worker_cv as W
+
+    img, left, right = _scan_matching(3, [((0, 1), 4, 0), ((0, 1), 4, 3),
+                                          ((1, 2), 0, 0), ((2, 0), -3, 0)])
+    pairs, conf = W.detect_matching(img, left, right)
+    assert sorted(pairs) == [[0, 1], [1, 2], [2, 0]] and conf >= 0.9
+
+
+def test_detect_matching_ignores_whiteout_remnants_at_crossings():
+    """Mauvais trait effacé au blanco : seuls restent des mini-traits là où
+    l'élève a épargné les bons traits qu'il croisait."""
+    import cv2
+    from app.services import worker_cv as W
+
+    def whiteout(img, L, R):
+        a, b = L[0], R[2]                        # mauvais trait 0→2 ...
+        cv2.line(img, tuple(np.round(a).astype(int)), tuple(np.round(b).astype(int)),
+                 (150, 70, 35), 3, cv2.LINE_AA)
+        c, d = L[1], R[0]                        # ... qui croise le bon trait 1→0
+        u, v = b - a, d - c
+        t = ((c[0] - a[0]) * v[1] - (c[1] - a[1]) * v[0]) / (u[0] * v[1] - u[1] * v[0])
+        spare = 9 / np.linalg.norm(u)            # l'élève épargne ±9 px autour du croisement
+        for lo, hi in ((0.12, t - spare), (t + spare, 0.88)):
+            cv2.line(img, tuple(np.round(a + lo * u).astype(int)),
+                     tuple(np.round(a + hi * u).astype(int)), (248, 248, 248), 12)
+
+    img, left, right = _scan_matching(3, [((0, 1), 0, 0), ((1, 0), 0, 0), ((2, 2), 3, 0)],
+                                      after=whiteout)
+    pairs, conf = W.detect_matching(img, left, right)
+    assert sorted(pairs) == [[0, 1], [1, 0], [2, 2]] and conf >= 0.9
+
+
+def test_detect_matching_scribbled_out_link_goes_to_review():
+    """Un trait barré d'un gribouillis : jamais lu comme une liaison certaine."""
+    import cv2
+    from app.services import worker_cv as W
+
+    def scribble(img, L, R):
+        a, b = L[1], R[2]
+        u = (b - a) / np.linalg.norm(b - a)
+        nv = np.array([-u[1], u[0]])
+        mid = (a + b) / 2
+        zz = [mid + u * (-25 + 5 * k) + nv * (14 if k % 2 else -14) for k in range(11)]
+        cv2.polylines(img, [np.round(np.array(zz)).astype(np.int32)], False, (150, 70, 35), 3)
+
+    img, left, right = _scan_matching(3, [((0, 0), 0, 0), ((1, 2), 0, 0), ((2, 1), 0, 0)],
+                                      after=scribble)
+    diag = {}
+    _pairs, conf = W.detect_matching(img, left, right, diag=diag)
+    assert conf < 0.9 and diag["reason"].startswith("unexplained")
+
+
+def test_detect_matching_old_copies_without_black_dots():
+    """Anciennes copies (pastilles saumon, supprimées par le dropout) : pas de
+    faux point pris sur la jonction de deux traits, positions théoriques."""
+    from app.services import worker_cv as W
+
+    img, left, right = _scan_matching(3, [((0, 1), 5, 0), ((1, 0), -5, 0), ((2, 2), 0, 0)],
+                                      dots=False)
+    diag = {}
+    pairs, conf = W.detect_matching(img, left, right, diag=diag)
+    assert sorted(pairs) == [[0, 1], [1, 0], [2, 2]] and conf >= 0.9
+    assert diag["dots_found"] == 0
+
+
+def test_detect_matching_reads_a_real_horizontal_card():
+    """Carte horizontale produite par pdfgen (étiquettes au-dessus et en
+    dessous des rangées, points noirs), rendue à 200 dpi, traits bancals."""
+    import io
+
+    import cv2
+    import fitz
+    from reportlab.pdfgen import canvas
+
+    from app.services import pdfgen
+    from app.services import worker_cv as W
+
+    left = ['$2^3$', '$3^2$', '$10^2$', '$5^0$', '$2^{-1}$', '$4^1$']
+    right = ['$9$', '$1$', '$8$', '$0{,}5$', '$100$', '$4$']
+    truth = [[0, 2], [1, 0], [2, 4], [3, 1], [4, 3], [5, 5]]
+    geo = pdfgen._matching_layout(left, right, 9, pdfgen.COL_W)
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=pdfgen.A4)
+    meta = pdfgen._draw_matching_zone(c, 40, 400, pdfgen.COL_W, geo["height"], left, right, 9)
+    c.save()
+    assert meta["orientation"] == "horizontal"
+    with fitz.open(stream=buf.getvalue(), filetype="pdf") as doc:
+        pix = doc[0].get_pixmap(dpi=W.DPI)
+    img = np.frombuffer(pix.samples, np.uint8).reshape(pix.h, pix.w, pix.n)[..., 2::-1].copy()
+
+    def center(q):
+        return np.array(W.pt_to_px(q["x_pt"] + q["w_pt"] / 2, q["y_pt"] + q["h_pt"] / 2))
+
+    for k, (i, j) in enumerate(truth):
+        a, b = center(meta["left_points"][i]), center(meta["right_points"][j])
+        t = np.linspace(0, 1, 50)[:, None]
+        nrm = np.array([-(b - a)[1], (b - a)[0]]) / np.linalg.norm(b - a)
+        pts = a + t * (b - a) + (6 if k % 2 else -6) * np.sin(np.pi * t) * nrm
+        cv2.polylines(img, [np.round(pts).astype(np.int32)], False, (150, 70, 35), 3, cv2.LINE_AA)
+    img = W.flatten_background(cv2.GaussianBlur(img, (0, 0), 0.7))
+    diag = {}
+    pairs, conf = W.detect_matching(img, meta["left_points"], meta["right_points"], diag=diag)
+    assert sorted(pairs) == truth and conf >= 0.9
+    assert diag["dots_found"] == 12
+
+
 def _qcm_page(marks, outline=175):
     """3 cases QCM à la géométrie réelle ; `marks` = {index: (couleur BGR, forme)}
     avec forme 'x' (croix) ou 'fill' (case noircie) ; `outline` = gris du

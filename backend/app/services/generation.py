@@ -78,6 +78,41 @@ def indigo_display(row) -> tuple[str, str, bool]:
     return f"**{title}**\n{row.statement}" if title else row.statement, calc, True
 
 
+def legible_matching(grading: dict, expected: dict) -> tuple[dict, dict]:
+    """Points à relier : réordonne la colonne de droite pour une lecture CV
+    sans ambiguïté (pdfgen.legible_order). UNE permutation, décidée sur la clé
+    de réponse (expected.pairs, celle que note grading.py), appliquée au
+    contenu PROPRE du barème et de la réponse attendue : la carte imprimée
+    (dessinée depuis le barème), la correction, l'overlay et l'aperçu parlent
+    du même ordre. Données incohérentes entre les deux (colonnes ou paires
+    différentes) : rien n'est réordonné, plutôt que de réécrire une clé."""
+    rights = [d["right"] for d in (grading, expected) if "right" in d]
+    all_pairs = [d["pairs"] for d in (grading, expected) if "pairs" in d]
+    if not rights or not all_pairs:
+        return grading, expected
+    right = rights[0]
+    pairs = expected.get("pairs") or all_pairs[0]
+
+    def as_set(ps) -> set:
+        return {(int(a), int(b)) for a, b in ps or []}
+    if any(r != right for r in rights) or any(as_set(p) != as_set(pairs) for p in all_pairs):
+        return grading, expected
+    left = grading.get("left") or expected.get("left") or []
+    order = pdfgen.legible_order(left, right, pairs)
+    if order is None:
+        return grading, expected
+    pos = {old: new for new, old in enumerate(order)}
+
+    def permuted(d: dict) -> dict:
+        d = dict(d)
+        if "right" in d:
+            d["right"] = [d["right"][old] for old in order]
+        if "pairs" in d:
+            d["pairs"] = [[int(a), pos[int(b)]] for a, b in d["pairs"]]
+        return d
+    return permuted(grading), permuted(expected)
+
+
 def render_shape(row, guides: str = pdfgen.GUIDES_INCLUDE) -> dict:
     """Carte pdfgen d'une ligne de banque, SANS aucune écriture en base : tout
     ce dont dépendent la mise en page et la mesure de hauteur. `item_id` (et
@@ -99,20 +134,26 @@ def render_shape(row, guides: str = pdfgen.GUIDES_INCLUDE) -> dict:
     if row.response_type == "composite":
         parts = (row.expected_json or {}).get("parts") \
             or (grading_json or {}).get("parts") or []
-        return {**common, "response_type": "composite",
-                "grading": {"parts": [
-                    {"response_type": p.get("response_type", "short_text"),
-                     "grading": scoring.with_bareme(
-                         p.get("grading") or {}, p.get("response_type", "short_text")),
-                     "statement": p.get("statement", ""),
-                     "expected": p.get("expected") or {},
-                     "figure": p.get("figure")} for p in parts]}}
+        shaped = []
+        for p in parts:
+            rtype = p.get("response_type", "short_text")
+            p_grading = scoring.with_bareme(p.get("grading") or {}, rtype)
+            p_expected = p.get("expected") or {}
+            if rtype == "matching":
+                p_grading, p_expected = legible_matching(p_grading, p_expected)
+            shaped.append({"response_type": rtype, "grading": p_grading,
+                           "statement": p.get("statement", ""),
+                           "expected": p_expected, "figure": p.get("figure")})
+        return {**common, "response_type": "composite", "grading": {"parts": shaped}}
+    expected = row.expected_json or {}
+    if row.response_type == "matching":
+        grading_json, expected = legible_matching(grading_json, expected)
     return {**common, "response_type": row.response_type,
             "choices": row.grading_json.get("choices", []),
             "grading": grading_json,
             # Le rendu dimensionne les champs sur la nature physique de la
             # réponse (une fraction manuscrite demande 3 mm de plus).
-            "expected": row.expected_json or {},
+            "expected": expected,
             "inline": bool((row.expected_json or {}).get("inline"))}
 
 
@@ -150,7 +191,8 @@ def build_render_item(db: Session, *, row, copy_id: str, catalog_id: str, seq: i
         generated_exercise_id=row.id,
         difficulty=row.difficulty_level * 3, response_type=row.response_type,
         statement=row.statement, correction=row.correction,
-        expected_json=row.expected_json, grading_json=render["grading"])
+        # `render["expected"]` : points à relier réordonnés comme la carte
+        expected_json=render["expected"] or row.expected_json, grading_json=render["grading"])
     db.add(item)
     db.flush()
     return {**render, "item_id": item.id}

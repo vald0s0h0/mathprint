@@ -21,7 +21,9 @@ AprilTag (famille 16h5) dédié au SEUL placement géométrique (translation,
 rotation, échelle) — un type de tag par coin, identique sur toutes les pages.
 """
 import io
+import itertools
 import json
+import math
 import re
 from contextvars import ContextVar
 from datetime import date
@@ -1421,7 +1423,9 @@ _TABLE_ROW_MIN_H = BLANK_H + 2 * _TABLE_CELL_PAD
 _TABLE_ROWLAB_MIN_W = 18.0 * mm
 _TABLE_BANK_GAP = 6.0 * mm         # séparation VISIBLE entre les deux bandes d'un tableau à 2 bandes
 _TABLE_TWO_BANK_MIN_ROWS = 6       # au-delà, un tableau fin passe à 2 bandes (2de moitié à côté)
-_MATCHING_PASTILLE = 2.2 * mm
+_MATCHING_PASTILLE = 2.2 * mm     # emplacement réservé au point (mise en page, cibles CV)
+_MATCHING_DOT = 1.6 * mm           # point noir plein imprimé : départ/arrivée sans ambiguïté,
+                                   # repéré puis effacé par la lecture CV (worker_cv)
 _MATCHING_COL_GAP = 10.0 * mm
 _MATCHING_LANE = 14.0 * mm         # couloir de tracé confortable entre les pastilles
 _MATCHING_LANE_MIN = 8.0 * mm      # resserré avant de replier un libellé
@@ -1659,9 +1663,180 @@ def _matching_geometry(left: list, right: list, font_size: float, width: float) 
             "dot": dot, "gap": gap, "lane": lane}
 
 
+# Disposition HORIZONTALE (points du haut reliés aux points du bas) : réservée
+# aux étiquettes très courtes (nombres, unités, petites expressions), elle
+# remplace la disposition en colonnes seulement si elle est nettement plus
+# compacte, sans replier aucune étiquette ni serrer les points.
+_MATCHING_H_PITCH_MIN = 9.0 * mm   # écart mini entre deux points d'une rangée
+_MATCHING_H_PITCH_MAX = 16.0 * mm  # au-delà, traits trop couchés : rangée resserrée
+_MATCHING_H_LABEL_PAD = 1.5 * mm   # marge d'une étiquette dans sa case
+_MATCHING_H_LABEL_GAP = 1.5 * mm   # étiquette ↔ point
+_MATCHING_H_MIN_ITEMS = 3          # à 2 éléments, les colonnes restent la norme
+_MATCHING_H_GAIN = 0.85            # horizontal seulement s'il gagne >= 15 % de hauteur
+
+
+def _matching_horizontal_geometry(left: list, right: list, font_size: float,
+                                  width: float) -> dict | None:
+    """Géométrie horizontale, ou None si elle n'est pas présentable : trop
+    d'éléments pour la largeur, ou une étiquette qui ne tient pas sur une ligne
+    dans sa case."""
+    n = max(len(left), len(right))
+    if n < _MATCHING_H_MIN_ITEMS:
+        return None
+    pitch = min(_MATCHING_H_PITCH_MAX, (width - 2 * CARD_PAD) / n)
+    if pitch < _MATCHING_H_PITCH_MIN:
+        return None
+    label_w = pitch - _MATCHING_H_LABEL_PAD
+    groups = [left, right]
+    if any(_natural_w(str(v), font_size) > label_w for g in groups for v in g):
+        return None
+    layouts = [[_rich_layout(str(v), label_w, font_size, parse_blocks=False) for v in g]
+               for g in groups]
+    if any(len(lay["lines"]) != 1 for g in layouts for lay in g):
+        return None
+    bands = [max((lay["height"] for lay in g), default=0.0) for g in layouts]
+    dot, lane = _MATCHING_PASTILLE, _MATCHING_LANE
+    return {"orientation": "horizontal", "pitch": pitch, "label_w": label_w,
+            "layouts": layouts, "bands": bands, "dot": dot, "lane": lane,
+            "width": pitch * n,
+            "height": (3 * mm + bands[0] + bands[1] + 2 * _MATCHING_H_LABEL_GAP
+                       + 2 * dot + lane)}
+
+
+def _matching_layout(left: list, right: list, font_size: float, width: float) -> dict:
+    """Disposition retenue pour un exercice « points à relier » : en colonnes
+    (`_matching_geometry`) par défaut, horizontale seulement si elle est
+    présentable ET nettement plus compacte. Une seule décision, partagée par
+    la mesure de hauteur, le dessin et le choix d'un ordre lisible."""
+    vertical = {**_matching_geometry(left, right, font_size, width), "orientation": "vertical"}
+    horizontal = _matching_horizontal_geometry(left, right, font_size, width)
+    if horizontal and horizontal["height"] <= _MATCHING_H_GAIN * vertical["height"]:
+        return horizontal
+    return vertical
+
+
 def _matching_zone_height(left: list, right: list, font_size: int,
                           width: float = COL_W) -> float:
-    return _matching_geometry(left, right, font_size, width)["height"]
+    return _matching_layout(left, right, font_size, width)["height"]
+
+
+def _matching_positions(geo: dict, order: tuple[int, ...] | None = None,
+                        n_left: int = 0, n_right: int = 0) -> tuple[list, list, float]:
+    """Positions des points le long de leur rangée (gauche/haut, droite/bas)
+    pour l'ordre `order` de la colonne de droite, et l'écart entre les deux
+    rangées de points. En colonnes, la hauteur d'une rangée dépend du plus
+    haut des deux libellés qu'elle porte, donc de l'ordre."""
+    lane = geo["dot"] + geo["lane"]
+    if geo.get("orientation") == "horizontal":
+        pitch = geo["pitch"]
+        width = pitch * max(n_left, n_right)
+
+        def row(k: int) -> list[float]:
+            x0 = (width - pitch * k) / 2
+            return [x0 + pitch * (i + 0.5) for i in range(k)]
+        return row(n_left), row(n_right), lane
+    lh = [lay["height"] for lay in geo["layouts"][0]]
+    rh = [lay["height"] for lay in geo["layouts"][1]]
+    order = order if order is not None else tuple(range(n_right))
+    ys, top = [], 0.0
+    for i in range(max(n_left, n_right)):
+        h = max([6.5 * mm] + ([lh[i] + 2 * mm] if i < n_left else [])
+                + ([rh[order[i]] + 2 * mm] if i < n_right else []))
+        ys.append(top + h / 2)
+        top += h
+    return ys[:n_left], ys[:n_right], lane
+
+
+# Disposition lisible des points à relier : l'ordre de la colonne de droite est
+# libre (seules les paires comptent). On écarte les dispositions que la lecture
+# CV — et l'œil — tranchent mal : trois droites concourantes, croisements à
+# angle fermé ou collés aux points, trait qui frôle un autre point. Un trait
+# droit (élément en face de sa réponse) donne la réponse : évité si possible.
+_LEGIBLE_MIN_ANGLE = 25.0          # degrés : croisement franc
+_LEGIBLE_CROSS_SEP = 2.5 * mm      # deux croisements jamais confondus
+_LEGIBLE_END_MARGIN = 3.0 * mm     # croisement loin des rangées de points
+_LEGIBLE_DOT_CLEAR = 2.5 * mm      # un trait passe loin des autres points
+_LEGIBLE_MAX_ITEMS = 7             # au-delà : ordre d'origine (5040 permutations)
+
+
+def _matching_flaws(left_pos: list[float], right_pos: list[float], lane: float,
+                    links: list[tuple[int, int]]) -> float:
+    """Défauts d'une disposition (0 = lisible). `left_pos`/`right_pos` :
+    positions des points le long de leur rangée, `lane` : écart entre les deux
+    rangées, `links` : (point gauche, place à droite) de chaque trait attendu.
+    Repère indifférent à l'orientation : u le long du trait, v le long des rangées."""
+    segs = [((0.0, left_pos[a]), (lane, right_pos[b])) for a, b in links]
+    flaws = 0.0
+    crossings = []
+    for (p1, q1), (p2, q2) in itertools.combinations(segs, 2):
+        d1 = (q1[0] - p1[0], q1[1] - p1[1])
+        d2 = (q2[0] - p2[0], q2[1] - p2[1])
+        den = d1[0] * d2[1] - d1[1] * d2[0]
+        if abs(den) < 1e-9:
+            continue                              # parallèles : jamais confondus
+        t = ((p2[0] - p1[0]) * d2[1] - (p2[1] - p1[1]) * d2[0]) / den
+        if not 0.0 < t < 1.0:
+            continue
+        x, y = p1[0] + t * d1[0], p1[1] + t * d1[1]
+        crossings.append((x, y))
+        angle = abs(math.degrees(math.atan2(d1[1], d1[0]) - math.atan2(d2[1], d2[0])))
+        angle = min(angle, 180.0 - angle)
+        flaws += max(0.0, _LEGIBLE_MIN_ANGLE - angle) / _LEGIBLE_MIN_ANGLE
+        flaws += max(0.0, _LEGIBLE_END_MARGIN - min(x, lane - x)) / _LEGIBLE_END_MARGIN
+    for (x1, y1), (x2, y2) in itertools.combinations(crossings, 2):
+        flaws += max(0.0, _LEGIBLE_CROSS_SEP - math.hypot(x2 - x1, y2 - y1)) / _LEGIBLE_CROSS_SEP
+    for (a, b), ((x0, y0), (x1, y1)) in zip(links, segs):
+        length = math.hypot(x1 - x0, y1 - y0)
+        for x, row, own in ((0.0, left_pos, a), (lane, right_pos, b)):
+            for r, y in enumerate(row):
+                if r == own:
+                    continue
+                gap = abs((x1 - x0) * (y0 - y) - (x0 - x) * (y1 - y0)) / length
+                flaws += max(0.0, _LEGIBLE_DOT_CLEAR - gap) / _LEGIBLE_DOT_CLEAR
+    return flaws
+
+
+def legible_order(left: list, right: list, pairs: list, font_size: float = 9,
+                  width: float = COL_W) -> tuple[int, ...] | None:
+    """Ordre de la colonne de droite (nouvelle place -> ancien indice) pour une
+    lecture sans ambiguïté, dans la disposition retenue (colonnes ou
+    horizontale) ; None pour garder l'ordre d'origine — déjà lisible et sans
+    plus d'un élément en face de sa réponse. Sinon la permutation la moins
+    défectueuse, puis avec le moins de traits droits (réponse en face), puis la
+    plus proche de l'original (choix déterministe : le même exercice donne
+    toujours la même carte, à l'aperçu comme à l'impression)."""
+    n = len(right)
+    links = [(int(p[0]), int(p[1])) for p in pairs or []
+             if isinstance(p, (list, tuple)) and len(p) == 2]
+    if (n < 2 or n > _LEGIBLE_MAX_ITEMS or not links
+            or any(not (0 <= a < len(left) and 0 <= b < n) for a, b in links)):
+        return None
+    geo = _matching_layout(left, right, font_size, width)
+
+    def cost(order: tuple[int, ...]) -> tuple[float, int, int]:
+        lpos, rpos, lane = _matching_positions(geo, order, len(left), n)
+        pos = {old: new for new, old in enumerate(order)}
+        placed = [(a, pos[b]) for a, b in links]
+        flaws = round(_matching_flaws(lpos, rpos, lane, placed), 6)
+        straight = sum(1 for a, b in placed if abs(lpos[a] - rpos[b]) < 0.5 * mm)
+        moved = sum(1 for new, old in enumerate(order) if new != old)
+        return flaws, straight, moved
+
+    flaws, straight, _moved = cost(tuple(range(n)))
+    if flaws == 0 and straight <= 1:
+        return None
+    best = min(itertools.permutations(range(n)), key=cost)
+    return None if best == tuple(range(n)) else best
+
+
+def legible_matching(left: list, right: list, pairs: list, font_size: float = 9,
+                     width: float = COL_W) -> tuple[list, list]:
+    """`legible_order` appliqué : (colonne de droite, paires renumérotées)."""
+    order = legible_order(left, right, pairs, font_size, width)
+    if order is None:
+        return right, pairs
+    pos = {old: new for new, old in enumerate(order)}
+    return [right[old] for old in order], [[int(a), pos[int(b)]] for a, b in pairs]
 
 
 def _zone_height(response_type: str, choices: list[str], width: float,
@@ -1798,9 +1973,39 @@ def _draw_table_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float,
     return {"cells": cells_meta}
 
 
+def _draw_matching_horizontal(c: canvas.Canvas, x: float, y: float, w: float, h: float,
+                              geo: dict) -> dict:
+    """Rangée du haut (éléments, étiquettes au-dessus des points) reliée à la
+    rangée du bas (réponses, étiquettes en dessous) ; chaque rangée centrée."""
+    p, pitch, label_w = geo["dot"], geo["pitch"], geo["label_w"]
+    top = y + h - 1.5 * mm
+    band_top, band_bottom = geo["bands"]
+    centers = [top - band_top - _MATCHING_H_LABEL_GAP - p / 2]
+    centers.append(centers[0] - p - geo["lane"])
+    label_mid = [centers[0] + p / 2 + _MATCHING_H_LABEL_GAP + band_top / 2,
+                 centers[1] - p / 2 - _MATCHING_H_LABEL_GAP - band_bottom / 2]
+    points = [[], []]
+    for side in (0, 1):
+        lays = geo["layouts"][side]
+        x0 = x + (w - pitch * len(lays)) / 2
+        for i, lay in enumerate(lays):
+            cx = x0 + pitch * (i + 0.5)
+            _draw_rich(c, cx - label_w / 2, _centered_top(lay, label_mid[side]), lay,
+                       centered=True, width=label_w)
+            c.setFillColor(black)
+            c.circle(cx, centers[side], _MATCHING_DOT / 2, stroke=0, fill=1)
+            points[side].append({"index": i, "x_pt": cx - p / 2, "y_pt": centers[side] - p / 2,
+                                 "w_pt": p, "h_pt": p})
+    c.setFillColor(black)
+    c.setStrokeColor(black)
+    return {"left_points": points[0], "right_points": points[1], "orientation": "horizontal"}
+
+
 def _draw_matching_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float,
                         left: list[str], right: list[str], font_size: int) -> dict:
-    geo = _matching_geometry(left, right, font_size, w)
+    geo = _matching_layout(left, right, font_size, w)
+    if geo["orientation"] == "horizontal":
+        return _draw_matching_horizontal(c, x, y, w, h, geo)
     p, gap = geo["dot"], geo["gap"]
     lx = x + (w - geo["width"]) / 2
     ldot = lx + geo["widths"][0] + gap
@@ -1816,9 +2021,8 @@ def _draw_matching_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float
             tx = lx if side == 0 else px + p + gap
             _draw_rich(c, tx, _centered_top(lay, cy), lay,
                        width=geo["widths"][side], right_aligned=side == 0)
-            c.setStrokeColor(DROPOUT)
-            c.setFillColor(white)
-            c.circle(px + p / 2, cy, p / 2, stroke=1, fill=1)
+            c.setFillColor(black)
+            c.circle(px + p / 2, cy, _MATCHING_DOT / 2, stroke=0, fill=1)
             points[side].append({"index": i, "x_pt": px, "y_pt": cy - p / 2,
                                  "w_pt": p, "h_pt": p})
         top -= row_h
@@ -2838,7 +3042,7 @@ def _draw_zone_marks(c: canvas.Canvas, z: dict, col):
     edge_x = marks.get("edge_x")
     if edge_x is not None:
         for e in marks.get("edge", []):
-            _edge_mark(c, edge_x, e["y"], e["ok"])
+            _edge_mark(c, e.get("x", edge_x), e["y"], e["ok"])
     c.restoreState()
 
 

@@ -1,7 +1,7 @@
 # ClassMap
 
 Application Windows portable (10/11, x64) pour suivre les avertissements d'une classe.
-Indépendante de MathPrint : aucun code, aucune API en commun.
+Indépendante de Kiro & Nina : aucun code, aucune API en commun.
 
 ## Installer sur la clé
 

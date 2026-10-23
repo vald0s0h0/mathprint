@@ -2,10 +2,10 @@
 
 Astra est l'agent Codex `gpt-6-astra` lancé depuis le chat VSCode : il LIT
 lui-même les images des pages du manuel et ÉCRIT `astra_output.json`. Ce module
-fait tout le reste, de façon déterministe, en réutilisant le backend MathPrint :
+fait tout le reste, de façon déterministe, en réutilisant le backend Kiro & Nina :
 
   prepare  : chapitre → pages (chapters_<niveau>.json) → images PNG + payload.json
-  validate : astra_output.json → contrat MathPrint (validateur partagé, sympy,
+  validate : astra_output.json → contrat Kiro & Nina (validateur partagé, sympy,
              barème codé) + règles Astra (CV seulement, guides) → report.json
   figures  : découpes (bbox + masques blanchis) et figures geo/chart → PNG
   preview  : PDF de relecture (pdfgen, le rendu RÉEL des copies) + PNG par page
@@ -694,7 +694,7 @@ def validate(db, run: Path) -> tuple[Report, dict]:
                 valid = exercise_gen._validate_exercise(
                     raw, comp, db, set(), allow_geometry_text=True, require_correction=False)
                 if valid is None:
-                    probs.append("refusé par le validateur MathPrint — " +
+                    probs.append("refusé par le validateur Kiro & Nina — " +
                                  exercise_gen.diagnose_rejection(raw, comp,
                                                                  require_correction=False))
                 else:

@@ -1790,7 +1790,7 @@ def start_worker() -> None:
     if _started:
         return
     _started = True
-    threading.Thread(target=_loop, daemon=True, name="mathprint-indigo-worker").start()
+    threading.Thread(target=_loop, daemon=True, name="kironina-indigo-worker").start()
 
 
 def resume_stuck(db) -> int:

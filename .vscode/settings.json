@@ -16,11 +16,22 @@
     "**/node_modules/**": true,
     "**/.venv/**": true,
     "**/__pycache__/**": true,
-    "**/*.db": true
+    "**/*.db": true,
+    "**/entreprise/twenty/app/**": true,
+    "**/entreprise/twenty/storage/**": true,
+    "**/entreprise/twenty/logs/**": true
   },
   "search.exclude": {
     "**/data/**": true,
     "**/volumes/**": true,
-    "**/dist/**": true
+    "**/dist/**": true,
+    "**/entreprise/twenty/app/**": true,
+    "**/entreprise/twenty/storage/**": true,
+    "**/entreprise/twenty/logs/**": true
+  },
+  // Code source de Twenty (CRM local) : des dizaines de milliers de fichiers,
+  // masqués de l'explorateur pour ne pas alourdir l'éditeur.
+  "files.exclude": {
+    "**/entreprise/twenty/app": true
   }
 }

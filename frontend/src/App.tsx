@@ -106,7 +106,7 @@ export default function App() {
         <Group h="100%" px="md" justify="space-between" wrap="nowrap">
           <Group gap={8} wrap="nowrap" style={{ cursor: 'pointer' }} onClick={() => navigate('/')}>
             <GraduationCap size={24} strokeWidth={2.2} />
-            <Title order={3} fw={700}>MathPrint</Title>
+            <Title order={3} fw={700}>Kiro & Nina</Title>
           </Group>
 
           {/* Filtre CYCLE global : le professeur travaille par cycle ; ce
@@ -157,7 +157,7 @@ export default function App() {
               style={{ letterSpacing: 0.6 }}>Admin</Text>
           )}
           {navBottom.map(renderNavLink)}
-          <Text size="xs" c="dimmed" px="sm" pt={4} pb={4}>MathPrint v{APP_VERSION}</Text>
+          <Text size="xs" c="dimmed" px="sm" pt={4} pb={4}>Kiro & Nina v{APP_VERSION}</Text>
         </Box>
       </AppShell.Navbar>
 

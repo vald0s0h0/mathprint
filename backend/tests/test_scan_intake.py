@@ -74,7 +74,7 @@ def _patch_classify(monkeypatch, db, pages):
 
 
 def _marked_pdf(payload: str) -> bytes:
-    """Une vraie page MathPrint, telle qu'elle arrive dans « Déposer en vrac ».
+    """Une vraie page Kiro & Nina, telle qu'elle arrive dans « Déposer en vrac ».
     Le test passe ensuite par raster_pdf + OpenCV, sans simuler le QR."""
     from reportlab.pdfgen import canvas
 

@@ -160,7 +160,7 @@ export default function PrinterSettings({ printers, refresh }: {
           <Box>
             <Text fw={700}>Imprimantes disponibles</Text>
             <Text size="sm" c="dimmed">
-              Les réglages sont propres à MathPrint et peuvent différer du défaut de l’ordinateur.
+              Les réglages sont propres à Kiro & Nina et peuvent différer du défaut de l’ordinateur.
             </Text>
           </Box>
           <Badge variant="light" color={printers?.printing_available ? 'green' : 'gray'}>
@@ -230,7 +230,7 @@ export default function PrinterSettings({ printers, refresh }: {
                     </Table.Td>
                     <Table.Td ta="center">
                       <Box style={{ display: 'flex', justifyContent: 'center' }}>
-                        <Checkbox aria-label={`Choisir ${row.name} par défaut dans MathPrint`}
+                        <Checkbox aria-label={`Choisir ${row.name} par défaut dans Kiro & Nina`}
                           checked={row.app_default}
                           disabled={saving === `${row.name}:app_default`}
                           onChange={(e) => setPreference(row, 'app_default', e.currentTarget.checked)} />
@@ -309,7 +309,7 @@ export default function PrinterSettings({ printers, refresh }: {
       <Card withBorder>
         <Title order={4}>Comment déterminer l’ordre de mon imprimante et de mon ADF ?</Title>
         <Text size="sm" c="dimmed" mt={4} mb="md">
-          Faites ce réglage une fois par couple imprimante–scanner. MathPrint imposera ensuite
+          Faites ce réglage une fois par couple imprimante–scanner. Kiro & Nina imposera ensuite
           la taille réelle, la collation et l’ordre de sortie à chaque impression.
         </Text>
         <Stack gap="sm">

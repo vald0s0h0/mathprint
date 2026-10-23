@@ -1,4 +1,4 @@
-# MathPrint
+# Kiro & Nina
 
 Plateforme NAS de génération, correction automatisée et suivi adaptatif en
 mathématiques (collège). Implémentation du cahier des charges
@@ -36,6 +36,8 @@ Le NAS ne construit rien localement : il tire les images depuis GHCR.
 En pratique : `scripts/ship.sh "message"` enchaîne tests, contrôle qu'aucune
 correction ne tourne sur le NAS (Tailscale actif), sauvegarde de la base,
 nouvelle version, commit, tag annoté et push (`--help` pour les options).
+Le NAS se met à jour la nuit (00:00–00:45) ; `--now` attend la CI et le met à
+jour tout de suite, `scripts/ship.sh --deploy-only` fait de même après coup.
 Les commits qui ne touchent que `entreprise/` ne déclenchent pas la CI.
 `.github/workflows/deploy.yml` lance les tests puis publie sur
 `ghcr.io/vald0s0h0/` les images qui ont changé (`mathprint-api`,

@@ -1,4 +1,4 @@
-"""Configuration centrale de MathPrint (NAS).
+"""Configuration centrale de Kiro & Nina (NAS).
 
 Tout est surchargeable par variable d'environnement (préfixe MATHPRINT_).
 Aucun identifiant de modèle LLM n'est codé en dur ailleurs que dans ce

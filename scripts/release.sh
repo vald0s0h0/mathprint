@@ -24,7 +24,7 @@ if [[ -n "$(git status --porcelain)" ]]; then
   exit 1
 fi
 
-git tag -a "$VERSION" -m "MathPrint $VERSION"
+git tag -a "$VERSION" -m "Kiro & Nina $VERSION"
 git push origin "$VERSION"
 echo "Tag $VERSION poussé — suivre la build sur l'onglet Actions du dépôt GitHub."
 echo "Pour épingler le NAS : MATHPRINT_VERSION=${VERSION#v}  (sans le « v »)."
