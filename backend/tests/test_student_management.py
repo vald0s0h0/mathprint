@@ -106,9 +106,10 @@ def test_dyslexic_pdf_embeds_font_without_changing_card_geometry():
     regular_zones, regular_pdf = _render(False)
     dyslexic_zones, dyslexic_pdf = _render(True)
 
+    # Liste à plat : pytest.approx refuse les structures imbriquées (pytest >= 9).
     geometry = lambda zones: [
-        (zone["page_index"], zone["x_pt"], zone["y_pt"], zone["w_pt"], zone["h_pt"])
-        for zone in zones
+        value for zone in zones
+        for value in (zone["page_index"], zone["x_pt"], zone["y_pt"], zone["w_pt"], zone["h_pt"])
     ]
     assert geometry(dyslexic_zones) == pytest.approx(geometry(regular_zones))
     assert b"OpenDyslexic" not in regular_pdf
