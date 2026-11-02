@@ -35,14 +35,14 @@ from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from ..models import (
-    Assessment, CompetencyEvidence, CompetencyStateHistory, Copy, CopyItem,
+    Assessment, CompetencyEvidence, Copy, CopyItem,
     CopyResult, ExerciseCompetency, GradingDecision, ManualReview, OcrAttempt,
-    ResponseZone, ScanBatch, Student, StudentCompetencyState, StudentResponse,
+    ResponseZone, ScanBatch, Student, StudentResponse,
 )
 from . import grading as grader
 from . import scoring
 from .appreciation import compute_competency_progress
-from .forgetting import apply_evidence
+from .forgetting import replay_states
 from .pdfgen import PAGE_H, PAGE_W, render_page_marks
 from .pipeline import (
     _copies_in_scan_order, _grading_contract_issue, _recognized_answer_issue,
@@ -440,29 +440,6 @@ def apply_points(db: Session, resp: StudentResponse, item: CopyItem,
 
 # ------------------------------------------------------- suivi de l'élève
 
-def _replay_states(db: Session, student_id: str, competency_ids: list[str]) -> None:
-    """Reconstruit la courbe d'oubli de l'élève sur ces compétences en rejouant
-    ses preuves dans l'ordre des devoirs (même règle que
-    data_admin.purge_correction_tracking, restreinte aux compétences touchées :
-    un état ne dépend que des preuves de SA compétence)."""
-    (db.query(CompetencyStateHistory)
-     .filter(CompetencyStateHistory.student_id == student_id,
-             CompetencyStateHistory.competency_id.in_(competency_ids))
-     .delete(synchronize_session=False))
-    (db.query(StudentCompetencyState)
-     .filter(StudentCompetencyState.student_id == student_id,
-             StudentCompetencyState.competency_id.in_(competency_ids))
-     .delete(synchronize_session="fetch"))
-    db.flush()
-    evidences = (db.query(CompetencyEvidence)
-                 .filter(CompetencyEvidence.student_id == student_id,
-                         CompetencyEvidence.competency_id.in_(competency_ids))
-                 .order_by(CompetencyEvidence.observed_at, CompetencyEvidence.id).all())
-    for ev in evidences:
-        apply_evidence(db, ev)
-        db.flush()
-
-
 def refresh_copy(db: Session, copy: Copy, item: CopyItem,
                  decision: GradingDecision) -> None:
     """Reporte la nouvelle note d'UNE réponse sur le suivi de l'élève : résultat
@@ -494,7 +471,7 @@ def refresh_copy(db: Session, copy: Copy, item: CopyItem,
     db.flush()
     appreciation = dict(copy.appreciation_json or {})
     if changed:
-        _replay_states(db, copy.student_id, changed)
+        replay_states(db, copy.student_id, changed)
         appreciation["progress"] = compute_competency_progress(
             db, assessment.id, copy.student_id)
         appreciation.setdefault("synthesis", "")

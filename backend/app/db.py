@@ -38,8 +38,10 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, ...]]] = {
     "users": [("subscription_plan", "TEXT")],
     "scan_batches": [("overlay_printed", "BOOLEAN"), ("overlay_distributed", "BOOLEAN"),
                      ("refine_rev", "INTEGER", "0"), ("overlay_rev", "INTEGER", "0"),
-                     ("overlay_print_json", "JSON")],
-    "scanned_pages": [("manual_page_id", "TEXT"), ("dismissed", "BOOLEAN")],
+                     ("overlay_print_json", "JSON"), ("overlay_wave", "INTEGER", "0"),
+                     ("waves_json", "JSON")],
+    "scanned_pages": [("manual_page_id", "TEXT"), ("dismissed", "BOOLEAN"),
+                      ("wave", "INTEGER", "0"), ("replaces_page_id", "TEXT")],
     "copies": [("appreciation_json", "JSON"), ("variant_key", "TEXT")],
     "generated_exercises": [
         ("verifier_model", "TEXT"),

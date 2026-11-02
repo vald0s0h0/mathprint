@@ -30,7 +30,9 @@ from . import grading as grader
 from . import llm_grader, providers, scoring
 from .runtime_settings import ocr_confidence_threshold
 from .appreciation import build_appreciation
-from .forgetting import apply_evidence, update_level_after_assessment
+from . import late_copies
+from .forgetting import apply_evidence, replay_states, update_level_after_assessment
+from .overlay_queue import overlay_file
 from .pdfgen import (CARD_PAD, EDGE_MARK_SIZE, qcm_answer_rects, render_copy_review,
                      render_overlay)
 
@@ -302,7 +304,9 @@ def effective_reading(db: Session, zone_id: str | None) -> OcrAttempt | None:
 def pending_ocr_responses(db: Session, assessment_id: str) -> list[StudentResponse]:
     """Réponses dont la dernière lecture CV/OCR reste sous le seuil réglé."""
     threshold = ocr_confidence_threshold(db)
-    copies = db.query(Copy).filter_by(assessment_id=assessment_id).all()
+    # Une copie finalisée est close : une copie tardive ne rouvre pas sa lecture.
+    copies = (db.query(Copy).filter(Copy.assessment_id == assessment_id,
+                                    Copy.status != "finalized").all())
     copy_ids = [c.id for c in copies]
     if not copy_ids:
         return []
@@ -355,6 +359,8 @@ def grade_stored_responses(db: Session, batch: ScanBatch) -> int:
     queue: list[llm_grader.Task] = []
     copies = db.query(Copy).filter_by(assessment_id=assessment.id).all()
     for copy in copies:
+        if copy.status == "finalized":
+            continue   # copie close, recorrigée seulement si le professeur le demande
         if copy.status == "absent" or copy_is_blank(db, copy):
             copy.status = "absent"
             continue
@@ -466,9 +472,17 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
         sp = (db.query(ScannedPage).filter_by(batch_id=batch.id, source_index=i).first()
               or ScannedPage(batch_id=batch.id, source_index=i))
         db.add(sp)
-        if sp.dismissed:
+        if sp.dismissed or sp.status in late_copies.SKIPPED_BY_PIPELINE:
             # confirmé par le professeur comme n'étant pas une vraie copie
             # (résolution des scans bloqués) : hors flux, aucun overlay attendu.
+            # Une feuille tardive sans correction à lire garde sa place, sans lecture.
+            continue
+        if (sp.status == "registered" and sp.page_id in page_index
+                and page_index[sp.page_id][1].status == "finalized"
+                and (derived_dir / f"page-{sp.page_id}.png").exists()):
+            # Copie déjà corrigée : une nouvelle vague ne la relit pas.
+            seen_page_ids.add(sp.page_id)
+            identified += 1
             continue
         # `manual_page_id` : identité posée à la main sur une page jusqu'ici
         # bloquée (QR illisible) — on ne retente pas la lecture QR, seulement
@@ -891,6 +905,9 @@ def _process_mock(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
 
 def open_reviews(db: Session, assessment_id: str) -> int:
     """Nombre de validations professeur encore ouvertes sur un sujet."""
+    # Session sans autoflush : la dernière revue créée doit compter. Sans cela, un
+    # lot à une seule revue se croyait terminé et sa validation échouait.
+    db.flush()
     return (db.query(ManualReview).join(GradingDecision)
             .join(StudentResponse, GradingDecision.response_id == StudentResponse.id)
             .join(CopyItem, StudentResponse.copy_item_id == CopyItem.id)
@@ -912,6 +929,10 @@ def audit_automatic_decisions(db: Session, assessment_id: str) -> int:
     # review_pending par une ancienne version de la pipeline.
     changed = llm_grader.sync_confidence_reviews(db, assessment_id)
     copies = db.query(Copy).filter_by(assessment_id=assessment_id).all()
+    # Une copie tardive ne fait pas rouvrir les copies déjà rendues de la classe.
+    if db.query(ScanBatch).filter(ScanBatch.assessment_id == assessment_id,
+                                  ScanBatch.overlay_wave > 0).first():
+        copies = [c for c in copies if c.status != "finalized"]
     copy_ids = [c.id for c in copies]
     if not copy_ids:
         return changed
@@ -1061,6 +1082,9 @@ def _finalize_batch(db: Session, batch: ScanBatch) -> dict:
         raise ValueError(f"{pending} validation(s) professeur restante(s)")
 
     assessment = db.get(Assessment, batch.assessment_id)
+    # Sujet déjà validé (copies tardives, Recalculer) : une preuve arrivée après
+    # coup doit être rejouée à sa date, pas appliquée après des devoirs plus récents.
+    already_final = assessment.status == "finalized"
     copies = db.query(Copy).filter_by(assessment_id=assessment.id).all()
     n_evidence = 0
     n_results = 0
@@ -1070,7 +1094,7 @@ def _finalize_batch(db: Session, batch: ScanBatch) -> dict:
             # elle devient explicitement absente dans le carnet de notes.
             copy.status = "absent"
             continue
-        if copy.status == "absent" or copy_is_blank(db, copy):
+        if copy.status != "finalized" and (copy.status == "absent" or copy_is_blank(db, copy)):
             copy.status = "absent"
             continue  # absents et copies non scannées : jamais pénalisés
         # Résultats consolidés de l'élève à ce sujet (points de barème par
@@ -1081,6 +1105,11 @@ def _finalize_batch(db: Session, batch: ScanBatch) -> dict:
         if scoring.compute_copy_result(db, copy, assessment) is not None:
             n_results += 1
         items = db.query(CopyItem).filter_by(copy_id=copy.id).all()
+        # Une preuve par exercice et compétence, quel que soit le nombre de
+        # validations : la courbe d'oubli ne compte jamais deux fois un devoir.
+        known = {(e.item_id, e.competency_id) for e in db.query(CompetencyEvidence).filter(
+            CompetencyEvidence.item_id.in_([i.id for i in items]))} if items else set()
+        replayed: set[str] = set()
         for item in items:
             resp = db.query(StudentResponse).filter_by(copy_item_id=item.id).first()
             if not resp:
@@ -1095,6 +1124,8 @@ def _finalize_batch(db: Session, batch: ScanBatch) -> dict:
             # dix jours plus tard repousserait sinon la date due d'autant.
             observed_at = scoring.assessment_date(assessment, copy)
             for ec in db.query(ExerciseCompetency).filter_by(exercise_id=item.catalog_id):
+                if (item.id, ec.competency_id) in known:
+                    continue
                 ev = CompetencyEvidence(
                     student_id=copy.student_id, competency_id=ec.competency_id,
                     item_id=item.id, mode=assessment.type, score_ratio=ratio,
@@ -1102,8 +1133,13 @@ def _finalize_batch(db: Session, batch: ScanBatch) -> dict:
                     difficulty=item.difficulty, weight=ec.weight * ec.evidence_strength)
                 db.add(ev)
                 db.flush()
-                apply_evidence(db, ev)
+                if already_final:
+                    replayed.add(ec.competency_id)
+                else:
+                    apply_evidence(db, ev)
                 n_evidence += 1
+        if replayed:
+            replay_states(db, copy.student_id, sorted(replayed))
         # Les états de maîtrise ajoutés ci-dessus doivent être visibles du
         # calcul malgré l'autoflush désactivé de la session applicative.
         db.flush()
@@ -1506,6 +1542,8 @@ def build_overlays(db: Session, batch: ScanBatch) -> str:
 
     Reconstruit TOUT le lot depuis la base : une copie affinée change seulement
     ses propres pages, les autres sont rendues à l'identique, à la même place.
+    Chaque enchaînement scanné (vague, cf. services.late_copies) a son propre PDF
+    imprimable : l'overlay d'une pile ne contient que les feuilles de cette pile.
     """
     assessment = db.get(Assessment, batch.assessment_id)
     # Version des corrections affinées couverte par ce rendu, relue en base (un
@@ -1514,7 +1552,6 @@ def build_overlays(db: Session, batch: ScanBatch) -> str:
                   .scalar() or 0)
     out_dir = settings.data_dir / "assessments" / assessment.id / "overlays"
     out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / "correction_overlay.pdf"
     review_path = out_dir / "correction_review.pdf"
     derived_dir = settings.data_dir / "assessments" / assessment.id / "scans" / "derived"
     # page_id -> (DocumentPage, Copy), pour nommer un placeholder « bloqué »
@@ -1560,17 +1597,21 @@ def build_overlays(db: Session, batch: ScanBatch) -> str:
             continue
         order_meta = {"_scan_index": scanned_page.source_index,
                       "_copy_index": scanned_page.source_index,
-                      "_page_no": 0}
+                      "_page_no": 0, "_wave": scanned_page.wave or 0}
         # Une identité CONNUE (lue ou reliée à la main) mais dont le recalage a
         # échoué (page abîmée) garde son nom sur le placeholder, au lieu du
         # « Non identifié » générique — la correction reste manuelle mais le
         # bon élève reçoit sa feuille.
         label = "Non identifié"
-        if scanned_page.page_id and scanned_page.page_id in page_index:
-            _, placeholder_copy = page_index[scanned_page.page_id]
+        known_page = scanned_page.page_id or scanned_page.replaces_page_id
+        if known_page and known_page in page_index:
+            _, placeholder_copy = page_index[known_page]
             placeholder_student = db.get(Student, placeholder_copy.student_id)
             if placeholder_student:
                 label = f"{placeholder_student.name} — à corriger manuellement"
+        # Feuille à sa place dans la pile, mais rien à y poser : page sans marque.
+        if scanned_page.status in late_copies.SKIPPED_BY_PIPELINE:
+            order_meta["blank"] = True
         placeholder = {
             "student": label, "unidentified": True,
             "assessment_type": assessment.type, "page_zones": [], **order_meta,
@@ -1587,6 +1628,9 @@ def build_overlays(db: Session, batch: ScanBatch) -> str:
         return (0, pos) if pos is not None else (
             1, page.get("_copy_index", 0), page.get("_page_no", 0))
 
+    wave_of = {row.source_index: row.wave or 0 for row in scan_rows}
+    for page in pages_annotations:
+        page["_wave"] = wave_of.get(page.get("_scan_index"), 0)
     pages_annotations.sort(key=physical_key)
     review_pages.sort(key=physical_key)
     if scan_rows and (len(pages_annotations) != len(scan_rows)
@@ -1598,6 +1642,13 @@ def build_overlays(db: Session, batch: ScanBatch) -> str:
         page.pop("_scan_index", None)
         page.pop("_copy_index", None)
         page.pop("_page_no", None)
+    waves: dict[int, list[dict]] = {}
+    for page in pages_annotations:
+        waves.setdefault(page.pop("_wave", 0), []).append(page)
+    for page in review_pages:
+        page.pop("_wave", None)
+    # Lot sans aucune page (cas limite) : l'overlay initial reste publié, vide.
+    waves.setdefault(0, [])
 
     color = correction_ink(db)
     # Annotations et appréciations écrites : on valide AVANT le rendu pour ne
@@ -1606,16 +1657,20 @@ def build_overlays(db: Session, batch: ScanBatch) -> str:
     db.commit()
     # 1) L'overlay IMPRIMABLE d'abord (marques seules, rapide) : dès qu'il est
     # publié, il fait foi et l'impression est débloquée.
-    _publish(path, lambda p: render_overlay(
-        p, copies_annotations=pages_annotations, color=color))
+    for wave, wave_pages in sorted(waves.items()):
+        _publish(overlay_file(assessment.id, wave), lambda p, pages=wave_pages: render_overlay(
+            p, copies_annotations=pages, color=color))
+    path = overlay_file(assessment.id, 0)
     # Un overlay régénéré APRÈS affinage remplace une impression devenue fausse :
     # l'étape repasse « à imprimer ». Rendu initial ou simple relance : inchangé.
     previous_rev = (db.query(ScanBatch.overlay_rev).filter(ScanBatch.id == batch.id)
                     .scalar() or 0)
     changes = {ScanBatch.overlay_rev: refine_rev}
     if refine_rev > previous_rev:
-        changes[ScanBatch.overlay_printed] = False
-        batch.overlay_printed = False
+        # Seules les piles contenant une copie affinée sont à réimprimer.
+        late_copies.reopen_refined_waves(batch)
+        changes[ScanBatch.overlay_printed] = batch.overlay_printed
+        changes[ScanBatch.waves_json] = batch.waves_json
     db.query(ScanBatch).filter(ScanBatch.id == batch.id).update(
         changes, synchronize_session=False)
     batch.overlay_rev = refine_rev

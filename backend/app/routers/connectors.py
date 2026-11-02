@@ -19,6 +19,7 @@ from ..db import get_db
 from ..models import (Assessment, AuditLog, ConnectorPrintJob, PrintConnector,
                       Printer, ScanBatch, User)
 from ..services import login_throttle
+from ..services import late_copies
 from ..services.print_connectors import expire_stale_queued_jobs
 from ..services.security import verify_password
 
@@ -302,8 +303,8 @@ def _mark_business_success(db: Session, job: ConnectorPrintJob):
     # Une passe recto laisse encore tous les versos à imprimer.
     if (job.file_name == "correction_overlay.pdf" and job.assessment_id
             and job.pass_side in ("all", "verso")):
-        (db.query(ScanBatch).filter(ScanBatch.assessment_id == job.assessment_id)
-         .update({ScanBatch.overlay_printed: True}, synchronize_session=False))
+        late_copies.mark_wave_printed(db, job.assessment_id,
+                                      (job.options_json or {}).get("overlay_wave", 0))
 
 
 @router.post("/jobs/{job_id}/result")

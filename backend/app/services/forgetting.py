@@ -218,6 +218,29 @@ def apply_evidence(db: Session, ev: CompetencyEvidence) -> StudentCompetencyStat
     return state
 
 
+def replay_states(db: Session, student_id: str, competency_ids: list[str]) -> None:
+    """Reconstruit la courbe d'oubli de l'élève sur ces compétences en rejouant
+    ses preuves dans l'ordre des devoirs (même règle que
+    data_admin.purge_correction_tracking, restreinte aux compétences touchées :
+    un état ne dépend que des preuves de SA compétence)."""
+    (db.query(CompetencyStateHistory)
+     .filter(CompetencyStateHistory.student_id == student_id,
+             CompetencyStateHistory.competency_id.in_(competency_ids))
+     .delete(synchronize_session=False))
+    (db.query(StudentCompetencyState)
+     .filter(StudentCompetencyState.student_id == student_id,
+             StudentCompetencyState.competency_id.in_(competency_ids))
+     .delete(synchronize_session="fetch"))
+    db.flush()
+    evidences = (db.query(CompetencyEvidence)
+                 .filter(CompetencyEvidence.student_id == student_id,
+                         CompetencyEvidence.competency_id.in_(competency_ids))
+                 .order_by(CompetencyEvidence.observed_at, CompetencyEvidence.id).all())
+    for ev in evidences:
+        apply_evidence(db, ev)
+        db.flush()
+
+
 def state_snapshot(state: StudentCompetencyState, at: datetime | None = None) -> dict:
     """Lecture complète d'un état, telle que l'affichent l'écran Élève et le
     moteur de sujets. Une seule définition : la priorité montrée au professeur

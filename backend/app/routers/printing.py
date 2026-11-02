@@ -31,7 +31,7 @@ from ..deps import current_user, require_role
 from ..models import (AuditLog, Assessment, ConnectorPrintJob, Copy,
                       DocumentPage, Job, PrintConnector, Printer, ScanBatch,
                       Student, User, TeacherProfile)
-from ..services import overlay_queue
+from ..services import late_copies, overlay_queue
 from ..services.print_connectors import (connector_online,
                                          expire_stale_queued_jobs)
 
@@ -304,26 +304,36 @@ class PrintIn(BaseModel):
     expected_student: str | None = None
     # Essai : la seule feuille de `start_position`, sans effet sur le suivi.
     sample: bool = False
+    # Enchaînement scanné à imprimer (0 = premier dépôt, cf. services.late_copies).
+    wave: int = 0
 
 
-def _overlay_path(assessment_id: str) -> Path:
-    return (settings.data_dir / "assessments" / assessment_id /
-            ALLOWED_FILES[OVERLAY_FILE] / OVERLAY_FILE)
-
-
-def _overlay_sheets(db: Session, assessment: Assessment, path: Path,
-                    batch: ScanBatch) -> list[overlay_queue.Sheet]:
+def _overlay_sheets(db: Session, assessment: Assessment, path: Path, batch: ScanBatch,
+                    wave: int = 0) -> list[overlay_queue.Sheet]:
     from pypdf import PdfReader
 
-    sides = overlay_queue.overlay_sides(db, batch, len(PdfReader(str(path)).pages))
+    sides = overlay_queue.overlay_sides(db, batch, len(PdfReader(str(path)).pages), wave)
     return overlay_queue.group_sheets(sides, duplex=bool(assessment.duplex))
+
+
+def _wave_blocked(db: Session, batch: ScanBatch, wave: int) -> str | None:
+    """Pourquoi cette pile ne peut pas encore partir à l'impression."""
+    if not wave:
+        return None
+    if wave > (batch.overlay_wave or 0):
+        return "Ces copies tardives n'existent plus."
+    if late_copies.list_conflicts(db, batch, wave=wave):
+        return "Résolvez d'abord la double correction de ce dépôt."
+    if not late_copies.wave_overlay_ready(db, batch, wave):
+        return "Ces copies tardives sont encore en cours de correction."
+    return None
 
 
 def _remember_overlay_print(batch: ScanBatch, *, status: str, job_id: str | None,
                             pass_side: str, start: int, total: int,
                             selected: list[overlay_queue.Sheet], printer: str,
-                            adf_reversed: bool, error: str | None = None):
-    batch.overlay_print_json = {
+                            adf_reversed: bool, error: str | None = None, wave: int = 0):
+    record = {
         "status": status, "job_id": job_id, "error": error, "pass_side": pass_side,
         "start_position": start, "total": total, "sheets": len(selected),
         "first_student": selected[0].student, "last_student": selected[-1].student,
@@ -331,12 +341,16 @@ def _remember_overlay_print(batch: ScanBatch, *, status: str, job_id: str | None
         "overlay_rev": batch.overlay_rev or 0,
         "sent_at": datetime.now(timezone.utc).isoformat(),
     }
+    if wave:
+        late_copies.set_wave_state(batch, wave, last_print=record)
+    else:
+        batch.overlay_print_json = record
 
 
 def _overlay_last_print(db: Session, batch: ScanBatch, *, total: int,
-                        adf_reversed: bool) -> dict | None:
+                        adf_reversed: bool, wave: int = 0) -> dict | None:
     """Dernier envoi de CET overlay : un rendu régénéré repart de zéro."""
-    data = batch.overlay_print_json
+    data = late_copies.wave_state(batch, wave).get("last_print") if wave else batch.overlay_print_json
     if not data or data.get("overlay_rev") != (batch.overlay_rev or 0) or data.get("total") != total:
         return None
     view = dict(data)
@@ -352,7 +366,7 @@ def _overlay_last_print(db: Session, batch: ScanBatch, *, total: int,
 @router.get("/overlay-queue")
 def overlay_print_queue(assessment_id: str, printer: str | None = None,
                         db: Session = Depends(get_db),
-                        user: User = Depends(current_user)):
+                        user: User = Depends(current_user), wave: int = 0):
     """File d'attente de l'overlay, dans l'ordre où les feuilles seront imprimées."""
     assessment = db.get(Assessment, assessment_id)
     if not assessment:
@@ -363,27 +377,31 @@ def overlay_print_queue(assessment_id: str, printer: str | None = None,
         _assert_profile_access(db, profile, user)
     adf_reversed = bool(profile and profile.adf_reverse_order)
     expire_stale_queued_jobs(db, user_id=user.id)
-    path = _overlay_path(assessment_id)
+    path = overlay_queue.overlay_file(assessment_id, wave)
     batch = overlay_queue.overlay_batch(db, assessment_id)
-    blocked = None
-    if not path.exists() or not batch:
+    blocked = _wave_blocked(db, batch, wave) if batch else None
+    if blocked:
+        pass
+    elif not path.exists() or not batch:
         blocked = "L'overlay n'est pas encore généré."
     elif (batch.refine_rev or 0) > (batch.overlay_rev or 0):
         blocked = "L'overlay n'est pas à jour des dernières corrections : régénérez-le avant d'imprimer."
     sheets: list[overlay_queue.Sheet] = []
     if not blocked:
         try:
-            sheets = _overlay_sheets(db, assessment, path, batch)
+            sheets = _overlay_sheets(db, assessment, path, batch, wave)
         except overlay_queue.OverlayQueueError as error:
             blocked = str(error)
     queue = overlay_queue.physical_queue(sheets, adf_reversed=adf_reversed)
     return {
-        "blocked": blocked, "total": len(queue), "adf_reversed": adf_reversed,
+        "blocked": blocked, "total": len(queue), "adf_reversed": adf_reversed, "wave": wave,
         "assessment_duplex": bool(assessment.duplex),
         "entries": [{"position": i + 1, "student": sheet.student,
-                     "identified": sheet.identified, "pages": sheet.pages_label}
+                     "identified": sheet.identified, "pages": sheet.pages_label,
+                     "pass_through": sheet.pass_through}
                     for i, sheet in enumerate(queue)],
-        "last_print": _overlay_last_print(db, batch, total=len(queue), adf_reversed=adf_reversed)
+        "last_print": _overlay_last_print(db, batch, total=len(queue), adf_reversed=adf_reversed,
+                                          wave=wave)
                       if batch and queue else None,
     }
 
@@ -456,7 +474,8 @@ def _queue_connector_job(*, db: Session, user: User, profile: Printer,
                          title: str, file_name: str, pass_side: str,
                          document: bytes, assessment_id: str | None,
                          copies: int, duplex: bool, reverse: bool,
-                         overlay_offset_mm: tuple[float, float] | None = None) -> ConnectorPrintJob:
+                         overlay_offset_mm: tuple[float, float] | None = None,
+                         overlay_wave: int = 0) -> ConnectorPrintJob:
     connector = _connector_for_profile(db, profile)
     if not _can_use_connector(db, connector, user):
         raise HTTPException(409, "Le connecteur de cette imprimante est déconnecté")
@@ -486,7 +505,8 @@ def _queue_connector_job(*, db: Session, user: User, profile: Printer,
             "pickup_reverse_order": bool(profile.pickup_reverse_order),
             "output_reverse_order": bool(profile.output_reverse_order),
             "adf_reverse_order": bool(profile.adf_reverse_order),
-            **({"overlay_offset_mm": list(overlay_offset_mm)} if overlay_offset_mm else {}),
+            **({"overlay_offset_mm": list(overlay_offset_mm),
+                "overlay_wave": overlay_wave} if overlay_offset_mm else {}),
         },
         document_relpath="pending", document_sha256="pending",
         document_size=len(prepared))
@@ -525,6 +545,10 @@ def print_file(body: PrintIn, db: Session = Depends(get_db),
         raise HTTPException(422, "Fichier non imprimable")
     path = (settings.data_dir / "assessments" / body.assessment_id /
             ALLOWED_FILES[body.file] / body.file)
+    if body.file == OVERLAY_FILE:
+        path = overlay_queue.overlay_file(body.assessment_id, body.wave)
+    elif body.wave:
+        raise HTTPException(422, "Les vagues de correction ne concernent que l’overlay")
     if not Path(path).exists():
         raise HTTPException(404, "Fichier non encore généré")
     if body.file == "correction_overlay.pdf" and (
@@ -572,8 +596,11 @@ def print_file(body: PrintIn, db: Session = Depends(get_db),
         overlay_batch = overlay_queue.overlay_batch(db, body.assessment_id)
         if not overlay_batch:
             raise HTTPException(404, "Fichier non encore généré")
+        reason = _wave_blocked(db, overlay_batch, body.wave)
+        if reason:
+            raise HTTPException(409, reason)
         try:
-            overlay_sheets = _overlay_sheets(db, assessment, Path(path), overlay_batch)
+            overlay_sheets = _overlay_sheets(db, assessment, Path(path), overlay_batch, body.wave)
         except overlay_queue.OverlayQueueError as error:
             raise HTTPException(409, str(error))
         queue = overlay_queue.physical_queue(overlay_sheets, adf_reversed=adf_reversed)
@@ -604,7 +631,7 @@ def print_file(body: PrintIn, db: Session = Depends(get_db),
                 overlay_batch, status=status, job_id=job_id, pass_side=body.pass_side,
                 start=body.start_position, total=len(overlay_sheets),
                 selected=overlay_selected, printer=body.printer,
-                adf_reversed=adf_reversed, error=error)
+                adf_reversed=adf_reversed, error=error, wave=body.wave)
 
     teacher = db.get(TeacherProfile, assessment.teacher_profile_id) if assessment.teacher_profile_id else None
     delivery = body.file == "subject_batch.pdf" and teacher and teacher.service_mode == "accompanied"
@@ -622,7 +649,8 @@ def print_file(body: PrintIn, db: Session = Depends(get_db),
             file_name="overlay_sample.pdf" if sample else body.file,
             pass_side=body.pass_side, document=document,
             assessment_id=body.assessment_id, copies=copies,
-            duplex=duplex, reverse=reverse, overlay_offset_mm=overlay_offset)
+            duplex=duplex, reverse=reverse, overlay_offset_mm=overlay_offset,
+            overlay_wave=body.wave)
         remember_overlay("queued", job_id=job.id)
         db.commit()
         connector = _connector_for_profile(db, profile)
@@ -652,6 +680,7 @@ def print_file(body: PrintIn, db: Session = Depends(get_db),
                                 "pass_side": body.pass_side,
                                 "start_position": body.start_position,
                                 "sample": sample,
+                                "wave": body.wave,
                                 "overlay_offset_mm": overlay_offset,
                                 "cups_compensation_reverse": reverse,
                                 "pickup_reverse_order": bool(
@@ -693,8 +722,7 @@ def print_file(body: PrintIn, db: Session = Depends(get_db),
         # réussi, jamais une coche manuelle dans l'interface. Une passe recto
         # laisse encore tous les versos à imprimer.
         if overlay and not sample and body.pass_side in ("all", "verso"):
-            (db.query(ScanBatch).filter(ScanBatch.assessment_id == body.assessment_id)
-             .update({ScanBatch.overlay_printed: True}, synchronize_session=False))
+            late_copies.mark_wave_printed(db, body.assessment_id, body.wave)
         db.commit()
         return {"ok": True, "lp_output": r.stdout.strip()}
     finally:

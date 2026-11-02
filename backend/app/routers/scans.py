@@ -24,7 +24,7 @@ from ..services import grading
 from ..services import providers
 from ..services import refine
 from ..services import sandbox as sandbox_service
-from ..services import scan_intake, scan_originals, scoring
+from ..services import late_copies, scan_intake, scan_originals, scoring
 from ..services.file_sniff import sniff_file as _sniff_file
 from ..services.pipeline import (
     FinalizeInProgress, build_overlays, effective_reading, finalize_batch,
@@ -254,7 +254,8 @@ async def create_batch(tasks: BackgroundTasks, assessment_id: str | None = None,
     return {"id": batch.id, "assessment_id": assessment_id,
             "pages_added": r["pages_added"],
             "duplicates_rejected": r["duplicates_rejected"],
-            "blocked_pages": r["blocked_pages"]}
+            "blocked_pages": r["blocked_pages"],
+            "late_pages": r["late_pages"], "conflicts": r["conflicts"]}
 
 
 SANDBOX_JOB = "sandbox_ingest"
@@ -404,6 +405,7 @@ def _awaiting_scan_rows(db: Session) -> list[dict]:
             "ocr_threshold": ocr_confidence_threshold(db), "segments": [],
             "overlay_printed": False, "overlay_distributed": False,
             "overlay_stale": False, "overlay_rebuilding": False,
+            "first_wave_status": "awaiting_scan", "late_jobs": [], "conflict_count": 0,
             "created_at": str(a.created_at),
         })
     return out
@@ -422,7 +424,8 @@ def _business_steps(status: str, progress: dict | None, pending: int,
                     error: str | None,
                     overlay_printed: bool = False,
                     overlay_stale: bool = False,
-                    overlay_rebuilding: bool = False) -> list[dict]:
+                    overlay_rebuilding: bool = False,
+                    late_overlay: bool = False) -> list[dict]:
     """Étapes MÉTIER de la correction, pour un visualiseur lisible par le
     professeur — pas les 10 phases techniques internes. La règle de couleur est
     simple et cohérente avec les actions proposées :
@@ -471,8 +474,10 @@ def _business_steps(status: str, progress: dict | None, pending: int,
          "state": ("blue" if overlay_rebuilding else "orange") if overlay and overlay_stale
                   else "green" if overlay else ("blue" if finalized else "gray")},
         {"phase": "overlay_print",
-         "label": "Overlay imprimé" if overlay_printed else "Overlay à imprimer",
-         "state": "green" if overlay_printed else ("blue" if overlay else "gray")},
+         "label": ("Overlay tardif à imprimer" if late_overlay
+                   else "Overlay imprimé" if overlay_printed else "Overlay à imprimer"),
+         "state": ("blue" if overlay else "gray") if late_overlay
+                  else "green" if overlay_printed else ("blue" if overlay else "gray")},
     ]
     if error:
         for s in steps:
@@ -506,9 +511,15 @@ def _batch_view(db: Session, b: ScanBatch) -> dict:
         b.status == "ocr_review_pending") else 0
     stale = refine.overlay_stale(b)
     rebuilding = stale and _is_running(b.id)
+    late_jobs = late_copies.jobs_view(db, b)
     segments = _business_steps(b.status, b.progress_json, pending, pending_ocr,
-                               b.error, b.overlay_printed, stale, rebuilding)
+                               b.error, b.overlay_printed, stale, rebuilding,
+                               any(job["stage"] not in ("done", "distribute") for job in late_jobs))
     assessment = db.get(Assessment, b.assessment_id)
+    # Les étapes techniques du lot suivent l'enchaînement en cours de correction ;
+    # la première vague, elle, reste imprimable sous son état final.
+    first_wave_status = ("overlay_ready" if late_jobs and assessment
+                         and assessment.status == "finalized" else b.status)
     cls = db.get(SchoolClass, assessment.class_id) if assessment else None
     # Absents = copies jamais revenues à la finalisation (services.pipeline
     # .finalize_batch les bascule en "absent", jamais pénalisées) + celles
@@ -532,6 +543,9 @@ def _batch_view(db: Session, b: ScanBatch) -> dict:
             "ocr_threshold": ocr_confidence_threshold(db), "segments": segments,
             "overlay_printed": b.overlay_printed, "overlay_distributed": b.overlay_distributed,
             "overlay_stale": stale, "overlay_rebuilding": rebuilding,
+            "first_wave_status": first_wave_status, "overlay_wave": b.overlay_wave or 0,
+            "late_jobs": late_jobs,
+            "conflict_count": sum(job["conflicts"] for job in late_jobs),
             "created_at": str(b.created_at)}
 
 
@@ -1387,6 +1401,7 @@ def overlays(batch_id: str, db: Session = Depends(get_db)):
 
 class BatchFlagsIn(BaseModel):
     overlay_distributed: bool | None = None
+    wave: int = 0
 
 
 @router.patch("/batches/{batch_id}")
@@ -1397,8 +1412,50 @@ def update_batch_flags(batch_id: str, body: BatchFlagsIn, db: Session = Depends(
     if not b:
         raise HTTPException(404)
     if body.overlay_distributed is not None:
-        b.overlay_distributed = body.overlay_distributed
+        if body.wave:
+            late_copies.set_wave_state(b, body.wave, distributed=body.overlay_distributed)
+        else:
+            b.overlay_distributed = body.overlay_distributed
     db.commit()
+    return _batch_view(db, b)
+
+
+# ------------------------------------------------- doubles corrections
+#
+# Une nouvelle version d'une copie déjà notée ne remplace jamais rien seule : le
+# professeur compare les deux feuilles et choisit (services.late_copies).
+
+@router.get("/batches/{batch_id}/conflicts")
+def list_conflicts(batch_id: str, db: Session = Depends(get_db)):
+    b = db.get(ScanBatch, batch_id)
+    if not b:
+        raise HTTPException(404)
+    return late_copies.list_conflicts(db, b)
+
+
+class ConflictResolveIn(BaseModel):
+    action: str   # keep_old | keep_new
+
+
+@router.post("/batches/{batch_id}/conflicts/{scanned_page_id}/resolve")
+def resolve_conflict(batch_id: str, scanned_page_id: str, body: ConflictResolveIn,
+                     tasks: BackgroundTasks, db: Session = Depends(get_db),
+                     user: User = Depends(current_user)):
+    b = db.get(ScanBatch, batch_id)
+    row = db.get(ScannedPage, scanned_page_id)
+    if not b or not row or row.batch_id != b.id or row.status != "conflict":
+        raise HTTPException(404, "Double correction introuvable (déjà résolue ?)")
+    if body.action == "keep_old":
+        late_copies.keep_existing(db, b, row, actor_id=user.id)
+        db.commit()
+        if b.status == "overlay_ready":
+            tasks.add_task(_run_build_overlays, b.id)
+    elif body.action == "keep_new":
+        late_copies.replace_existing(db, b, row, actor_id=user.id)
+        db.commit()
+        tasks.add_task(_run_pipeline, b.id)
+    else:
+        raise HTTPException(422, "action inconnue")
     return _batch_view(db, b)
 
 
@@ -1533,6 +1590,8 @@ class RefineAnswerIn(BaseModel):
 
 
 def _after_refine(db: Session, batch: ScanBatch, copy: Copy, extra: dict) -> dict:
+    late_copies.note_refined(db, batch, copy)
+    db.commit()
     return {**extra, "copy": refine.single_copy_view(db, batch, copy),
             **_refine_status(db, batch)}
 
@@ -1693,6 +1752,9 @@ def resolve_scan_problem(scanned_page_id: str, body: ScanProblemResolveIn,
     if body.assessment_id == batch.assessment_id:
         # Le sujet du lot était le bon : il ne manquait que l'élève.
         sp.manual_page_id = dp.id
+        if sp.wave:
+            # Page d'un enchaînement tardif : elle reste à lire et à corriger.
+            late_copies.rewind_progress(batch)
         db.commit()
         _schedule_reprocess(tasks, batch)
         return {"ok": True}

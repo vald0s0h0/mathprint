@@ -19,11 +19,21 @@ from typing import Literal
 
 from pypdf import PageObject, PdfReader, PdfWriter, Transformation
 from reportlab.lib.units import mm
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from ..config import settings
 from ..models import Copy, DocumentPage, ScanBatch, ScannedPage, Student
 
 UNIDENTIFIED = "Non identifié"
+# Feuilles de la pile sans correction à recevoir (cf. services.late_copies).
+PASS_THROUGH = ("late_duplicate", "superseded", "conflict_rejected")
+
+
+def overlay_file(assessment_id: str, wave: int = 0) -> Path:
+    """PDF imprimable d'un enchaînement scanné : un par pile, jamais mélangés."""
+    name = "correction_overlay.pdf" if not wave else f"correction_overlay_w{wave}.pdf"
+    return settings.data_dir / "assessments" / assessment_id / "overlays" / name
 
 
 class OverlayQueueError(Exception):
@@ -35,6 +45,7 @@ class Sheet:
     student: str
     identified: bool
     stream_index: int                 # rang de la feuille dans le flux ADF
+    pass_through: bool = False        # traverse l'imprimante sans correction
     recto: int | None = None          # index de page dans le PDF d'overlay
     verso: int | None = None
     page_nos: list[int] = field(default_factory=list)
@@ -50,13 +61,15 @@ def overlay_batch(db: Session, assessment_id: str) -> ScanBatch | None:
             .order_by(ScanBatch.created_at.asc()).first())
 
 
-def overlay_sides(db: Session, batch: ScanBatch, pdf_pages: int) -> list[dict]:
-    """Une entrée par page du PDF d'overlay, dans l'ordre du PDF."""
+def overlay_sides(db: Session, batch: ScanBatch, pdf_pages: int, wave: int = 0) -> list[dict]:
+    """Une entrée par page du PDF d'overlay de cette vague, dans l'ordre du PDF."""
     rows = (db.query(ScannedPage, DocumentPage, Student.name)
-            .outerjoin(DocumentPage, ScannedPage.page_id == DocumentPage.id)
+            .outerjoin(DocumentPage, func.coalesce(ScannedPage.page_id, ScannedPage.replaces_page_id)
+                       == DocumentPage.id)
             .outerjoin(Copy, DocumentPage.copy_id == Copy.id)
             .outerjoin(Student, Copy.student_id == Student.id)
-            .filter(ScannedPage.batch_id == batch.id, ScannedPage.dismissed.is_(False))
+            .filter(ScannedPage.batch_id == batch.id, ScannedPage.dismissed.is_(False),
+                    ScannedPage.wave == wave)
             .order_by(ScannedPage.source_index).all())
     if not rows:
         # Anciens lots simulés sans position persistée : pages sans identité.
@@ -68,8 +81,9 @@ def overlay_sides(db: Session, batch: ScanBatch, pdf_pages: int) -> list[dict]:
             "relancez sa génération depuis Corrections.")
     return [{"student": name or UNIDENTIFIED, "identified": bool(name),
              "copy_id": document_page.copy_id if document_page else None,
-             "page_no": document_page.page_no if document_page else None}
-            for _scanned, document_page, name in rows]
+             "page_no": document_page.page_no if document_page else None,
+             "pass_through": scanned.status in PASS_THROUGH}
+            for scanned, document_page, name in rows]
 
 
 def group_sheets(sides: list[dict], *, duplex: bool) -> list[Sheet]:
@@ -78,7 +92,7 @@ def group_sheets(sides: list[dict], *, duplex: bool) -> list[Sheet]:
 
     def new_sheet(side: dict) -> Sheet:
         sheet = Sheet(student=side["student"], identified=side["identified"],
-                      stream_index=len(sheets))
+                      stream_index=len(sheets), pass_through=bool(side.get("pass_through")))
         sheets.append(sheet)
         return sheet
 

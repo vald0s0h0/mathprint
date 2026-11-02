@@ -15,12 +15,13 @@ import { notifications } from '@mantine/notifications'
 import {
   AlertTriangle, ArrowDownRight, ArrowRight, ArrowUpRight, CheckCircle2, CircleDollarSign,
   ClipboardList, Eye, FileText, Hourglass, Library, Loader2, Minus, Plus, Printer, RefreshCw,
-  ScanLine, Send, Sparkles, Upload, Wand2,
+  ScanLine, Send, Sparkles, Upload, Wand2, Scale,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../api'
 import PdfPreviewModal from '../components/PdfPreview'
+import { type LateJob, LateConflictButton, lateJobNames } from '../components/LateJobs'
 import PrintButton from '../components/PrintButton'
 import { useAppState } from '../state/AppState'
 import { masteryColor } from '../utils/mastery'
@@ -52,6 +53,16 @@ type Batch = {
   overlay_stale: boolean
   error: string | null; pending_reviews: number; pending_ocr: number
   created_at: string
+  // Pendant une correction tardive, la première vague garde son état propre.
+  first_wave_status?: string; late_jobs?: LateJob[]
+}
+
+// Un lot vu depuis sa première vague : ses étapes techniques en cours appartiennent
+// à l'enchaînement tardif, qui a sa propre ligne dans « À faire ».
+function firstWave(b: Batch): Batch {
+  return b.late_jobs?.length
+    ? { ...b, status: b.first_wave_status ?? b.status, pending_reviews: 0, pending_ocr: 0, error: null }
+    : b
 }
 type GradeValue = { note: number | null; note_base: number; absent: boolean }
 type Gradebook = {
@@ -67,6 +78,7 @@ type Matrix = {
 }
 type SandboxResult = {
   status: string; pages_added: number; duplicates_rejected: number; blocked_pages: number
+  late_pages?: number; conflicts?: number
 }
 
 const STATUS_LABEL: Record<string, { label: string; color: string }> = {
@@ -469,8 +481,12 @@ export default function Dashboard() {
   const printableSubjects = visibleAssessments.filter(
     (a) => ['ready', 'printed', 'scanning'].includes(a.status) && !a.overlay_distributed)
   const printableOverlays = visibleBatches.filter(
-    (b) => b.status === 'overlay_ready' && !b.overlay_distributed)
-  const overlaysToPrint = printableOverlays.filter((b) => !b.overlay_printed)
+    (b) => firstWave(b).status === 'overlay_ready' && !b.overlay_distributed)
+  const lateOverlays = visibleBatches.flatMap((b) => (b.late_jobs ?? [])
+    .filter((job) => job.stage === 'print' || job.stage === 'distribute')
+    .map((job) => ({ batch: b, job })))
+  const overlaysToPrint = [...printableOverlays.filter((b) => !b.overlay_printed),
+    ...lateOverlays.filter(({ job }) => job.stage === 'print')]
   const reviewCount = sum(visibleBatches.filter((b) => stageOf(b) === 'review')
     .map((b) => b.pending_reviews))
   const printBadge = readySubjects.length + overlaysToPrint.length
@@ -526,13 +542,16 @@ export default function Dashboard() {
       const pages = sum(r.results.map((x) => x.pages_added))
       const dups = sum(r.results.map((x) => x.duplicates_rejected + (x.status === 'duplicate_file' ? 1 : 0)))
       const blocked = sum(r.results.map((x) => x.blocked_pages))
+      const late = sum(r.results.map((x) => x.late_pages ?? 0))
+      const conflicts = sum(r.results.map((x) => x.conflicts ?? 0))
       notifications.show({
-        color: pages ? 'green' : 'orange',
-        title: 'Scans déposés',
+        color: conflicts ? 'orange' : pages ? 'green' : 'orange',
+        title: late ? 'Copies tardives déposées' : 'Scans déposés',
         message: `${plural(pages, 'page identifiée', 'pages identifiées')}`
           + (dups ? `, ${plural(dups, 'doublon ignoré', 'doublons ignorés')}` : '')
           + (blocked ? `, ${plural(blocked, 'page non identifiée', 'pages non identifiées')}` : '')
-          + ' — suivi dans Corrections.',
+          + (conflicts ? `, ${plural(conflicts, 'double correction à résoudre', 'doubles corrections à résoudre')}` : '')
+          + (late ? ' — nouvelle ligne dans « À faire ».' : ' — suivi dans Corrections.'),
       })
       loadLive()
     } catch (e) {
@@ -550,9 +569,44 @@ export default function Dashboard() {
       <Button size="xs" variant="light" color={color} rightSection={<ArrowRight size={13} />}
         onClick={() => navigate(to)}>{label}</Button>
     )
-    for (const b of visibleBatches) {
+    for (const raw of visibleBatches) {
+      const b = firstWave(raw)
       const stage = stageOf(b)
       const where = `${b.assessment_title} · ${b.class_name}`
+      // Chaque enchaînement tardif est un job à part : sa propre ligne.
+      for (const job of raw.late_jobs ?? []) {
+        const key = `late-${raw.id}-${job.wave}`
+        const detail = `${lateJobNames(job)} — ${where}`
+        if (job.stage === 'conflict') {
+          out.push({ key, tone: 'orange', weight: 1, icon: <Scale size={18} />,
+            title: plural(job.conflicts, 'double correction à résoudre', 'doubles corrections à résoudre'),
+            detail, action: <LateConflictButton batchId={raw.id} count={job.conflicts} onResolved={loadLive} /> })
+        } else if (job.stage === 'error') {
+          out.push({ key, tone: 'red', weight: 0, icon: <AlertTriangle size={18} />,
+            title: 'Copies tardives : correction bloquée', detail: raw.error ? `${detail} — ${raw.error}` : detail,
+            action: go('/corrections', 'Débloquer', 'red') })
+        } else if (job.stage === 'review') {
+          out.push({ key, tone: 'orange', weight: 1, icon: <ScanLine size={18} />,
+            title: `Copies tardives : ${plural(job.pending_reviews, 'réponse')} à corriger`, detail,
+            action: go('/corrections', 'Corriger', 'orange') })
+        } else if (job.stage === 'ocr_review') {
+          out.push({ key, tone: 'blue', weight: 2, icon: <Eye size={18} />,
+            title: 'Copies tardives : lecture à vérifier', detail,
+            action: go('/corrections', 'Vérifier') })
+        } else if (job.stage === 'processing') {
+          out.push({ key, tone: 'blue', weight: 7, icon: <Loader2 size={18} className="mpd-spin" />,
+            title: 'Copies tardives : correction en cours', detail })
+        } else if (job.stage === 'print') {
+          out.push({ key, tone: 'green', weight: 3, icon: <Printer size={18} />,
+            title: `Imprimer les overlays tardifs (${plural(job.students.length, 'copie')})`, detail,
+            action: <PrintButton assessmentId={raw.assessment_id} file="correction_overlay.pdf"
+              wave={job.wave} label="Imprimer" /> })
+        } else if (job.stage === 'distribute') {
+          out.push({ key, tone: 'teal', weight: 6, icon: <Send size={18} />,
+            title: 'Copies tardives à rendre', detail,
+            action: go('/corrections', 'Marquer distribué', 'teal') })
+        }
+      }
       if (stage === 'error') {
         out.push({ key: `err-${b.id}`, tone: 'red', weight: 0, icon: <AlertTriangle size={18} />,
           title: 'Correction bloquée', detail: b.error ? `${where} — ${b.error}` : where,
@@ -1033,10 +1087,26 @@ export default function Dashboard() {
             <Text size="xs" fw={700} c="dimmed" tt="uppercase" mb={6} style={{ letterSpacing: 0.5 }}>
               Copies corrigées (overlay)
             </Text>
-            {printableOverlays.length === 0 ? (
+            {printableOverlays.length === 0 && lateOverlays.length === 0 ? (
               <Text size="sm" c="dimmed">Aucune correction prête à imprimer.</Text>
             ) : (
               <Stack gap={6}>
+                {lateOverlays.map(({ batch, job }) => (
+                  <Paper key={`${batch.id}-${job.wave}`} withBorder radius="md" p="xs">
+                    <Group justify="space-between" wrap="nowrap" gap="xs">
+                      <div style={{ minWidth: 0 }}>
+                        <Text size="sm" fw={600} truncate>{batch.assessment_title}</Text>
+                        <Group gap={6}>
+                          <Text size="xs" c="dimmed">{batch.class_name}</Text>
+                          <Badge size="xs" variant="light" color="orange">tardives : {lateJobNames(job)}</Badge>
+                          {job.stage === 'distribute' && <Badge size="xs" variant="dot" color="cyan">imprimé</Badge>}
+                        </Group>
+                      </div>
+                      <PrintButton assessmentId={batch.assessment_id} file="correction_overlay.pdf"
+                        wave={job.wave} label="Imprimer les overlays tardifs" />
+                    </Group>
+                  </Paper>
+                ))}
                 {printableOverlays.map((b) => (
                   <Paper key={b.id} withBorder radius="md" p="xs">
                     <Group justify="space-between" wrap="nowrap" gap="xs">

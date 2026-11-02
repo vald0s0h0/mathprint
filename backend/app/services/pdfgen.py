@@ -3145,6 +3145,8 @@ def _draw_correction_marks(c: canvas.Canvas, page: dict, col):
     """Dessine les marques de correction d'une page (nom, note, appréciation,
     scores par exercice) dans la couleur d'encre `col`. Partagé par l'overlay
     (fond blanc) et l'aperçu « copie + overlay » (fond = scan recalé)."""
+    if page.get("blank"):
+        return   # feuille qui traverse l'imprimante sans recevoir de correction
     geo = header_geometry(page.get("assessment_type", "control"))
     c.setFillColor(col)
     c.setStrokeColor(col)

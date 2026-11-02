@@ -19,6 +19,7 @@ import { useSearchParams } from 'react-router-dom'
 import { api, getToken } from '../api'
 import { MathAnswer } from '../components/MathText'
 import PdfPreviewModal from '../components/PdfPreview'
+import LateJobRows, { type LateJob } from '../components/LateJobs'
 import PrintButton from '../components/PrintButton'
 import RefineCorrectionModal from '../components/RefineCorrectionModal'
 import { useAppState } from '../state/AppState'
@@ -41,6 +42,8 @@ type Batch = {
   absent_count: number
   ocr_threshold: number
   segments: Segment[]; created_at: string
+  // Enchaînements déposés après la validation : un job par dépôt (services.late_copies)
+  late_jobs?: LateJob[]; first_wave_status?: string
 }
 // une case à corriger d'un tableau / de cases à trous (table_fill, multi_blank) :
 // sa réponse attendue lisible, ce que l'OCR a lu, le crédit calculé par le moteur
@@ -101,6 +104,7 @@ const DEFAULT_SHORTCUTS: Shortcuts = { full: 'f', two_thirds: 'd', one_third: 's
 type SandboxResult = {
   filename: string; file_kind: 'image' | 'pdf' | 'unknown'; status: string; pages_added: number
   duplicates_rejected: number; blocked_pages: number; batches_created: string[]
+  late_pages?: number; conflicts?: number
 }
 type Scope = 'flagged' | 'all'
 
@@ -463,6 +467,8 @@ export default function Corrections() {
       && r.status === 'processed' && r.pages_added > 0).length,
     duplicates: sandboxResults.reduce((n, r) => n + r.duplicates_rejected, 0),
     unidentifiedPages: sandboxResults.reduce((n, r) => n + r.blocked_pages, 0),
+    latePages: sandboxResults.reduce((n, r) => n + (r.late_pages ?? 0), 0),
+    conflicts: sandboxResults.reduce((n, r) => n + (r.conflicts ?? 0), 0),
     unrecognizedFiles: sandboxResults.filter((r) =>
       r.status === 'unrecognized' || r.status === 'error').length,
   }), [sandboxResults])
@@ -975,6 +981,18 @@ export default function Corrections() {
                 {sandboxSummary.pdfs} PDF identifié{sandboxSummary.pdfs > 1 ? 's' : ''}
               </Badge>
             )}
+            {sandboxSummary.latePages > 0 && (
+              <Badge size="sm" variant="light" color="teal">
+                {sandboxSummary.latePages} copie{sandboxSummary.latePages > 1 ? 's' : ''}{' '}
+                tardive{sandboxSummary.latePages > 1 ? 's' : ''}
+              </Badge>
+            )}
+            {sandboxSummary.conflicts > 0 && (
+              <Badge size="sm" variant="light" color="orange">
+                {sandboxSummary.conflicts} double{sandboxSummary.conflicts > 1 ? 's' : ''}{' '}
+                correction{sandboxSummary.conflicts > 1 ? 's' : ''} à résoudre
+              </Badge>
+            )}
             {sandboxSummary.duplicates > 0 && (
               <Badge size="sm" variant="light" color="gray">
                 {sandboxSummary.duplicates} doublon{sandboxSummary.duplicates > 1 ? 's' : ''}{' '}
@@ -1030,7 +1048,11 @@ export default function Corrections() {
             {g.rows.map((b) => {
               const stage = stageOf(b)
               const overlayReady = b.status === 'overlay_ready'
-              const done = stage === 'done' && b.overlay_distributed
+              const lateOpen = (b.late_jobs ?? []).some((job) => job.stage !== 'done')
+              // Pendant une correction tardive, l'overlay de la première pile reste imprimable.
+              const firstWaveBusy = stage !== 'done' && b.first_wave_status === 'overlay_ready'
+                && Boolean(b.late_jobs?.length)
+              const done = stage === 'done' && b.overlay_distributed && !lateOpen
               const stale = stage === 'done' && b.overlay_stale
               const badge = done ? { label: 'terminé', color: 'gray' }
                 : stale ? { label: 'overlay à régénérer', color: 'orange' } : STAGE_BADGE[stage]
@@ -1084,6 +1106,17 @@ export default function Corrections() {
                             checked={b.overlay_distributed}
                             onChange={(e) => setDistributed(b, e.target.checked)} />
                         </Group>
+                      )}
+                      {firstWaveBusy && !b.overlay_printed && (
+                        <Group gap="xs" mt={2}>
+                          <Text size="xs" c="dimmed">Première pile :</Text>
+                          <PrintButton assessmentId={b.assessment_id}
+                            file="correction_overlay.pdf" label="Imprimer l'overlay" />
+                        </Group>
+                      )}
+                      {Boolean(b.late_jobs?.length) && (
+                        <LateJobRows batchId={b.id} assessmentId={b.assessment_id}
+                          jobs={b.late_jobs ?? []} onChanged={refresh} />
                       )}
                     </Stack>
 
@@ -1176,8 +1209,9 @@ export default function Corrections() {
                             </Tooltip>
                           )}
                           {overlayReady && !stale && (
-                            <PrintButton assessmentId={b.assessment_id}
-                              file="correction_overlay.pdf" label="Imprimer l'overlay" />
+                            <PrintButton assessmentId={b.assessment_id} file="correction_overlay.pdf"
+                              label={b.late_jobs?.length && b.overlay_printed
+                                ? 'Réimprimer la première pile' : "Imprimer l'overlay"} />
                           )}
                           {overlayReady && !b.overlay_distributed && (
                             <Tooltip label="Relire chaque copie avec son overlay et corriger une note en modifiant la réponse de l'élève">

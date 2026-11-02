@@ -7,6 +7,7 @@ import { useEffect, useRef } from 'react'
 
 export type OverlayQueueEntry = {
   position: number; student: string; identified: boolean; pages: string
+  pass_through: boolean
 }
 
 export type OverlayLastPrint = {
@@ -18,7 +19,7 @@ export type OverlayLastPrint = {
 
 export type OverlayQueue = {
   blocked: string | null; total: number; adf_reversed: boolean
-  assessment_duplex: boolean; entries: OverlayQueueEntry[]
+  assessment_duplex: boolean; entries: OverlayQueueEntry[]; wave: number
   last_print: OverlayLastPrint | null
 }
 
@@ -102,6 +103,7 @@ export default function OverlayQueuePanel({ queue, start, onSelect, disabled, ve
   const next = start ? queue.entries[start - 1] : null
   // Une seule face par feuille : le numéro de page n'apprendrait rien.
   const pagesOf = (entry: OverlayQueueEntry) => queue.assessment_duplex ? entry.pages : ''
+  const passThrough = queue.entries.filter((entry) => entry.pass_through).length
 
   useEffect(() => {
     // Défilement limité à la liste : la page derrière le panneau ne bouge pas.
@@ -177,12 +179,19 @@ export default function OverlayQueuePanel({ queue, start, onSelect, disabled, ve
                   {entry.student}
                 </span>
                 <span style={{ flexShrink: 0, fontSize: 11, opacity: 0.7, fontWeight: 400 }}>
-                  {skipped ? 'sautée' : selected ? 'prochaine' : pagesOf(entry)}
+                  {skipped ? 'sautée' : selected ? 'prochaine'
+                    : entry.pass_through ? 'sans correction' : pagesOf(entry)}
                 </span>
               </UnstyledButton>
             )
           })}
         </Box>
+        {passThrough > 0 && (
+          <Text size="xs" c="dimmed" mt={4}>
+            Laissez toute la pile telle qu’elle a été scannée : {passThrough > 1
+              ? `${passThrough} feuilles passent` : 'une feuille passe'} sans recevoir de correction.
+          </Text>
+        )}
         {queue.adf_reversed && (
           <Text size="xs" c="dimmed" mt={4}>
             L’ADF de ce profil inverse la pile : la file commence par la dernière copie scannée.

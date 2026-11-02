@@ -594,6 +594,11 @@ class ScanBatch(Base):
     # dernier envoi de l'overlay (position, feuilles, travail) : l'ordinateur ne
     # voit pas les feuilles sortir, ce repère guide la reprise du professeur.
     overlay_print_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Copies tardives (services.late_copies) : chaque enchaînement déposé après la
+    # validation est une vague numérotée, avec ses propres états dans `waves_json`.
+    # Les champs overlay_* ci-dessus restent ceux de la première vague (0).
+    overlay_wave: Mapped[int] = mapped_column(Integer, default=0)
+    waves_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
 
@@ -615,6 +620,10 @@ class ScannedPage(Base):
     # feuillet, page blanche happée par l'ADF...) : exclue du flux d'overlay,
     # ne bloque plus l'invariant de position (cf. services.pipeline.build_overlays)
     dismissed: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Enchaînement scanné auquel appartient la page (0 = premier dépôt).
+    wave: Mapped[int] = mapped_column(Integer, default=0)
+    # Page d'élève que cette feuille reprend (redépôt d'une copie déjà enregistrée).
+    replaces_page_id: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class SandboxUpload(Base):

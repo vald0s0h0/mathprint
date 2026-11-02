@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..models import SandboxUpload
-from . import scan_intake, scan_originals, worker_cv
+from . import late_copies, scan_intake, scan_originals, worker_cv
 
 
 def scan_filename_key(filename: str) -> tuple:
@@ -88,8 +88,8 @@ def ingest_files(db: Session, files: list[tuple[str, str, bytes]],
                 classified.append({
                     "png": scan_intake.as_png(keep), "page_id": page_id,
                     "assessment_id": aid,
-                    "already_registered": bool(
-                        page_id and scan_intake.page_already_registered(db, page_id)),
+                    "kind": (late_copies.redeposit_kind(db, page_id, keep)
+                             if identified else None),
                 })
                 del img, warped, keep
         except Exception as e:
@@ -129,26 +129,32 @@ def ingest_files(db: Session, files: list[tuple[str, str, bytes]],
                      if p["assessment_id"]}
         local_fallback = (next(iter(local_ids)) if len(local_ids) == 1 else None)
         fallback_aid = single_upload_assessment or local_fallback
-        n_added = n_dup = n_blocked = 0
+        n_added = n_dup = n_blocked = n_late = n_conflicts = 0
         for page in record["pages"]:
-            page_id, aid = page["page_id"], page["assessment_id"]
-            if page["already_registered"]:
-                # Redépôt antérieur : pas dans la pile physique courante.
+            page_id, aid, kind = page["page_id"], page["assessment_id"], page["kind"]
+            kept_page = scan_intake.KeptPage(page["png"], page_id, kind)
+            if kind == "same":
+                # Rien de neuf : scan_intake.add_pages décide si cette feuille
+                # garde sa place (nouvel enchaînement) ou si elle est ignorée.
                 n_dup += 1
+                kept_by_assessment[aid].append(kept_page)
                 continue
             if page_id and aid:
                 if page_id in seen_page_ids:
                     # Doublon au SEIN du lot courant : position conservée, mais
                     # le pipeline n'effectuera qu'une correction.
                     n_dup += 1
+                    kept_page.kind = None
                 else:
                     seen_page_ids.add(page_id)
-                kept_by_assessment[aid].append(page["png"])
+                    n_conflicts += kind == "conflict"
+                    n_late += late_copies.is_late(db, aid)
+                kept_by_assessment[aid].append(kept_page)
                 n_added += 1
                 continue
             n_blocked += 1
             if fallback_aid:
-                kept_by_assessment[fallback_aid].append(page["png"])
+                kept_by_assessment[fallback_aid].append(kept_page)
                 n_added += 1
 
         # Un fichier n'est un « doublon » que si toutes ses pages appartenaient
@@ -159,18 +165,23 @@ def ingest_files(db: Session, files: list[tuple[str, str, bytes]],
             results.append({"filename": filename, "file_kind": file_kind,
                             "status": "duplicate_file",
                             "pages_added": 0, "duplicates_rejected": n_dup,
-                            "blocked_pages": 0, "batches_created": []})
+                            "blocked_pages": 0, "batches_created": [],
+                            "late_pages": 0, "conflicts": 0})
             continue
         upload.status = "processed"
         results.append({"filename": filename, "file_kind": file_kind,
                         "status": "processed", "pages_added": n_added,
                         "duplicates_rejected": n_dup, "blocked_pages": n_blocked,
-                        "batches_created": []})
+                        "batches_created": [], "late_pages": n_late,
+                        "conflicts": n_conflicts})
 
     batch_ids: list[str] = []
-    for assessment_id, imgs in kept_by_assessment.items():
+    for assessment_id, kept_pages in kept_by_assessment.items():
+        # Un dépôt qui ne contient que des feuilles déjà connues n'ouvre rien.
+        if not any(page.kind != "same" for page in kept_pages):
+            continue
         batch = scan_intake.get_or_create_batch(db, assessment_id, uploaded_by)
-        scan_intake.append_pages(db, batch, assessment_id, imgs)
+        scan_intake.add_pages(db, batch, assessment_id, kept_pages)
         if batch.id not in batch_ids:
             batch_ids.append(batch.id)
     db.commit()

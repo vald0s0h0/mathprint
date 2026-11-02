@@ -16,6 +16,7 @@ idempotent, il ne re-corrige pas une copie déjà notée et note les nouvelles."
 import hashlib
 import io
 from collections.abc import Iterable
+from dataclasses import dataclass
 
 import cv2
 import numpy as np
@@ -26,8 +27,17 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..models import Copy, DocumentPage, FileObject, ScanBatch, ScannedPage
-from . import worker_cv
+from . import late_copies, worker_cv
 from .security import verify_page_payload
+
+
+@dataclass
+class KeptPage:
+    """Page d'un dépôt, à sa place dans l'enchaînement scanné. `kind` : voir
+    late_copies.redeposit_kind (None pour une page encore jamais vue)."""
+    png: bytes
+    page_id: str | None = None
+    kind: str | None = None
 
 
 def as_png(img: "np.ndarray | bytes") -> bytes:
@@ -156,6 +166,46 @@ def append_pages(db: Session, batch: ScanBatch, assessment_id: str,
     fo.size = len(combined)
 
 
+def _write_source_preview(assessment_id: str, index: int, png: bytes) -> None:
+    derived = settings.data_dir / "assessments" / assessment_id / "scans" / "derived"
+    derived.mkdir(parents=True, exist_ok=True)
+    (derived / f"source-{index}.png").write_bytes(png)
+
+
+def add_pages(db: Session, batch: ScanBatch, assessment_id: str,
+              pages: "list[KeptPage]") -> int:
+    """Ajoute un enchaînement scanné au lot et retourne sa vague.
+
+    Avant la validation, les dépôts forment une seule pile (vague courante). Après,
+    chaque dépôt est un nouveau job. S'il n'apporte rien de neuf, il est ignoré ;
+    sinon ses feuilles déjà corrigées GARDENT leur place dans la pile, car l'ordre
+    scanné reste l'ordre d'impression (cf. services.late_copies)."""
+    late = late_copies.is_late(db, assessment_id)
+    if not any(page.kind != "same" for page in pages):
+        return batch.overlay_wave or 0
+    if not late:
+        pages = [page for page in pages if page.kind != "same"]
+    source = settings.data_dir / "assessments" / assessment_id / "scans" / "original" / f"{batch.id}.pdf"
+    base = worker_cv.count_pages(str(source)) if batch.source_file_id and source.exists() else 0
+    wave = late_copies.open_wave(batch) if late else (batch.overlay_wave or 0)
+    append_pages(db, batch, assessment_id, [page.png for page in pages])
+    rows = {"same": "late_duplicate", "conflict": "conflict"}
+    for offset, page in enumerate(pages):
+        if page.kind == "replace":
+            late_copies.release_page(db, batch, page.page_id, actor_id=batch.uploaded_by)
+        if wave or page.kind:
+            db.add(ScannedPage(
+                batch_id=batch.id, source_index=base + offset, wave=wave,
+                status=rows.get(page.kind, "pending"),
+                replaces_page_id=page.page_id if page.kind else None))
+        if page.kind == "conflict":
+            _write_source_preview(assessment_id, base + offset, page.png)
+    if late:
+        late_copies.rewind_progress(batch)
+    db.flush()
+    return wave
+
+
 def attach_scan(db: Session, assessment_id: str, images: "Iterable[np.ndarray]",
                 uploaded_by: str | None) -> dict:
     """Attache des pages scannées (un seul fichier, un sujet connu) à l'unique
@@ -163,10 +213,11 @@ def attach_scan(db: Session, assessment_id: str, images: "Iterable[np.ndarray]",
     deviendra un overlay « Non identifié », car la retirer décalerait toutes les
     copies physiques suivantes. Seules les pages déjà enregistrées lors d'un
     dépôt ANTÉRIEUR restent rejetées comme redépôts. Retourne un résumé
-    {batch_id, pages_added, duplicates_rejected, blocked_pages}."""
+    {batch_id, pages_added, duplicates_rejected, blocked_pages, late_pages, conflicts}."""
     batch = get_or_create_batch(db, assessment_id, uploaded_by)
+    late = late_copies.is_late(db, assessment_id)
     # pages lues UNE À UNE (itérable) et gardées en PNG compressé
-    kept: list[bytes] = []
+    kept: list[KeptPage] = []
     seen: set[str] = set()
     n_dup = n_blocked = 0
     for img in images:
@@ -175,21 +226,27 @@ def attach_scan(db: Session, assessment_id: str, images: "Iterable[np.ndarray]",
             # Le sujet est connu par le dépôt ciblé / les autres pages du PDF :
             # on conserve physiquement cette place sans lui attribuer d'élève.
             n_blocked += 1
-            kept.append(as_png(img))
+            kept.append(KeptPage(as_png(img)))
             continue
-        if page_already_registered(db, page_id):
-            n_dup += 1
-            continue
+        straight = warped if warped is not None else img
         if page_id in seen:
             # Doublon DANS le lot physique courant : il doit occuper une place
             # dans le PDF de sortie, sinon toutes les feuilles après lui glissent.
             n_dup += 1
-            kept.append(as_png(warped if warped is not None else img))
+            kept.append(KeptPage(as_png(straight), page_id))
+            continue
+        kind = late_copies.redeposit_kind(db, page_id, straight)
+        if kind == "same":
+            n_dup += 1
+            kept.append(KeptPage(as_png(straight), page_id, "same"))
             continue
         seen.add(page_id)
         # on stocke l'image RECALÉE (canonique), pas la photo brute : le pipeline
         # la reprend fidèlement, sans risque d'échec de ré-identification.
-        kept.append(as_png(warped if warped is not None else img))
-    append_pages(db, batch, assessment_id, kept)
-    return {"batch_id": batch.id, "pages_added": len(kept),
-            "duplicates_rejected": n_dup, "blocked_pages": n_blocked}
+        kept.append(KeptPage(as_png(straight), page_id, kind))
+    add_pages(db, batch, assessment_id, kept)
+    new_pages = [page for page in kept if page.kind != "same"]
+    return {"batch_id": batch.id, "pages_added": len(new_pages),
+            "duplicates_rejected": n_dup, "blocked_pages": n_blocked,
+            "late_pages": sum(bool(page.page_id) for page in new_pages) if late else 0,
+            "conflicts": sum(page.kind == "conflict" for page in kept)}

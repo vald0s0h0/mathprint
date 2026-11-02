@@ -79,10 +79,12 @@ function chooseDestination(printers: Printers) {
 }
 
 export default function PrintButton({
-  assessmentId, file, label = 'Imprimer', size = 'xs', assessmentDuplex = false,
+  assessmentId, file, label = 'Imprimer', size = 'xs', assessmentDuplex = false, wave = 0,
 }: {
   assessmentId: string; file: string; label?: string; size?: string
   assessmentDuplex?: boolean
+  // Enchaînement scanné à imprimer (0 = premier dépôt, sinon copies tardives).
+  wave?: number
 }) {
   const isOverlay = file === 'correction_overlay.pdf'
   const [printers, setPrinters] = useState<Printers | null>(null)
@@ -143,7 +145,7 @@ export default function PrintButton({
   useEffect(() => {
     if (!isOverlay || !printersWanted || !printer) return
     let active = true
-    const query = new URLSearchParams({ assessment_id: assessmentId, printer })
+    const query = new URLSearchParams({ assessment_id: assessmentId, printer, wave: String(wave) })
     api.get<OverlayQueue>(`/api/printers/overlay-queue?${query}`).then((next) => {
       if (!active) return
       setQueue(next)
@@ -156,7 +158,7 @@ export default function PrintButton({
       if (active && opened) notifications.show({ color: 'red', message: (error as Error).message })
     })
     return () => { active = false }
-  }, [isOverlay, printersWanted, printer, assessmentId, queueTick])
+  }, [isOverlay, printersWanted, printer, assessmentId, queueTick, wave])
 
   useEffect(() => {
     setRectoDone(Boolean(printer
@@ -207,7 +209,7 @@ export default function PrintButton({
     const entry = nextEntry ?? (queue?.entries[0])
     if (!entry) return
     const r = await api.post<PrintResult>('/api/printers/print', {
-      assessment_id: assessmentId, file, printer, sample: true,
+      assessment_id: assessmentId, file, printer, sample: true, wave,
       start_position: entry.position, expected_student: entry.student,
     })
     if (r.queued && r.job_id) setPendingJob({ id: r.job_id, side: 'all', printer, sample: true })
@@ -224,7 +226,7 @@ export default function PrintButton({
         duplex: file === 'subject_batch.pdf' && assessmentDuplex && selectedPrinter?.duplex,
         pass_side: passSide,
         ...(isOverlay && nextEntry ? {
-          start_position: nextEntry.position, expected_student: nextEntry.student,
+          start_position: nextEntry.position, expected_student: nextEntry.student, wave,
         } : {}),
       })
       if (isOverlay) {
