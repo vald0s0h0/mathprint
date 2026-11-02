@@ -330,7 +330,7 @@ def _page_numbers(blocks: list[dict]) -> list[int]:
 # ------------------------------------------------------------ exploitation
 
 def _competencies(db, grade: str) -> list[Competency]:
-    fw = db.query(CompetencyFramework).filter_by(grade_level=grade).first()
+    fw = db.query(CompetencyFramework).filter_by(grade_level=grade, program_id="fr", subject_id="math", path_id=None).first()
     if fw is None:
         return []
     return (db.query(Competency).filter_by(framework_id=fw.id)

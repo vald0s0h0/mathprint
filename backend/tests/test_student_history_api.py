@@ -18,7 +18,7 @@ from app.deps import current_user
 from app.main import app
 from app.models import (
     Assessment, Competency, CompetencyFramework, Copy, CopyItem, CopyItemResult,
-    CopyResult, SchoolClass, Student, User,
+    CopyResult, SchoolClass, Student, User, Subject,
 )
 
 NOW = datetime.now(timezone.utc)
@@ -32,6 +32,7 @@ def client():
                            poolclass=StaticPool)
     Base.metadata.create_all(engine)
     session = sessionmaker(bind=engine)()
+    session.add(Subject(id="math", name="Mathématiques")); session.commit()
     app.dependency_overrides[get_db] = lambda: session
     app.dependency_overrides[current_user] = lambda: User(
         id="u1", email="prof@test.fr", role="teacher")

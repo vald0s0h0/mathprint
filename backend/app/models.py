@@ -10,7 +10,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import (
-    JSON, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text,
+    JSON, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -44,6 +44,107 @@ class User(Base):
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
+class Country(Base):
+    __tablename__ = "countries"
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    name: Mapped[str] = mapped_column(String)
+
+
+class Program(Base):
+    __tablename__ = "programs"
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    name: Mapped[str] = mapped_column(String)
+    origin_country_id: Mapped[str] = mapped_column(ForeignKey("countries.id"))
+
+
+class Subject(Base):
+    __tablename__ = "subjects"
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    name: Mapped[str] = mapped_column(String)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class CurriculumPath(Base):
+    """Série ou enseignement optionnel, propre à un programme et à ses cycles."""
+    __tablename__ = "curriculum_paths"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
+    program_id: Mapped[str] = mapped_column(ForeignKey("programs.id"))
+    name: Mapped[str] = mapped_column(String)
+    kind: Mapped[str] = mapped_column(String, default="series")
+    grades: Mapped[list] = mapped_column(JSON, default=list)
+    source_url: Mapped[str] = mapped_column(String, default="")
+
+
+class School(Base):
+    __tablename__ = "schools"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
+    name: Mapped[str] = mapped_column(String)
+    country_id: Mapped[str] = mapped_column(ForeignKey("countries.id"))
+    city: Mapped[str] = mapped_column(String, default="")
+    address: Mapped[str] = mapped_column(String, default="")
+    contact: Mapped[str] = mapped_column(String, default="")
+    service_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    notes: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
+class SchoolProgram(Base):
+    __tablename__ = "school_programs"
+    school_id: Mapped[str] = mapped_column(ForeignKey("schools.id"), primary_key=True)
+    program_id: Mapped[str] = mapped_column(ForeignKey("programs.id"), primary_key=True)
+
+
+class TeacherProfile(Base):
+    """Une fiche existe avant l'ouverture d'un compte de connexion."""
+    __tablename__ = "teacher_profiles"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
+    name: Mapped[str] = mapped_column(String)
+    service_mode: Mapped[str] = mapped_column(String, default="accompanied")
+    email: Mapped[str] = mapped_column(String, default="")
+    phone: Mapped[str] = mapped_column(String, default="")
+    user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), unique=True, nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class TeacherSchool(Base):
+    __tablename__ = "teacher_schools"
+    teacher_id: Mapped[str] = mapped_column(ForeignKey("teacher_profiles.id"), primary_key=True)
+    school_id: Mapped[str] = mapped_column(ForeignKey("schools.id"), primary_key=True)
+
+
+class TeacherInvitation(Base):
+    __tablename__ = "teacher_invitations"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
+    teacher_id: Mapped[str] = mapped_column(ForeignKey("teacher_profiles.id"))
+    token_hash: Mapped[str] = mapped_column(String, unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
+
+
+class ClassTeaching(Base):
+    __tablename__ = "class_teachings"
+    __table_args__ = (UniqueConstraint("class_id", "subject_id"),)
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
+    class_id: Mapped[str] = mapped_column(ForeignKey("classes.id"))
+    subject_id: Mapped[str] = mapped_column(ForeignKey("subjects.id"))
+    teacher_id: Mapped[str] = mapped_column(ForeignKey("teacher_profiles.id"))
+
+
+class TeachingGroup(Base):
+    __tablename__ = "teaching_groups"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
+    teaching_id: Mapped[str] = mapped_column(ForeignKey("class_teachings.id"))
+    path_id: Mapped[str] = mapped_column(ForeignKey("curriculum_paths.id"))
+    name: Mapped[str] = mapped_column(String)
+
+
+class GroupStudent(Base):
+    __tablename__ = "group_students"
+    group_id: Mapped[str] = mapped_column(ForeignKey("teaching_groups.id"), primary_key=True)
+    student_id: Mapped[str] = mapped_column(ForeignKey("students.id"), primary_key=True)
+
+
 class SchoolYear(Base):
     __tablename__ = "school_years"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
@@ -55,11 +156,15 @@ class SchoolYear(Base):
 
 class SchoolClass(Base):
     __tablename__ = "classes"
+    __table_args__ = (UniqueConstraint("school_id", "school_year_id", "name"),)
     id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
     school_year_id: Mapped[str | None] = mapped_column(ForeignKey("school_years.id"), nullable=True)
     name: Mapped[str] = mapped_column(String)
     grade_level: Mapped[str] = mapped_column(String, default="5e")  # 6e/5e/4e/3e
     teacher_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    school_id: Mapped[str | None] = mapped_column(ForeignKey("schools.id"), nullable=True)
+    program_id: Mapped[str] = mapped_column(String, default="fr")
+    series_id: Mapped[str | None] = mapped_column(ForeignKey("curriculum_paths.id"), nullable=True)
     archived_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     students: Mapped[list["Student"]] = relationship(back_populates="school_class")
 
@@ -99,6 +204,9 @@ class CompetencyFramework(Base):
     ~10 ans, ex. 2026) — à distinguer de `SchoolYear` qui est l'année
     scolaire d'une classe."""
     __tablename__ = "competency_frameworks"
+    program_id: Mapped[str] = mapped_column(String, default="fr")
+    subject_id: Mapped[str] = mapped_column(String, default="math")
+    path_id: Mapped[str | None] = mapped_column(String, nullable=True)
     id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
     grade_level: Mapped[str] = mapped_column(String)
     cycle: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -121,6 +229,8 @@ class Competency(Base):
     de quoi il s'agit. `code` reste l'identifiant technique legacy (verbeux,
     non affiché) pour les niveaux pas encore migrés vers ce modèle."""
     __tablename__ = "competencies"
+    source_competency_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    section: Mapped[str] = mapped_column(String, default="common")  # common | complement
     id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
     framework_id: Mapped[str] = mapped_column(ForeignKey("competency_frameworks.id"))
     code: Mapped[str] = mapped_column(String)
@@ -154,6 +264,7 @@ class GeneratedExercise(Base):
     par couple compétence × niveau de difficulté (1-3 : facile/moyen/difficile),
     stocké pour réutilisation."""
     __tablename__ = "generated_exercises"
+    source_exercise_id: Mapped[str | None] = mapped_column(String, nullable=True)
     id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
     competency_id: Mapped[str] = mapped_column(ForeignKey("competencies.id"))
     difficulty_level: Mapped[int] = mapped_column(Integer)  # 1-3 (cf. exercise_gen.DIFFICULTY_LEVELS)
@@ -196,6 +307,15 @@ class ExerciseCompetency(Base):
 
 class Assessment(Base):
     __tablename__ = "assessments"
+    subject_id: Mapped[str] = mapped_column(String, default="math")
+    teacher_profile_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    framework_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    group_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    subjects_delivered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    originals_received_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    delivery_due_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    operations_note: Mapped[str] = mapped_column(Text, default="")
     id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
     class_id: Mapped[str] = mapped_column(ForeignKey("classes.id"))
     type: Mapped[str] = mapped_column(String, default="training")  # control | training
@@ -471,6 +591,9 @@ class ScanBatch(Base):
     # version qu'il couvre. refine_rev > overlay_rev = overlay à régénérer.
     refine_rev: Mapped[int] = mapped_column(Integer, default=0)
     overlay_rev: Mapped[int] = mapped_column(Integer, default=0)
+    # dernier envoi de l'overlay (position, feuilles, travail) : l'ordinateur ne
+    # voit pas les feuilles sortir, ce repère guide la reprise du professeur.
+    overlay_print_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
 
@@ -707,6 +830,7 @@ class CompetencyStateHistory(Base):
 
 class StudentLevel(Base):
     __tablename__ = "student_levels"
+    subject_id: Mapped[str] = mapped_column(String, default="math")
     id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
     student_id: Mapped[str] = mapped_column(ForeignKey("students.id"))
     # Correction ayant provoqué ce palier. Null pour les réglages manuels et
@@ -723,6 +847,7 @@ class StudentLevel(Base):
 
 class StudentReport(Base):
     __tablename__ = "student_reports"
+    subject_id: Mapped[str] = mapped_column(String, default="math")
     id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
     student_id: Mapped[str] = mapped_column(ForeignKey("students.id"))
     period: Mapped[str] = mapped_column(String)
@@ -777,6 +902,11 @@ class Printer(Base):
     output_reverse_order: Mapped[bool] = mapped_column("reverse_order", Boolean, default=False)
     app_default: Mapped[bool] = mapped_column(Boolean, default=False)
     adf_reverse_order: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Déplacement de l'overlay à l'impression (x vers la droite, y vers le haut) :
+    # la copie est déjà imprimée, seul ce qui reste à imprimer peut compenser un
+    # écart constaté. Le fichier d'overlay lui-même reste à sa place théorique.
+    overlay_offset_x_mm: Mapped[float] = mapped_column(Float, default=0.0)
+    overlay_offset_y_mm: Mapped[float] = mapped_column(Float, default=0.0)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
@@ -852,6 +982,7 @@ class CalibrationProfile(Base):
 
 class Job(Base):
     __tablename__ = "jobs"
+    created_by: Mapped[str | None] = mapped_column(String, nullable=True)
     id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
     type: Mapped[str] = mapped_column(String)
     status: Mapped[str] = mapped_column(String, default="pending")  # pending|running|done|failed

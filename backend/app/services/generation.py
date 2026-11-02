@@ -48,8 +48,8 @@ def assessment_dir(assessment_id: str) -> Path:
     return d
 
 
-def _student_level(db: Session, student_id: str) -> int:
-    lvl = (db.query(StudentLevel).filter_by(student_id=student_id)
+def _student_level(db: Session, student_id: str, subject_id: str = "math") -> int:
+    lvl = (db.query(StudentLevel).filter_by(student_id=student_id, subject_id=subject_id)
            .order_by(StudentLevel.valid_from.desc()).first())
     return lvl.level if lvl else 5
 
@@ -210,8 +210,8 @@ def generate_assessment_job(db: Session, assessment: Assessment,
         return manual_subject.generate_manual_job(db, assessment, job, font_size)
 
     school_class = db.get(SchoolClass, assessment.class_id)
-    students = sorted((s for s in school_class.students if s.active),
-                      key=lambda s: (s.order_index, s.id))
+    from .education import assessment_students
+    students = assessment_students(db, assessment)
     blueprint = assessment.blueprint_json or {}
     # Création AUTOMATIQUE de l'assistant « Créer un sujet » (mode "auto") :
     # sujet individuel, banque entière, guides en dégradé selon le niveau,
@@ -328,7 +328,7 @@ def generate_assessment_job(db: Session, assessment: Assessment,
                       f"(banque générée à la demande si besoin)")
         logger.info("Copie %s/%s (%s)", s_idx + 1, len(students), student.llm_pseudonym)
         seed = distribution.variant_seed(base_seed, assessment.personalization_mode, s_idx)
-        level = _student_level(db, student.id)
+        level = _student_level(db, student.id, assessment.subject_id or "math")
         level3 = distribution.difficulty_level3(assessment.personalization_mode, level)
         target_mix = settings.exercise_kind_mix
         individual = assessment.personalization_mode == "individual"

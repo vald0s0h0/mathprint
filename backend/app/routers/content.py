@@ -76,7 +76,7 @@ def _exercise_out(ex: GeneratedExercise, comp: Competency | None) -> dict:
 
 
 @router.get("/summary")
-def summary(grade_level: str | None = None, db: Session = Depends(get_db)):
+def summary(grade_level: str | None = None, db: Session = Depends(get_db), framework_id: str | None = None, subject_id: str = "math"):
     """Couverture de la banque par compétence : nb d'exercices actifs par
     niveau 1-5, nb de "problèmes" (kind=probleme, badge probleme/énigme
     confondus). Renvoie aussi domaine/chapitre (codes ET libellés, H1/H2)
@@ -85,6 +85,8 @@ def summary(grade_level: str | None = None, db: Session = Depends(get_db)):
     comp_q = (db.query(Competency, CompetencyFramework.grade_level)
               .join(CompetencyFramework,
                     Competency.framework_id == CompetencyFramework.id))
+    comp_q = comp_q.filter(CompetencyFramework.subject_id == subject_id)
+    if framework_id: comp_q = comp_q.filter(CompetencyFramework.id == framework_id)
     if grade_level:
         comp_q = comp_q.filter(CompetencyFramework.grade_level == grade_level)
     comps = comp_q.all()
@@ -172,7 +174,7 @@ class GenerateExercisesIn(BaseModel):
 
 
 @router.post("/exercises/generate",
-             dependencies=[Depends(require_role("admin", "teacher"))])
+             dependencies=[Depends(require_role("admin"))])
 def generate_exercises(body: GenerateExercisesIn, db: Session = Depends(get_db)):
     """Complète la banque pour (compétence, niveau) à partir de la source
     demandée : extraction Sésamaths (tout ce que la Série du manuel contient)
@@ -191,7 +193,7 @@ def generate_exercises(body: GenerateExercisesIn, db: Session = Depends(get_db))
 
 
 @router.post("/exercises/{exercise_id}/retire",
-             dependencies=[Depends(require_role("admin", "teacher"))])
+             dependencies=[Depends(require_role("admin"))])
 def retire_exercise(exercise_id: str, db: Session = Depends(get_db)):
     """Retire un exercice de la banque (il ne sera plus jamais servi) ;
     la prochaine génération le remplacera automatiquement."""

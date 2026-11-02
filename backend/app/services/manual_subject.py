@@ -200,8 +200,8 @@ def pool(db: Session, competency_ids: list[str], pages: int = 1) -> dict:
 
 # --------------------------------------------------------------- génération
 
-def _student_level(db: Session, student_id: str) -> int:
-    lvl = (db.query(StudentLevel).filter_by(student_id=student_id)
+def _student_level(db: Session, student_id: str, subject_id: str = "math") -> int:
+    lvl = (db.query(StudentLevel).filter_by(student_id=student_id, subject_id=subject_id)
            .order_by(StudentLevel.valid_from.desc()).first())
     return lvl.level if lvl else 5
 
@@ -247,8 +247,8 @@ def generate_manual_job(db: Session, assessment: Assessment, job: Job | None = N
     guide_mode = normalize_guide_mode(blueprint.get("guides"))
 
     school_class = db.get(SchoolClass, assessment.class_id)
-    students = sorted((s for s in school_class.students if s.active),
-                      key=lambda s: (s.order_index, s.id))
+    from .education import assessment_students
+    students = assessment_students(db, assessment)
     if not students:
         raise ValueError("Aucun élève actif dans cette classe.")
 
@@ -292,7 +292,7 @@ def generate_manual_job(db: Session, assessment: Assessment, job: Job | None = N
         generation._set_progress(
             db, job, round(5 + 90 * s_idx / max(1, len(students))),
             f"Copie {s_idx + 1}/{len(students)}")
-        level = _student_level(db, student.id)
+        level = _student_level(db, student.id, assessment.subject_id or "math")
         fixed_key = (blueprint.get("duplicate_student_variants") or {}).get(student.id)
         v_idx = next((i for i, v in enumerate(variants)
                       if fixed_key and str(v.get("key")) == str(fixed_key)),

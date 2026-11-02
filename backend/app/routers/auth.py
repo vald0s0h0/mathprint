@@ -35,9 +35,12 @@ def login(body: LoginIn, db: Session = Depends(get_db), request: Request = None)
 
 
 @router.get("/me")
-def me(user: User = Depends(current_user)):
-    return {"id": user.id, "email": user.email,
-            "display_name": user.display_name, "role": user.role}
+def me(user: User = Depends(current_user), db: Session = Depends(get_db)):
+    from ..models import TeacherProfile
+    profile = db.query(TeacherProfile).filter_by(user_id=user.id).first()
+    return {"id": user.id, "email": user.email, "display_name": user.display_name,
+            "role": user.role, "teacher_profile_id": profile.id if profile else None,
+            "service_mode": profile.service_mode if profile else None}
 
 
 class ChangePasswordIn(BaseModel):
@@ -55,3 +58,59 @@ def change_password(body: ChangePasswordIn, db: Session = Depends(get_db),
     user.password_hash = hash_password(body.new_password)
     db.commit()
     return {"ok": True}
+
+
+class InvitationCheckIn(BaseModel):
+    token: str
+
+
+class RegistrationIn(InvitationCheckIn):
+    email: str
+    password: str
+
+
+def _invitation(db, token):
+    import hashlib
+    from ..models import TeacherInvitation, TeacherProfile
+    invitation = db.query(TeacherInvitation).filter_by(
+        token_hash=hashlib.sha256(token.encode()).hexdigest(), used_at=None).first()
+    if not invitation:
+        raise HTTPException(410, "Lien d’inscription invalide ou déjà utilisé")
+    expiry = invitation.expires_at.replace(tzinfo=timezone.utc) if invitation.expires_at.tzinfo is None else invitation.expires_at
+    teacher = db.get(TeacherProfile, invitation.teacher_id)
+    if expiry <= datetime.now(timezone.utc) or not teacher or not teacher.active or teacher.user_id:
+        raise HTTPException(410, "Lien expiré ou compte déjà activé")
+    return invitation, teacher
+
+
+@router.post("/invitation/check")
+def check_invitation(body: InvitationCheckIn, db: Session = Depends(get_db)):
+    _, teacher = _invitation(db, body.token)
+    return {"name": teacher.name, "service_mode": teacher.service_mode}
+
+
+@router.post("/register")
+def register(body: RegistrationIn, db: Session = Depends(get_db)):
+    from sqlalchemy.exc import IntegrityError
+    from ..models import TeacherInvitation
+    invitation, teacher = _invitation(db, body.token)
+    email = body.email.strip().lower()
+    if len(body.password) < 10 or len(email) > 254 or "@" not in email or " " in email:
+        raise HTTPException(422, "Adresse e-mail valide et mot de passe d’au moins 10 caractères requis")
+    if db.query(User).filter_by(email=email).first():
+        raise HTTPException(409, "Cette adresse possède déjà un compte")
+    claimed = db.query(TeacherInvitation).filter_by(id=invitation.id, used_at=None).update(
+        {"used_at": datetime.now(timezone.utc)}, synchronize_session=False)
+    if not claimed: raise HTTPException(410, "Lien déjà utilisé")
+    user = User(email=email, password_hash=hash_password(body.password), display_name=teacher.name,
+                role="teacher", active=True)
+    db.add(user)
+    try:
+        db.flush()
+        teacher.user_id = user.id
+        teacher.email = email
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "Ce compte a déjà été activé")
+    return {"token": make_token(user.id, user.role)}

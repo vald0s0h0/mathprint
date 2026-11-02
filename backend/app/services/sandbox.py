@@ -50,6 +50,12 @@ def ingest_files(db: Session, files: list[tuple[str, str, bytes]],
     présente deux fois n'est corrigée qu'une fois, mais ses deux emplacements
     restent dans le flux. L'appelant (routers.scans) planifie ensuite le pipeline
     une seule fois par batch touché."""
+    if uploaded_by:
+        from ..models import User
+        from .access import scope_session
+        actor = db.get(User, uploaded_by)
+        if actor:
+            scope_session(db, actor)
     kept_by_assessment: dict[str, list] = defaultdict(list)
     records: list[dict] = []
 

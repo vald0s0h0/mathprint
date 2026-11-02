@@ -41,6 +41,7 @@ def class_gradebook(
     class_id: str,
     kind: Literal["all", "control", "training"] = "all",
     db: Session = Depends(get_db),
+    subject_id: str = "math",
 ):
     school_class = db.get(SchoolClass, class_id)
     if not school_class or school_class.archived_at is not None:
@@ -70,7 +71,7 @@ def class_gradebook(
     ))
 
     assessment_query = db.query(Assessment).filter(
-        Assessment.class_id == class_id, Assessment.id.in_(assessment_ids))
+        Assessment.class_id == class_id, Assessment.id.in_(assessment_ids), Assessment.subject_id == subject_id)
     if kind != "all":
         assessment_query = assessment_query.filter(Assessment.type == kind)
     assessments = assessment_query.order_by(Assessment.created_at.asc(), Assessment.id).all()
@@ -160,7 +161,7 @@ def class_gradebook(
     # manuelles/historiques restent dans la chronologie afin de fournir le
     # niveau précédent, mais ne sont attribuées à aucune colonne.
     level_rows = (db.query(StudentLevel)
-                  .filter(StudentLevel.student_id.in_(student_ids))
+                  .filter(StudentLevel.student_id.in_(student_ids), StudentLevel.subject_id == subject_id)
                   .order_by(StudentLevel.valid_from.asc(), StudentLevel.id.asc()).all()
                   if student_ids else [])
     previous_levels: dict[str, int] = {}

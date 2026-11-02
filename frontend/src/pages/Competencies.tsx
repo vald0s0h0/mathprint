@@ -7,17 +7,18 @@
 // l'assistant sujet : /api/assessments/competency-matrix) + une colonne
 // Moyenne (moyenne des classes renseignées).
 import {
-  Badge, Group, Progress, ScrollArea, Stack, Text, TextInput, Title, Tooltip,
+  Badge, Button, Select, Group, Progress, ScrollArea, Stack, Text, TextInput, Title, Tooltip,
 } from '@mantine/core'
 import { Search } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
-import { api } from '../api'
+import { api, download } from '../api'
+import { notifications } from '@mantine/notifications'
 import CompetencyHierarchy, { type CompetencyHierarchyColumn } from '../components/CompetencyHierarchy'
 import GradeSelectionRequired from '../components/GradeSelectionRequired'
 import { useAppState } from '../state/AppState'
 import { masteryColor } from '../utils/mastery'
 
-type Framework = { id: string; name: string; grade_level: string; version: string; status: string }
+type Framework = { id: string; name: string; grade_level: string; version: string; status: string; program_id: string; subject_id: string; path_id: string | null }
 type Comp = { id: string; code: string; short_id: string; label: string }
 type Domain = {
   code: string; name: string
@@ -54,7 +55,7 @@ export default function Competencies() {
   const [tree, setTree] = useState<Domain[]>([])
   const [filter, setFilter] = useState('')
   const [matrix, setMatrix] = useState<Matrix | null>(null)
-  const { cycle } = useAppState()
+  const { cycle, subject } = useAppState()
 
   useEffect(() => {
     api.get<Framework[]>('/api/competencies/frameworks').then(setFrameworks)
@@ -67,20 +68,20 @@ export default function Competencies() {
       setTree([])
       return
     }
-    const fw = frameworks.find((f) => f.grade_level === cycle)
+    const fw = frameworks.find((f) => f.grade_level === cycle && f.subject_id === subject)
     setSel(fw?.id ?? null)
     setTree([])
-  }, [frameworks, cycle])
+  }, [frameworks, cycle, subject])
 
   useEffect(() => {
     setMatrix(null)
-    if (cycle === 'all') return
+    if (cycle === 'all' || !sel) return
     let current = true
-    api.get<Matrix>(`/api/assessments/competency-matrix?grade_level=${cycle}`)
+    api.get<Matrix>(`/api/assessments/competency-matrix?grade_level=${cycle}&subject_id=${subject}&framework_id=${sel}`)
       .then((m) => { if (current) setMatrix(m) })
       .catch(() => {})
     return () => { current = false }
-  }, [cycle])
+  }, [cycle, subject, sel])
 
   // maîtrise par compétence : id -> (classe -> maîtrise moyenne)
   const masteryById = useMemo(() => {
@@ -159,19 +160,23 @@ export default function Competencies() {
                 v{fw.version} — {fw.status === 'published' ? 'publiée (immuable)' : fw.status}
               </Badge>
               <Text size="xs" c="dimmed">
-                {total} objectifs d'apprentissage — {fw.grade_level === '6e'
-                  ? 'cycle 3 (année 6e uniquement)' : 'cycle 4'}
+                {total} compétences · {fw.program_id.toUpperCase()} · {fw.grade_level}
               </Text>
             </Group>
           )}
         </div>
         <Group gap="xs">
+          <Button size="xs" variant="light" disabled={!sel || !total}
+            onClick={() => download(`/api/competencies/frameworks/${sel}/pdf`, 'competences.pdf').catch(e => notifications.show({ color: 'red', message: e.message }))}>Liste à imprimer</Button>
           <TextInput size="xs" w={240} placeholder="Filtrer les objectifs…" value={filter}
             leftSection={<Search size={14} />}
             onChange={(e) => setFilter(e.target.value)} />
         </Group>
       </Group>
 
+      <Select label="Référentiel" searchable value={sel} onChange={v => { setSel(v); setTree([]) }}
+        data={frameworks.filter(f => f.grade_level === cycle && f.subject_id === subject).map(f => ({ value: f.id, label: `${f.program_id.toUpperCase()} · ${f.name}` }))} />
+      {total === 0 && <Text size="sm" c="dimmed">Structure prête. Les compétences seront ajoutées ultérieurement.</Text>}
       <ScrollArea h="calc(100vh - 180px)">
         <CompetencyHierarchy domains={hierarchy} columns={columns}
           columnGroupLabel="Compétences acquises"

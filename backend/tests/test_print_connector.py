@@ -113,7 +113,8 @@ def test_manual_duplex_jobs_are_split_then_physically_reversed(tmp_path, monkeyp
             printer=profile.name, pass_side="verso"), db, user)
         verso = db.get(ConnectorPrintJob, verso_result["job_id"])
         verso_pdf = PdfReader(str(tmp_path / verso.document_relpath))
-        assert [int(p.mediabox.width) for p in verso_pdf.pages] == [102]
+        # Le verso vide de la page 3 traverse aussi le chemin papier.
+        assert [int(p.mediabox.width) for p in verso_pdf.pages] == [103, 102]
         connectors.claim_job(connector, db)
         connectors.report_job(verso.id, connectors.JobResultIn(
             status="submitted", spool_job_id="windows-43"), connector, db)

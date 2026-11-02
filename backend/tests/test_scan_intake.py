@@ -394,3 +394,17 @@ def test_interrupted_sandbox_job_is_marked_failed_at_startup(mock_db):
     db.add(job); db.commit()
     assert scans_router.fail_interrupted_sandbox_jobs(db) == 1
     assert scans_router.sandbox_job(job.id, db)["status"] == "failed"
+
+
+def test_native_qr_crop_survives_cubic_resampling_failure(tmp_path, monkeypatch):
+    # Matrice réelle observée lors d'un échec intermittent du parcours IMAP.
+    # Le HMAC est isolé pour rendre ce motif indépendant des clés du test.
+    payload = 'M2:MRDMNRLELJFIXC7OKVUQJGGJDY:EZTMSD3ZH2QBE'
+    monkeypatch.setattr(worker_cv, 'verify_page_payload', lambda text: 'known-page' if text == payload else None)
+    # Tester le repli, indépendamment du détecteur multi-QR aléatoire d'OpenCV.
+    monkeypatch.setattr(worker_cv, '_detect_qrcodes', lambda img: [])
+    source = tmp_path / 'native-qr.pdf'
+    source.write_bytes(_marked_pdf(payload))
+    analysis = worker_cv.analyze_page(worker_cv.raster_pdf(str(source))[0])
+    assert analysis.page_id == 'known-page'
+    assert 'main_qr_missing_or_invalid' not in analysis.warnings

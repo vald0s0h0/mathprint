@@ -204,17 +204,22 @@ def analyze_page(img: np.ndarray, forced_page_id: str | None = None) -> PageAnal
             res.page_id = page_id
             centers_px["MAIN"] = quad.mean(axis=0)
 
-        # seconde lecture du QR principal sur ROI haut-droit sur-échantillonnée
+        # Repli sur le coin haut-droit. Certaines matrices QR parfaitement
+        # lisibles à taille native deviennent indécodables après interpolation
+        # cubique : essayer d'abord le crop original, puis les agrandissements.
         if res.page_id is None:
             h, w = img.shape[:2]
-            roi = img[0:int(h * 0.20), int(w * 0.65):w]
-            big = cv2.resize(roi, None, fx=2.5, fy=2.5, interpolation=cv2.INTER_CUBIC)
-            text, quad, _ = cv2.QRCodeDetector().detectAndDecode(big)
-            page_id = verify_page_payload(text)
-            if page_id:
-                res.page_id = page_id
-                center = quad.reshape(-1, 2).mean(axis=0) / 2.5
-                centers_px["MAIN"] = center + np.array([w * 0.65, 0], dtype=np.float32)
+            x0 = int(w * 0.65)
+            roi = img[0:int(h * 0.20), x0:w]
+            for scale, interpolation in ((1, cv2.INTER_NEAREST), (2.5, cv2.INTER_CUBIC), (2.5, cv2.INTER_NEAREST)):
+                candidate = roi if scale == 1 else cv2.resize(roi, None, fx=scale, fy=scale, interpolation=interpolation)
+                text, quad, _ = cv2.QRCodeDetector().detectAndDecode(candidate)
+                page_id = verify_page_payload(text)
+                if page_id and quad is not None:
+                    res.page_id = page_id
+                    center = quad.reshape(-1, 2).mean(axis=0) / scale
+                    centers_px["MAIN"] = center + np.array([x0, 0], dtype=np.float32)
+                    break
 
     # fiduciels de coin : purement géométriques (§5.4)
     for role, center in detect_fiducials(img).items():

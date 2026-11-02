@@ -34,7 +34,7 @@ from ..models import (
     CompetencyStateHistory,
     Student,
     StudentCompetencyState,
-    StudentLevel,
+    StudentLevel, Assessment, Competency, CompetencyFramework,
 )
 
 
@@ -264,7 +264,7 @@ def due_competencies(db: Session, student_id: str) -> list[dict]:
     return sorted(out, key=lambda x: -x["priority"])
 
 
-def compute_student_level(db: Session, student_id: str, grade_level: str = "5e") -> tuple[int, str]:
+def compute_student_level(db: Session, student_id: str, grade_level: str = "5e", subject_id: str = "math") -> tuple[int, str]:
     """Niveau global 1-10 : calcul initial déterministe (§7.3).
 
     Volontairement fondé sur `mastery` et NON sur `strength` : le niveau dit ce
@@ -273,7 +273,9 @@ def compute_student_level(db: Session, student_id: str, grade_level: str = "5e")
     pendant les vacances, et avec lui le mix de dérivés servi à la rentrée. La
     fraîcheur pilote CE QU'ON RETRAVAILLE (priority), pas ce dont l'élève est
     capable."""
-    states = db.query(StudentCompetencyState).filter_by(student_id=student_id).all()
+    states = (db.query(StudentCompetencyState).join(Competency, Competency.id == StudentCompetencyState.competency_id)
+              .join(CompetencyFramework, CompetencyFramework.id == Competency.framework_id)
+              .filter(StudentCompetencyState.student_id == student_id, CompetencyFramework.subject_id == subject_id).all())
     if not states:
         return 5, "aucune preuve : niveau médian par défaut"
     weighted = sum(s.mastery * max(0.1, s.confidence) for s in states)
@@ -292,22 +294,26 @@ def update_level_after_assessment(
     calcul initialise le niveau sans constituer une hausse ou une baisse ; le
     carnet peut ainsi distinguer un vrai changement d'une valeur initiale.
     """
+    assessment = db.get(Assessment, assessment_id)
+    subject_id = (assessment.subject_id or "math") if assessment else "math"
     existing = (db.query(StudentLevel)
-                .filter_by(student_id=student.id, assessment_id=assessment_id)
+                .filter_by(student_id=student.id, assessment_id=assessment_id, subject_id=subject_id)
                 .first())
-    if existing or student.level_locked:
+    if existing or (subject_id == "math" and student.level_locked):
         return existing
 
-    current = (db.query(StudentLevel).filter_by(student_id=student.id)
+    current = (db.query(StudentLevel).filter_by(student_id=student.id, subject_id=subject_id)
                .order_by(StudentLevel.valid_from.desc(), StudentLevel.id.desc()).first())
-    level, reason = compute_student_level(db, student.id)
+    if current and current.locked:
+        return None
+    level, reason = compute_student_level(db, student.id, subject_id=subject_id)
     if current:
         level = max(current.level - 1, min(current.level + 1, level))
         if level == current.level:
             return None
 
     row = StudentLevel(
-        student_id=student.id,
+        student_id=student.id, subject_id=subject_id,
         assessment_id=assessment_id,
         level=level,
         source="deterministic",

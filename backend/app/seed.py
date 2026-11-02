@@ -108,7 +108,11 @@ def migrate_cahier_frameworks(db: Session):
     for grade in CAHIER_GRADES:
         old = (db.query(CompetencyFramework)
                .filter(CompetencyFramework.grade_level == grade,
-                       CompetencyFramework.version != CAHIER_VERSION).all())
+                       CompetencyFramework.version != CAHIER_VERSION,
+                       CompetencyFramework.program_id == "fr",
+                       CompetencyFramework.subject_id == "math",
+                       CompetencyFramework.path_id.is_(None),
+                       CompetencyFramework.source != "structure").all())
         if not old:
             continue
         _purge_frameworks(db, old)

@@ -29,21 +29,33 @@ def test_adf_filenames_use_natural_numeric_order():
         "scan-001.jpg", "scan-2.jpg", "scan-10.jpg", "scan-20260811-093001.jpg"]
 
 
-def test_pickup_output_and_adf_inversions_are_composed_by_xor():
+def test_subject_order_composes_pickup_and_output_tray():
     profile = Printer(name="P", pickup_reverse_order=False,
                       output_reverse_order=False, adf_reverse_order=False)
     assert _effective_reverse(profile, "subject_batch.pdf") is False
-    assert _effective_reverse(profile, "correction_overlay.pdf") is False
     profile.pickup_reverse_order = True
     assert _effective_reverse(profile, "subject_batch.pdf") is True
-    assert _effective_reverse(profile, "correction_overlay.pdf") is True
     profile.output_reverse_order = True
     # Double inversion imprimante : prélèvement et bac s'annulent.
     assert _effective_reverse(profile, "subject_batch.pdf") is False
-    assert _effective_reverse(profile, "correction_overlay.pdf") is False
+    # L'ADF ne concerne que les copies déjà scannées.
     profile.adf_reverse_order = True
     assert _effective_reverse(profile, "subject_batch.pdf") is False
-    assert _effective_reverse(profile, "correction_overlay.pdf") is True
+
+
+def test_overlay_order_ignores_the_output_tray():
+    """La feuille prise dans le bac reçoit sa correction AVANT d'atteindre le
+    bac de réception : la façon dont il empile ne peut pas changer l'appariement."""
+    for output_reverses in (False, True):
+        profile = Printer(name="P", pickup_reverse_order=False,
+                          output_reverse_order=output_reverses, adf_reverse_order=False)
+        assert _effective_reverse(profile, "correction_overlay.pdf") is False
+        profile.pickup_reverse_order = True
+        assert _effective_reverse(profile, "correction_overlay.pdf") is True
+        profile.adf_reverse_order = True
+        assert _effective_reverse(profile, "correction_overlay.pdf") is False
+        profile.pickup_reverse_order = False
+        assert _effective_reverse(profile, "correction_overlay.pdf") is True
 
 
 def test_lp_command_forces_collation_scale_duplex_and_order(tmp_path):
@@ -82,7 +94,7 @@ def test_successful_overlay_print_marks_batch_as_printed(tmp_path, monkeypatch):
     db = sessionmaker(bind=engine)()
     try:
         school_class = SchoolClass(name="5A", grade_level="5e")
-        user = User(email="print@x.fr", password_hash="x")
+        user = User(email="print@x.fr", password_hash="x", role="corrector")
         db.add_all([school_class, user]); db.flush()
         assessment = Assessment(class_id=school_class.id, title="Overlay", status="finalized")
         db.add(assessment); db.flush()
@@ -94,7 +106,10 @@ def test_successful_overlay_print_marks_batch_as_printed(tmp_path, monkeypatch):
         overlay = (tmp_path / "assessments" / assessment.id / "overlays"
                    / "correction_overlay.pdf")
         overlay.parent.mkdir(parents=True)
-        overlay.write_bytes(b"%PDF-test")
+        writer = PdfWriter()
+        writer.add_blank_page(width=200, height=200)
+        with overlay.open("wb") as stream:
+            writer.write(stream)
         monkeypatch.setattr(printing.settings, "data_dir", tmp_path)
         monkeypatch.setattr(printing, "_local_printers", lambda: [
             {"name": "Salle", "source": "cups_local", "status": "idle"}])
@@ -120,7 +135,7 @@ def test_application_default_is_independent_and_exclusive(monkeypatch):
         {"name": "Salle", "source": "cups_local", "status": "idle", "default": True},
     ])
     try:
-        user = User(email="defaults@x.fr", password_hash="x")
+        user = User(email="defaults@x.fr", password_hash="x", role="corrector")
         db.add(user); db.commit()
         initial = list_printers(db, user)
         system_default = next(p for p in initial["local"] if p["name"] == "Salle")
@@ -129,9 +144,9 @@ def test_application_default_is_independent_and_exclusive(monkeypatch):
         update_printer_preferences(
             PrinterPreferencesIn(name="Bureau", app_default=True, duplex=True,
                                  pickup_reverse_order=True,
-                                 output_reverse_order=True), db)
+                                 output_reverse_order=True), db, user)
         update_printer_preferences(
-            PrinterPreferencesIn(name="Salle", app_default=True), db)
+            PrinterPreferencesIn(name="Salle", app_default=True), db, user)
         profiles = db.query(Printer).order_by(Printer.name).all()
         assert [(p.name, p.app_default, p.duplex, p.pickup_reverse_order,
                  p.output_reverse_order) for p in profiles] == [
@@ -173,7 +188,7 @@ def test_manual_duplex_passes_use_page_number_inside_each_copy(tmp_path):
         rectos = PdfReader(BytesIO(_subject_pass_pdf(db, assessment.id, source, "recto")))
         versos = PdfReader(BytesIO(_subject_pass_pdf(db, assessment.id, source, "verso")))
         assert [int(p.mediabox.width) for p in rectos.pages] == [101, 103, 104, 106]
-        assert [int(p.mediabox.width) for p in versos.pages] == [102, 105]
+        assert [int(p.mediabox.width) for p in versos.pages] == [102, 103, 105, 106]
     finally:
         db.close()
 

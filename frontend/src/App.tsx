@@ -1,10 +1,10 @@
 import {
   ActionIcon, AppShell, Badge, Box, Divider, Group, Loader, Menu, NavLink, Progress,
-  SegmentedControl, Text, Title, Tooltip, useComputedColorScheme, useMantineColorScheme,
+  SegmentedControl, Select, Text, Title, Tooltip, useComputedColorScheme, useMantineColorScheme,
 } from '@mantine/core'
 import {
   BookOpenCheck, ClipboardList, GraduationCap, LayoutDashboard, Library, LogOut,
-  Moon, ScanLine, Settings as SettingsIcon, ShieldUser, Sun, Target, Users, FileText,
+  Building2, Moon, ScanLine, Settings as SettingsIcon, ShieldUser, Sun, Target, Users, FileText,
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
@@ -21,10 +21,12 @@ import Bank from './pages/Bank'
 import Exercices from './pages/Exercices'
 import Subjects from './pages/Subjects'
 import Grades from './pages/Grades'
+import Establishments from './pages/Establishments'
+import Register from './pages/Register'
 import ScanProblemsModal from './components/ScanProblemsModal'
 import { CYCLES, useAppState, type Cycle } from './state/AppState'
 
-type NavItem = { to: string; label: string; icon: typeof LayoutDashboard; admin?: boolean }
+type NavItem = { to: string; label: string; icon: typeof LayoutDashboard; admin?: boolean; operator?: boolean }
 
 // Navigation du quotidien, en haut de la barre latérale.
 const NAV: NavItem[] = [
@@ -41,6 +43,7 @@ const NAV: NavItem[] = [
 // rôle admin (absent des builds utilisateur/correcteur). Les utilisateurs se
 // gèrent désormais dans Paramètres > Utilisateurs.
 const NAV_BOTTOM: NavItem[] = [
+  { to: '/etablissements', label: 'Établissements', icon: Building2, operator: true },
   { to: '/exercices', label: 'Exercices', icon: BookOpenCheck, admin: true },
   { to: '/parametres', label: 'Paramètres', icon: SettingsIcon },
 ]
@@ -64,9 +67,11 @@ export default function App() {
   const authed = !!getToken()
   const [needsSetup, setNeedsSetup] = useState<boolean | null>(null)
   const [role, setRole] = useState<string>('')
-  const { cycle, setCycle, activeJobs } = useAppState()
+  const { cycle, setCycle, activeJobs, subject, setSubject } = useAppState()
   const isAdmin = role === 'admin'
-  const navBottom = NAV_BOTTOM.filter((n) => !n.admin || isAdmin)
+  const isOperator = isAdmin || role === 'corrector'
+  const [subjects, setSubjects] = useState<{ id: string; name: string }[]>([])
+  const navBottom = NAV_BOTTOM.filter((n) => (!n.admin || isAdmin) && (!n.operator || isOperator))
 
   useEffect(() => {
     api.get<{ needs_setup: boolean }>('/api/setup/status')
@@ -75,7 +80,11 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    if (authed) api.get<{ role: string }>('/api/auth/me').then((m) => setRole(m.role)).catch(() => {})
+    let active = true
+    if (!authed) { setRole(''); setSubjects([]); return }
+    api.get<{ role: string }>('/api/auth/me').then((m) => { if (active) setRole(m.role) }).catch(() => {})
+    api.get<{ subjects: { id: string; name: string }[] }>('/api/operations/catalog').then(c => { if (active) setSubjects(c.subjects) }).catch(() => {})
+    return () => { active = false }
   }, [authed])
 
   function renderNavLink(n: NavItem) {
@@ -96,8 +105,10 @@ export default function App() {
   if (needsSetup === null) return null
   if (needsSetup) return <Setup onDone={() => setNeedsSetup(false)} />
 
+  if (location.pathname === '/inscription') return <Register />
   if (!authed && location.pathname !== '/login') return <Navigate to="/login" />
   if (location.pathname === '/login') return <Login />
+  if (!role) return <Loader m="xl" />
 
   return (
     <AppShell header={{ height: 56 }} navbar={{ width: 216, breakpoint: 'sm' }} padding="lg">
@@ -111,10 +122,12 @@ export default function App() {
 
           {/* Filtre CYCLE global : le professeur travaille par cycle ; ce
               choix filtre classes, sujets, corrections et compétences. */}
-          <SegmentedControl size="sm" radius="md" value={cycle}
-            onChange={(v) => setCycle(v as Cycle)}
-            data={[...CYCLES.map((c) => ({ value: c, label: c })),
-                   { value: 'all', label: 'Tout' }]} />
+          <Group gap="xs" wrap="nowrap">
+            <Select aria-label="Cycle" size="xs" w={150} value={cycle} onChange={v => setCycle((v || 'all') as Cycle)}
+              data={[{ value: 'all', label: 'Tous les cycles' }, ...CYCLES.map(c => ({ value: c, label: ({ '2nde': 'Seconde', '1re': 'Première', 'tle': 'Terminale' } as Record<string, string>)[c] || c }))]} />
+            <Select aria-label="Matière" size="xs" w={180} value={subject} onChange={v => setSubject(v || 'math')}
+              data={subjects.map(s => ({ value: s.id, label: s.name }))} />
+          </Group>
 
           <Group gap="xs" wrap="nowrap">
             {activeJobs.length > 0 && (
@@ -152,9 +165,9 @@ export default function App() {
         {NAV.map(renderNavLink)}
         <Box mt="auto">
           <Divider mb={6} />
-          {isAdmin && (
+          {isOperator && (
             <Text size="10px" fw={700} c="dimmed" tt="uppercase" px="sm" mb={4}
-              style={{ letterSpacing: 0.6 }}>Admin</Text>
+              style={{ letterSpacing: 0.6 }}>{isAdmin ? 'Admin' : 'Opérations'}</Text>
           )}
           {navBottom.map(renderNavLink)}
           <Text size="xs" c="dimmed" px="sm" pt={4} pb={4}>Kiro & Nina v{APP_VERSION}</Text>
@@ -163,7 +176,8 @@ export default function App() {
 
       <AppShell.Main>
         <Routes>
-          <Route path="/" element={<Dashboard />} />
+          <Route path="/" element={role === 'corrector' ? <Navigate to="/etablissements" replace /> : <Dashboard />} />
+          {isOperator && <Route path="/etablissements" element={<Establishments />} />}
           <Route path="/sujets" element={<Subjects />} />
           <Route path="/banque" element={<Bank />} />
           {isAdmin && <Route path="/exercices" element={<Exercices />} />}

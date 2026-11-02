@@ -375,13 +375,14 @@ GUIDE_NONE_MIN_LEVEL = 9
 DEFAULT_GUIDE_MEDIUM_SHARE = 0.5
 
 
-def corrected_subjects(db: Session, class_id: str) -> int:
+def corrected_subjects(db: Session, class_id: str, subject_id: str = "math", group_id: str | None = None) -> int:
     """Nombre de sujets CORRIGÉS (finalisés) de la classe — la condition
     d'accès à la création automatique (AUTO_MIN_CORRECTED)."""
     from ..models import Assessment
     return (db.query(Assessment)
             .filter(Assessment.class_id == class_id,
-                    Assessment.status == "finalized").count())
+                    Assessment.status == "finalized", Assessment.subject_id == subject_id,
+                    Assessment.group_id == group_id).count())
 
 
 def guide_ratio(level_1_10: int, medium_share: float = DEFAULT_GUIDE_MEDIUM_SHARE) -> float:

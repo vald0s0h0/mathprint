@@ -66,7 +66,7 @@ def manual_page(which: str, index: int, grade_level: str = "3e"):
 
 @router.get("/competencies")
 def competencies(grade_level: str = "3e", db: Session = Depends(get_db)):
-    fw = db.query(CompetencyFramework).filter_by(grade_level=grade_level).first()
+    fw = db.query(CompetencyFramework).filter_by(grade_level=grade_level, program_id="fr", subject_id="math", path_id=None).first()
     if fw is None:
         return {"grade_level": grade_level, "competencies": []}
     rows = (db.query(Competency).filter_by(framework_id=fw.id)
@@ -353,7 +353,7 @@ def summary(grade_level: str = "3e", db: Session = Depends(get_db)):
     compteurs de chapitre sont renvoyés sur chaque ligne afin que l'UI puisse
     les afficher dans des cellules fusionnées.
     """
-    fw = db.query(CompetencyFramework).filter_by(grade_level=grade_level).first()
+    fw = db.query(CompetencyFramework).filter_by(grade_level=grade_level, program_id="fr", subject_id="math", path_id=None).first()
     if fw is None:
         return []
     rows = (db.query(Competency).filter_by(framework_id=fw.id)

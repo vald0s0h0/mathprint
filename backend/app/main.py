@@ -8,7 +8,7 @@ from .db import Base, SessionLocal, engine, run_migrations
 from .routers import (
     assessments, auth, connectors, content, data_admin, grades,
     indigo as indigo_router, misc, org, printing, scans, setup, students, system,
-    users_admin,
+    users_admin, operations,
 )
 from .seed import seed
 from .services import errorlog, indigo, job_worker, mail_intake, scan_originals
@@ -27,7 +27,7 @@ app.add_middleware(
 for r in (setup.router, auth.router, org.router, assessments.router, scans.router,
           students.router, misc.router, printing.router, system.router,
           connectors.router, content.router, data_admin.router, grades.router,
-          indigo_router.router, users_admin.router):
+          indigo_router.router, users_admin.router, operations.router):
     app.include_router(r)
 
 
@@ -51,6 +51,8 @@ def startup():
     db = SessionLocal()
     try:
         seed(db)
+        from .services.education import seed_structure
+        seed_structure(db)
         indigo.seed_published(db)   # exercices Indigo publiés -> banque (tous déploiements)
         job_worker.resume_stuck_jobs(db)
         indigo.resume_stuck(db)

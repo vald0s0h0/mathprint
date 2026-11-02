@@ -2,7 +2,7 @@
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -27,8 +27,20 @@ router = APIRouter(prefix="/api", tags=["misc"], dependencies=[Depends(current_u
 @router.get("/competencies/frameworks")
 def frameworks(db: Session = Depends(get_db)):
     return [{"id": f.id, "name": f.name, "grade_level": f.grade_level,
-             "version": f.version, "status": f.status}
+             "version": f.version, "status": f.status, "program_id": f.program_id,
+             "subject_id": f.subject_id, "path_id": f.path_id}
             for f in db.query(CompetencyFramework).all()]
+
+
+@router.get("/competencies/frameworks/{framework_id}/pdf")
+def framework_pdf(framework_id: str, db: Session = Depends(get_db)):
+    from ..services.competency_sheet import render_competency_sheet
+    framework = db.get(CompetencyFramework, framework_id)
+    if not framework: raise HTTPException(404, "Référentiel inconnu")
+    if not db.query(Competency).filter_by(framework_id=framework.id).first():
+        raise HTTPException(422, "Ce référentiel ne contient pas encore de compétences")
+    return Response(render_competency_sheet(db, framework), media_type="application/pdf",
+                    headers={"Content-Disposition": 'attachment; filename="competences.pdf"'})
 
 
 @router.get("/competencies")
@@ -38,6 +50,7 @@ def competencies(framework_id: str | None = None, db: Session = Depends(get_db))
         q = q.filter_by(framework_id=framework_id)
     return [{"id": c.id, "code": c.code, "short_id": c.short_id, "label": c.label,
              "description": c.description, "framework_id": c.framework_id,
+             "section": c.section, "source_competency_id": c.source_competency_id,
              "domain_code": c.domain_code, "domain_name": c.domain_name,
              "chapter_code": c.chapter_code, "chapter_name": c.chapter_name}
             for c in q.all()]
@@ -60,7 +73,7 @@ def build_competency_tree(rows: list[Competency], competency_extra=None) -> list
         if ch is None:
             ch = {"code": c.chapter_code, "name": c.chapter_name, "competencies": []}
             d["chapters"].append(ch)
-        entry = {"id": c.id, "code": c.code, "short_id": c.short_id, "label": c.label}
+        entry = {"id": c.id, "code": c.code, "short_id": c.short_id, "label": c.label, "section": c.section}
         if competency_extra:
             entry.update(competency_extra(c))
         ch["competencies"].append(entry)

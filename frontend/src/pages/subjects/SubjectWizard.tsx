@@ -17,7 +17,7 @@
 // plan enregistré diffère (POST /auto-plan ou /manual-plan).
 import {
   Alert, Badge, Box, Button, Card, Divider, Group, Modal, Progress, ScrollArea,
-  SegmentedControl, SimpleGrid, Slider, Stack, Stepper, Switch, Text,
+  Select, SegmentedControl, SimpleGrid, Slider, Stack, Stepper, Switch, Text,
   TextInput, ThemeIcon, Title, Tooltip, UnstyledButton,
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
@@ -28,6 +28,8 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { api } from '../../api'
+import { type Teaching } from '../../components/ClassEditor'
+import { useAppState } from '../../state/AppState'
 import CompetencyMatrixStep, { type Matrix } from './CompetencyMatrixStep'
 import LayoutBoard, {
   deriveVariant, emptyLayout, layoutCount, overfullColumns, resizeLayout,
@@ -35,7 +37,7 @@ import LayoutBoard, {
 } from './LayoutBoard'
 
 export type WizardClass = {
-  id: string; name: string; grade_level: string; student_count?: number
+  id: string; name: string; grade_level: string; student_count?: number; school_name?: string
 }
 type Eligibility = {
   corrected: number; required: number; eligible: boolean; students: number
@@ -187,6 +189,10 @@ function Row({ k, v }: { k: string; v: ReactNode }) {
 export default function SubjectWizard({ opened, classes, onClose, onCreated }: {
   opened: boolean; classes: WizardClass[]; onClose: () => void; onCreated: () => void
 }) {
+  const { subject: defaultSubject } = useAppState()
+  const [subject, setSubject] = useState(defaultSubject)
+  const [groupId, setGroupId] = useState<string | null>(null)
+  const [teachings, setTeachings] = useState<Teaching[]>([])
   const [step, setStep] = useState(0)
   // 1. classe et mode
   const [classId, setClassId] = useState<string | null>(null)
@@ -222,7 +228,7 @@ export default function SubjectWizard({ opened, classes, onClose, onCreated }: {
   const elig = classId ? eligibility[classId] : undefined
 
   const reset = useCallback(() => {
-    setStep(0); setClassId(null); setMode('manual'); setTitle(''); setType('training')
+    setStep(0); setGroupId(null); setClassId(null); setMode('manual'); setTitle(''); setType('training')
     setNoteBase('20'); setPages(1); setGuides('include'); setGuideMediumPct(50)
     setCompetencyIds([]); setProblems(false); setVariantKind('none'); setCurrent(0)
     setPool(null)
@@ -230,20 +236,35 @@ export default function SubjectWizard({ opened, classes, onClose, onCreated }: {
   }, [])
 
   function close() { reset(); onClose() }
+  useEffect(() => { if (opened && classes.length === 1) setClassId(classes[0].id) }, [opened, classes.length])
+  useEffect(() => {
+    let active = true
+    setGroupId(null); setCompetencyIds([]); setTeachings([])
+    if (classId) api.get<Teaching[]>(`/api/operations/classes/${classId}/teachings`).then(rows => {
+      if (!active) return
+      setTeachings(rows); setSubject(rows.some(t => t.subject_id === defaultSubject) ? defaultSubject : rows[0]?.subject_id || defaultSubject)
+    }).catch(e => notifications.show({ color: 'red', message: e.message }))
+    return () => { active = false }
+  }, [classId, defaultSubject])
+  useEffect(() => { setCompetencyIds([]); setPool(null); setMatrix(null) }, [subject, groupId])
 
   // éligibilité à la création automatique, pour toutes les classes proposées
   const classKey = classes.map((c) => c.id).join(',')
   useEffect(() => {
     if (!opened) return
+    let active = true
+    setEligibility({})
     for (const c of classes) {
-      api.get<Eligibility>(`/api/assessments/auto-eligibility?class_id=${c.id}`)
-        .then((e) => setEligibility((m) => ({ ...m, [c.id]: e })))
+      if (groupId && c.id !== classId) continue
+      api.get<Eligibility>(`/api/assessments/auto-eligibility?class_id=${c.id}&subject_id=${subject}${groupId ? `&group_id=${groupId}` : ''}`)
+        .then((e) => { if (active) setEligibility((m) => ({ ...m, [c.id]: e })) })
         .catch(() => { /* la classe reste simplement en mode manuel */ })
     }
+    return () => { active = false }
     // la liste est recréée à chaque rafraîchissement de la page : seuls les
     // identifiants comptent
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [opened, classKey])
+  }, [opened, classKey, subject, groupId, classId])
 
   // une classe sans assez de corrections ne peut pas rester en automatique
   useEffect(() => {
@@ -369,6 +390,8 @@ export default function SubjectWizard({ opened, classes, onClose, onCreated }: {
     switch (stepKey) {
       case 'classe':
         if (!classId) return 'Choisissez une classe'
+        if (!teachings.some(t => t.subject_id === subject)) return 'Aucun enseignement affecté'
+        if (!groupId && !teachings.find(t => t.subject_id === subject)?.framework_id) return 'Choisissez un groupe d’enseignement'
         if (mode === 'auto' && !elig?.eligible) return 'Création automatique indisponible pour cette classe'
         return null
       case 'competences':
@@ -389,7 +412,7 @@ export default function SubjectWizard({ opened, classes, onClose, onCreated }: {
     setSuggesting(true)
     try {
       const s = await api.get<{ competency_ids: string[]; reason: string }>(
-        `/api/assessments/suggested-competencies?class_id=${classId}`)
+        `/api/assessments/suggested-competencies?class_id=${classId}&subject_id=${subject}${groupId ? `&group_id=${groupId}` : ''}`)
       if (s.competency_ids.length) setCompetencyIds(s.competency_ids)
       notifications.show({ color: s.competency_ids.length ? 'blue' : 'gray', message: s.reason })
     } catch (e) {
@@ -403,7 +426,7 @@ export default function SubjectWizard({ opened, classes, onClose, onCreated }: {
     setBusy(true)
     try {
       const created = await api.post<{ id: string }>('/api/assessments', {
-        class_id: classId, type, title: finalTitle, pages, note_base: Number(noteBase),
+        class_id: classId, subject_id: subject, group_id: groupId, type, title: finalTitle, pages, note_base: Number(noteBase),
       })
       if (mode === 'auto') {
         await api.post(`/api/assessments/${created.id}/auto-plan`, {
@@ -461,8 +484,9 @@ export default function SubjectWizard({ opened, classes, onClose, onCreated }: {
                   }}>
                   <Group justify="space-between" wrap="nowrap">
                     <Text fw={700} size="lg">{c.name}</Text>
-                    <Badge variant="light" size="sm">{c.grade_level}</Badge>
+                    <Badge variant="light" size="sm" style={{ flexShrink: 0 }}>{({ '2nde': 'Seconde', '1re': 'Première', 'tle': 'Terminale' } as Record<string, string>)[c.grade_level] || c.grade_level}</Badge>
                   </Group>
+                  {c.school_name && <Text size="xs" c="dimmed" mt={4}>{c.school_name}</Text>}
                   <Group gap={10} mt={4}>
                     <Group gap={4}>
                       <Users size={13} opacity={0.6} />
@@ -481,6 +505,11 @@ export default function SubjectWizard({ opened, classes, onClose, onCreated }: {
 
       <Stack gap="sm">
         <StepIntro title="Comment composer le sujet ?" />
+        {classId && <Group grow>
+          <Select label="Matière" data={teachings.map(t => ({ value: t.subject_id, label: t.subject_name }))} value={subject} onChange={v => { setSubject(v || 'math'); setGroupId(null) }} />
+          {!!teachings.find(t => t.subject_id === subject)?.groups.length && <Select label="Groupe d’enseignement" placeholder="Classe entière" clearable
+            data={(teachings.find(t => t.subject_id === subject)?.groups || []).map(g => ({ value: g.id, label: g.name }))} value={groupId} onChange={setGroupId} />}
+        </Group>}
         <Group align="stretch" gap="sm">
           <ChoiceCard selected={mode === 'auto'} disabled={!classId || !elig?.eligible}
             icon={Wand2} title="Création automatique" color="violet"
@@ -650,7 +679,7 @@ export default function SubjectWizard({ opened, classes, onClose, onCreated }: {
           </Group>
         </Card>
       )}
-      <CompetencyMatrixStep gradeLevel={grade} classId={classId} selected={competencyIds}
+      <CompetencyMatrixStep gradeLevel={grade} classId={classId} subjectId={subject} groupId={groupId} selected={competencyIds}
         onChange={setCompetencyIds} onMatrix={setMatrix} />
     </Stack>
   )

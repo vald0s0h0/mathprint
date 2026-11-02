@@ -93,8 +93,9 @@ export default function SettingsPage() {
   const tab = searchParams.get('onglet') || 'compte'
   const isAdmin = me?.role === 'admin'
 
-  function refresh() {
-    api.get<Me>('/api/auth/me').then(setMe)
+  async function refresh() {
+    const account = await api.get<Me>('/api/auth/me'); setMe(account)
+    if (account.role === 'admin') {
     api.get<Provider[]>('/api/settings/providers').then(setProviders)
     api.get<Record<string, any>>('/api/settings/system').then((values) => {
       setSystem(values)
@@ -102,14 +103,15 @@ export default function SettingsPage() {
       setLlmThresholdPct(Math.round(Number(values.llm_confidence_threshold?.value ?? 0.9) * 100))
     })
     api.get<SystemStatus>('/api/system/status').then(setStatus)
+    }
     api.get<PrintersInfo>('/api/printers').then(setPrinters)
-    api.get<{ name: string; size: number }[]>('/api/system/backups').then(setBackups)
+    if (account.role === 'admin') api.get<{ name: string; size: number }[]>('/api/system/backups').then(setBackups)
     api.get<any[]>('/api/system/calibration/profiles').then(setCalibrations)
     // build de l'interface web (image nginx) — absent en dev, servi en no-cache
     fetch('/build.json').then((r) => (r.ok ? r.json() : null)).then(setWebBuild)
       .catch(() => setWebBuild(null))
   }
-  useEffect(refresh, [])
+  useEffect(() => { void refresh() }, [])
   // arrivée directe sur ?onglet=journaux : le chargement suit l'onglet ouvert
   useEffect(() => { if (tab === 'journaux') refreshLogs() }, [])
   useEffect(() => {
@@ -357,15 +359,15 @@ export default function SettingsPage() {
         }}>
         <Tabs.List>
           <Tabs.Tab value="compte" leftSection={<UserRound size={15} />}>Mon compte</Tabs.Tab>
-          <Tabs.Tab value="api" leftSection={<KeyRound size={15} />}>API</Tabs.Tab>
+          {isAdmin && <Tabs.Tab value="api" leftSection={<KeyRound size={15} />}>API</Tabs.Tab>}
           <Tabs.Tab value="imprimantes" leftSection={<Printer size={15} />}>Imprimantes</Tabs.Tab>
-          <Tabs.Tab value="mail" leftSection={<Mail size={15} />}>Scans par mail</Tabs.Tab>
+          {isAdmin && <Tabs.Tab value="mail" leftSection={<Mail size={15} />}>Scans par mail</Tabs.Tab>}
           <Tabs.Tab value="calibration" leftSection={<Ruler size={15} />}>Calibration</Tabs.Tab>
-          <Tabs.Tab value="pedagogie" leftSection={<SlidersHorizontal size={15} />}>Pédagogie</Tabs.Tab>
-          <Tabs.Tab value="documents" leftSection={<FileText size={15} />}>Documents</Tabs.Tab>
-          <Tabs.Tab value="systeme" leftSection={<Database size={15} />}>Système</Tabs.Tab>
-          <Tabs.Tab value="journaux" leftSection={<ScrollText size={15} />}>Journaux</Tabs.Tab>
-          <Tabs.Tab value="donnees" leftSection={<Trash2 size={15} />}>Données</Tabs.Tab>
+          {isAdmin && <Tabs.Tab value="pedagogie" leftSection={<SlidersHorizontal size={15} />}>Pédagogie</Tabs.Tab>}
+          {isAdmin && <Tabs.Tab value="documents" leftSection={<FileText size={15} />}>Documents</Tabs.Tab>}
+          {isAdmin && <Tabs.Tab value="systeme" leftSection={<Database size={15} />}>Système</Tabs.Tab>}
+          {isAdmin && <Tabs.Tab value="journaux" leftSection={<ScrollText size={15} />}>Journaux</Tabs.Tab>}
+          {isAdmin && <Tabs.Tab value="donnees" leftSection={<Trash2 size={15} />}>Données</Tabs.Tab>}
           {isAdmin && (
             <Tabs.Tab value="utilisateurs" leftSection={<Users size={15} />}>Utilisateurs</Tabs.Tab>
           )}
@@ -400,7 +402,7 @@ export default function SettingsPage() {
           </Card>
         </Tabs.Panel>
 
-        <Tabs.Panel value="api" pt="md">
+        {isAdmin && <Tabs.Panel value="api" pt="md">
           <Stack>
             <Text size="sm" c="dimmed">
               Sans clé, un service reste en mode simulé. Les clés sont chiffrées au repos
@@ -432,15 +434,15 @@ export default function SettingsPage() {
               )
             })}
           </Stack>
-        </Tabs.Panel>
+        </Tabs.Panel>}
 
         <Tabs.Panel value="imprimantes" pt="md">
           <PrinterSettings printers={printers} refresh={refresh} />
         </Tabs.Panel>
 
-        <Tabs.Panel value="mail" pt="md">
+        {isAdmin && <Tabs.Panel value="mail" pt="md">
           <MailIntakeSettings />
-        </Tabs.Panel>
+        </Tabs.Panel>}
 
         <Tabs.Panel value="calibration" pt="md">
           <Card withBorder>
@@ -479,7 +481,7 @@ export default function SettingsPage() {
           </Card>
         </Tabs.Panel>
 
-        <Tabs.Panel value="pedagogie" pt="md">
+        {isAdmin && <Tabs.Panel value="pedagogie" pt="md">
           <Stack maw={640}>
             <Card withBorder>
               <Text fw={600} mb={4}>Lecture OCR et vision</Text>
@@ -572,9 +574,9 @@ export default function SettingsPage() {
               </Table>
             </Card>
           </Stack>
-        </Tabs.Panel>
+        </Tabs.Panel>}
 
-        <Tabs.Panel value="documents" pt="md">
+        {isAdmin && <Tabs.Panel value="documents" pt="md">
           <Stack>
             <TemplateEditor />
             <Card withBorder maw={640}>
@@ -594,9 +596,9 @@ export default function SettingsPage() {
               </Text>
             </Card>
           </Stack>
-        </Tabs.Panel>
+        </Tabs.Panel>}
 
-        <Tabs.Panel value="systeme" pt="md">
+        {isAdmin && <Tabs.Panel value="systeme" pt="md">
           <Stack>
             {status && (
               <Card withBorder>
@@ -646,9 +648,9 @@ export default function SettingsPage() {
               ))}
             </Card>
           </Stack>
-        </Tabs.Panel>
+        </Tabs.Panel>}
 
-        <Tabs.Panel value="journaux" pt="md">
+        {isAdmin && <Tabs.Panel value="journaux" pt="md">
           <Stack>
             <Group justify="space-between">
               <div>
@@ -689,9 +691,9 @@ export default function SettingsPage() {
               </Card>
             ))}
           </Stack>
-        </Tabs.Panel>
+        </Tabs.Panel>}
 
-        <Tabs.Panel value="donnees" pt="md">
+        {isAdmin && <Tabs.Panel value="donnees" pt="md">
           <Stack>
             <Alert color="red" variant="light" icon={<AlertTriangle size={16} />}>
               Suppression définitive et irréversible — aucune corbeille. Supprimer une classe
@@ -897,7 +899,7 @@ export default function SettingsPage() {
               })}
             </Accordion>
           </Stack>
-        </Tabs.Panel>
+        </Tabs.Panel>}
 
         {isAdmin && (
           <Tabs.Panel value="utilisateurs" pt="md">

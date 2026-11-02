@@ -49,7 +49,7 @@ export default function Grades() {
   const [view, setView] = useState<GradeView>('all')
   const [gradebook, setGradebook] = useState<Gradebook | null>(null)
   const [loading, setLoading] = useState(false)
-  const { cycle, matches } = useAppState()
+  const { cycle, matches, subject } = useAppState()
 
   useEffect(() => {
     api.get<ClassChoice[]>('/api/classes').then(setClasses)
@@ -75,11 +75,11 @@ export default function Grades() {
     setLoading(true)
     setGradebook(null)
     const kind = view === 'control' || view === 'training' ? view : 'all'
-    api.get<Gradebook>(`/api/grades/classes/${classId}?kind=${kind}`)
+    api.get<Gradebook>(`/api/grades/classes/${classId}?kind=${kind}&subject_id=${subject}`)
       .then((book) => { if (active) setGradebook(book) })
       .finally(() => { if (active) setLoading(false) })
     return () => { active = false }
-  }, [classId, view])
+  }, [classId, view, subject])
 
   async function copyAssessment(assessmentId: string) {
     if (!gradebook) return

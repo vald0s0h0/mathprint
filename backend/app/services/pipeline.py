@@ -322,12 +322,42 @@ def pending_ocr_responses(db: Session, assessment_id: str) -> list[StudentRespon
     return out
 
 
+def copy_is_blank(db: Session, copy: Copy) -> bool:
+    """Absence uniquement si TOUTES les réponses ont été lues et confirmées vides.
+    Un scan incomplet ou une lecture incertaine ne constitue pas une absence.
+    """
+    items = db.query(CopyItem).filter_by(copy_id=copy.id).all()
+    if not items: return False
+    for item in items:
+        response = db.query(StudentResponse).filter_by(copy_item_id=item.id).first()
+        reading = effective_reading(db, response.zone_id) if response else None
+        if not response or not reading or reading.confidence < ocr_confidence_threshold(db):
+            return False
+        raw = reading.raw_json or {}
+        if item.response_type.startswith("qcm"):
+            if response.selected_choices: return False
+        elif item.response_type == "checkbox_grid":
+            if any(v is not None and v != -1 for v in (response.selected_choices or [])): return False
+        elif item.response_type == "matching":
+            if response.selected_pairs: return False
+        elif item.response_type in ("table_fill", "multi_blank"):
+            if "cells" not in raw or any(str(v).strip() for v in raw["cells"] if v is not None): return False
+        elif item.response_type == "manual_drawing":
+            if "empty_score" not in raw or raw["empty_score"] >= worker_cv.BLANK_INK_THRESHOLD: return False
+        elif (response.final_text or reading.text or reading.latex or "").strip():
+            return False
+    return True
+
+
 def grade_stored_responses(db: Session, batch: ScanBatch) -> int:
     """Lance correction déterministe puis LLM après validation de la lecture."""
     assessment = db.get(Assessment, batch.assessment_id)
     queue: list[llm_grader.Task] = []
     copies = db.query(Copy).filter_by(assessment_id=assessment.id).all()
     for copy in copies:
+        if copy.status == "absent" or copy_is_blank(db, copy):
+            copy.status = "absent"
+            continue
         items = db.query(CopyItem).filter_by(copy_id=copy.id).all()
         for item in items:
             resp = db.query(StudentResponse).filter_by(copy_item_id=item.id).first()
@@ -1040,7 +1070,8 @@ def _finalize_batch(db: Session, batch: ScanBatch) -> dict:
             # elle devient explicitement absente dans le carnet de notes.
             copy.status = "absent"
             continue
-        if copy.status == "absent":
+        if copy.status == "absent" or copy_is_blank(db, copy):
+            copy.status = "absent"
             continue  # absents et copies non scannées : jamais pénalisés
         # Résultats consolidés de l'élève à ce sujet (points de barème par
         # exercice + note sur la base choisie) : le suivi personnalisé est
@@ -1343,6 +1374,14 @@ def copy_overlay_pages(db: Session, assessment: Assessment, copy: Copy,
     d'ordre `_scan_index` / `_page_no`, que l'appelant retire avant le rendu."""
     derived_dir = settings.data_dir / "assessments" / assessment.id / "scans" / "derived"
     student = db.get(Student, copy.student_id)
+    if copy.status == "absent":
+        # Conserver exactement les positions scannées, sans note ni pénalité.
+        return [{"page_id": p.id, "student": student.name, "assessment_type": assessment.type,
+                 "page_zones": [], "comment": "Absent" if p.page_no == 1 else "",
+                 "background": str(derived_dir / f"page-{p.id}.png"),
+                 "_scan_index": scan_page_positions[p.id], "_page_no": p.page_no}
+                for p in db.query(DocumentPage).filter_by(copy_id=copy.id)
+                if p.id in scan_page_positions]
     items = db.query(CopyItem).filter_by(copy_id=copy.id).order_by(CopyItem.sequence).all()
     # zones regroupées par page du document (pour l'aperçu copie+overlay,
     # une page PDF = une page scannée), et n° de page pour l'ordre

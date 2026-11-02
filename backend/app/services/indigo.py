@@ -871,7 +871,7 @@ def _run_multipass_vision(db, doc_eleve, grade: str, page_indices: list[int],
     la compétence officielle. Chaque famille prête conserve la publication
     immédiate de la pipeline historique.
     """
-    fw = db.query(CompetencyFramework).filter_by(grade_level=grade).first()
+    fw = db.query(CompetencyFramework).filter_by(grade_level=grade, program_id="fr", subject_id="math", path_id=None).first()
     if fw is None:
         raise RuntimeError(f"Référentiel de compétences {grade} introuvable")
     comps = (db.query(Competency).filter_by(framework_id=fw.id)
@@ -2572,7 +2572,7 @@ def _promote_to_volume() -> None:
 def _resolve_competency(db, code: str, grade: str):
     """Résout une compétence par son CODE (stable entre déploiements) et non par
     id (UUID régénéré à chaque seed de competencies_fr.json)."""
-    fw = db.query(CompetencyFramework).filter_by(grade_level=grade).first()
+    fw = db.query(CompetencyFramework).filter_by(grade_level=grade, program_id="fr", subject_id="math", path_id=None).first()
     if fw is None:
         return None
     return db.query(Competency).filter_by(framework_id=fw.id, code=code).first()

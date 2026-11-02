@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..db import SessionLocal
-from ..models import Assessment, Job
+from ..models import Assessment, Job, AuditLog
 
 logger = logging.getLogger(__name__)
 
@@ -76,8 +76,11 @@ class _JobLogHandler(logging.Handler):
 
 def enqueue_generation(db: Session, assessment: Assessment, font_size: int = 10) -> Job:
     job = Job(type=_TYPE, status="pending", assessment_id=assessment.id,
-              payload_json={"font_size": font_size})
+              created_by=db.info.get("actor_id"), payload_json={"font_size": font_size})
     db.add(job)
+    db.add(AuditLog(actor_id=db.info.get("actor_id"), action="assessment.generate",
+                    entity_type="assessment", entity_id=assessment.id,
+                    after_json={"font_size": font_size}))
     assessment.status = "queued"
     db.commit()
     _wake.set()

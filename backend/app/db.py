@@ -37,7 +37,8 @@ def get_db():
 _ADDED_COLUMNS: dict[str, list[tuple[str, ...]]] = {
     "users": [("subscription_plan", "TEXT")],
     "scan_batches": [("overlay_printed", "BOOLEAN"), ("overlay_distributed", "BOOLEAN"),
-                     ("refine_rev", "INTEGER", "0"), ("overlay_rev", "INTEGER", "0")],
+                     ("refine_rev", "INTEGER", "0"), ("overlay_rev", "INTEGER", "0"),
+                     ("overlay_print_json", "JSON")],
     "scanned_pages": [("manual_page_id", "TEXT"), ("dismissed", "BOOLEAN")],
     "copies": [("appreciation_json", "JSON"), ("variant_key", "TEXT")],
     "generated_exercises": [
@@ -50,6 +51,7 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, ...]]] = {
         ("raw_extract_json", "JSON"),
     ],
     "jobs": [
+        ("created_by", "TEXT", "NULL"),
         ("assessment_id", "TEXT"),
         ("progress_message", "TEXT"),
         ("updated_at", "TIMESTAMP"),
@@ -110,8 +112,28 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, ...]]] = {
         ("pickup_reverse_order", "BOOLEAN"),
         ("app_default", "BOOLEAN"),
         ("adf_reverse_order", "BOOLEAN"),
+        ("overlay_offset_x_mm", "FLOAT", "0"),
+        ("overlay_offset_y_mm", "FLOAT", "0"),
     ],
 }
+
+# Organisation multi-programmes. Aucune suppression de données pédagogiques.
+for _table, _columns in {
+    "classes": [("school_id", "TEXT", "NULL"), ("program_id", "TEXT", "'fr'"),
+                ("series_id", "TEXT", "NULL")],
+    "competency_frameworks": [("program_id", "TEXT", "'fr'"), ("subject_id", "TEXT", "'math'"),
+                             ("path_id", "TEXT", "NULL")],
+    "competencies": [("source_competency_id", "TEXT", "NULL"), ("section", "TEXT", "'common'")],
+    "generated_exercises": [("source_exercise_id", "TEXT", "NULL")],
+    "student_levels": [("subject_id", "TEXT", "'math'")],
+    "student_reports": [("subject_id", "TEXT", "'math'")],
+    "assessments": [("subject_id", "TEXT", "'math'"), ("teacher_profile_id", "TEXT", "NULL"),
+                    ("framework_id", "TEXT", "NULL"), ("group_id", "TEXT", "NULL"),
+                    ("created_by", "TEXT", "NULL"), ("subjects_delivered_at", "TIMESTAMP", "NULL"),
+                    ("originals_received_at", "TIMESTAMP", "NULL"), ("delivery_due_at", "TIMESTAMP", "NULL"),
+                    ("operations_note", "TEXT", "''")],
+}.items():
+    _ADDED_COLUMNS.setdefault(_table, []).extend(_columns)
 
 # renommages de colonnes (hiérarchie H1/H2 documentée sur `Competency` :
 # l'ancien "thème" du programme officiel devient "chapitre", cf. modèle) :

@@ -299,7 +299,9 @@ def _mark_business_success(db: Session, job: ConnectorPrintJob):
     if job.file_name == "subject_batch.pdf" and job.pass_side in ("all", "verso"):
         if assessment and assessment.status == "ready":
             assessment.status = "printed"
-    if job.file_name == "correction_overlay.pdf" and job.assessment_id:
+    # Une passe recto laisse encore tous les versos à imprimer.
+    if (job.file_name == "correction_overlay.pdf" and job.assessment_id
+            and job.pass_side in ("all", "verso")):
         (db.query(ScanBatch).filter(ScanBatch.assessment_id == job.assessment_id)
          .update({ScanBatch.overlay_printed: True}, synchronize_session=False))
 

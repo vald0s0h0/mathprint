@@ -342,7 +342,7 @@ async def sandbox_upload(tasks: BackgroundTasks, files: list[UploadFile],
             continue
         ext, _mime = sniffed
         recognized.append((f.filename or "scan", ext, content))
-    job = Job(type=SANDBOX_JOB, status="running" if recognized else "done",
+    job = Job(type=SANDBOX_JOB, created_by=user.id, status="running" if recognized else "done",
               payload_json={"results": results,
                             "files": [name for name, _e, _c in recognized]})
     db.add(job)

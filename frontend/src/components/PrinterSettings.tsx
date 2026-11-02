@@ -4,11 +4,12 @@ import {
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
 import {
-  ClipboardList, Eye, Info, Network, Printer, RefreshCw, ScanLine,
+  ClipboardList, Eye, Info, Move, Network, Printer, RefreshCw, ScanLine,
   TestTube2, Trash2,
 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { api } from '../api'
+import OverlayOffsetModal, { overlayOffsetLabel } from './OverlayOffsetModal'
 
 export type PrinterRow = {
   id?: string
@@ -28,6 +29,8 @@ export type PrinterRow = {
   pickup_reverse_order: boolean
   output_reverse_order: boolean
   adf_reverse_order: boolean
+  overlay_offset_x_mm: number
+  overlay_offset_y_mm: number
 }
 
 export type PrintersInfo = {
@@ -89,9 +92,11 @@ export default function PrinterSettings({ printers, refresh }: {
   const [saving, setSaving] = useState<string | null>(null)
   const [testing, setTesting] = useState<string | null>(null)
   const [previewName, setPreviewName] = useState<string | null>(null)
+  const [offsetName, setOffsetName] = useState<string | null>(null)
 
   const rows = useMemo(() => printers ? [...printers.local, ...printers.network] : [], [printers])
   const preview = rows.find((p) => p.name === previewName) ?? null
+  const offsetRow = rows.find((p) => p.name === offsetName) ?? null
 
   async function setPreference(row: PrinterRow, field: keyof Pick<PrinterRow,
     'duplex' | 'pickup_reverse_order' | 'output_reverse_order' | 'app_default'
@@ -187,7 +192,7 @@ export default function PrinterSettings({ printers, refresh }: {
         )}
 
         {rows.length ? (
-          <Table.ScrollContainer minWidth={1210}>
+          <Table.ScrollContainer minWidth={1340}>
             <Table striped highlightOnHover verticalSpacing="sm">
               <Table.Thead>
                 <Table.Tr>
@@ -217,6 +222,11 @@ export default function PrinterSettings({ printers, refresh }: {
                             {row.available ? 'Connecté' : `Hors ligne · ${lastSeenLabel(row.last_seen_at)}`}
                           </Text>}
                           {row.uri && <Text size="xs" c="dimmed">{row.uri}</Text>}
+                          {overlayOffsetLabel(row.overlay_offset_x_mm, row.overlay_offset_y_mm) && (
+                            <Text size="xs" c="orange">
+                              Overlay imprimée {overlayOffsetLabel(row.overlay_offset_x_mm, row.overlay_offset_y_mm)}
+                            </Text>
+                          )}
                         </Box>
                       </Group>
                     </Table.Td>
@@ -270,6 +280,8 @@ export default function PrinterSettings({ printers, refresh }: {
                       <Group gap={6} justify="flex-end" wrap="nowrap">
                         <Button size="compact-xs" variant="light" leftSection={<Eye size={13} />}
                           onClick={() => setPreviewName(row.name)}>Aperçu</Button>
+                        <Button size="compact-xs" variant="light" leftSection={<Move size={13} />}
+                          onClick={() => setOffsetName(row.name)}>Position overlay</Button>
                         <Button size="compact-xs" variant="default" leftSection={<TestTube2 size={13} />}
                           disabled={!row.available} loading={testing === row.name}
                           onClick={() => printTest(row)}>Test 1–2</Button>
@@ -352,6 +364,13 @@ export default function PrinterSettings({ printers, refresh }: {
         </Alert>
       </Card>
 
+      {offsetRow && (
+        <OverlayOffsetModal opened onClose={() => setOffsetName(null)}
+          printerName={offsetRow.name} printerLabel={offsetRow.display_name || offsetRow.name}
+          offsetX={offsetRow.overlay_offset_x_mm} offsetY={offsetRow.overlay_offset_y_mm}
+          onSaved={refresh} />
+      )}
+
       <Modal opened={Boolean(preview)} onClose={() => setPreviewName(null)} size="lg"
         title={`Chemin des feuilles${preview ? ` — ${preview.name}` : ''}`}>
         {preview && (
@@ -391,6 +410,7 @@ export default function PrinterSettings({ printers, refresh }: {
                   : '1er passage Recto — pose sur le bac de réception'}>
                 <Text size="xs" c="dimmed" mb="xs">
                   Cette deuxième propriété est indépendante du prélèvement : le bac peut inverser une nouvelle fois la pile.
+                  Elle ne compte que pour les sujets : chaque overlay est posée sur sa copie avant d’atteindre le bac.
                 </Text>
                 <PilePicture reversed={printerPileReversed}
                   caption={`Pile sur le bac : ${printerPileReversed ? '3, 2, 1' : '1, 2, 3'}.`}

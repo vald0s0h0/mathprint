@@ -32,8 +32,10 @@ que les fonctions locales restent disponibles.
 Le serveur prépare un PDF final et immuable avant sa mise en file :
 
 - séparation des pages recto/verso pour un duplex manuel ;
-- ordre physique `1→2→3` ou `3→2→1` obtenu à partir des trois réglages
-  `prélèvement`, `sortie imprimante` et, pour l’overlay, `ADF` ;
+- ordre physique `1→2→3` ou `3→2→1` obtenu à partir des réglages `prélèvement`
+  et `sortie imprimante` pour un sujet, `prélèvement` et `ADF` pour un overlay ;
+- pour une reprise d’overlay, seules les feuilles restantes figurent dans le PDF ;
+- le déplacement d’overlay réglé par imprimante est déjà appliqué aux pages du PDF ;
 - prélèvement de la première ou de la dernière feuille suivant ce même calcul ;
 - A4, échelle 100 % (`none`/`noscale`), assemblage activé ;
 - simplex pour les deux passages manuels, duplex bord long pour l’automatique.

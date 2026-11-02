@@ -9,14 +9,13 @@ import { notifications } from '@mantine/notifications'
 import { AlertTriangle, GripVertical, Lock, Plus, RefreshCw, X } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../api'
+import { useSearchParams } from 'react-router-dom'
+import ClassEditor, { type ClassRow } from '../components/ClassEditor'
 import CompactClassSelector, { sortClassChoices } from '../components/CompactClassSelector'
 import { CYCLES, useAppState } from '../state/AppState'
 import { masteryColor } from '../utils/mastery'
 
-type Cls = {
-  id: string; name: string; grade_level: string; school_year: string | null
-  student_count: number
-}
+type Cls = ClassRow
 type StudentRow = {
   id: string; name: string; order_index: number; dyslexic: boolean; pseudonym: string
   level: number | null; level_locked: boolean
@@ -88,30 +87,15 @@ export default function Students() {
   const [batchText, setBatchText] = useState('')
   const [batchOpen, setBatchOpen] = useState(false)
   const [draggedId, setDraggedId] = useState<string | null>(null)
-  const { cycle, matches } = useAppState()
+  const { cycle, matches, subject } = useAppState()
 
-  // assistant de création de classe
   const [wizardOpen, setWizardOpen] = useState(false)
-  // le cycle proposé suit le filtre global au moment de l'ouverture
-  function openWizard() {
-    if (cycle !== 'all') setNewGrade(cycle)
-    setWizardOpen(true)
-  }
-  const [newName, setNewName] = useState('')
-  const [newGrade, setNewGrade] = useState<string>(cycle !== 'all' ? cycle : '5e')
-  const [newYear, setNewYear] = useState<string | null>(null)
-  const [newStudents, setNewStudents] = useState('')
-  const [creating, setCreating] = useState(false)
-
+  const [editingClass, setEditingClass] = useState<ClassRow | null>(null)
+  const [params] = useSearchParams()
+  function openWizard() { setEditingClass(null); setWizardOpen(true) }
   function refreshClasses() { api.get<Cls[]>('/api/classes').then(setClasses) }
-  useEffect(() => {
-    refreshClasses()
-    api.get<Year[]>('/api/years').then((ys) => {
-      setYears(ys)
-      const active = ys.find((y) => y.active)
-      if (active) setNewYear(active.id)
-    })
-  }, [])
+  useEffect(refreshClasses, [])
+  useEffect(() => { if (selClass) void pickClass(selClass) }, [subject])
 
   const cycleClasses = useMemo(
     () => sortClassChoices(classes.filter((c) => matches(c.grade_level))), [classes, matches])
@@ -122,43 +106,21 @@ export default function Students() {
     if (cycleClasses.length === 0) {
       setSelClass(null); setStudents([]); setDetail(null)
     } else if (!selClass || !cycleClasses.some((schoolClass) => schoolClass.id === selClass.id)) {
-      void pickClass(cycleClasses[0])
+      void pickClass(cycleClasses.find(c => c.id === params.get('class')) || cycleClasses[0])
     }
   }, [cycleClasses, selClass])
 
   async function pickClass(c: Cls) {
     setSelClass(c); setDetail(null)
-    setStudents(await api.get<StudentRow[]>(`/api/classes/${c.id}/students`))
+    setStudents(await api.get<StudentRow[]>(`/api/classes/${c.id}/students?subject_id=${subject}`))
   }
 
   async function pickStudent(id: string) {
     setHistory([])
-    setDetail(await api.get<Detail>(`/api/students/${id}`))
-    setReports(await api.get<Report[]>(`/api/students/${id}/reports`))
-    const h = await api.get<{ items: HistoryRow[] }>(`/api/students/${id}/history`)
+    setDetail(await api.get<Detail>(`/api/students/${id}?subject_id=${subject}`))
+    setReports(await api.get<Report[]>(`/api/students/${id}/reports?subject_id=${subject}`))
+    const h = await api.get<{ items: HistoryRow[] }>(`/api/students/${id}/history?subject_id=${subject}`)
     setHistory(h.items)
-  }
-
-  const parsedCount = newStudents.split('\n').filter((l) => l.trim()).length
-
-  async function createClass() {
-    setCreating(true)
-    try {
-      const r = await api.post<{ id: string; students_created: number }>('/api/classes', {
-        name: newName, grade_level: newGrade, school_year_id: newYear,
-        students_text: newStudents,
-      })
-      notifications.show({
-        color: 'green',
-        message: `Classe ${newName} créée${r.students_created ? ` avec ${r.students_created} élève(s)` : ''}`,
-      })
-      setWizardOpen(false); setNewName(''); setNewStudents('')
-      refreshClasses()
-    } catch (e) {
-      notifications.show({ color: 'red', message: (e as Error).message })
-    } finally {
-      setCreating(false)
-    }
   }
 
   async function addBatch() {
@@ -207,7 +169,7 @@ export default function Students() {
     if (!detail) return
     try {
       const r = await api.post<{ level: number; reason: string }>(
-        `/api/students/${detail.id}/level/recompute`)
+        `/api/students/${detail.id}/level/recompute?subject_id=${subject}`)
       notifications.show({ color: 'blue', message: `Niveau ${r.level} — ${r.reason}` })
       pickStudent(detail.id)
     } catch (e) {
@@ -217,8 +179,8 @@ export default function Students() {
 
   async function makeReport() {
     if (!detail) return
-    await api.post(`/api/students/${detail.id}/reports?period=période courante`)
-    setReports(await api.get<Report[]>(`/api/students/${detail.id}/reports`))
+    await api.post(`/api/students/${detail.id}/reports?period=période courante&subject_id=${subject}`)
+    setReports(await api.get<Report[]>(`/api/students/${detail.id}/reports?subject_id=${subject}`))
   }
 
   const compact = !!detail // le tableau se simplifie quand le volet est ouvert
@@ -248,7 +210,7 @@ export default function Students() {
           {selClass ? (
             <Stack gap="xs">
               <Group justify="space-between">
-                <Title order={4}>{selClass.name}</Title>
+                <Group><Title order={4}>{selClass.name}</Title><Button size="compact-xs" variant="subtle" onClick={() => { setEditingClass(selClass); setWizardOpen(true) }}>Modifier la classe</Button></Group>
                 <Button size="xs" variant="light" onClick={() => setBatchOpen(true)}>
                   Ajouter des élèves
                 </Button>
@@ -542,30 +504,7 @@ export default function Students() {
         )}
       </Grid>
 
-      {/* assistant de création de classe : nom, cycle, année, élèves */}
-      <Modal opened={wizardOpen} onClose={() => setWizardOpen(false)}
-        title={<Text fw={650}>Nouvelle classe</Text>} size="md">
-        <Stack>
-          <TextInput label="Nom de la classe" required placeholder="ex. 5eA"
-            value={newName} onChange={(e) => setNewName(e.target.value)} />
-          <Select label="Cycle" required value={newGrade}
-            description="Le cycle détermine le programme officiel appliqué"
-            onChange={(v) => v && setNewGrade(v)}
-            data={CYCLES.map((c) => ({ value: c, label: c }))} />
-          <Select label="Année scolaire" value={newYear} onChange={setNewYear}
-            data={years.map((y) => ({ value: y.id, label: y.label + (y.active ? ' (en cours)' : '') }))} />
-          <Textarea label="Élèves (facultatif)" rows={7} value={newStudents}
-            description="Un élève par ligne, dans l’ordre de la liste de classe — vous pourrez en ajouter ou les réordonner plus tard"
-            placeholder={'Camille\nJules M.\nDurand\n…'}
-            onChange={(e) => setNewStudents(e.target.value)} />
-          {parsedCount > 0 && (
-            <Text size="xs" c="dimmed">{parsedCount} élève(s) détecté(s)</Text>
-          )}
-          <Button onClick={createClass} loading={creating} disabled={!newName.trim()}>
-            Créer la classe{parsedCount > 0 ? ` et ${parsedCount} élève(s)` : ''}
-          </Button>
-        </Stack>
-      </Modal>
+      <ClassEditor opened={wizardOpen} onClose={() => setWizardOpen(false)} onSaved={refreshClasses} editing={editingClass} />
 
       <Modal opened={batchOpen} onClose={() => setBatchOpen(false)}
         title={<Text fw={650}>Ajouter des élèves — {selClass?.name}</Text>}>

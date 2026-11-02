@@ -142,6 +142,12 @@ def test_unidentified_physical_page_never_shifts_following_correction(
     assert "Non identifié" in texts[1]
     assert "Correction — E1 X" in texts[2]
 
+    # La file annoncée au professeur nomme l'élève réellement imprimé, page à page.
+    from app.services.overlay_queue import overlay_sides
+    names = [side["student"] for side in overlay_sides(db, batch, len(texts))]
+    assert names == ["E0 X", "Non identifié", "E1 X"]
+    assert all(name in text for name, text in zip(names, texts))
+
 
 def test_review_all_and_response_resolve(mock_db, tmp_path, monkeypatch):
     """Voie « corriger manuellement » toujours accessible : scope=all expose

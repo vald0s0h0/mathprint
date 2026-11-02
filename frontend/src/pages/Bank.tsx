@@ -4,7 +4,7 @@
 // le retrait d'un contenu douteux. Toute création reste hors de cet onglet.
 import {
   ActionIcon, Badge, Box, Button, Collapse, Group, Loader, Paper, ScrollArea,
-  SegmentedControl, SimpleGrid, Stack, Text, Title, Tooltip,
+  Select, SegmentedControl, SimpleGrid, Stack, Text, Title, Tooltip,
 } from '@mantine/core'
 import { ChevronDown, ChevronUp, Library } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
@@ -105,7 +105,11 @@ function ExerciseCard({ ex }: { ex: Exercise }) {
 }
 
 export default function Bank() {
-  const { cycle } = useAppState()
+  const { cycle, subject } = useAppState()
+  const [frameworks, setFrameworks] = useState<{ id: string; name: string; grade_level: string; subject_id: string; program_id: string }[]>([])
+  const [framework, setFramework] = useState<string | null>(null)
+  useEffect(() => { api.get<typeof frameworks>('/api/competencies/frameworks').then(setFrameworks) }, [])
+  useEffect(() => { setFramework(frameworks.find(f => f.grade_level === cycle && f.subject_id === subject)?.id || null) }, [cycle, subject, frameworks])
   const [summary, setSummary] = useState<Summary[] | null>(null)
   const [selected, setSelected] = useState<Summary | null>(null)
   const [exercises, setExercises] = useState<Exercise[] | null>(null)
@@ -116,16 +120,16 @@ export default function Bank() {
     setSelected(null)
     setExercises(null)
     setLevelFilter('all')
-    if (isAll) {
+    if (isAll || !framework) {
       setSummary(null)
       return
     }
     setSummary(null)
     let current = true
-    api.get<Summary[]>(`/api/content/summary?grade_level=${cycle}`)
+    api.get<Summary[]>(`/api/content/summary?grade_level=${cycle}&subject_id=${subject}&framework_id=${framework}`)
       .then((rows) => { if (current) setSummary(rows) })
     return () => { current = false }
-  }, [cycle, isAll])
+  }, [cycle, isAll, subject, framework])
 
   const loadDetail = useCallback((s: Summary) => {
     setSelected(s)
@@ -209,6 +213,7 @@ export default function Bank() {
         </Box>
       </Group>
 
+      <Select label="Référentiel" searchable value={framework} onChange={setFramework} data={frameworks.filter(f => f.grade_level === cycle && f.subject_id === subject).map(f => ({ value: f.id, label: `${f.program_id.toUpperCase()} · ${f.name}` }))} />
       <Group align="flex-start" gap="md" wrap="nowrap">
         {/* compétence ouverte : le tableau se rétrécit, les exercices prennent la place */}
         <Paper withBorder radius="md" p="xs" style={selected

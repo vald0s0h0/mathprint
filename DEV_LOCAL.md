@@ -42,6 +42,29 @@ l'arbre de processus complet : worker uvicorn, node, etc. — aucun orphelin).
 
 Ouvre **http://localhost:5173**. `Ctrl+C` coupe les deux services d'un coup.
 
+### Démarrage automatique (service launchd) et accès à distance
+
+Sur le MacBook Air d'Etienne, `scripts/dev.sh` tourne en service launchd
+`com.kironina.dev` (modèle : `scripts/launchd/com.kironina.dev.plist`, copié
+dans `~/Library/LaunchAgents`) : lancé à l'ouverture de session, relancé s'il
+s'arrête. Journal : `~/Library/Logs/kironina-dev.log`. L'API et Vite se
+rechargent toujours à chaud : rien à relancer après une modification.
+
+```bash
+launchctl kickstart -k gui/$(id -u)/com.kironina.dev   # redémarrer
+launchctl bootout gui/$(id -u)/com.kironina.dev        # arrêter (jusqu'à la prochaine session)
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.kironina.dev.plist   # relancer
+```
+
+Tant que le service tourne, `Cmd+Shift+B` et `./scripts/dev.sh` refusent de
+démarrer (port 8787 pris) : l'arrêter d'abord pour déboguer à la main.
+
+**À distance** : Tailscale Serve publie Vite, réservé aux appareils du tailnet,
+sur <https://macbook-air-de-etienne.tail428d1a.ts.net> (`tailscale serve status`).
+`allowedHosts: ['.ts.net']` dans `vite.config.ts` est là pour ça. Il faut que
+Tailscale soit lancé et connecté sur le Mac, et que le Mac soit allumé et
+éveillé.
+
 ## Débogage Python (breakpoints)
 
 `.vscode/launch.json` fournit le débogueur (debugpy, livré avec l'extension

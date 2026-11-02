@@ -15,6 +15,7 @@ import {
   Trash2, Upload,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { api, getToken } from '../api'
 import { MathAnswer } from '../components/MathText'
 import PdfPreviewModal from '../components/PdfPreview'
@@ -417,6 +418,8 @@ function ItemStatus({ it }: { it: Item }) {
 }
 
 export default function Corrections() {
+  const [searchParams, setSearchParams] = useSearchParams()
+  const assessmentFilter = searchParams.get('assessment')
   const [batches, setBatches] = useState<Batch[]>([])
   const [items, setItems] = useState<Item[]>([])
   const [reviewBatch, setReviewBatch] = useState<Batch | null>(null)
@@ -848,7 +851,7 @@ export default function Corrections() {
   }
 
   const groups = useMemo(() => {
-    const filtered = batches.filter((b) => matches(b.grade_level))
+    const filtered = batches.filter((b) => assessmentFilter ? b.assessment_id === assessmentFilter : matches(b.grade_level))
     const by = new Map<string, { cls: string; grade: string; rows: Batch[] }>()
     for (const b of filtered) {
       const key = b.class_id || b.class_name
@@ -856,7 +859,7 @@ export default function Corrections() {
       by.get(key)!.rows.push(b)
     }
     return [...by.values()].sort((x, y) => x.cls.localeCompare(y.cls))
-  }, [batches, matches])
+  }, [batches, matches, assessmentFilter])
 
   // unité courante + la réponse (fraîche) et la case dont elle dérive
   const cur = units[idx]
@@ -903,7 +906,7 @@ export default function Corrections() {
     <Stack gap="lg">
       <Group justify="space-between">
         <div>
-          <Title order={2}>Corrections</Title>
+          <Group><Title order={2}>Corrections</Title>{assessmentFilter && <Button variant="light" size="xs" onClick={() => setSearchParams({})}>Voir toutes les corrections</Button>}</Group>
           <Text size="sm" c="dimmed">
             Déposez le PDF scanné — le QR de chaque page l'associe au bon sujet, puis
             corrigez et validez pour imprimer les copies corrigées.

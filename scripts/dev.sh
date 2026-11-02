@@ -19,6 +19,11 @@ command -v python3 >/dev/null || die "python3 introuvable"
 command -v node    >/dev/null || die "node introuvable"
 command -v npm     >/dev/null || die "npm introuvable"
 
+# --- déjà lancé ? (service launchd com.kironina.dev, voir DEV_LOCAL.md) -------
+if lsof -nP -iTCP:8787 -sTCP:LISTEN >/dev/null 2>&1; then
+  die "le port 8787 est déjà pris : l'app tourne sans doute déjà (service launchd com.kironina.dev, journal ~/Library/Logs/kironina-dev.log)"
+fi
+
 # --- bootstrap backend (venv) -------------------------------------------------
 if [ ! -x "$ROOT/backend/.venv/bin/uvicorn" ]; then
   log "création du venv backend + installation des dépendances (première fois)…"

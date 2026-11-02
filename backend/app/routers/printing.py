@@ -13,12 +13,13 @@ import hashlib
 import os
 import subprocess
 import tempfile
+from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 from reportlab.pdfgen import canvas
@@ -26,19 +27,21 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..db import get_db
-from ..deps import current_user
+from ..deps import current_user, require_role
 from ..models import (AuditLog, Assessment, ConnectorPrintJob, Copy,
                       DocumentPage, Job, PrintConnector, Printer, ScanBatch,
-                      Student, User)
+                      Student, User, TeacherProfile)
+from ..services import overlay_queue
 from ..services.print_connectors import (connector_online,
                                          expire_stale_queued_jobs)
 
 router = APIRouter(prefix="/api/printers", tags=["printing"],
                    dependencies=[Depends(current_user)])
 
+OVERLAY_FILE = "correction_overlay.pdf"
 ALLOWED_FILES = {
     "subject_batch.pdf": "generated",
-    "correction_overlay.pdf": "overlays",
+    OVERLAY_FILE: "overlays",
     "calibration_page.pdf": "calibration",
 }
 
@@ -75,6 +78,8 @@ def _profile_view(p: Printer | None) -> dict:
         "output_reverse_order": bool(p.output_reverse_order) if p else False,
         "app_default": bool(p.app_default) if p else False,
         "adf_reverse_order": bool(p.adf_reverse_order) if p else False,
+        "overlay_offset_x_mm": float(p.overlay_offset_x_mm or 0) if p else 0.0,
+        "overlay_offset_y_mm": float(p.overlay_offset_y_mm or 0) if p else 0.0,
     }
 
 
@@ -85,9 +90,18 @@ def _connector_for_profile(db: Session, profile: Printer | None) -> PrintConnect
     return db.get(PrintConnector, connector_id) if connector_id else None
 
 
+def _can_use_connector(db, connector, user):
+    if not connector: return False
+    if connector.user_id == user.id: return True
+    owner = db.get(User, connector.user_id)
+    return user.role in ("admin", "corrector") and owner and owner.role in ("admin", "corrector")
+
+
 def _assert_profile_access(db: Session, profile: Printer | None, user: User):
     connector = _connector_for_profile(db, profile)
-    if connector and connector.user_id != user.id:
+    if user.role == "teacher" and not connector:
+        raise HTTPException(403, "Imprimante du centre réservée à l’équipe Kironina")
+    if connector and not _can_use_connector(db, connector, user):
         raise HTTPException(404, "Imprimante inconnue")
 
 
@@ -101,18 +115,21 @@ def _get_or_create_profile(db: Session, name: str, *, protocol: str = "cups") ->
 
 
 def _effective_reverse(profile: Printer | None, file: str) -> bool:
-    """Compensation physique à demander à CUPS.
+    """Le document doit-il être remis à l'imprimante en ordre inverse ?
 
-    L'imprimante peut inverser DEUX fois : choisir la dernière copie du fichier
-    en premier, puis renverser l'ordre en empilant sur son bac. Une correction
-    ajoute une troisième transformation possible, celle de l'ADF. Ces
-    permutations involutives se composent exactement par XOR.
+    Sujet : seule la pile à la sortie compte, sur des feuilles vierges. Le
+    prélèvement et la pose sur le bac se composent par XOR.
+
+    Overlay : chaque feuille prise dans le bac est une copie précise, qui doit
+    recevoir SA correction. Seuls l'ordre de cette pile (ADF) et l'ordre de
+    traitement (prélèvement) comptent. La pose sur le bac, qui a lieu après
+    l'impression, ne change rien : la compter posait les corrections en sens
+    inverse sur toute imprimante dont le bac inverse la pile.
     """
     pickup_reverses = bool(profile and profile.pickup_reverse_order)
-    output_reverses = bool(profile and profile.output_reverse_order)
-    adf_reverses = bool(profile and profile.adf_reverse_order)
-    return (pickup_reverses ^ output_reverses
-            ^ (file == "correction_overlay.pdf" and adf_reverses))
+    if file == OVERLAY_FILE:
+        return pickup_reverses ^ bool(profile and profile.adf_reverse_order)
+    return pickup_reverses ^ bool(profile and profile.output_reverse_order)
 
 
 def _lp_command(*, printer: str, path: Path, copies: int, duplex: bool,
@@ -142,11 +159,12 @@ def list_printers(db: Session = Depends(get_db),
     local = _local_printers()
     profiles = {p.name: p for p in db.query(Printer).all()}
     local_names = {p["name"] for p in local}
+    if user.role == "teacher": local = []
     local_rows = [{**p, "display_name": p["name"], "available": True,
                    "system_default": bool(p.get("default")),
                    **_profile_view(profiles.get(p["name"]))} for p in local]
-    connectors = {c.id: c for c in db.query(PrintConnector).filter_by(
-        user_id=user.id, active=True).all()}
+    connectors = {c.id: c for c in db.query(PrintConnector).filter_by(active=True).all()
+                  if _can_use_connector(db, c, user)}
     connector_rows = []
     connector_printer_counts: dict[str, int] = {}
     for profile in profiles.values():
@@ -192,6 +210,7 @@ def list_printers(db: Session = Depends(get_db),
                     if p.active and p.protocol not in ("cups", "connector")
                     and p.uri and p.name not in local_names]
 
+    if user.role == "teacher": network_rows = []
     all_rows = [*local_rows, *network_rows]
     return {"local": local_rows, "network": network_rows,
             "connectors": connector_rows,
@@ -206,7 +225,7 @@ class NetworkPrinterIn(BaseModel):
     protocol: str = "ipp"
 
 
-@router.post("/network")
+@router.post("/network", dependencies=[Depends(require_role("admin", "corrector"))])
 def register_network_printer(body: NetworkPrinterIn, db: Session = Depends(get_db)):
     p = db.query(Printer).filter_by(name=body.name).first()
     if p and p.protocol == "cups":
@@ -228,6 +247,8 @@ class PrinterPreferencesIn(BaseModel):
     output_reverse_order: bool | None = None
     app_default: bool | None = None
     adf_reverse_order: bool | None = None
+    overlay_offset_x_mm: float | None = Field(default=None, ge=-20, le=20)
+    overlay_offset_y_mm: float | None = Field(default=None, ge=-20, le=20)
 
 
 @router.patch("/preferences")
@@ -246,14 +267,21 @@ def update_printer_preferences(body: PrinterPreferencesIn,
             setattr(p, field, value)
     if body.output_reverse_order is not None:
         p.output_reverse_order = body.output_reverse_order
+    for field in ("overlay_offset_x_mm", "overlay_offset_y_mm"):
+        value = getattr(body, field)
+        if value is not None:
+            setattr(p, field, round(value * 2) / 2)  # pas de 0,5 mm
     if body.app_default:
-        db.query(Printer).update({Printer.app_default: False}, synchronize_session=False)
+        for candidate in db.query(Printer).all():
+            connector = _connector_for_profile(db, candidate)
+            if _can_use_connector(db, connector, user) or (not connector and user.role in ("admin", "corrector")):
+                candidate.app_default = False
         p.app_default = True
     db.commit()
     return {"ok": True, "name": p.name, **_profile_view(p)}
 
 
-@router.delete("/network/{printer_id}")
+@router.delete("/network/{printer_id}", dependencies=[Depends(require_role("admin", "corrector"))])
 def delete_network_printer(printer_id: str, db: Session = Depends(get_db)):
     p = db.get(Printer, printer_id)
     if not p or p.protocol in ("cups", "connector") or not p.uri:
@@ -270,6 +298,94 @@ class PrintIn(BaseModel):
     copies: int = 1
     duplex: bool | None = None
     pass_side: Literal["all", "recto", "verso"] = "all"
+    # Overlay uniquement : première feuille à imprimer (1 = début de la file) et
+    # élève annoncé au professeur, pour refuser un envoi si la file a changé.
+    start_position: int = 1
+    expected_student: str | None = None
+    # Essai : la seule feuille de `start_position`, sans effet sur le suivi.
+    sample: bool = False
+
+
+def _overlay_path(assessment_id: str) -> Path:
+    return (settings.data_dir / "assessments" / assessment_id /
+            ALLOWED_FILES[OVERLAY_FILE] / OVERLAY_FILE)
+
+
+def _overlay_sheets(db: Session, assessment: Assessment, path: Path,
+                    batch: ScanBatch) -> list[overlay_queue.Sheet]:
+    from pypdf import PdfReader
+
+    sides = overlay_queue.overlay_sides(db, batch, len(PdfReader(str(path)).pages))
+    return overlay_queue.group_sheets(sides, duplex=bool(assessment.duplex))
+
+
+def _remember_overlay_print(batch: ScanBatch, *, status: str, job_id: str | None,
+                            pass_side: str, start: int, total: int,
+                            selected: list[overlay_queue.Sheet], printer: str,
+                            adf_reversed: bool, error: str | None = None):
+    batch.overlay_print_json = {
+        "status": status, "job_id": job_id, "error": error, "pass_side": pass_side,
+        "start_position": start, "total": total, "sheets": len(selected),
+        "first_student": selected[0].student, "last_student": selected[-1].student,
+        "printer": printer, "adf_reversed": adf_reversed,
+        "overlay_rev": batch.overlay_rev or 0,
+        "sent_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _overlay_last_print(db: Session, batch: ScanBatch, *, total: int,
+                        adf_reversed: bool) -> dict | None:
+    """Dernier envoi de CET overlay : un rendu régénéré repart de zéro."""
+    data = batch.overlay_print_json
+    if not data or data.get("overlay_rev") != (batch.overlay_rev or 0) or data.get("total") != total:
+        return None
+    view = dict(data)
+    job = db.get(ConnectorPrintJob, data["job_id"]) if data.get("job_id") else None
+    if job:
+        view["status"], view["error"] = job.status, job.error_message
+    # Une position n'a de sens que dans l'ordre où elle a été choisie.
+    if data.get("adf_reversed") != adf_reversed:
+        view["start_position"] = None
+    return view
+
+
+@router.get("/overlay-queue")
+def overlay_print_queue(assessment_id: str, printer: str | None = None,
+                        db: Session = Depends(get_db),
+                        user: User = Depends(current_user)):
+    """File d'attente de l'overlay, dans l'ordre où les feuilles seront imprimées."""
+    assessment = db.get(Assessment, assessment_id)
+    if not assessment:
+        raise HTTPException(404, "Sujet inaccessible")
+    profile = (db.query(Printer).filter_by(name=printer, active=True).first()
+               if printer else None)
+    if printer:
+        _assert_profile_access(db, profile, user)
+    adf_reversed = bool(profile and profile.adf_reverse_order)
+    expire_stale_queued_jobs(db, user_id=user.id)
+    path = _overlay_path(assessment_id)
+    batch = overlay_queue.overlay_batch(db, assessment_id)
+    blocked = None
+    if not path.exists() or not batch:
+        blocked = "L'overlay n'est pas encore généré."
+    elif (batch.refine_rev or 0) > (batch.overlay_rev or 0):
+        blocked = "L'overlay n'est pas à jour des dernières corrections : régénérez-le avant d'imprimer."
+    sheets: list[overlay_queue.Sheet] = []
+    if not blocked:
+        try:
+            sheets = _overlay_sheets(db, assessment, path, batch)
+        except overlay_queue.OverlayQueueError as error:
+            blocked = str(error)
+    queue = overlay_queue.physical_queue(sheets, adf_reversed=adf_reversed)
+    return {
+        "blocked": blocked, "total": len(queue), "adf_reversed": adf_reversed,
+        "assessment_duplex": bool(assessment.duplex),
+        "entries": [{"position": i + 1, "student": sheet.student,
+                     "identified": sheet.identified, "pages": sheet.pages_label}
+                    for i, sheet in enumerate(queue)],
+        "last_print": _overlay_last_print(db, batch, total=len(queue), adf_reversed=adf_reversed)
+                      if batch and queue else None,
+    }
 
 
 def _subject_pass_pdf(db: Session, assessment_id: str, source: Path,
@@ -295,9 +411,13 @@ def _subject_pass_pdf(db: Session, assessment_id: str, source: Path,
                  "régénérez-le avant l’impression en deux passes.")
     wanted_parity = 1 if pass_side == "recto" else 0
     writer = PdfWriter()
-    for pdf_page, document_page in zip(reader.pages, page_rows):
+    for i, (pdf_page, document_page) in enumerate(zip(reader.pages, page_rows)):
         if document_page.page_no % 2 == wanted_parity:
             writer.add_page(pdf_page)
+        elif pass_side == "verso" and (i + 1 == len(page_rows) or page_rows[i + 1].copy_id != document_page.copy_id):
+            # Une dernière page impaire occupe une feuille : le verso blanc
+            # doit traverser l'imprimante pour ne pas décaler l'élève suivant.
+            writer.add_blank_page(width=pdf_page.mediabox.width, height=pdf_page.mediabox.height)
     if not writer.pages:
         raise HTTPException(422, f"Ce sujet ne contient aucun {pass_side}")
     out = BytesIO()
@@ -305,7 +425,7 @@ def _subject_pass_pdf(db: Session, assessment_id: str, source: Path,
     return out.getvalue()
 
 
-def _reverse_pdf_pages(pdf: bytes) -> bytes:
+def _reverse_pdf_pages(pdf: bytes, *, duplex: bool = False) -> bytes:
     """Inverse réellement les pages pour ne dépendre d'aucune option pilote.
 
     Windows n'a pas d'équivalent universel à ``outputorder=reverse``. Le PDF
@@ -315,8 +435,18 @@ def _reverse_pdf_pages(pdf: bytes) -> bytes:
 
     reader = PdfReader(BytesIO(pdf))
     writer = PdfWriter()
-    for page in reversed(reader.pages):
-        writer.add_page(page)
+    if duplex:
+        pages = list(reader.pages)
+        if len(pages) % 2:
+            from pypdf import PageObject
+            last = pages[-1]
+            pages.append(PageObject.create_blank_page(width=last.mediabox.width, height=last.mediabox.height))
+        # Inverser les FEUILLES ; inverser les pages échangerait recto et verso.
+        for i in reversed(range(0, len(pages), 2)):
+            writer.add_page(pages[i]); writer.add_page(pages[i + 1])
+    else:
+        for page in reversed(reader.pages):
+            writer.add_page(page)
     out = BytesIO()
     writer.write(out)
     return out.getvalue()
@@ -325,9 +455,10 @@ def _reverse_pdf_pages(pdf: bytes) -> bytes:
 def _queue_connector_job(*, db: Session, user: User, profile: Printer,
                          title: str, file_name: str, pass_side: str,
                          document: bytes, assessment_id: str | None,
-                         copies: int, duplex: bool, reverse: bool) -> ConnectorPrintJob:
+                         copies: int, duplex: bool, reverse: bool,
+                         overlay_offset_mm: tuple[float, float] | None = None) -> ConnectorPrintJob:
     connector = _connector_for_profile(db, profile)
-    if not connector or connector.user_id != user.id:
+    if not _can_use_connector(db, connector, user):
         raise HTTPException(409, "Le connecteur de cette imprimante est déconnecté")
     if not connector_online(connector):
         raise HTTPException(
@@ -340,7 +471,7 @@ def _queue_connector_job(*, db: Session, user: User, profile: Printer,
     if not isinstance(native_name, str) or not native_name.strip():
         raise HTTPException(409, "Nom local de l'imprimante indisponible")
 
-    prepared = _reverse_pdf_pages(document) if reverse else document
+    prepared = _reverse_pdf_pages(document, duplex=duplex) if reverse else document
     job = ConnectorPrintJob(
         connector_id=connector.id, user_id=user.id, printer_id=profile.id,
         assessment_id=assessment_id, title=title, file_name=file_name,
@@ -355,6 +486,7 @@ def _queue_connector_job(*, db: Session, user: User, profile: Printer,
             "pickup_reverse_order": bool(profile.pickup_reverse_order),
             "output_reverse_order": bool(profile.output_reverse_order),
             "adf_reverse_order": bool(profile.adf_reverse_order),
+            **({"overlay_offset_mm": list(overlay_offset_mm)} if overlay_offset_mm else {}),
         },
         document_relpath="pending", document_sha256="pending",
         document_size=len(prepared))
@@ -384,6 +516,11 @@ def _queue_connector_job(*, db: Session, user: User, profile: Printer,
 @router.post("/print")
 def print_file(body: PrintIn, db: Session = Depends(get_db),
                user: User = Depends(current_user)):
+    from ..services.education import assert_service_active
+    from ..services.delivery_sheet import render_delivery_sheet, with_delivery_sheet
+    assessment = db.get(Assessment, body.assessment_id)
+    if not assessment: raise HTTPException(404, "Sujet inaccessible")
+    assert_service_active(db, assessment)
     if body.file not in ALLOWED_FILES:
         raise HTTPException(422, "Fichier non imprimable")
     path = (settings.data_dir / "assessments" / body.assessment_id /
@@ -401,52 +538,121 @@ def print_file(body: PrintIn, db: Session = Depends(get_db),
 
     profile = db.query(Printer).filter_by(name=body.printer, active=True).first()
     _assert_profile_access(db, profile, user)
+    if user.role == "teacher" and (not profile or profile.protocol != "connector"):
+        raise HTTPException(403, "Les imprimantes du centre sont réservées à l’équipe Kironina")
     assessment = db.get(Assessment, body.assessment_id)
+    overlay = body.file == OVERLAY_FILE
+    sample = overlay and body.sample
+    if body.sample and not overlay:
+        raise HTTPException(422, "L’essai ne concerne que l’overlay")
     if body.pass_side != "all":
-        if body.file != "subject_batch.pdf" or not assessment or not assessment.duplex:
+        if (body.file not in ("subject_batch.pdf", OVERLAY_FILE)
+                or not assessment or not assessment.duplex):
             raise HTTPException(422, "Les passes recto/verso ne concernent qu’un sujet recto-verso")
         if profile and profile.duplex:
             raise HTTPException(409, "Cette imprimante est configurée en recto-verso automatique")
 
     duplex = (profile.duplex if body.duplex is None and profile else bool(body.duplex))
+    if overlay:
+        # L'overlay suit la feuille déjà imprimée : son recto-verso se déduit du
+        # sujet, jamais d'un réglage transmis par l'appelant.
+        duplex = bool(assessment.duplex and profile and profile.duplex)
+        if sample:
+            duplex = False
+        elif assessment.duplex and not duplex and body.pass_side == "all":
+            raise HTTPException(409, "Cette imprimante n’a pas de recto-verso automatique : "
+                                     "lancez les deux passes séparément.")
     if body.pass_side != "all":
         duplex = False
     reverse = _effective_reverse(profile, body.file)
 
+    overlay_batch = overlay_sheets = overlay_selected = overlay_offset = None
+    adf_reversed = bool(profile and profile.adf_reverse_order)
+    if overlay:
+        overlay_batch = overlay_queue.overlay_batch(db, body.assessment_id)
+        if not overlay_batch:
+            raise HTTPException(404, "Fichier non encore généré")
+        try:
+            overlay_sheets = _overlay_sheets(db, assessment, Path(path), overlay_batch)
+        except overlay_queue.OverlayQueueError as error:
+            raise HTTPException(409, str(error))
+        queue = overlay_queue.physical_queue(overlay_sheets, adf_reversed=adf_reversed)
+        if not 1 <= body.start_position <= len(queue):
+            raise HTTPException(422, "Position de reprise hors de la file d’impression")
+        overlay_selected = queue[body.start_position - 1:]
+        if body.expected_student not in (None, overlay_selected[0].student):
+            raise HTTPException(409, "La file d’impression a changé : vérifiez la prochaine "
+                                     "copie avant de relancer.")
+        if sample:
+            overlay_selected = overlay_selected[:1]
+        overlay_offset = ((profile.overlay_offset_x_mm or 0.0, profile.overlay_offset_y_mm or 0.0)
+                          if profile else (0.0, 0.0))
+        document = overlay_queue.overlay_document(
+            Path(path), overlay_selected, "recto" if sample else body.pass_side,
+            duplex=duplex, offset_mm=overlay_offset)
+    elif body.start_position != 1:
+        raise HTTPException(422, "La reprise ne concerne que l’overlay")
+    elif body.pass_side != "all":
+        document = _subject_pass_pdf(db, body.assessment_id, Path(path), body.pass_side)
+    else:
+        document = Path(path).read_bytes()
+    copies = 1 if overlay else body.copies
+
+    def remember_overlay(status: str, job_id: str | None = None, error: str | None = None):
+        if overlay and not sample:
+            _remember_overlay_print(
+                overlay_batch, status=status, job_id=job_id, pass_side=body.pass_side,
+                start=body.start_position, total=len(overlay_sheets),
+                selected=overlay_selected, printer=body.printer,
+                adf_reversed=adf_reversed, error=error)
+
+    teacher = db.get(TeacherProfile, assessment.teacher_profile_id) if assessment.teacher_profile_id else None
+    delivery = body.file == "subject_batch.pdf" and teacher and teacher.service_mode == "accompanied"
+    if delivery:
+        document = with_delivery_sheet(document, render_delivery_sheet(db, assessment),
+                                       duplex=duplex, pass_side=body.pass_side)
     if profile and profile.protocol == "connector":
-        document = (_subject_pass_pdf(db, body.assessment_id, Path(path), body.pass_side)
-                    if body.pass_side != "all" else Path(path).read_bytes())
         job = _queue_connector_job(
             db=db, user=user, profile=profile,
             title=f"{assessment.title if assessment else 'Kiro & Nina'} — "
-                  f"{body.pass_side if body.pass_side != 'all' else body.file}",
-            file_name=body.file, pass_side=body.pass_side, document=document,
-            assessment_id=body.assessment_id, copies=body.copies,
-            duplex=duplex, reverse=reverse)
+                  f"{body.pass_side if body.pass_side != 'all' else body.file}"
+                  + (f" — essai pour {overlay_selected[0].student}" if sample
+                     else f" — à partir de {overlay_selected[0].student}" if overlay else ""),
+            # Un autre nom de fichier : un essai ne marque jamais l'overlay imprimé.
+            file_name="overlay_sample.pdf" if sample else body.file,
+            pass_side=body.pass_side, document=document,
+            assessment_id=body.assessment_id, copies=copies,
+            duplex=duplex, reverse=reverse, overlay_offset_mm=overlay_offset)
+        remember_overlay("queued", job_id=job.id)
+        db.commit()
         connector = _connector_for_profile(db, profile)
         return {"ok": True, "queued": True, "job_id": job.id,
                 "lp_output": f"En attente sur {connector.name if connector else 'le connecteur'}"}
 
+    if reverse:
+        document = _reverse_pdf_pages(document, duplex=duplex)
     local_names = {p["name"] for p in _local_printers()}
     print_path = Path(path)
     temp_path: Path | None = None
     try:
-        if body.pass_side != "all":
+        if body.pass_side != "all" or delivery or reverse or overlay:
             fd, raw_path = tempfile.mkstemp(prefix=f"kironina-{body.pass_side}-", suffix=".pdf")
             temp_path = Path(raw_path)
             stream = os.fdopen(fd, "wb")
             with stream:
-                stream.write(_subject_pass_pdf(db, body.assessment_id, print_path,
-                                               body.pass_side))
+                stream.write(document)
             print_path = temp_path
 
-        cmd = _lp_command(printer=body.printer, path=print_path, copies=body.copies,
-                          duplex=duplex, reverse=reverse, network=profile,
+        cmd = _lp_command(printer=body.printer, path=print_path, copies=copies,
+                          duplex=duplex, reverse=False, network=profile,
                           local_names=local_names)
-        job = Job(type="print", status="running",
+        job = Job(type="print", status="running", created_by=user.id, assessment_id=body.assessment_id,
                   payload_json={"file": str(path), "printer": body.printer,
-                                "copies": body.copies, "duplex": duplex,
+                                "copies": copies, "duplex": duplex,
                                 "pass_side": body.pass_side,
+                                "start_position": body.start_position,
+                                "sample": sample,
+                                "overlay_offset_mm": overlay_offset,
                                 "cups_compensation_reverse": reverse,
                                 "pickup_reverse_order": bool(
                                     profile and profile.pickup_reverse_order),
@@ -462,11 +668,13 @@ def print_file(body: PrintIn, db: Session = Depends(get_db),
         except subprocess.TimeoutExpired:
             job.status = "failed"
             job.error_code = "timeout"
+            remember_overlay("failed", error="Délai dépassé")
             db.commit()
             raise HTTPException(504, "Impression : délai dépassé")
         if r.returncode != 0:
             job.status = "failed"
             job.error_code = (r.stderr or r.stdout).strip()[:400]
+            remember_overlay("failed", error=job.error_code)
             db.commit()
             raise HTTPException(502, f"Échec impression : {job.error_code}")
         job.status = "done"
@@ -474,14 +682,17 @@ def print_file(body: PrintIn, db: Session = Depends(get_db),
                         entity_type="assessment", entity_id=body.assessment_id,
                         after_json={"printer": body.printer, "file": body.file,
                                     "pass_side": body.pass_side,
+                                    "start_position": body.start_position,
                                     "cups_compensation_reverse": reverse,
                                     "lp": r.stdout.strip()}))
         if body.file == "subject_batch.pdf" and body.pass_side in ("all", "verso"):
             if assessment and assessment.status == "ready":
                 assessment.status = "printed"
+        remember_overlay("submitted")
         # L'étape « Overlay imprimé » reflète désormais un vrai envoi CUPS
-        # réussi, jamais une coche manuelle dans l'interface.
-        if body.file == "correction_overlay.pdf":
+        # réussi, jamais une coche manuelle dans l'interface. Une passe recto
+        # laisse encore tous les versos à imprimer.
+        if overlay and not sample and body.pass_side in ("all", "verso"):
             (db.query(ScanBatch).filter(ScanBatch.assessment_id == body.assessment_id)
              .update({ScanBatch.overlay_printed: True}, synchronize_session=False))
         db.commit()
@@ -571,7 +782,7 @@ def connector_job_status(job_id: str, db: Session = Depends(get_db),
                          user: User = Depends(current_user)):
     expire_stale_queued_jobs(db, user_id=user.id)
     job = db.get(ConnectorPrintJob, job_id)
-    if not job or job.user_id != user.id:
+    if not job or (job.user_id != user.id and user.role not in ("admin", "corrector")):
         raise HTTPException(404, "Travail d'impression inconnu")
     return {"id": job.id, "status": job.status,
             "error": job.error_message, "spool_job_id": job.spool_job_id}

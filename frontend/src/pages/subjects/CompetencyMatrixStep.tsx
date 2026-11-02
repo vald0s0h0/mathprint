@@ -6,7 +6,7 @@
 // page propose les exercices de ces compétences (et les problèmes de leurs
 // chapitres).
 import {
-  Accordion, Badge, Checkbox, Group, Progress, ScrollArea, Stack, Table, Text,
+  Accordion, Alert, Badge, Checkbox, Group, Progress, ScrollArea, Stack, Table, Text,
   TextInput, Tooltip,
 } from '@mantine/core'
 import { Search } from 'lucide-react'
@@ -24,9 +24,9 @@ type DomainGroup = { code: string; name: string; chapters: ChapterGroup[] }
 export type Matrix = { classes: ClassRef[]; domains: DomainGroup[] }
 
 export default function CompetencyMatrixStep({
-  gradeLevel, classId, selected, onChange, onMatrix,
+  gradeLevel, classId, subjectId = 'math', groupId, selected, onChange, onMatrix,
 }: {
-  gradeLevel?: string; classId?: string | null
+  gradeLevel?: string; classId?: string | null; subjectId?: string; groupId?: string | null
   selected: string[]; onChange: (ids: string[]) => void
   // la matrice chargée, remontée au parent (comptage des problèmes des
   // chapitres cochés, récapitulatif)
@@ -34,14 +34,19 @@ export default function CompetencyMatrixStep({
 }) {
   const [matrix, setMatrix] = useState<Matrix>({ classes: [], domains: [] })
   const [search, setSearch] = useState('')
+  const [error, setError] = useState('')
 
   useEffect(() => {
+    let active = true
+    setMatrix({ classes: [], domains: [] }); setError('')
     if (!gradeLevel) return
-    api.get<Matrix>(`/api/assessments/competency-matrix?grade_level=${gradeLevel}`)
-      .then((m) => { setMatrix(m); onMatrix?.(m) })
+    api.get<Matrix>(`/api/assessments/competency-matrix?grade_level=${gradeLevel}&subject_id=${subjectId}${classId ? `&class_id=${classId}` : ''}${groupId ? `&group_id=${groupId}` : ''}`)
+      .then((m) => { if (active) { setMatrix(m); onMatrix?.(m) } })
+      .catch(e => { if (active) setError(e.message) })
+    return () => { active = false }
     // onMatrix est un rappel du parent : ne relance pas la requête
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gradeLevel])
+  }, [gradeLevel, classId, subjectId, groupId])
 
   const sel = new Set(selected)
   function toggle(ids: string[], checked: boolean) {
@@ -69,6 +74,8 @@ export default function CompetencyMatrixStep({
 
   return (
     <Stack gap="xs" style={{ flex: 1, minHeight: 0 }}>
+      {error && <Alert color="red">{error}</Alert>}
+      {!error && !matrix.domains.length && <Text c="dimmed" size="sm">Aucune compétence disponible pour cet enseignement. Le référentiel doit d’abord être complété par l’administrateur.</Text>}
       <Group justify="space-between" wrap="nowrap">
         <TextInput size="xs" w={280} placeholder="Filtrer les compétences…"
           leftSection={<Search size={13} />} value={search}
