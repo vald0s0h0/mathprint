@@ -104,6 +104,10 @@ class TeacherProfile(Base):
     phone: Mapped[str] = mapped_column(String, default="")
     user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), unique=True, nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Professeur autonome : ni établissement ni affectation, il choisit lui-même
+    # (Paramètres) ce qu'il enseigne. Sans objet pour un professeur accompagné.
+    program_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    subject_id: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class TeacherSchool(Base):

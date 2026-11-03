@@ -4,20 +4,25 @@
 // génération tourne dans un worker de fond côté API : l'assistant se ferme dès
 // la mise en file, et la liste affiche la progression jusqu'à "prêt".
 import {
-  Alert, Badge, Button, Card, Group, Stack, Text, Title, Tooltip,
+  Alert, Badge, Button, Card, Group, Menu, Modal, Stack, Text, Title, Tooltip,
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
-import { AlertTriangle, Copy, Eye, FileText, Plus, RotateCcw, ScrollText } from 'lucide-react'
+import {
+  AlertTriangle, Copy, CopyPlus, Eye, FileText, Plus, Printer, RotateCcw, ScrollText, Trash2,
+} from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api } from '../api'
+import ActionsMenu from '../components/ActionsMenu'
 import GenerationLogModal from '../components/GenerationLogModal'
 import PdfPreviewModal from '../components/PdfPreview'
 import PrintButton from '../components/PrintButton'
 import SubjectWizard, { type WizardClass } from './subjects/SubjectWizard'
 import { useAppState } from '../state/AppState'
 
-type Cls = WizardClass
+type Cls = WizardClass & {
+  school_id?: string | null; program_id?: string | null; series_id?: string | null
+}
 type Assessment = {
   id: string; title: string; type: string; status: string
   class_name: string; class_id: string; grade_level: string
@@ -31,6 +36,8 @@ type Assessment = {
   manual: boolean; variant_kind: string; duplicate_version: number
   auto: boolean; problems: boolean
   overlay_distributed: boolean
+  // une correction existe (même bloquée) : le sujet n'est plus supprimable
+  has_correction: boolean
 }
 
 const VARIANT_LABEL: Record<string, string> = {
@@ -56,6 +63,8 @@ export default function Subjects() {
   const [previewId, setPreviewId] = useState<string | null>(null)
   const [logAssessment, setLogAssessment] = useState<Assessment | null>(null)
   const [duplicatingId, setDuplicatingId] = useState<string | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<Assessment | null>(null)
+  const [deleting, setDeleting] = useState(false)
   const { cycle, matches } = useAppState()
   const [params, setParams] = useSearchParams()
 
@@ -102,10 +111,21 @@ export default function Subjects() {
     }
   }
 
-  async function duplicate(a: Assessment) {
+  // Classes pouvant recevoir le sujet : même cycle, même établissement et même
+  // référentiel (le backend refuse les autres).
+  function otherClasses(a: Assessment) {
+    const origin = classes.find((c) => c.id === a.class_id)
+    if (!origin) return []
+    return classes.filter((c) => c.id !== origin.id && c.grade_level === origin.grade_level
+      && c.school_id === origin.school_id && c.program_id === origin.program_id
+      && c.series_id === origin.series_id)
+  }
+
+  async function duplicate(a: Assessment, classId?: string) {
     setDuplicatingId(a.id)
     try {
-      const created = await api.post<{ title: string }>(`/api/assessments/${a.id}/duplicate`)
+      const created = await api.post<{ title: string }>(`/api/assessments/${a.id}/duplicate`,
+        classId ? { class_id: classId } : undefined)
       notifications.show({
         color: 'blue',
         message: `« ${created.title} » est en file de génération`,
@@ -115,6 +135,29 @@ export default function Subjects() {
       notifications.show({ color: 'red', message: (e as Error).message })
     } finally {
       setDuplicatingId(null)
+    }
+  }
+
+  async function markPrinted(a: Assessment) {
+    try {
+      await api.post(`/api/assessments/${a.id}/mark-printed`)
+      refresh()
+    } catch (e) {
+      notifications.show({ color: 'red', message: (e as Error).message })
+    }
+  }
+
+  async function deleteSubject() {
+    if (!deleteTarget) return
+    setDeleting(true)
+    try {
+      await api.del(`/api/assessments/${deleteTarget.id}`)
+      setDeleteTarget(null)
+      refresh()
+    } catch (e) {
+      notifications.show({ color: 'red', message: (e as Error).message })
+    } finally {
+      setDeleting(false)
     }
   }
 
@@ -212,18 +255,7 @@ export default function Subjects() {
                       )}
                       {['ready', 'printed', 'scanning', 'finalized'].includes(a.status) && (
                         <>
-                          {a.manual && (
-                            <Tooltip label="Recréer le même sujet avec la même variante pour chaque élève">
-                              <Button size="xs" variant="light" color="indigo"
-                                leftSection={<Copy size={14} />}
-                                loading={duplicatingId === a.id}
-                                disabled={duplicatingId !== null && duplicatingId !== a.id}
-                                onClick={() => duplicate(a)}>
-                                Dupliquer
-                              </Button>
-                            </Tooltip>
-                          )}
-                          <Button size="xs" variant="light" leftSection={<Eye size={14} />}
+                          <Button size="xs" variant="subtle" leftSection={<Eye size={14} />}
                             onClick={() => setPreviewId(a.id)}>
                             Aperçu
                           </Button>
@@ -236,6 +268,37 @@ export default function Subjects() {
                               label="Imprimer l'overlay" />
                           )}
                         </>
+                      )}
+                      {!['queued', 'generating'].includes(a.status) && (
+                        <ActionsMenu>
+                          {a.manual && ['ready', 'printed', 'scanning', 'finalized'].includes(a.status) && (
+                            <>
+                              <Tooltip position="left" label="Recréer le même sujet avec la même variante pour chaque élève">
+                                <Menu.Item leftSection={<Copy size={14} />}
+                                  disabled={duplicatingId !== null}
+                                  onClick={() => duplicate(a)}>
+                                  Dupliquer même classe
+                                </Menu.Item>
+                              </Tooltip>
+                              {otherClasses(a).map((c) => (
+                                <Menu.Item key={c.id} leftSection={<CopyPlus size={14} />}
+                                  disabled={duplicatingId !== null || !c.student_count}
+                                  onClick={() => duplicate(a, c.id)}>
+                                  Dupliquer vers {c.name}{c.student_count ? '' : ' (aucun élève)'}
+                                </Menu.Item>
+                              ))}
+                            </>
+                          )}
+                          {a.status === 'ready' && (
+                            <Menu.Item leftSection={<Printer size={14} />} onClick={() => markPrinted(a)}>
+                              Marquer comme imprimé
+                            </Menu.Item>
+                          )}
+                          <Menu.Item color="red" leftSection={<Trash2 size={14} />}
+                            disabled={a.has_correction} onClick={() => setDeleteTarget(a)}>
+                            {a.has_correction ? 'Supprimer (correction déjà faite)' : 'Supprimer'}
+                          </Menu.Item>
+                        </ActionsMenu>
                       )}
                     </Group>
                   </Group>
@@ -253,6 +316,23 @@ export default function Subjects() {
 
       <PdfPreviewModal assessmentId={previewId} opened={!!previewId}
         onClose={() => setPreviewId(null)} />
+
+      <Modal opened={!!deleteTarget} onClose={() => setDeleteTarget(null)}
+        title={<Text fw={650}>Supprimer le sujet</Text>}>
+        <Stack>
+          <Text size="sm">
+            Supprimer définitivement « {deleteTarget?.title} » ({deleteTarget?.class_name}) ?
+          </Text>
+          <Text size="xs" c="dimmed">
+            Le sujet, ses copies et ses PDF disparaissent. Des copies déjà imprimées ne
+            pourront plus être corrigées : leur QR ne renverra plus vers aucun sujet.
+          </Text>
+          <Group justify="flex-end">
+            <Button variant="subtle" onClick={() => setDeleteTarget(null)}>Annuler</Button>
+            <Button color="red" loading={deleting} onClick={deleteSubject}>Supprimer</Button>
+          </Group>
+        </Stack>
+      </Modal>
 
       <GenerationLogModal assessmentId={logAssessment?.id ?? null}
         title={logAssessment?.title} onClose={() => setLogAssessment(null)} />

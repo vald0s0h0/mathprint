@@ -16,14 +16,20 @@ export type Teaching = { id: string; subject_id: string; subject_name: string; t
 export const options = (rows: { id: string; name: string }[]) => rows.map(r => ({ value: r.id, label: r.name }))
 export const showError = (e: unknown) => notifications.show({ color: 'red', message: (e as Error).message })
 
-export default function ClassEditor({ opened, onClose, onSaved, schoolId, editing }: {
-  opened: boolean; onClose: () => void; onSaved: () => void; schoolId?: string; editing?: ClassRow | null
+type Me = { role: string; service_mode: string | null; program_id: string | null }
+
+// `supervised` : ouvert depuis Établissements, pour un professeur accompagné. Sinon
+// un professeur autonome crée sa classe sans établissement, dans son programme.
+export default function ClassEditor({ opened, onClose, onSaved, schoolId, editing, supervised }: {
+  opened: boolean; onClose: () => void; onSaved: () => void; schoolId?: string; editing?: ClassRow | null; supervised?: boolean
 }) {
   const [catalog, setCatalog] = useState<Catalog | null>(null)
   const [schools, setSchools] = useState<SchoolRow[]>([])
   const [teachers, setTeachers] = useState<TeacherRow[]>([])
   const [years, setYears] = useState<YearRow[]>([])
-  const [role, setRole] = useState('')
+  const [me, setMe] = useState<Me | null>(null)
+  const role = me?.role || ''
+  const autonomous = !supervised && me?.service_mode === 'autonomous'
   const [school, setSchool] = useState(''); const [program, setProgram] = useState('fr')
   const [grade, setGrade] = useState('6e'); const [series, setSeries] = useState<string | null>(null)
   const [teacher, setTeacher] = useState<string | null>(null); const [subject, setSubject] = useState('math')
@@ -35,40 +41,47 @@ export default function ClassEditor({ opened, onClose, onSaved, schoolId, editin
     setProgram(editing?.program_id || 'fr'); setGrade(editing?.grade_level || '6e'); setSeries(editing?.series_id || null)
     setTeacher(null); setSubject('math'); setStudents('')
     Promise.all([api.get<Catalog>('/api/operations/catalog'), api.get<SchoolRow[]>('/api/operations/schools'),
-      api.get<YearRow[]>('/api/years'), api.get<{ role: string }>('/api/auth/me')]).then(([c, s, y, me]) => {
-        setCatalog(c); setSchools(s); setYears(y); setRole(me.role)
+      api.get<YearRow[]>('/api/years'), api.get<Me>('/api/auth/me')]).then(([c, s, y, account]) => {
+        setCatalog(c); setSchools(s); setYears(y); setMe(account)
         setYear(editing?.school_year_id || y.find(x => x.active)?.id || null)
-        if (me.role !== 'teacher') api.get<TeacherRow[]>('/api/operations/teachers').then(setTeachers).catch(showError)
+        if (!supervised && account.service_mode === 'autonomous') {
+          if (!editing) setProgram(account.program_id || 'fr')
+        } else if (account.role !== 'teacher') {
+          api.get<TeacherRow[]>('/api/operations/teachers').then(setTeachers).catch(showError)
+        }
       }).catch(showError)
-  }, [opened, schoolId, editing])
+  }, [opened, schoolId, editing, supervised])
   const chosenSchool = schools.find(s => s.id === school)
   async function save() {
     setSaving(true)
     try {
       if (editing) await api.patch(`/api/classes/${editing.id}`, { name, grade_level: grade, program_id: program, series_id: series })
+      else if (autonomous) await api.post('/api/classes', { name, grade_level: grade, series_id: series, school_year_id: year, students_text: students })
       else await api.post('/api/classes', { name, school_id: school, program_id: program, grade_level: grade,
         series_id: series, school_year_id: year, teacher_profile_id: teacher, subject_id: subject, students_text: students })
       onSaved(); onClose()
     } catch (e) { showError(e) } finally { setSaving(false) }
   }
+  const needsChoice = autonomous && !me?.program_id
   return <Modal opened={opened} onClose={onClose} title={editing ? 'Modifier la classe' : 'Nouvelle classe'} size="lg">
     <Stack>
-      {schools.length === 0 && <Alert>Aucun établissement affecté. L’équipe Kironina doit d’abord rattacher votre fiche à un établissement.</Alert>}
-      <Select label="Établissement" data={options(schools)} value={school || null} searchable disabled={!!editing}
-        onChange={v => { setSchool(v || ''); setTeacher(null); const s = schools.find(x => x.id === v); setProgram(s?.program_ids[0] || 'fr'); setSeries(null) }} />
+      {needsChoice && <Alert>Choisissez d’abord votre programme et votre matière dans Paramètres.</Alert>}
+      {!autonomous && me && schools.length === 0 && <Alert>Aucun établissement affecté. L’équipe Kironina doit d’abord rattacher votre fiche à un établissement.</Alert>}
+      {!autonomous && <Select label="Établissement" data={options(schools)} value={school || null} searchable disabled={!!editing}
+        onChange={v => { setSchool(v || ''); setTeacher(null); const s = schools.find(x => x.id === v); setProgram(s?.program_ids[0] || 'fr'); setSeries(null) }} />}
       <Group grow><TextInput label="Classe" placeholder="Ex. 3A" value={name} onChange={e => setName(e.currentTarget.value)} />
         <Select label="Année scolaire" disabled={!!editing} data={years.filter(y => y.active || y.id === year).map(y => ({ value: y.id, label: y.label }))} value={year} onChange={setYear} /></Group>
-      <Group grow><Select label="Programme" data={options(catalog?.programs.filter(p => chosenSchool?.program_ids.includes(p.id)) || [])}
-        value={program} onChange={v => { setProgram(v || 'fr'); setSeries(null) }} />
+      <Group grow>{!autonomous && <Select label="Programme" data={options(catalog?.programs.filter(p => chosenSchool?.program_ids.includes(p.id)) || [])}
+        value={program} onChange={v => { setProgram(v || 'fr'); setSeries(null) }} />}
         <Select label="Cycle" data={options(catalog?.grades || [])} value={grade} onChange={v => { setGrade(v || '6e'); setSeries(null) }} /></Group>
       {['2nde', '1re', 'tle'].includes(grade) && <Select label="Série" placeholder={program === 'ci' ? 'Choisir une série' : 'Voie générale (sans série)'} clearable
         data={options(catalog?.paths.filter(p => p.kind === 'series' && p.program_id === program && p.grades.includes(grade)) || [])} value={series} onChange={setSeries} />}
       {!editing && <>
-        <Select label="Matière" data={options(catalog?.subjects || [])} value={subject} onChange={v => setSubject(v || 'math')} />
-        {role !== 'teacher' && <Select label="Professeur" searchable data={options(teachers.filter(t => t.active && t.school_ids.includes(school)))} value={teacher} onChange={setTeacher} />}
+        {!autonomous && <Select label="Matière" data={options(catalog?.subjects || [])} value={subject} onChange={v => setSubject(v || 'math')} />}
+        {!autonomous && role !== 'teacher' && <Select label="Professeur" searchable data={options(teachers.filter(t => t.active && t.school_ids.includes(school)))} value={teacher} onChange={setTeacher} />}
         <Textarea label="Élèves" description="Un nom complet par ligne, dans l’ordre de la classe." minRows={6} value={students} onChange={e => setStudents(e.currentTarget.value)} />
       </>}
-      <Button onClick={save} loading={saving} disabled={!name.trim() || !school || !year || (!editing && role !== 'teacher' && !teacher)}>Enregistrer</Button>
+      <Button onClick={save} loading={saving} disabled={!name.trim() || !year || (autonomous ? !editing && needsChoice : !school || (!editing && role !== 'teacher' && !teacher))}>Enregistrer</Button>
     </Stack>
   </Modal>
 }

@@ -7,6 +7,7 @@ import { api } from '../api'
 import ClassEditor, { type Catalog, type ClassRow, type SchoolRow, type TeacherRow, type Teaching, type YearRow, options, showError } from '../components/ClassEditor'
 import PrintButton from '../components/PrintButton'
 import PdfPreviewModal from '../components/PdfPreview'
+import { useAppState } from '../state/AppState'
 import SubjectWizard from './subjects/SubjectWizard'
 import styles from './Establishments.module.css'
 
@@ -20,14 +21,16 @@ const stages: Record<string, { label: string; color: string }> = {
   return: { label: 'À restituer', color: 'teal' }, complete: { label: 'Terminé', color: 'green' }, blocked: { label: 'À débloquer', color: 'red' },
 }
 const emptySchool = { name: '', country_id: 'CI', program_ids: ['ci'], city: '', address: '', contact: '', notes: '', service_active: true }
-const emptyTeacher = { name: '', service_mode: 'accompanied', school_ids: [] as string[], email: '', phone: '', active: true }
+const emptyTeacher = { name: '', school_ids: [] as string[], email: '', phone: '', active: true }
 
 export default function Establishments() {
   const navigate = useNavigate()
+  // L'établissement filtré se choisit dans la barre du haut (HeaderFilters).
+  const { school: schoolId, setSchool: setSchoolId, setSchools: shareSchools } = useAppState()
   const [catalog, setCatalog] = useState<Catalog | null>(null); const [schools, setSchools] = useState<SchoolRow[]>([])
   const [teachers, setTeachers] = useState<TeacherRow[]>([]); const [classes, setClasses] = useState<ClassRow[]>([])
   const [years, setYears] = useState<YearRow[]>([]); const [role, setRole] = useState('')
-  const [schoolId, setSchoolId] = useState<string | null>(null); const [yearId, setYearId] = useState<string | null>(null)
+  const [yearId, setYearId] = useState<string | null>(null)
   const [stage, setStage] = useState<string | null>(null); const [search, setSearch] = useState(''); const [tab, setTab] = useState<string | null>('work')
   const [dashboard, setDashboard] = useState<Dashboard>({ counts: {}, assessments: [], lots_at_schools: 0, overdue_collection_count: 0 }); const [error, setError] = useState('')
   const [schoolModal, setSchoolModal] = useState(false); const [schoolEdit, setSchoolEdit] = useState<string | null>(null); const [schoolForm, setSchoolForm] = useState(emptySchool)
@@ -50,8 +53,8 @@ export default function Establishments() {
     const [c, s, t, cl, y, me] = await Promise.all([api.get<Catalog>('/api/operations/catalog'),
       api.get<SchoolRow[]>('/api/operations/schools'), api.get<TeacherRow[]>('/api/operations/teachers'),
       api.get<ClassRow[]>('/api/classes?include_archived=true'), api.get<YearRow[]>('/api/years'), api.get<{ role: string }>('/api/auth/me')])
-    setCatalog(c); setSchools(s); setTeachers(t); setClasses(cl); setYears(y); setRole(me.role)
-  }, [])
+    setCatalog(c); setSchools(s); shareSchools(s); setTeachers(t); setClasses(cl); setYears(y); setRole(me.role)
+  }, [shareSchools])
   const refreshWork = useCallback(async () => {
     try {
       const q = new URLSearchParams(); if (schoolId) q.set('school_id', schoolId); if (yearId) q.set('year_id', yearId)
@@ -66,7 +69,8 @@ export default function Establishments() {
     catch (e) { showError(e) } finally { setBusy(false) }
   }
   const school = schools.find(s => s.id === schoolId)
-  const visibleClasses = classes.filter(c => (!schoolId || c.school_id === schoolId) && (yearId ? c.school_year_id === yearId : !c.archived))
+  // Une classe sans établissement est celle d'un professeur autonome : pas supervisée ici.
+  const visibleClasses = classes.filter(c => c.school_id && (!schoolId || c.school_id === schoolId) && (yearId ? c.school_year_id === yearId : !c.archived))
   const work = dashboard.assessments.filter(a => (!stage || (stage === 'collect' ? a.at_school : a.stage === stage)) && `${a.title} ${a.class_name} ${a.teacher_name} ${a.school_name}`.toLowerCase().includes(search.toLowerCase()))
     .sort((a, b) => stage === 'collect' ? (b.days_at_school ?? -1) - (a.days_at_school ?? -1) : 0)
   function newSubject(c?: ClassRow) { setWizardClass(c || null); setWizard(true) }
@@ -85,8 +89,7 @@ export default function Establishments() {
       <Group><Button variant="subtle" leftSection={<RefreshCw size={15} />} onClick={() => { void refreshWork(); refreshLists().catch(showError) }}>Actualiser</Button>
         <Button leftSection={<Plus size={16} />} onClick={() => newSubject()} disabled={!visibleClasses.some(c => !c.archived) || school?.service_active === false}>Créer un sujet</Button></Group></Group>
     {error && <Alert color="red">{error}</Alert>}
-    <Group align="end"><Select label="Établissement" placeholder="Tous les établissements" clearable searchable w={330} data={options(schools)} value={schoolId} onChange={setSchoolId} />
-      <Select label="Année scolaire" placeholder="Années actives" clearable w={200} data={years.map(y => ({ value: y.id, label: `${y.label}${y.active ? '' : ' · archivée'}` }))} value={yearId} onChange={setYearId} />
+    <Group align="end"><Select label="Année scolaire" placeholder="Années actives" clearable w={200} data={years.map(y => ({ value: y.id, label: `${y.label}${y.active ? '' : ' · archivée'}` }))} value={yearId} onChange={setYearId} />
       {school && <><Badge color={school.service_active ? 'green' : 'orange'}>{school.service_active ? 'Service actif' : 'Service suspendu'}</Badge>
         <Button size="xs" variant="light" onClick={() => editSchool(school)}>Modifier l’établissement</Button></>}
     </Group>
@@ -150,10 +153,10 @@ export default function Establishments() {
           <Text size="xs" mb="sm">{s.program_ids.map(p => catalog?.programs.find(c => c.id === p)?.name).join(' · ')}</Text>
           <Group><Button size="xs" variant="light" onClick={() => { setSchoolId(s.id); setTab('work') }}>Voir le suivi</Button><Button size="xs" variant="subtle" onClick={() => editSchool(s)}>Modifier</Button></Group></Card>)}</SimpleGrid>
       </Stack></Tabs.Panel>
-      <Tabs.Panel value="teachers" pt="lg"><Stack><Group justify="space-between"><Text c="dimmed">Le service fonctionne même sans compte de connexion.</Text><Button onClick={() => editTeacher()}>Ajouter un professeur</Button></Group>
-        <Table.ScrollContainer minWidth={750}><Table striped><Table.Thead><Table.Tr>{['Professeur', 'Mode', 'Accès', 'Établissements', 'Actions'].map(x => <Table.Th key={x}>{x}</Table.Th>)}</Table.Tr></Table.Thead><Table.Tbody>
+      <Tabs.Panel value="teachers" pt="lg"><Stack><Group justify="space-between"><Text c="dimmed">Professeurs accompagnés. Le service fonctionne même sans compte de connexion.</Text><Button onClick={() => editTeacher()}>Ajouter un professeur</Button></Group>
+        <Table.ScrollContainer minWidth={750}><Table striped><Table.Thead><Table.Tr>{['Professeur', 'Accès', 'Établissements', 'Actions'].map(x => <Table.Th key={x}>{x}</Table.Th>)}</Table.Tr></Table.Thead><Table.Tbody>
           {teachers.filter(t => !schoolId || t.school_ids.includes(schoolId)).map(t => <Table.Tr key={t.id}><Table.Td><Text fw={600} size="sm">{t.name}</Text><Text size="xs" c="dimmed">{t.email || t.phone}</Text></Table.Td>
-            <Table.Td>{t.service_mode === 'autonomous' ? 'Autonome' : 'Service accompagné'}</Table.Td><Table.Td>{!t.active ? 'Suspendu' : t.has_account ? 'Activé' : 'Sans compte'}</Table.Td>
+            <Table.Td>{!t.active ? 'Suspendu' : t.has_account ? 'Activé' : 'Sans compte'}</Table.Td>
             <Table.Td>{t.school_ids.map(id => schools.find(s => s.id === id)?.name).filter(Boolean).join(', ')}</Table.Td>
             <Table.Td><Group gap="xs"><Button size="xs" variant="subtle" onClick={() => editTeacher(t)}>Modifier</Button>{!t.has_account && t.active && <Button size="xs" variant="light" onClick={() => act(async () => { const r = await api.post<{ path: string }>(`/api/operations/teachers/${t.id}/invitation`); setInviteUrl(window.location.origin + r.path) })}>Lien d’inscription</Button>}</Group></Table.Td></Table.Tr>)}
         </Table.Tbody></Table></Table.ScrollContainer></Stack></Tabs.Panel>
@@ -172,7 +175,7 @@ export default function Establishments() {
         <Card withBorder><Title order={4}>Séries</Title><Text size="sm" c="dimmed" my="sm">Les séries proposées dépendent du programme et du cycle. La liste technique initiale est issue de l’annuaire ministériel 2020-2021 et peut être complétée.</Text><Group align="end"><Select label="Programme" data={options(catalog?.programs || [])} value={newPathProgram} onChange={v => setNewPathProgram(v || 'ci')} /><TextInput label="Série" value={newPathName} onChange={e => setNewPathName(e.currentTarget.value)} /><MultiSelect label="Cycles" data={options(catalog?.grades.slice(4) || [])} value={newPathGrades} onChange={setNewPathGrades} /><Button onClick={() => act(() => api.post('/api/operations/paths', { program_id: newPathProgram, name: newPathName, grades: newPathGrades }))}>Ajouter</Button></Group></Card>
       </Stack></Tabs.Panel>}
     </Tabs>
-    <ClassEditor opened={classModal} onClose={() => setClassModal(false)} onSaved={() => { refreshLists().catch(showError) }} schoolId={schoolId || undefined} editing={classEdit} />
+    <ClassEditor supervised opened={classModal} onClose={() => setClassModal(false)} onSaved={() => { refreshLists().catch(showError) }} schoolId={schoolId || undefined} editing={classEdit} />
     <SubjectWizard opened={wizard} classes={(wizardClass ? [wizardClass] : visibleClasses).filter(c => !c.archived)} onClose={() => setWizard(false)} onCreated={() => { setWizard(false); void refreshWork() }} />
     <PdfPreviewModal assessmentId={preview} opened={!!preview} onClose={() => setPreview(null)} />
     <Modal opened={schoolModal} onClose={() => setSchoolModal(false)} title={schoolEdit ? 'Modifier l’établissement' : 'Nouvel établissement'} size="lg"><Stack>
@@ -186,7 +189,6 @@ export default function Establishments() {
     </Stack></Modal>
     <Modal opened={teacherModal} onClose={() => setTeacherModal(false)} title={teacherEdit ? 'Modifier le professeur' : 'Nouveau professeur'}><Stack>
       <TextInput label="Nom affiché et imprimé" value={teacherForm.name} onChange={e => setTeacherForm({ ...teacherForm, name: e.currentTarget.value })} />
-      <Select label="Mode de service" data={[{ value: 'accompanied', label: 'Service accompagné' }, { value: 'autonomous', label: 'Autonome' }]} value={teacherForm.service_mode} onChange={v => setTeacherForm({ ...teacherForm, service_mode: v || 'accompanied' })} />
       <MultiSelect label="Établissements" searchable data={options(schools)} value={teacherForm.school_ids} onChange={v => setTeacherForm({ ...teacherForm, school_ids: v })} />
       <TextInput label="E-mail de contact (facultatif)" value={teacherForm.email} onChange={e => setTeacherForm({ ...teacherForm, email: e.currentTarget.value })} />
       <TextInput label="Téléphone (facultatif)" value={teacherForm.phone} onChange={e => setTeacherForm({ ...teacherForm, phone: e.currentTarget.value })} />

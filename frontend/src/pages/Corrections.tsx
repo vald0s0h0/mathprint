@@ -6,7 +6,7 @@
 // de choisir l'évaluation : le QR signé de chaque page identifie le sujet.
 import {
   ActionIcon, Alert, Badge, Box, Button, Card, Checkbox, Divider, FileButton, Group, Kbd,
-  Loader, Modal, NumberInput, SegmentedControl, SimpleGrid, Stack, Table, Text,
+  Loader, Menu, Modal, NumberInput, SegmentedControl, SimpleGrid, Stack, Table, Text,
   Title, Tooltip,
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
@@ -17,6 +17,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api, getToken } from '../api'
+import ActionsMenu from '../components/ActionsMenu'
 import { MathAnswer } from '../components/MathText'
 import PdfPreviewModal from '../components/PdfPreview'
 import LateJobRows, { type LateJob } from '../components/LateJobs'
@@ -441,6 +442,7 @@ export default function Corrections() {
   const [mathpixOk, setMathpixOk] = useState(true)
   const [llmOk, setLlmOk] = useState(true)
   const [previewId, setPreviewId] = useState<string | null>(null)
+  const [previewMode, setPreviewMode] = useState<'copy' | 'review'>('review')
   const [refineBatchId, setRefineBatchId] = useState<string | null>(null)
   const [idx, setIdx] = useState(0)
   // file APLATIE en unités (une case / un QCM / une réponse rédigée), regroupées
@@ -1120,11 +1122,21 @@ export default function Corrections() {
                       )}
                     </Stack>
 
-                    {/* Un bouton principal par étape indique la prochaine action ;
+                    {/* Aperçu, puis UN bouton principal par étape (la prochaine
+                        action attendue) ; toute autre commande est dans le menu ⋮.
                         « Corriger les copies » (ouvre la modale scan + réponse
                         attendue) est TOUJOURS distinct de « Valider » (verrouille),
                         et un déblocage/effacement est offert quand c'est utile. */}
                     <Group gap="xs" wrap="nowrap" style={{ flexShrink: 0 }}>
+                      <Button size="xs" variant="subtle" leftSection={<Eye size={14} />}
+                        onClick={() => {
+                          // « Copie + Overlay » n'existe qu'une fois l'overlay généré
+                          setPreviewMode(overlayReady ? 'review' : 'copy')
+                          setPreviewId(b.assessment_id)
+                        }}>
+                        Aperçu
+                      </Button>
+
                       {stage === 'awaiting' && (
                         <Text size="xs" c="dimmed" ta="right" style={{ maxWidth: 190 }}>
                           Déposez le scan dans le <b>bac à sable</b> en haut de page.
@@ -1134,12 +1146,13 @@ export default function Corrections() {
                       {stage === 'processing' && (
                         <>
                           <Button size="xs" variant="light" loading disabled>Correction en cours…</Button>
-                          <Tooltip label="Si la correction semble bloquée, relancez-la">
-                            <Button size="xs" variant="subtle" color="gray"
-                              leftSection={<RefreshCw size={14} />} onClick={() => retry(b)}>
-                              Relancer
-                            </Button>
-                          </Tooltip>
+                          <ActionsMenu>
+                            <Tooltip position="left" label="Si la correction semble bloquée, relancez-la">
+                              <Menu.Item leftSection={<RefreshCw size={14} />} onClick={() => retry(b)}>
+                                Relancer
+                              </Menu.Item>
+                            </Tooltip>
+                          </ActionsMenu>
                         </>
                       )}
 
@@ -1151,10 +1164,14 @@ export default function Corrections() {
                               OCRiser ({b.pending_ocr})
                             </Button>
                           </Tooltip>
-                          <Tooltip label="Effacer cette lecture et re-scanner depuis zéro">
-                            <ActionIcon variant="subtle" color="red" size="lg"
-                              onClick={() => setResetTarget(b)}><Trash2 size={16} /></ActionIcon>
-                          </Tooltip>
+                          <ActionsMenu>
+                            <Tooltip position="left" label="Effacer cette lecture et re-scanner depuis zéro">
+                              <Menu.Item color="red" leftSection={<Trash2 size={14} />}
+                                onClick={() => setResetTarget(b)}>
+                                Effacer
+                              </Menu.Item>
+                            </Tooltip>
+                          </ActionsMenu>
                         </>
                       )}
 
@@ -1164,15 +1181,18 @@ export default function Corrections() {
                             onClick={() => retry(b)}>
                             Relancer
                           </Button>
-                          <Button size="xs" variant="light" onClick={() => openCorrection(b, 'all')}>
-                            Corriger les copies
-                          </Button>
-                          <Tooltip label="Effacer, puis re-déposez un scan propre dans le bac à sable">
-                            <Button size="xs" variant="subtle" color="red"
-                              leftSection={<Trash2 size={14} />} onClick={() => setResetTarget(b)}>
-                              Effacer
-                            </Button>
-                          </Tooltip>
+                          <ActionsMenu>
+                            <Menu.Item leftSection={<ScanLine size={14} />}
+                              onClick={() => openCorrection(b, 'all')}>
+                              Corriger les copies
+                            </Menu.Item>
+                            <Tooltip position="left" label="Effacer, puis re-déposez un scan propre dans le bac à sable">
+                              <Menu.Item color="red" leftSection={<Trash2 size={14} />}
+                                onClick={() => setResetTarget(b)}>
+                                Effacer
+                              </Menu.Item>
+                            </Tooltip>
+                          </ActionsMenu>
                         </>
                       )}
 
@@ -1182,19 +1202,21 @@ export default function Corrections() {
                             onClick={() => openCorrection(b, 'flagged')}>
                             Corriger les copies ({b.pending_reviews})
                           </Button>
-                          {b.pending_llm > 0 && (
-                            <Tooltip label="Retenter uniquement les verdicts DeepSeek indisponibles, sans refaire l’OCR">
-                              <Button size="xs" variant="light" color="blue"
-                                leftSection={<RefreshCw size={14} />} onClick={() => retry(b)}>
-                                Relancer l’IA ({b.pending_llm})
-                              </Button>
+                          <ActionsMenu>
+                            {b.pending_llm > 0 && (
+                              <Tooltip position="left" label="Retenter uniquement les verdicts DeepSeek indisponibles, sans refaire l’OCR">
+                                <Menu.Item leftSection={<RefreshCw size={14} />} onClick={() => retry(b)}>
+                                  Relancer l’IA ({b.pending_llm})
+                                </Menu.Item>
+                              </Tooltip>
+                            )}
+                            <Tooltip position="left" label="Effacer cette correction et re-scanner depuis zéro">
+                              <Menu.Item color="red" leftSection={<Trash2 size={14} />}
+                                onClick={() => setResetTarget(b)}>
+                                Effacer
+                              </Menu.Item>
                             </Tooltip>
-                          )}
-                          <Tooltip label="Effacer cette correction et re-scanner depuis zéro">
-                            <ActionIcon variant="subtle" color="red" size="lg" onClick={() => setResetTarget(b)}>
-                              <Trash2 size={16} />
-                            </ActionIcon>
-                          </Tooltip>
+                          </ActionsMenu>
                         </>
                       )}
 
@@ -1213,27 +1235,25 @@ export default function Corrections() {
                               label={b.late_jobs?.length && b.overlay_printed
                                 ? 'Réimprimer la première pile' : "Imprimer l'overlay"} />
                           )}
-                          {overlayReady && !b.overlay_distributed && (
-                            <Tooltip label="Relire chaque copie avec son overlay et corriger une note en modifiant la réponse de l'élève">
-                              <Button size="xs" variant="light" leftSection={<PencilLine size={14} />}
-                                onClick={() => setRefineBatchId(b.id)}>
-                                Affiner
-                              </Button>
+                          <ActionsMenu>
+                            {overlayReady && !b.overlay_distributed && (
+                              <Tooltip position="left" label="Relire chaque copie avec son overlay et corriger une note en modifiant la réponse de l'élève">
+                                <Menu.Item leftSection={<PencilLine size={14} />}
+                                  onClick={() => setRefineBatchId(b.id)}>
+                                  Affiner
+                                </Menu.Item>
+                              </Tooltip>
+                            )}
+                            <Menu.Item leftSection={<ScanLine size={14} />}
+                              onClick={() => openCorrection(b, 'all')}>
+                              Corriger
+                            </Menu.Item>
+                            <Tooltip position="left" label="Recalculer les notes et régénérer les copies corrigées après un ajustement">
+                              <Menu.Item leftSection={<RefreshCw size={14} />} onClick={() => finalize(b)}>
+                                Recalculer les notes
+                              </Menu.Item>
                             </Tooltip>
-                          )}
-                          <Button size="xs" variant="subtle" leftSection={<Eye size={14} />}
-                            onClick={() => setPreviewId(b.assessment_id)}>
-                            Aperçu
-                          </Button>
-                          <Button size="xs" variant="subtle" leftSection={<ScanLine size={14} />}
-                            onClick={() => openCorrection(b, 'all')}>
-                            Corriger
-                          </Button>
-                          <Tooltip label="Recalculer les notes et régénérer les copies corrigées après un ajustement">
-                            <ActionIcon variant="subtle" color="gray" size="lg" onClick={() => finalize(b)}>
-                              <RefreshCw size={16} />
-                            </ActionIcon>
-                          </Tooltip>
+                          </ActionsMenu>
                         </>
                       )}
                     </Group>
@@ -1245,7 +1265,7 @@ export default function Corrections() {
         </div>
       ))}
 
-      <PdfPreviewModal assessmentId={previewId} opened={!!previewId} initialMode="review"
+      <PdfPreviewModal assessmentId={previewId} opened={!!previewId} initialMode={previewMode}
         onClose={() => setPreviewId(null)} />
 
       <RefineCorrectionModal batchId={refineBatchId} opened={!!refineBatchId}

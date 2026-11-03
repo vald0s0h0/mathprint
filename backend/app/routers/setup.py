@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..models import ProviderConfig, User
+from ..models import ProviderConfig, TeacherProfile, User
 from ..services.security import hash_password, make_token
 
 router = APIRouter(prefix="/api/setup", tags=["setup"])
@@ -55,6 +55,10 @@ def create_first_admin(body: SetupIn, db: Session = Depends(get_db)):
                display_name=body.display_name.strip() or "Professeur", role="admin")
     db.add(user)
     db.flush()
+    # Le premier compte est un professeur autonome : il crée ses classes sans
+    # établissement, après avoir choisi son programme et sa matière (Paramètres).
+    db.add(TeacherProfile(name=user.display_name, service_mode="autonomous",
+                          user_id=user.id, email=email))
 
     for provider, cfg in body.providers.items():
         if provider not in ALLOWED_PROVIDERS or not cfg.secret.strip():

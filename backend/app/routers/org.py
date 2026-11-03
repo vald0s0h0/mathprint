@@ -7,6 +7,7 @@ Vocabulaire (à respecter partout, UI comprise) :
 """
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import and_, select
 from sqlalchemy.orm import Session
 
 from ..config import settings
@@ -23,11 +24,11 @@ from ..services.security import new_pseudonym
 
 router = APIRouter(prefix="/api", tags=["org"], dependencies=[Depends(current_user)])
 
-from ..services.education import GRADES as GRADE_LEVELS
+from ..services.education import GRADES as GRADE_LEVELS, autonomous_profile
 
 
 class ClassIn(BaseModel):
-    school_id: str
+    school_id: str | None = None     # sans établissement : classe d'un professeur autonome
     program_id: str = "fr"
     series_id: str | None = None
     teacher_profile_id: str | None = None
@@ -87,6 +88,16 @@ def _class_context(db, grade, program, series):
         raise HTTPException(422, "Choisissez une série pour le lycée ivoirien")
 
 
+def _class_name_taken(db, school_id, teacher_user_id, year_id, name, except_id=None) -> bool:
+    """Unicité vérifiée sur toutes les classes de l'établissement, même celles qu'un
+    autre professeur ne peut pas consulter ; sans établissement, sur celles du professeur."""
+    table = SchoolClass.__table__
+    owner = table.c.school_id == school_id if school_id else and_(
+        table.c.school_id.is_(None), table.c.teacher_id == teacher_user_id)
+    return db.execute(select(table.c.id).where(owner, table.c.school_year_id == year_id,
+                                               table.c.name == name, table.c.id != (except_id or ""))).first() is not None
+
+
 @router.get("/classes")
 def list_classes(db: Session = Depends(get_db), include_archived: bool = False):
     years = {y.id: y.label for y in db.query(SchoolYear).all()}
@@ -107,29 +118,33 @@ def create_class(body: ClassIn, db: Session = Depends(get_db),
                  user: User = Depends(current_user)):
     name = body.name.strip()
     if not name: raise HTTPException(422, "Nom de classe requis")
-    school = db.get(School, body.school_id)
-    if not school: raise HTTPException(404, "Établissement inaccessible")
-    if not db.query(SchoolProgram).filter_by(school_id=school.id, program_id=body.program_id).first():
-        raise HTTPException(422, "Programme non proposé par cet établissement")
-    _class_context(db, body.grade_level, body.program_id, body.series_id)
+    program_id, subject_id = body.program_id, body.subject_id
+    if body.school_id:
+        school = db.get(School, body.school_id)
+        if not school: raise HTTPException(404, "Établissement inaccessible")
+        if not db.query(SchoolProgram).filter_by(school_id=school.id, program_id=program_id).first():
+            raise HTTPException(422, "Programme non proposé par cet établissement")
+        teacher = (db.query(TeacherProfile).filter_by(user_id=user.id).first() if user.role == "teacher"
+                   else db.get(TeacherProfile, body.teacher_profile_id) if body.teacher_profile_id else None)
+        if not teacher or not teacher.active or not db.query(TeacherSchool).filter_by(teacher_id=teacher.id, school_id=school.id).first():
+            raise HTTPException(422, "Choisissez un professeur de cet établissement")
+    else:
+        # Professeur autonome : ni établissement, ni affectation, son propre choix.
+        teacher = autonomous_profile(db, user)
+        if not teacher: raise HTTPException(422, "Choisissez un établissement")
+        if not teacher.program_id or not teacher.subject_id:
+            raise HTTPException(422, "Choisissez d’abord votre programme et votre matière dans Paramètres")
+        program_id, subject_id = teacher.program_id, teacher.subject_id
+    _class_context(db, body.grade_level, program_id, body.series_id)
     year = db.get(SchoolYear, body.school_year_id) if body.school_year_id else db.query(SchoolYear).filter_by(active=True).first()
     if not year or not year.active: raise HTTPException(422, "Année scolaire active requise")
-    teacher = (db.query(TeacherProfile).filter_by(user_id=user.id).first() if user.role == "teacher"
-               else db.get(TeacherProfile, body.teacher_profile_id) if body.teacher_profile_id else None)
-    if not teacher or not teacher.active or not db.query(TeacherSchool).filter_by(teacher_id=teacher.id, school_id=school.id).first():
-        raise HTTPException(422, "Choisissez un professeur de cet établissement")
-    if not db.get(Subject, body.subject_id): raise HTTPException(422, "Matière inconnue")
-    # La contrainte est vérifiée sur toutes les classes de l'établissement,
-    # même celles qu'un autre professeur ne peut pas consulter.
-    from sqlalchemy import select
-    table = SchoolClass.__table__
-    exists = db.execute(select(table.c.id).where(table.c.school_id == school.id,
-        table.c.school_year_id == year.id, table.c.name == name)).first()
-    if exists: raise HTTPException(409, "Cette classe existe déjà pour cet établissement et cette année")
+    if not db.get(Subject, subject_id): raise HTTPException(422, "Matière inconnue")
+    if _class_name_taken(db, body.school_id, teacher.user_id, year.id, name):
+        raise HTTPException(409, "Cette classe existe déjà pour cette année")
     c = SchoolClass(name=name, grade_level=body.grade_level, school_year_id=year.id,
-        teacher_id=teacher.user_id, school_id=school.id, program_id=body.program_id, series_id=body.series_id)
+        teacher_id=teacher.user_id, school_id=body.school_id, program_id=program_id, series_id=body.series_id)
     db.add(c); db.flush()
-    db.add(ClassTeaching(class_id=c.id, subject_id=body.subject_id, teacher_id=teacher.id))
+    db.add(ClassTeaching(class_id=c.id, subject_id=subject_id, teacher_id=teacher.id))
     created = 0
     for order_index, student_name in enumerate(_parse_students(body.students_text)):
         db.add(Student(class_id=c.id, name=student_name, order_index=order_index,
@@ -154,11 +169,8 @@ def update_class(class_id: str, body: ClassPatch, db: Session = Depends(get_db))
         raise HTTPException(422, "Programme non proposé par l’établissement")
     if body.name is not None:
         if not body.name.strip(): raise HTTPException(422, "Nom requis")
-        table = SchoolClass.__table__
-        if db.execute(table.select().where(table.c.school_id == c.school_id,
-                table.c.school_year_id == c.school_year_id, table.c.name == body.name.strip(),
-                table.c.id != c.id)).first():
-            raise HTTPException(409, "Une classe porte déjà ce nom dans cet établissement et cette année")
+        if _class_name_taken(db, c.school_id, c.teacher_id, c.school_year_id, body.name.strip(), c.id):
+            raise HTTPException(409, "Une classe porte déjà ce nom pour cette année")
         c.name = body.name.strip()
     if body.school_year_id and body.school_year_id != c.school_year_id:
         raise HTTPException(409, "Utilisez la reprise de classe pour changer d’année scolaire")

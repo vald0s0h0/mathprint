@@ -24,8 +24,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.db import Base
 from app.models import (
-    Assessment, Competency, CompetencyFramework, Copy, CopyItem, DocumentPage,
-    GeneratedExercise, ResponseZone, SchoolClass, Student, StudentLevel,
+    Assessment, ClassTeaching, Competency, CompetencyFramework, Copy, CopyItem, DocumentPage,
+    GeneratedExercise, ResponseZone, ScanBatch, SchoolClass, Student, StudentLevel,
 )
 from app.services import manual_subject, pdfgen
 from app.services.pdfgen import DEFAULT_TEMPLATES
@@ -486,6 +486,114 @@ def test_duplicate_manual_subject_keeps_each_students_variant(client, db, monkey
         students[0].id: "B", students[1].id: "A"}
     listed = {row["id"]: row for row in client.get("/api/assessments").json()}
     assert listed[duplicate.id]["duplicate_version"] == 2
+
+
+def _generated_subject(db, cls, students):
+    variants = [{"key": "A", "label": "Variante A", "items": []},
+                {"key": "B", "label": "Variante B", "items": []}]
+    source = Assessment(
+        class_id=cls.id, title="Fractions", status="ready", pages_target=1,
+        personalization_mode="common_variants",
+        blueprint_json={"mode": "manual", "variant_kind": "anticheat", "variants": variants})
+    db.add(source)
+    db.flush()
+    db.add(Copy(assessment_id=source.id, student_id=students[0].id, seed=1, variant_key="B"))
+    db.commit()
+    return source
+
+
+def _other_class(db, name="3eC", grade="3e", students=1, teacher_id="prof-b"):
+    other = SchoolClass(name=name, grade_level=grade)
+    db.add(other)
+    db.flush()
+    db.add(ClassTeaching(class_id=other.id, subject_id="math", teacher_id=teacher_id))
+    db.add_all([Student(class_id=other.id, name=f"Élève {i}", order_index=i, llm_pseudonym=f"{name}-{i}")
+                for i in range(students)])
+    db.commit()
+    return other
+
+
+@pytest.fixture
+def fake_enqueue(monkeypatch):
+    from types import SimpleNamespace
+    from app.services import job_worker
+
+    def enqueue(session, assessment, _font_size):
+        assessment.status = "queued"
+        session.commit()
+        return SimpleNamespace(id="job")
+
+    monkeypatch.setattr(job_worker, "enqueue_generation", enqueue)
+
+
+def test_duplicate_to_another_class_gives_it_its_own_variants(client, db, fake_enqueue):
+    cls, _comps, _rows, students = _seed(db, n_students=2)
+    source = _generated_subject(db, cls, students)
+    other = _other_class(db)
+
+    first = client.post(f"/api/assessments/{source.id}/duplicate", json={"class_id": other.id})
+    assert first.status_code == 202, first.text
+    assert first.json()["title"] == "Fractions"  # première passation de cette classe
+    copy = db.get(Assessment, first.json()["id"])
+    assert copy.class_id == other.id
+    assert copy.teacher_profile_id == "prof-b"
+    assert copy.blueprint_json["duplicate_student_variants"] == {}
+    assert copy.blueprint_json["duplicate_source_id"] == source.id
+
+    # refaire la même commande : nouvelle version dans la classe cible
+    again = client.post(f"/api/assessments/{source.id}/duplicate", json={"class_id": other.id})
+    assert again.json()["title"] == "Fractions v2"
+
+
+def test_duplicate_to_another_class_is_refused_outside_the_cycle(client, db, fake_enqueue):
+    cls, _comps, _rows, students = _seed(db, n_students=2)
+    source = _generated_subject(db, cls, students)
+    url = f"/api/assessments/{source.id}/duplicate"
+
+    other_cycle = _other_class(db, name="4eA", grade="4e")
+    assert client.post(url, json={"class_id": other_cycle.id}).status_code == 422
+    empty = _other_class(db, name="3eD", students=0)
+    assert client.post(url, json={"class_id": empty.id}).status_code == 409
+    assert client.post(url, json={"class_id": "inconnue"}).status_code == 404
+
+
+def test_mark_printed_only_from_ready(client, db):
+    cls, _comps, _rows, students = _seed(db, n_students=1)
+    source = _generated_subject(db, cls, students)
+
+    assert client.post(f"/api/assessments/{source.id}/mark-printed").status_code == 200
+    db.refresh(source)
+    assert source.status == "printed"
+    assert client.post(f"/api/assessments/{source.id}/mark-printed").status_code == 409
+
+
+def test_delete_subject_without_correction(client, db):
+    cls, _comps, _rows, students = _seed(db, n_students=1)
+    source = _generated_subject(db, cls, students)
+    source_id = source.id
+
+    response = client.delete(f"/api/assessments/{source_id}")
+    assert response.status_code == 200, response.text
+    db.expire_all()
+    assert db.get(Assessment, source_id) is None
+    assert db.query(Copy).filter_by(assessment_id=source_id).count() == 0
+
+
+def test_delete_subject_is_refused_once_corrected_or_generating(client, db):
+    cls, _comps, _rows, students = _seed(db, n_students=1)
+    corrected = _generated_subject(db, cls, students)
+    db.add(ScanBatch(assessment_id=corrected.id))
+    generating = _generated_subject(db, cls, students)
+    generating.status = "generating"
+    db.commit()
+
+    listed = {row["id"]: row for row in client.get("/api/assessments").json()}
+    assert listed[corrected.id]["has_correction"] is True
+    assert listed[generating.id]["has_correction"] is False
+    assert client.delete(f"/api/assessments/{corrected.id}").status_code == 409
+    assert client.delete(f"/api/assessments/{generating.id}").status_code == 409
+    db.expire_all()
+    assert db.get(Assessment, corrected.id) is not None
 
 
 def test_a_composite_without_context_starts_at_its_first_subquestion():

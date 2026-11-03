@@ -1,6 +1,6 @@
 import {
   ActionIcon, AppShell, Badge, Box, Divider, Group, Loader, Menu, NavLink, Progress,
-  SegmentedControl, Select, Text, Title, Tooltip, useComputedColorScheme, useMantineColorScheme,
+  Text, Title, Tooltip, useComputedColorScheme, useMantineColorScheme,
 } from '@mantine/core'
 import {
   BookOpenCheck, ClipboardList, GraduationCap, LayoutDashboard, Library, LogOut,
@@ -23,8 +23,9 @@ import Subjects from './pages/Subjects'
 import Grades from './pages/Grades'
 import Establishments from './pages/Establishments'
 import Register from './pages/Register'
+import HeaderFilters from './components/HeaderFilters'
 import ScanProblemsModal from './components/ScanProblemsModal'
-import { CYCLES, useAppState, type Cycle } from './state/AppState'
+import { useAppState, type Teaching } from './state/AppState'
 
 type NavItem = { to: string; label: string; icon: typeof LayoutDashboard; admin?: boolean; operator?: boolean }
 
@@ -67,10 +68,9 @@ export default function App() {
   const authed = !!getToken()
   const [needsSetup, setNeedsSetup] = useState<boolean | null>(null)
   const [role, setRole] = useState<string>('')
-  const { cycle, setCycle, activeJobs, subject, setSubject } = useAppState()
+  const { activeJobs, setTeaching } = useAppState()
   const isAdmin = role === 'admin'
   const isOperator = isAdmin || role === 'corrector'
-  const [subjects, setSubjects] = useState<{ id: string; name: string }[]>([])
   const navBottom = NAV_BOTTOM.filter((n) => (!n.admin || isAdmin) && (!n.operator || isOperator))
 
   useEffect(() => {
@@ -81,11 +81,16 @@ export default function App() {
 
   useEffect(() => {
     let active = true
-    if (!authed) { setRole(''); setSubjects([]); return }
-    api.get<{ role: string }>('/api/auth/me').then((m) => { if (active) setRole(m.role) }).catch(() => {})
-    api.get<{ subjects: { id: string; name: string }[] }>('/api/operations/catalog').then(c => { if (active) setSubjects(c.subjects) }).catch(() => {})
+    if (!authed) { setRole(''); return }
+    // Relu à chaque onglet : une classe créée peut ajouter un cycle au filtre.
+    api.get<{ role: string; teaching: Teaching; service_mode: string | null; program_id: string | null }>('/api/auth/me').then((m) => {
+      if (!active) return
+      setRole(m.role); setTeaching(m.teaching)
+      // Professeur autonome qui arrive : son premier geste est de dire ce qu'il enseigne.
+      if (m.service_mode === 'autonomous' && !m.program_id && location.pathname === '/') navigate('/parametres', { replace: true })
+    }).catch(() => {})
     return () => { active = false }
-  }, [authed])
+  }, [authed, location.pathname, navigate, setTeaching])
 
   function renderNavLink(n: NavItem) {
     return (
@@ -120,14 +125,7 @@ export default function App() {
             <Title order={3} fw={700}>Kiro & Nina</Title>
           </Group>
 
-          {/* Filtre CYCLE global : le professeur travaille par cycle ; ce
-              choix filtre classes, sujets, corrections et compétences. */}
-          <Group gap="xs" wrap="nowrap">
-            <Select aria-label="Cycle" size="xs" w={150} value={cycle} onChange={v => setCycle((v || 'all') as Cycle)}
-              data={[{ value: 'all', label: 'Tous les cycles' }, ...CYCLES.map(c => ({ value: c, label: ({ '2nde': 'Seconde', '1re': 'Première', 'tle': 'Terminale' } as Record<string, string>)[c] || c }))]} />
-            <Select aria-label="Matière" size="xs" w={180} value={subject} onChange={v => setSubject(v || 'math')}
-              data={subjects.map(s => ({ value: s.id, label: s.name }))} />
-          </Group>
+          <HeaderFilters />
 
           <Group gap="xs" wrap="nowrap">
             {activeJobs.length > 0 && (

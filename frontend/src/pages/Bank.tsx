@@ -105,11 +105,13 @@ function ExerciseCard({ ex }: { ex: Exercise }) {
 }
 
 export default function Bank() {
-  const { cycle, subject } = useAppState()
+  const { cycle, subject, teaching } = useAppState()
   const [frameworks, setFrameworks] = useState<{ id: string; name: string; grade_level: string; subject_id: string; program_id: string }[]>([])
   const [framework, setFramework] = useState<string | null>(null)
   useEffect(() => { api.get<typeof frameworks>('/api/competencies/frameworks').then(setFrameworks) }, [])
-  useEffect(() => { setFramework(frameworks.find(f => f.grade_level === cycle && f.subject_id === subject)?.id || null) }, [cycle, subject, frameworks])
+  // Référentiels du cycle, dans les seuls programmes enseignés par l'utilisateur.
+  const available = useMemo(() => frameworks.filter(f => f.grade_level === cycle && f.subject_id === subject && teaching.programs.includes(f.program_id)), [frameworks, cycle, subject, teaching.programs])
+  useEffect(() => { setFramework(available[0]?.id || null) }, [available])
   const [summary, setSummary] = useState<Summary[] | null>(null)
   const [selected, setSelected] = useState<Summary | null>(null)
   const [exercises, setExercises] = useState<Exercise[] | null>(null)
@@ -200,7 +202,7 @@ export default function Bank() {
     () => (exercises ?? []).filter((e) => levelFilter === 'all' || e.level === Number(levelFilter)),
     [exercises, levelFilter])
 
-  if (isAll) return <GradeSelectionRequired title="Banque de contenus" />
+  if (isAll) return <GradeSelectionRequired title="Banque de contenus" noClass={!teaching.cycles.length} />
 
   return (
     <Stack gap="md">
@@ -213,7 +215,7 @@ export default function Bank() {
         </Box>
       </Group>
 
-      <Select label="Référentiel" searchable value={framework} onChange={setFramework} data={frameworks.filter(f => f.grade_level === cycle && f.subject_id === subject).map(f => ({ value: f.id, label: `${f.program_id.toUpperCase()} · ${f.name}` }))} />
+      <Select label="Référentiel" searchable value={framework} onChange={setFramework} data={available.map(f => ({ value: f.id, label: `${f.program_id.toUpperCase()} · ${f.name}` }))} />
       <Group align="flex-start" gap="md" wrap="nowrap">
         {/* compétence ouverte : le tableau se rétrécit, les exercices prennent la place */}
         <Paper withBorder radius="md" p="xs" style={selected

@@ -902,9 +902,10 @@ function CompetencyTable({ rows, onSelect, onProblems }: { rows: SummaryRow[]; o
 
 // ----------------------------------------------------- page principale
 export default function Exercices() {
-  const { cycle } = useAppState()
+  const { catalog } = useAppState()
   const [params, setParams] = useSearchParams()
-  const grade = cycle                    // '6e' | '5e' | '4e' | '3e' | 'all'
+  const grade = catalog.cycle            // '6e' | '5e' | '4e' | '3e' | 'all'
+  const catalogQuery = `grade_level=${grade}&program_id=${catalog.program}&subject_id=${catalog.subject}`
   const [manuals, setManuals] = useState<Manuals | null>(null)
   const [comps, setComps] = useState<Comp[]>([])
   const [summary, setSummary] = useState<SummaryRow[] | null>(null)
@@ -935,8 +936,8 @@ export default function Exercices() {
   const isAll = grade === 'all'
   const loadSummary = useCallback(() => {
     if (isAll) return
-    api.get<SummaryRow[]>(`/api/indigo/summary?grade_level=${grade}`).then(setSummary)
-  }, [grade, isAll])
+    api.get<SummaryRow[]>(`/api/indigo/summary?${catalogQuery}`).then(setSummary)
+  }, [catalogQuery, isAll])
   const loadPub = useCallback(() => {
     if (isAll) return
     api.get<PublishState>('/api/indigo/published').then(setPub)
@@ -960,9 +961,9 @@ export default function Exercices() {
     setSelected(null); setExercises(null)
     setVisionPageStart(''); setVisionPageEnd('')
     api.get<Manuals>(`/api/indigo/manuals?grade_level=${grade}`).then(setManuals)
-    api.get<{ competencies: Comp[] }>(`/api/indigo/competencies?grade_level=${grade}`).then((r) => setComps(r.competencies))
+    api.get<{ competencies: Comp[] }>(`/api/indigo/competencies?${catalogQuery}`).then((r) => setComps(r.competencies))
     loadSummary(); loadExtractions(); loadPub(); loadCoverage()
-  }, [grade, isAll, loadSummary, loadExtractions, loadPub, loadCoverage])
+  }, [grade, catalogQuery, isAll, loadSummary, loadExtractions, loadPub, loadCoverage])
 
   useEffect(() => {   // fournisseur LLM global (indépendant de la classe)
     // Plus de sélecteur : cette page force le mode multipass au chargement si
@@ -1443,7 +1444,10 @@ export default function Exercices() {
 
       {/* vue TABLE (aucune compétence sélectionnée) */}
       {!selected && summary === null && <Loader />}
-      {!selected && summary && <CompetencyTable rows={summary} onSelect={openComp} onProblems={openProblems} />}
+      {!selected && summary?.length === 0 && (
+        <Text size="sm" c="dimmed">Aucune compétence pour ce programme, ce cycle et cette matière.</Text>
+      )}
+      {!selected && !!summary?.length && <CompetencyTable rows={summary} onSelect={openComp} onProblems={openProblems} />}
 
       {/* vue LISTE (compétence sélectionnée) */}
       {selected && (

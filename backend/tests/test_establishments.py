@@ -12,7 +12,7 @@ from sqlalchemy.pool import StaticPool
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.db import Base, get_db
 from app.models import *
-from app.routers import auth, operations, org, assessments, students, content, printing, grades, misc
+from app.routers import auth, operations, org, assessments, students, content, printing, grades, misc, users_admin
 from app.services.education import seed_structure
 from app.services.security import make_token
 
@@ -31,7 +31,7 @@ def env():
         tokens = {u.role: {'Authorization': 'Bearer ' + make_token(u.id, u.role)} for u in (admin, corrector)}
         year_id = year.id
     app = FastAPI()
-    for mod in (auth, operations, org, assessments, students, content, printing, grades, misc): app.include_router(mod.router)
+    for mod in (auth, operations, org, assessments, students, content, printing, grades, misc, users_admin): app.include_router(mod.router)
     def get_session():
         with factory() as db: yield db
     app.dependency_overrides[get_db] = get_session
@@ -327,3 +327,158 @@ def test_collection_alerts_follow_school_and_year_filters(env, monkeypatch):
     assert data['lots_at_schools'] == 1 and data['overdue_collection_count'] == 0
     data = client.get(f'/api/operations/dashboard?school_id={sid}&year_id={past_year_id}', headers=tokens['corrector']).json()
     assert data['lots_at_schools'] == 1 and data['overdue_collection_count'] == 1
+
+
+# ----------------------------------------------------- professeur autonome
+
+def autonomous_teacher(env, name='Emile'):
+    """Invité depuis Paramètres > Utilisateurs, puis inscrit avec son lien."""
+    client, factory, tokens, year = env
+    created = client.post('/api/admin/users/autonomous-teachers', headers=tokens['admin'], json={'name': name})
+    assert created.status_code == 200, created.text
+    token = created.json()['path'].split('invitation=')[1]
+    signup = client.post('/api/auth/register', json={
+        'token': token, 'email': name.lower()+'@test.fr', 'password': 'Long-password-123'})
+    assert signup.status_code == 200, signup.text
+    return {'Authorization': 'Bearer '+signup.json()['token']}
+
+
+def new_class(client, headers, name='6e3', grade='6e', **extra):
+    return client.post('/api/classes', headers=headers, json={
+        'name': name, 'grade_level': grade, 'students_text': 'Alice\nBenoît', **extra})
+
+
+def choose(client, headers, program='fr', subject='math'):
+    return client.put('/api/auth/me/teaching', headers=headers, json={'program_id': program, 'subject_id': subject})
+
+
+def test_autonomous_teacher_chooses_program_and_subject_and_needs_no_school(env):
+    client, factory, tokens, year = env
+    h = autonomous_teacher(env)
+    me = client.get('/api/auth/me', headers=h).json()
+    assert me['service_mode'] == 'autonomous' and me['program_id'] is None
+    assert me['teaching']['cycles'] == []   # aucune classe : aucun cycle
+    refused = new_class(client, h)
+    assert refused.status_code == 422 and 'Paramètres' in refused.json()['detail']
+
+    chosen = choose(client, h)
+    assert chosen.status_code == 200, chosen.text
+    assert chosen.json() == {'cycles': [], 'subjects': [{'id': 'math', 'name': 'Mathématiques'}], 'programs': ['fr']}
+
+    # Les cycles viennent des classes créées, dans l'ordre scolaire.
+    for name, grade in (('3e6', '3e'), ('6e3', '6e'), ('6e4', '6e')):
+        made = new_class(client, h, name, grade, program_id='ci', subject_id='physics')
+        assert made.status_code == 200, made.text
+    me = client.get('/api/auth/me', headers=h).json()
+    assert me['program_id'] == 'fr' and me['subject_id'] == 'math'
+    assert me['teaching']['cycles'] == ['6e', '3e'] and me['teaching']['programs'] == ['fr']
+    rows = {c['name']: c for c in client.get('/api/classes', headers=h).json()}
+    assert set(rows) == {'3e6', '6e3', '6e4'}
+    assert all(c['school_id'] is None and c['program_id'] == 'fr' for c in rows.values())
+
+    # Il crée ses sujets et voit ses seules classes, sans aucun établissement.
+    cid = rows['6e3']['id']
+    assert new_class(client, h, '6e3', '6e').status_code == 409
+    assert client.patch(f'/api/classes/{cid}', headers=h, json={'name': '6e4'}).status_code == 409
+    assert client.patch(f'/api/classes/{cid}', headers=h, json={'name': '6e5'}).status_code == 200
+    made = client.post('/api/assessments', headers=h, json={'class_id': cid, 'title': 'Angles'})
+    assert made.status_code == 200, made.text
+    assert client.get('/api/operations/schools', headers=h).json() == []
+    assert client.get('/api/operations/teachers', headers=h).status_code == 403
+
+
+def test_two_autonomous_teachers_can_name_a_class_alike(env):
+    client, factory, tokens, year = env
+    h1, h2 = autonomous_teacher(env), autonomous_teacher(env, 'Lina')
+    for h in (h1, h2):
+        assert choose(client, h).status_code == 200
+        made = new_class(client, h)
+        assert made.status_code == 200, made.text
+    assert len(client.get('/api/classes', headers=h1).json()) == 1
+
+
+def test_establishments_only_supervise_accompanied_teachers(env):
+    client, factory, tokens, year = env
+    sid, tid, cid, _, _ = create_teacher_class(env)
+    h = autonomous_teacher(env)
+    assert choose(client, h).status_code == 200
+    own = new_class(client, h).json()['id']
+    assert client.post('/api/assessments', headers=h, json={'class_id': own, 'title': 'Autonome'}).status_code == 200
+    assert client.post('/api/assessments', headers=tokens['admin'], json={'class_id': cid, 'title': 'Accompagné'}).status_code == 200
+    with factory() as db:
+        autonomous = db.query(TeacherProfile).filter_by(service_mode='autonomous').one().id
+
+    for h_op in (tokens['admin'], tokens['corrector']):
+        assert [t['id'] for t in client.get('/api/operations/teachers', headers=h_op).json()] == [tid]
+        board = client.get('/api/operations/dashboard', headers=h_op).json()
+        assert [a['title'] for a in board['assessments']] == ['Accompagné']
+    body = {'name': 'X', 'school_ids': [sid]}
+    assert client.put(f'/api/operations/teachers/{autonomous}', headers=tokens['admin'], json=body).status_code == 404
+    assert client.post(f'/api/operations/teachers/{autonomous}/invitation', headers=tokens['admin']).status_code == 404
+    assert client.put(f'/api/operations/classes/{own}/teaching', headers=tokens['admin'], json={
+        'subject_id': 'math', 'teacher_id': autonomous}).status_code == 422
+    # Un mode envoyé par un ancien client ne fait plus entrer d'autonome ici.
+    made = client.post('/api/operations/teachers', headers=tokens['admin'], json={
+        'name': 'Sam', 'school_ids': [sid], 'service_mode': 'autonomous'})
+    with factory() as db:
+        assert db.get(TeacherProfile, made.json()['id']).service_mode == 'accompanied'
+
+
+def test_accompanied_teacher_keeps_school_and_cannot_choose_teaching(env):
+    client, factory, tokens, year = env
+    sid, tid, cid, th, _ = create_teacher_class(env)
+    assert choose(client, th).status_code == 403
+    assert new_class(client, th, '4B', '4e').status_code == 422
+    made = new_class(client, th, '4B', '4e', school_id=sid, program_id='fr')
+    assert made.status_code == 200, made.text
+    # Une classe sans établissement reste refusée à un administrateur sans fiche autonome.
+    assert new_class(client, tokens['admin']).status_code == 422
+
+
+def test_changing_program_follows_classes_until_they_have_subjects(env):
+    client, factory, tokens, year = env
+    h = autonomous_teacher(env)
+    assert choose(client, h).status_code == 200
+    cid = new_class(client, h).json()['id']
+    assert choose(client, h, 'ci').status_code == 200
+    assert client.get('/api/classes', headers=h).json()[0]['program_id'] == 'ci'
+    assert choose(client, h, 'fr').status_code == 200
+    assert client.post('/api/assessments', headers=h, json={'class_id': cid, 'title': 'Angles'}).status_code == 200
+    refused = choose(client, h, 'ci')
+    assert refused.status_code == 409 and 'sujets' in refused.json()['detail']
+    assert client.get('/api/auth/me', headers=h).json()['program_id'] == 'fr'
+    # Un lycée ivoirien exige une série : refus plutôt qu'une classe invalide.
+    h2 = autonomous_teacher(env, 'Lina')
+    assert choose(client, h2).status_code == 200
+    assert new_class(client, h2, 'T1', 'tle').status_code == 200
+    assert choose(client, h2, 'ci').status_code == 409
+
+
+def test_changing_subject_keeps_access_to_existing_subjects(env):
+    client, factory, tokens, year = env
+    assert client.post('/api/operations/subjects', headers=tokens['admin'], json={'id': 'physics', 'name': 'Physique'}).status_code == 200
+    h = autonomous_teacher(env)
+    assert choose(client, h).status_code == 200
+    with_subject = new_class(client, h, '6e3').json()['id']
+    empty = new_class(client, h, '6e4').json()['id']
+    assert client.post('/api/assessments', headers=h, json={'class_id': with_subject, 'title': 'Angles'}).status_code == 200
+    assert choose(client, h, 'fr', 'physics').status_code == 200
+    with factory() as db:
+        taught = lambda class_id: sorted(t.subject_id for t in db.query(ClassTeaching).filter_by(class_id=class_id))
+        assert taught(with_subject) == ['math', 'physics'] and taught(empty) == ['physics']
+    assert [a['title'] for a in client.get('/api/assessments', headers=h).json()] == ['Angles']
+    assert client.get('/api/auth/me', headers=h).json()['teaching']['subjects'] == [{'id': 'physics', 'name': 'Physique'}]
+
+
+def test_pending_autonomous_invitations_are_listed_and_renewable(env):
+    client, factory, tokens, year = env
+    created = client.post('/api/admin/users/autonomous-teachers', headers=tokens['admin'], json={'name': 'Nora'})
+    pending = client.get('/api/admin/users/autonomous-teachers', headers=tokens['admin']).json()
+    assert [t['name'] for t in pending] == ['Nora']
+    renewed = client.post(f"/api/admin/users/autonomous-teachers/{pending[0]['id']}/invitation", headers=tokens['admin'])
+    assert renewed.status_code == 200, renewed.text
+    old = created.json()['path'].split('invitation=')[1]
+    assert client.post('/api/auth/invitation/check', json={'token': old}).status_code == 410
+    new = renewed.json()['path'].split('invitation=')[1]
+    assert client.post('/api/auth/invitation/check', json={'token': new}).json()['service_mode'] == 'autonomous'
+    assert client.post('/api/admin/users/autonomous-teachers', headers=tokens['corrector'], json={'name': 'X'}).status_code == 403

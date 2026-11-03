@@ -55,7 +55,11 @@ export default function Competencies() {
   const [tree, setTree] = useState<Domain[]>([])
   const [filter, setFilter] = useState('')
   const [matrix, setMatrix] = useState<Matrix | null>(null)
-  const { cycle, subject } = useAppState()
+  const { cycle, subject, teaching } = useAppState()
+  // Référentiels du cycle, dans les seuls programmes enseignés par l'utilisateur.
+  const available = useMemo(() => frameworks.filter((f) => f.grade_level === cycle
+    && f.subject_id === subject && teaching.programs.includes(f.program_id)),
+  [frameworks, cycle, subject, teaching.programs])
 
   useEffect(() => {
     api.get<Framework[]>('/api/competencies/frameworks').then(setFrameworks)
@@ -63,15 +67,9 @@ export default function Competencies() {
 
   // le référentiel affiché suit le cycle filtré dans la barre du haut
   useEffect(() => {
-    if (cycle === 'all') {
-      setSel(null)
-      setTree([])
-      return
-    }
-    const fw = frameworks.find((f) => f.grade_level === cycle && f.subject_id === subject)
-    setSel(fw?.id ?? null)
+    setSel(available[0]?.id ?? null)
     setTree([])
-  }, [frameworks, cycle, subject])
+  }, [available])
 
   useEffect(() => {
     setMatrix(null)
@@ -147,7 +145,7 @@ export default function Competencies() {
     })),
   })), [filtered])
 
-  if (cycle === 'all') return <GradeSelectionRequired title="Compétences" />
+  if (cycle === 'all') return <GradeSelectionRequired title="Compétences" noClass={!teaching.cycles.length} />
 
   return (
     <Stack gap="sm">
@@ -175,7 +173,7 @@ export default function Competencies() {
       </Group>
 
       <Select label="Référentiel" searchable value={sel} onChange={v => { setSel(v); setTree([]) }}
-        data={frameworks.filter(f => f.grade_level === cycle && f.subject_id === subject).map(f => ({ value: f.id, label: `${f.program_id.toUpperCase()} · ${f.name}` }))} />
+        data={available.map(f => ({ value: f.id, label: `${f.program_id.toUpperCase()} · ${f.name}` }))} />
       {total === 0 && <Text size="sm" c="dimmed">Structure prête. Les compétences seront ajoutées ultérieurement.</Text>}
       <ScrollArea h="calc(100vh - 180px)">
         <CompetencyHierarchy domains={hierarchy} columns={columns}

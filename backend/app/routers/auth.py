@@ -37,10 +37,32 @@ def login(body: LoginIn, db: Session = Depends(get_db), request: Request = None)
 @router.get("/me")
 def me(user: User = Depends(current_user), db: Session = Depends(get_db)):
     from ..models import TeacherProfile
+    from ..services.education import teaching_scope
     profile = db.query(TeacherProfile).filter_by(user_id=user.id).first()
     return {"id": user.id, "email": user.email, "display_name": user.display_name,
             "role": user.role, "teacher_profile_id": profile.id if profile else None,
-            "service_mode": profile.service_mode if profile else None}
+            "service_mode": profile.service_mode if profile else None,
+            "program_id": profile.program_id if profile else None,
+            "subject_id": profile.subject_id if profile else None,
+            "teaching": teaching_scope(db, user)}
+
+
+class TeachingChoiceIn(BaseModel):
+    program_id: str
+    subject_id: str
+
+
+@router.put("/me/teaching")
+def set_my_teaching(body: TeachingChoiceIn, user: User = Depends(current_user),
+                    db: Session = Depends(get_db)):
+    """Réservé au professeur autonome : pour un accompagné, tout passe par ses affectations."""
+    from ..services.education import autonomous_profile, choose_teaching, teaching_scope
+    profile = autonomous_profile(db, user)
+    if not profile:
+        raise HTTPException(403, "Réservé aux professeurs autonomes")
+    choose_teaching(db, profile, body.program_id, body.subject_id)
+    db.commit()
+    return teaching_scope(db, user)
 
 
 class ChangePasswordIn(BaseModel):

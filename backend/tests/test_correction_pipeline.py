@@ -205,7 +205,8 @@ def test_retry_clears_error_and_reschedules(mock_db, tmp_path, monkeypatch):
 
 def test_retry_while_running_does_not_start_a_second_pipeline(mock_db, tmp_path, monkeypatch):
     """Double clic sur « Relancer » : une 2e lecture du même scan en parallèle
-    doublait la mémoire sur le NAS. Le doublon n'est ni planifié ni exécuté."""
+    doublait la mémoire sur le NAS. Le doublon n'est pas planifié, et une demande
+    arrivée pendant la lecture attend qu'elle soit finie."""
     from fastapi import BackgroundTasks
 
     db = mock_db
@@ -216,19 +217,19 @@ def test_retry_while_running_does_not_start_a_second_pipeline(mock_db, tmp_path,
 
     calls = []
     monkeypatch.setattr(scans_router, "process_batch", lambda _db, b: calls.append(b.id))
-    scans_router._RUNNING.add(batch.id)       # une lecture tourne déjà
-    try:
-        tasks = BackgroundTasks()
-        r = scans_router.retry_batch(batch.id, tasks, db)
-        assert r["already_running"] is True and tasks.tasks == []
-        scans_router._run_pipeline(batch.id)   # tâche en double : ignorée
-        assert calls == []
-    finally:
-        scans_router._RUNNING.discard(batch.id)
     monkeypatch.setattr(scans_router, "SessionLocal", lambda: db)
     monkeypatch.setattr(db, "close", lambda: None)
-    scans_router._run_pipeline(batch.id)       # lot libre : exécutée
+    scans_router._RUNNING.add(batch.id)       # une lecture tourne déjà
+    tasks = BackgroundTasks()
+    r = scans_router.retry_batch(batch.id, tasks, db)
+    assert r["already_running"] is True and tasks.tasks == []
+    scans_router._run_pipeline(batch.id)       # demande pendant la lecture : pas en parallèle
+    scans_router._run_pipeline(batch.id)
+    assert calls == []
+    scans_router._release(batch.id)            # lot libéré : rejouée une seule fois
     assert calls == [batch.id] and not scans_router._is_running(batch.id)
+    scans_router._run_pipeline(batch.id)       # lot libre : exécutée
+    assert calls == [batch.id, batch.id]
 
 
 def test_finalize_surfaces_overlay_error(mock_db, tmp_path, monkeypatch):

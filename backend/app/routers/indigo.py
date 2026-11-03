@@ -64,13 +64,21 @@ def manual_page(which: str, index: int, grade_level: str = "3e"):
 
 # ------------------------------------------------------------- compétences 3e
 
-@router.get("/competencies")
-def competencies(grade_level: str = "3e", db: Session = Depends(get_db)):
-    fw = db.query(CompetencyFramework).filter_by(grade_level=grade_level, program_id="fr", subject_id="math", path_id=None).first()
-    if fw is None:
-        return {"grade_level": grade_level, "competencies": []}
-    rows = (db.query(Competency).filter_by(framework_id=fw.id)
+def _catalog_competencies(db: Session, grade_level: str, program_id: str, subject_id: str) -> list[Competency]:
+    """Compétences du cycle dans le programme choisi (« all » : tous les programmes)."""
+    frameworks = (db.query(CompetencyFramework.id)
+                  .filter_by(grade_level=grade_level, subject_id=subject_id, path_id=None)
+                  .filter(CompetencyFramework.status != "archived"))
+    if program_id != "all":
+        frameworks = frameworks.filter_by(program_id=program_id)
+    return (db.query(Competency).filter(Competency.framework_id.in_(frameworks))
             .order_by(Competency.order_index).all())
+
+
+@router.get("/competencies")
+def competencies(grade_level: str = "3e", db: Session = Depends(get_db),
+                 program_id: str = "fr", subject_id: str = "math"):
+    rows = _catalog_competencies(db, grade_level, program_id, subject_id)
     return {"grade_level": grade_level,
             "competencies": [{"id": c.id, "code": c.code, "short_id": c.short_id,
                               "label": c.label, "domain_code": c.domain_code,
@@ -345,7 +353,8 @@ def dismiss_extraction(extraction_id: str, db: Session = Depends(get_db)):
 # ------------------------------------------------------------------ exercices
 
 @router.get("/summary")
-def summary(grade_level: str = "3e", db: Session = Depends(get_db)):
+def summary(grade_level: str = "3e", db: Session = Depends(get_db),
+            program_id: str = "fr", subject_id: str = "math"):
     """Arbre Domaine > Chapitre > Compétence avec compteurs séparés.
 
     Les exercices sont rattachés à une compétence. Les problèmes sont
@@ -353,11 +362,7 @@ def summary(grade_level: str = "3e", db: Session = Depends(get_db)):
     compteurs de chapitre sont renvoyés sur chaque ligne afin que l'UI puisse
     les afficher dans des cellules fusionnées.
     """
-    fw = db.query(CompetencyFramework).filter_by(grade_level=grade_level, program_id="fr", subject_id="math", path_id=None).first()
-    if fw is None:
-        return []
-    rows = (db.query(Competency).filter_by(framework_id=fw.id)
-            .order_by(Competency.order_index).all())
+    rows = _catalog_competencies(db, grade_level, program_id, subject_id)
     by_id = {c.id: c for c in rows}
     chapter_key = lambda c: f"{c.domain_code}\0{c.chapter_code}"
     work: dict[str, dict] = {}

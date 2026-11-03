@@ -101,10 +101,12 @@ def redeposit_kind(db: Session, page_id: str, img: np.ndarray) -> str | None:
     derived = _derived_dir(copy.assessment_id)
     zones = db.query(ResponseZone).filter_by(page_id=page_id).all()
 
+    # Version pas encore tranchée, ou tranchée et pas encore lue : l'élève a déjà
+    # une feuille en cours, redéposer la même n'ouvre rien de plus.
     pending = (db.query(ScannedPage)
                .join(ScanBatch, ScannedPage.batch_id == ScanBatch.id)
                .filter(ScanBatch.assessment_id == copy.assessment_id,
-                       ScannedPage.status == "conflict",
+                       ScannedPage.status.in_(("conflict", "pending")),
                        ScannedPage.replaces_page_id == page_id).all())
     for row in pending:
         previous = cv2.imread(str(derived / f"source-{row.source_index}.png"), cv2.IMREAD_COLOR)
@@ -293,18 +295,21 @@ def list_conflicts(db: Session, batch: ScanBatch, *, wave: int | None = None) ->
 def keep_existing(db: Session, batch: ScanBatch, row: ScannedPage, *,
                   actor_id: str | None = None) -> None:
     """La note reste. La feuille reste aussi dans la pile : elle passera sans
-    correction. Un job où plus rien n'est à corriger se referme seul."""
+    correction."""
     row.status = "conflict_rejected"
     db.add(AuditLog(actor_id=actor_id, action="late_copy_rejected", entity_type="scanned_page",
                     entity_id=row.id, after_json={"page_id": row.replaces_page_id}))
-    db.flush()
-    if row.wave and not sheets_to_correct(db, batch, row.wave):
-        set_wave_state(batch, row.wave, printed=True, distributed=True, closed=True)
+    close_wave_if_empty(db, batch, row.wave)
 
 
 def replace_existing(db: Session, batch: ScanBatch, row: ScannedPage, *,
                      actor_id: str | None = None) -> None:
     release_page(db, batch, row.replaces_page_id, actor_id=actor_id)
+    # Une version précédente pas encore lue cède la place : une seule sera notée.
+    for earlier in db.query(ScannedPage).filter_by(batch_id=batch.id, status="pending",
+                                                   replaces_page_id=row.replaces_page_id):
+        earlier.status = "superseded"
+        close_wave_if_empty(db, batch, earlier.wave)
     row.status = "pending"
     rewind_progress(batch)
     db.flush()
@@ -320,14 +325,21 @@ def sheets_to_correct(db: Session, batch: ScanBatch, wave: int) -> list[ScannedP
             .order_by(ScannedPage.source_index).all())
 
 
+def close_wave_if_empty(db: Session, batch: ScanBatch, wave: int) -> None:
+    """Un job où plus rien n'est à corriger se referme seul."""
+    db.flush()
+    if wave and not sheets_to_correct(db, batch, wave):
+        set_wave_state(batch, wave, printed=True, distributed=True, closed=True)
+
+
 def wave_overlay_ready(db: Session, batch: ScanBatch, wave: int) -> bool:
-    """Tous les scans de la vague sont lus et son PDF est publié."""
+    """Tous les scans de la vague sont lus et son PDF est publié. L'état du lot ne
+    suffit pas : il peut être finalisé avec une feuille de la vague encore à lire,
+    dont l'overlay ne porterait alors aucune correction."""
     from .overlay_queue import overlay_file
 
-    if batch.status not in ("overlay_ready", "finalized") and "finalized" not in (batch.progress_json or {}):
-        waiting = any(row.status == "pending" for row in sheets_to_correct(db, batch, wave))
-        if waiting or not overlay_file(batch.assessment_id, wave).exists():
-            return False
+    if any(row.status == "pending" for row in sheets_to_correct(db, batch, wave)):
+        return False
     return overlay_file(batch.assessment_id, wave).exists()
 
 

@@ -74,6 +74,10 @@ def _log_task_error(task: str, batch_id: str, e: Exception) -> None:
 # parallèle : mémoire doublée sur le NAS (1,75 Go) et écritures concurrentes.
 _RUNNING: set[str] = set()
 _RUNNING_LOCK = threading.Lock()
+# Lectures demandées pendant qu'une tâche occupait le lot. La tâche en cours a pu
+# dépasser la feuille concernée (double correction tranchée, nouveau dépôt) : sans
+# seconde lecture, celle-ci resterait en attente sans que rien ne la lise.
+_RERUN: set[str] = set()
 
 
 def _is_running(batch_id: str) -> bool:
@@ -81,24 +85,35 @@ def _is_running(batch_id: str) -> bool:
         return batch_id in _RUNNING
 
 
-def _single_flight(fn):
-    """Une seule tâche de fond à la fois par lot ; un doublon est ignoré."""
+def _release(batch_id: str) -> None:
+    """Libère le lot, puis lance la lecture demandée entre-temps."""
+    with _RUNNING_LOCK:
+        _RUNNING.discard(batch_id)
+        again = batch_id in _RERUN
+        _RERUN.discard(batch_id)
+    if again:
+        _run_pipeline(batch_id)
+
+
+def _single_flight(fn, *, replay: bool = False):
+    """Une seule tâche de fond à la fois par lot. Un doublon n'est pas exécuté en
+    parallèle ; avec `replay`, il est rejoué une fois le lot libéré."""
     @functools.wraps(fn)
     def wrapper(batch_id: str):
         with _RUNNING_LOCK:
             if batch_id in _RUNNING:
+                if replay:
+                    _RERUN.add(batch_id)
                 return
             _RUNNING.add(batch_id)
         try:
             return fn(batch_id)
         finally:
-            with _RUNNING_LOCK:
-                _RUNNING.discard(batch_id)
+            _release(batch_id)
     return wrapper
 
 
-@_single_flight
-def _run_pipeline(batch_id: str):
+def _read_batch(batch_id: str):
     db = SessionLocal()
     try:
         batch = db.get(ScanBatch, batch_id)
@@ -114,6 +129,9 @@ def _run_pipeline(batch_id: str):
         db.commit()
     finally:
         db.close()
+
+
+_run_pipeline = _single_flight(_read_batch, replay=True)
 
 
 @_single_flight
@@ -176,8 +194,7 @@ def _start_overlay_rebuild(batch_id: str) -> bool:
         try:
             _rebuild_overlays(batch_id)
         finally:
-            with _RUNNING_LOCK:
-                _RUNNING.discard(batch_id)
+            _release(batch_id)
 
     threading.Thread(target=work, name=f"overlays-{batch_id[:8]}", daemon=True).start()
     return True

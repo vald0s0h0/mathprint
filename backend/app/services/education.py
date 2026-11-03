@@ -69,6 +69,66 @@ def seed_structure(db: Session):
     db.commit()
 
 
+def autonomous_profile(db: Session, user) -> TeacherProfile | None:
+    profile = db.query(TeacherProfile).filter_by(user_id=user.id).first()
+    return profile if profile and profile.service_mode == "autonomous" else None
+
+
+def teaching_scope(db: Session, user) -> dict:
+    """Cycles, matières et programmes enseignés par l'utilisateur : ses filtres ne
+    proposent rien d'autre. Un professeur autonome a choisi son programme et sa
+    matière, ses cycles sont ceux de ses classes. Sans enseignement à lui
+    (administrateur, correcteur), tout ce qu'il peut voir ; instance encore vide,
+    tout le catalogue."""
+    classes = (db.query(SchoolClass.grade_level, SchoolClass.program_id, Subject.id, Subject.name)
+               .outerjoin(ClassTeaching, ClassTeaching.class_id == SchoolClass.id)
+               .outerjoin(Subject, ClassTeaching.subject_id == Subject.id)
+               .filter(SchoolClass.archived_at.is_(None)))
+    profile = db.query(TeacherProfile).filter_by(user_id=user.id).first()
+    autonomous = autonomous_profile(db, user)
+    rows = classes.filter(ClassTeaching.teacher_id == profile.id).all() if profile else []
+    if not autonomous:
+        rows = rows or classes.all()
+    grades = {row[0] for row in rows}
+    subjects = {subject_id: name for _, _, subject_id, name in rows if subject_id}
+    chosen = db.get(Subject, autonomous.subject_id) if autonomous and autonomous.subject_id else None
+    if chosen:
+        subjects = {chosen.id: chosen.name}
+    subjects = subjects or {s.id: s.name for s in db.query(Subject).filter_by(active=True)}
+    programs = {row[1] for row in rows if row[1]}
+    if autonomous and autonomous.program_id:
+        programs = {autonomous.program_id}
+    return {"cycles": [g for g in GRADES if g in grades or (not rows and not autonomous)],
+            "subjects": [{"id": key, "name": name} for key, name in sorted(subjects.items())],
+            "programs": sorted(programs or {p.id for p in db.query(Program)})}
+
+
+def choose_teaching(db: Session, profile: TeacherProfile, program_id: str, subject_id: str) -> None:
+    """Programme et matière d'un professeur autonome : ses classes en cours suivent.
+    Une classe qui a déjà des sujets garde son programme : leurs compétences en dépendent."""
+    if not db.get(Program, program_id) or not db.get(Subject, subject_id):
+        raise HTTPException(422, "Programme ou matière inconnus")
+    classes = (db.query(SchoolClass).join(ClassTeaching, ClassTeaching.class_id == SchoolClass.id)
+               .filter(ClassTeaching.teacher_id == profile.id, SchoolClass.archived_at.is_(None)).all())
+    moved = [cls for cls in classes if cls.program_id != program_id]
+    if moved and db.query(Assessment).filter(Assessment.class_id.in_([c.id for c in moved])).first():
+        raise HTTPException(409, "Vos classes ont déjà des sujets : leur programme ne peut plus changer")
+    if program_id == "ci" and any(cls.grade_level not in COLLEGE for cls in moved):
+        raise HTTPException(409, "Vos classes de lycée doivent d’abord recevoir une série")
+    for cls in moved:
+        cls.program_id, cls.series_id = program_id, None
+    for cls in classes:
+        for teaching in db.query(ClassTeaching).filter_by(class_id=cls.id, teacher_id=profile.id):
+            # Une matière qui a déjà des sujets reste affectée : ils restent accessibles.
+            if teaching.subject_id != subject_id and not db.query(Assessment).filter_by(
+                    class_id=cls.id, subject_id=teaching.subject_id).first():
+                db.delete(teaching)
+        db.flush()
+        if not db.query(ClassTeaching).filter_by(class_id=cls.id, subject_id=subject_id).first():
+            db.add(ClassTeaching(class_id=cls.id, subject_id=subject_id, teacher_id=profile.id))
+    profile.program_id, profile.subject_id = program_id, subject_id
+
+
 def framework_for(db: Session, cls: SchoolClass, subject_id="math", group_id=None):
     path_id = cls.series_id
     if group_id:

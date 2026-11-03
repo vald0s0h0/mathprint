@@ -506,7 +506,7 @@ export default function SubjectWizard({ opened, classes, onClose, onCreated }: {
       <Stack gap="sm">
         <StepIntro title="Comment composer le sujet ?" />
         {classId && <Group grow>
-          <Select label="Matière" data={teachings.map(t => ({ value: t.subject_id, label: t.subject_name }))} value={subject} onChange={v => { setSubject(v || 'math'); setGroupId(null) }} />
+          {teachings.length > 1 && <Select label="Matière" data={teachings.map(t => ({ value: t.subject_id, label: t.subject_name }))} value={subject} onChange={v => { setSubject(v || 'math'); setGroupId(null) }} />}
           {!!teachings.find(t => t.subject_id === subject)?.groups.length && <Select label="Groupe d’enseignement" placeholder="Classe entière" clearable
             data={(teachings.find(t => t.subject_id === subject)?.groups || []).map(g => ({ value: g.id, label: g.name }))} value={groupId} onChange={setGroupId} />}
         </Group>}

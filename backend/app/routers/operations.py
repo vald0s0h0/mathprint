@@ -1,4 +1,6 @@
-"""Établissements : opérations sans facturation. API réutilisable par un futur MCP."""
+"""Établissements : supervision des professeurs accompagnés et de leurs établissements,
+sans facturation. Un professeur autonome n'y figure pas : il gère seul ses classes
+(Paramètres, Élèves). API réutilisable par un futur MCP."""
 import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -130,7 +132,6 @@ def update_school(school_id: str, body: SchoolIn, db: Session = Depends(get_db),
 
 class TeacherIn(BaseModel):
     name: str = Field(min_length=1, max_length=200)
-    service_mode: str = "accompanied"
     school_ids: list[str]
     email: str = ""
     phone: str = ""
@@ -138,8 +139,8 @@ class TeacherIn(BaseModel):
 
 
 def save_teacher(db, body, teacher):
-    if not body.name.strip() or body.service_mode not in ("autonomous", "accompanied"):
-        raise HTTPException(422, "Nom et mode de service valides requis")
+    if not body.name.strip():
+        raise HTTPException(422, "Nom requis")
     if any(not db.get(School, s) for s in body.school_ids): raise HTTPException(422, "Établissement inconnu")
     used = {s.school_id for s in db.query(SchoolClass).join(ClassTeaching, ClassTeaching.class_id == SchoolClass.id)
             .filter(ClassTeaching.teacher_id == teacher.id)} if teacher.id else set()
@@ -154,34 +155,43 @@ def save_teacher(db, body, teacher):
         account.display_name = teacher.name
 
 
+def accompanied_teacher(db, teacher_id) -> TeacherProfile:
+    t = db.get(TeacherProfile, teacher_id)
+    if not t or t.service_mode != "accompanied": raise HTTPException(404, "Professeur inconnu")
+    return t
+
+
 @router.get("/teachers", dependencies=[Depends(operator)])
 def teachers(db: Session = Depends(get_db)):
     return [{"id": t.id, "name": t.name, "service_mode": t.service_mode, "email": t.email,
         "phone": t.phone, "active": t.active, "has_account": bool(t.user_id),
         "school_ids": [r.school_id for r in db.query(TeacherSchool).filter_by(teacher_id=t.id)]}
-        for t in db.query(TeacherProfile).order_by(TeacherProfile.name)]
+        for t in db.query(TeacherProfile).filter_by(service_mode="accompanied").order_by(TeacherProfile.name)]
 
 
 @router.post("/teachers")
 def create_teacher(body: TeacherIn, db: Session = Depends(get_db), user=Depends(operator)):
-    t = TeacherProfile(); save_teacher(db, body, t)
+    t = TeacherProfile(service_mode="accompanied"); save_teacher(db, body, t)
     record(db, user, "teacher.create", "teacher", t.id, {"name": t.name})
     db.commit(); return {"id": t.id}
 
 
 @router.put("/teachers/{teacher_id}")
 def update_teacher(teacher_id: str, body: TeacherIn, db: Session = Depends(get_db), user=Depends(operator)):
-    t = db.get(TeacherProfile, teacher_id)
-    if not t: raise HTTPException(404)
+    t = accompanied_teacher(db, teacher_id)
     save_teacher(db, body, t)
-    record(db, user, "teacher.update", "teacher", t.id, {"mode": t.service_mode, "active": t.active})
+    record(db, user, "teacher.update", "teacher", t.id, {"active": t.active})
     db.commit(); return {"ok": True}
 
 
 @router.post("/teachers/{teacher_id}/invitation")
 def invite(teacher_id: str, db: Session = Depends(get_db), user=Depends(operator)):
-    t = db.get(TeacherProfile, teacher_id)
-    if not t or not t.active: raise HTTPException(404, "Professeur inactif ou inconnu")
+    return issue_invitation(db, accompanied_teacher(db, teacher_id), user)
+
+
+def issue_invitation(db, t: TeacherProfile, user) -> dict:
+    """Lien personnel d'inscription, à transmettre manuellement."""
+    if not t.active: raise HTTPException(404, "Professeur inactif ou inconnu")
     if t.user_id: raise HTTPException(409, "Ce professeur a déjà un accès")
     db.query(TeacherInvitation).filter_by(teacher_id=t.id, used_at=None).update({"used_at": now()})
     token = secrets.token_urlsafe(32)
@@ -336,6 +346,8 @@ def dashboard(school_id: str | None = None, year_id: str | None = None, db: Sess
         if not year_id and cls.archived_at: continue
         school = db.get(School, cls.school_id) if cls.school_id else None
         teacher = db.get(TeacherProfile, a.teacher_profile_id) if a.teacher_profile_id else None
+        # Seuls les professeurs accompagnés et leurs établissements sont supervisés.
+        if not school or teacher and teacher.service_mode != "accompanied": continue
         subject = db.get(Subject, a.subject_id)
         batch = db.query(ScanBatch).filter_by(assessment_id=a.id).first()
         stage = "prepare"

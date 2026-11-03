@@ -2,14 +2,15 @@ import { Alert, Stack, Title } from '@mantine/core'
 import { AlertTriangle } from 'lucide-react'
 
 export const GRADE_SELECTION_MESSAGE =
-  'Sélectionne une classe (6ᵉ, 5ᵉ, 4ᵉ ou 3ᵉ) avec le sélecteur en haut de la page pour voir ses compétences.'
+  'Choisis un cycle en haut de la page pour voir ses compétences.'
 
-export default function GradeSelectionRequired({ title }: { title: string }) {
+// `noClass` : aucun cycle à proposer tant que le professeur n'a pas créé de classe.
+export default function GradeSelectionRequired({ title, noClass }: { title: string; noClass?: boolean }) {
   return (
     <Stack>
       <Title order={2}>{title}</Title>
       <Alert color="blue" icon={<AlertTriangle size={16} />}>
-        {GRADE_SELECTION_MESSAGE}
+        {noClass ? 'Créez une classe dans l’onglet Élèves : ses compétences s’afficheront ici.' : GRADE_SELECTION_MESSAGE}
       </Alert>
     </Stack>
   )

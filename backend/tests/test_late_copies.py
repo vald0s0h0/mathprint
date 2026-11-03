@@ -496,3 +496,132 @@ def test_a_single_open_review_is_counted_by_the_pipeline(world):
     _, batch = _deposit(world, _scan(world.pages["Awa"]))
     assert batch.status == "review_pending" and batch.error is None
     assert len(scans_router.list_reviews(batch.id, None, world.db)) == 1
+
+
+# ------------------------------------------- résolutions pendant une lecture
+
+def _two_conflicts(world):
+    """Deux copies tardives d'élèves déjà notés, dans le même enchaînement."""
+    batch = _first_round(world)
+    out, batch = _deposit(world, _scan(world.pages["Awa"], tick=True),
+                          _scan(world.pages["Bakary"], tick=True))
+    assert out["conflicts"] == 2
+    return batch, late_copies.list_conflicts(world.db, batch)
+
+
+def _replace(world, batch, conflict):
+    scans_router.resolve_conflict(batch.id, conflict["id"],
+                                  scans_router.ConflictResolveIn(action="keep_new"),
+                                  BackgroundTasks(), world.db, world.user)
+
+
+def test_late_sheet_still_pending_blocks_its_overlay(world):
+    """Incident Sohayb : le lot redevient « prêt » avec une feuille jamais lue. Son
+    overlay ne porterait qu'une mention « à corriger manuellement »."""
+    batch, conflicts = _two_conflicts(world)
+    _replace(world, batch, conflicts[0])
+    pipeline.process_batch(world.db, batch)
+    _replace(world, batch, conflicts[1])
+    # La lecture en cours n'a pas vu la 2e résolution et termine le lot.
+    _correct_all(world, batch)
+    assert batch.status == "overlay_ready"
+
+    assert _job(world, batch)["stage"] == "processing"
+    assert "correction" in _queue(world)["blocked"]
+
+
+def test_read_requested_during_a_task_is_replayed_after_it(world, monkeypatch):
+    """La 2e résolution arrive pendant la lecture lancée par la 1re : elle ne doit
+    pas se perdre, sa feuille resterait en attente sans que rien ne la lise."""
+    batch, conflicts = _two_conflicts(world)
+    monkeypatch.setattr(scans_router, "SessionLocal", lambda: world.db)
+    monkeypatch.setattr(world.db, "close", lambda: None)
+    runs = []
+    process = pipeline.process_batch
+
+    def during_first_read(db, current):
+        runs.append(current.id)
+        if len(runs) == 1:
+            # Lecture déjà passée sur la 2e feuille quand le professeur la tranche.
+            process(db, current)
+            _replace(world, batch, conflicts[1])
+            scans_router._run_pipeline(batch.id)
+            assert len(runs) == 1, "jamais deux lectures en parallèle"
+        else:
+            process(db, current)
+
+    monkeypatch.setattr(scans_router, "process_batch", during_first_read)
+    _replace(world, batch, conflicts[0])
+    scans_router._run_pipeline(batch.id)
+
+    assert len(runs) == 2 and not scans_router._is_running(batch.id)
+    statuses = [row.status for row in world.db.query(ScannedPage).filter_by(batch_id=batch.id, wave=1)]
+    assert statuses == ["registered", "registered"]
+    assert _job(world, batch)["students"] == ["Awa", "Bakary"]
+    _correct_all(world, batch, ratio=1.0)
+    assert _note(world, "Awa") == 20 and _note(world, "Bakary") == 20
+    texts = _overlay_texts(world, 1)
+    assert "Awa" in texts[0] and "Bakary" in texts[1]
+    assert not any("manuellement" in text for text in texts)
+
+
+def test_rescanning_a_sheet_waiting_to_be_read_opens_no_job(world):
+    """Redéposer la feuille restée en attente : même feuille, aucun nouveau job."""
+    batch, conflicts = _two_conflicts(world)
+    _replace(world, batch, conflicts[1])
+    again, batch = _deposit_no_pipeline(world, _scan(world.pages["Bakary"], tick=True))
+    assert again["pages_added"] == 0 and again["duplicates_rejected"] == 1
+    assert batch.overlay_wave == 1
+
+
+def test_new_version_of_a_sheet_waiting_to_be_read_replaces_it(world):
+    """Une autre version pendant l'attente : le professeur tranche, une seule est notée."""
+    batch, conflicts = _two_conflicts(world)
+    _replace(world, batch, conflicts[1])
+    bakary = world.pages["Bakary"].id
+    out, batch = _deposit_no_pipeline(world, _scan(world.pages["Bakary"]))
+    assert out["conflicts"] == 1 and batch.overlay_wave == 2
+    newest = next(c for c in late_copies.list_conflicts(world.db, batch) if c["wave"] == 2)
+    _replace(world, batch, newest)
+    rows = (world.db.query(ScannedPage)
+            .filter_by(batch_id=batch.id, replaces_page_id=bakary, status="pending").all())
+    assert [row.wave for row in rows] == [2]
+
+
+def test_job_left_with_no_sheet_after_a_newer_version_closes_itself(world):
+    batch = _first_round(world)
+    _, batch = _deposit_no_pipeline(world, _scan(world.pages["Awa"], tick=True))
+    first = late_copies.list_conflicts(world.db, batch)[0]
+    _replace(world, batch, first)
+    _, batch = _deposit_no_pipeline(world, _scan(world.pages["Awa"]))
+    newest = next(c for c in late_copies.list_conflicts(world.db, batch) if c["wave"] == 2)
+    _replace(world, batch, newest)
+    assert late_copies.wave_state(batch, 1).get("closed") is True
+    assert _job(world, batch, 1)["stage"] == "done"
+
+
+def test_sheet_twice_in_a_late_pile_gets_a_silent_page(world, monkeypatch):
+    """La correction est sur l'autre exemplaire : pas de « à corriger manuellement »."""
+    batch = _first_round(world)
+    sheet = _scan(world.pages["Chloé"])
+    out, batch = _deposit(world, sheet, sheet)
+    assert out["pages_added"] == 2
+    _correct_all(world, batch)
+    assert [(e["student"], e["pass_through"]) for e in _queue(world)["entries"]] == [
+        ("Chloé", False), ("Chloé", True)]
+    pages = _printed_pages(world, monkeypatch, wave=1)
+    assert "Chloé" in pages[0] and pages[1] == ""
+
+
+def test_late_pile_of_a_sheet_corrected_elsewhere_closes_itself(world):
+    """Enchaînement réduit à une feuille déjà lue dans un autre : rien à imprimer."""
+    batch = _first_round(world)
+    out, batch = _deposit_no_pipeline(world, _scan(world.pages["Chloé"]))
+    assert out["pages_added"] == 1 and batch.overlay_wave == 1
+    # 2e dépôt avant toute lecture : la page n'est encore rattachée à personne.
+    out, batch = _deposit_no_pipeline(world, _scan(world.pages["Chloé"]))
+    assert out["pages_added"] == 1 and batch.overlay_wave == 2
+    pipeline.process_batch(world.db, batch)
+    _correct_all(world, batch)
+    assert _job(world, batch, 1)["stage"] == "print"
+    assert _job(world, batch, 2)["stage"] == "done"

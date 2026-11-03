@@ -3,9 +3,10 @@
 ## Périmètre livré
 
 La structure dissocie le pays d’implantation de l’établissement et les programmes
-qu’il propose. Une classe appartient à un établissement, une année scolaire,
-un programme et un cycle (6e à Terminale). Au lycée ivoirien, elle appartient
-aussi à une série. Le niveau pédagogique 1–10 est propre à chaque matière.
+qu’il propose. Une classe appartient à une année scolaire, un programme et un
+cycle (6e à Terminale), et à un établissement si son professeur est accompagné.
+Au lycée ivoirien, elle appartient aussi à une série. Le niveau pédagogique 1–10
+est propre à chaque matière.
 
 Les référentiels sont identifiés par programme, cycle, matière et série ou
 enseignement optionnel. Les nouvelles combinaisons sont initialisées en brouillon,
@@ -22,13 +23,22 @@ les identifiants techniques de la base.
 
 ## Professeurs et droits
 
-Une fiche professeur fonctionne sans compte de connexion. Son mode unique,
-« Autonome » ou « Service accompagné », vaut pour tous ses établissements et ne
-dépend pas du pays. Une affectation relie classe, matière et professeur ; une
-seule affectation est admise par classe et matière.
+Un professeur est soit accompagné, soit autonome ; ce mode ne dépend pas du pays.
 
-L’administration ou le correcteur génère un lien personnel d’inscription,
-à envoyer manuellement. Le jeton est stocké sous forme d’empreinte, expire après
+- **Accompagné** : supervisé depuis l’onglet Établissements, qui ne montre que
+  ces professeurs et leurs établissements. Sa fiche fonctionne sans compte de
+  connexion ; s’il en ouvre un, il peut aussi créer ses propres sujets. Une
+  affectation relie classe, matière et professeur ; une seule est admise par
+  classe et matière.
+- **Autonome** : premier compte de l’installation, ou invité depuis
+  Paramètres > Utilisateurs, il n’a ni établissement
+  ni affectation et n’apparaît pas dans Établissements. Il choisit son programme
+  et sa matière dans Paramètres > Mon compte. Ses cycles se déduisent des classes
+  qu’il crée. Une classe qui a déjà des sujets garde son programme.
+
+L’administration ou le correcteur génère un lien personnel d’inscription pour un
+professeur accompagné, l’administration pour un autonome ; il s’envoie
+manuellement. Le jeton est stocké sous forme d’empreinte, expire après
 14 jours et n’est utilisable qu’une fois. Un nouveau lien invalide le précédent.
 Le professeur choisit son adresse et son mot de passe et retrouve sa fiche,
 ses élèves et leurs résultats. Il ne dispose d’aucune liste de collègues.

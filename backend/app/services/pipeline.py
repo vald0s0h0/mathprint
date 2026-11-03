@@ -503,10 +503,13 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
                 if res.page_id in seen_page_ids:
                     # La feuille existe physiquement deux fois : on garde sa
                     # position mais une seule lecture/correction. L'autre place
-                    # recevra l'overlay de sécurité « Non identifié ».
-                    sp.status = "duplicate"
+                    # recevra l'overlay de sécurité « Non identifié ». Dans une
+                    # pile tardive, elle la traverse sans marque : sa correction
+                    # est sur l'autre exemplaire.
+                    sp.status = "late_duplicate" if sp.wave else "duplicate"
                     sp.quality_json = {**sp.quality_json, "warnings":
                                        sp.quality_json["warnings"] + ["duplicate_in_batch"]}
+                    late_copies.close_wave_if_empty(db, batch, sp.wave)
                 else:
                     seen_page_ids.add(res.page_id)
                     identified += 1

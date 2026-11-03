@@ -16,10 +16,14 @@ import { useSearchParams } from 'react-router-dom'
 import { api, getToken } from '../api'
 import MailIntakeSettings from '../components/MailIntakeSettings'
 import PrinterSettings, { type PrintersInfo } from '../components/PrinterSettings'
+import TeachingPreferences from '../components/TeachingPreferences'
 import TemplateEditor from '../components/TemplateEditor'
 import UsersAdmin from './UsersAdmin'
 
-type Me = { id: string; email: string; display_name: string; role: string }
+type Me = {
+  id: string; email: string; display_name: string; role: string
+  service_mode: string | null; program_id: string | null; subject_id: string | null
+}
 type Provider = { provider: string; secret_preview: string; active: boolean }
 type Build = { sha: string; time: string }
 type StudentRow = {
@@ -400,6 +404,9 @@ export default function SettingsPage() {
               </Button>
             </Stack>
           </Card>
+          {me?.service_mode === 'autonomous' && (
+            <TeachingPreferences programId={me.program_id} subjectId={me.subject_id} />
+          )}
         </Tabs.Panel>
 
         {isAdmin && <Tabs.Panel value="api" pt="md">

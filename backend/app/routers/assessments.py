@@ -18,7 +18,7 @@ from ..models import (
     StudentCompetencyState, ClassTeaching, TeachingGroup, AuditLog, User,
 )
 from ..services import (
-    exercise_gen, generation, job_worker, manual_subject, scoring,
+    data_admin, exercise_gen, generation, job_worker, manual_subject, scoring,
     student_history,
 )
 from ..services.forgetting import due_competencies
@@ -96,6 +96,12 @@ class ManualPlanIn(BaseModel):
     variants: list[VariantIn] = []
 
 
+def _has_correction(a: Assessment, scan_batch: ScanBatch | None) -> bool:
+    """Une correction commencée (même bloquée) interdit de supprimer le sujet ;
+    « Effacer la correction » (Corrections) lève ce verrou."""
+    return scan_batch is not None or a.status in ("scanning", "finalized")
+
+
 @router.get("")
 def list_assessments(db: Session = Depends(get_db)):
     out = []
@@ -124,6 +130,7 @@ def list_assessments(db: Session = Depends(get_db)):
                     # Sujets et Corrections.
                     "overlay_distributed": bool(
                         scan_batch and scan_batch.overlay_distributed),
+                    "has_correction": _has_correction(a, scan_batch),
                     "error_message": a.error_message,
                     "created_at": str(a.created_at)})
     return out
@@ -392,13 +399,42 @@ def save_manual_plan(assessment_id: str, body: ManualPlanIn,
             "items": sum(len(v.items) for v in variants)}
 
 
+class DuplicateIn(BaseModel):
+    # autre classe du même cycle ; absent = nouvelle passation dans la même classe
+    class_id: str | None = None
+
+
+def _duplication_target(db: Session, source: Assessment, class_id: str) -> tuple[SchoolClass, ClassTeaching]:
+    """Une autre classe ne peut recevoir le sujet que si ses exercices y ont
+    leur place : même établissement, même cycle, même référentiel."""
+    origin = db.get(SchoolClass, source.class_id)
+    target = db.get(SchoolClass, class_id)
+    if not origin or not target:
+        raise HTTPException(404, "Classe inaccessible")
+    if target.grade_level != origin.grade_level or target.school_id != origin.school_id:
+        raise HTTPException(422, "La classe doit être du même cycle et du même établissement")
+    teaching = db.query(ClassTeaching).filter_by(
+        class_id=target.id, subject_id=source.subject_id).first()
+    if not teaching:
+        raise HTTPException(422, "Aucun professeur affecté à cette matière dans cette classe")
+    framework = framework_for(db, target, source.subject_id)
+    if source.framework_id and (not framework or framework.id != source.framework_id):
+        raise HTTPException(422, "Cette classe ne suit pas le même référentiel")
+    if not db.query(Student).filter_by(class_id=target.id, active=True).first():
+        raise HTTPException(409, "Cette classe n'a aucun élève actif")
+    return target, teaching
+
+
 @router.post("/{assessment_id}/duplicate", status_code=202)
-def duplicate_assessment(assessment_id: str, db: Session = Depends(get_db)):
+def duplicate_assessment(assessment_id: str, body: DuplicateIn | None = None,
+                         db: Session = Depends(get_db)):
     """Recrée un sujet manuel à l'identique pour une nouvelle passation.
 
-    Le plan contient les exercices concrets, pas des critères de tirage. On
-    fige en plus l'affectation élève → variante de la première passation :
-    l'ordre de la classe peut donc changer sans modifier les feuilles reçues.
+    Le plan contient les exercices concrets, pas des critères de tirage. Dans
+    la même classe, on fige en plus l'affectation élève → variante de la
+    première passation : l'ordre de la classe peut donc changer sans modifier
+    les feuilles reçues. Vers une autre classe (`class_id`), les variantes sont
+    attribuées à ses propres élèves, comme pour un sujet neuf.
     """
     source = db.get(Assessment, assessment_id)
     if not source:
@@ -410,29 +446,43 @@ def duplicate_assessment(assessment_id: str, db: Session = Depends(get_db)):
     if source.status not in ("ready", "printed", "scanning", "finalized"):
         raise HTTPException(409, "Le sujet doit être généré avant d'être dupliqué")
 
-    source_copies = db.query(Copy).filter_by(assessment_id=source.id).all()
-    if not source_copies:
-        raise HTTPException(409, "Aucune affectation de variante à dupliquer")
-
-    version = int(blueprint.get("duplicate_version") or 1) + 1
     root_id = blueprint.get("duplicate_source_id") or source.id
+    source_version = int(blueprint.get("duplicate_version") or 1)
+    base_title = source.title
+    if source_version > 1:
+        base_title = base_title.removesuffix(f" v{source_version}")
+    target_id = body.class_id if body and body.class_id else source.class_id
+
+    if target_id == source.class_id:
+        source_copies = db.query(Copy).filter_by(assessment_id=source.id).all()
+        if not source_copies:
+            raise HTTPException(409, "Aucune affectation de variante à dupliquer")
+        student_variants = {c.student_id: c.variant_key for c in source_copies}
+        version = source_version + 1
+        teacher_profile_id, group_id = source.teacher_profile_id, source.group_id
+    else:
+        target, teaching = _duplication_target(db, source, target_id)
+        student_variants = {}
+        # version propre à la classe : sa première passation ne porte pas de « v2 »
+        version = 1 + max((
+            int((a.blueprint_json or {}).get("duplicate_version") or 1)
+            for a in db.query(Assessment).filter_by(class_id=target.id).all()
+            if a.id == root_id or (a.blueprint_json or {}).get("duplicate_source_id") == root_id
+        ), default=0)
+        teacher_profile_id, group_id = teaching.teacher_id, None
+
     cloned_blueprint = copylib.deepcopy(blueprint)
     cloned_blueprint.update({
         "duplicate_version": version,
         "duplicate_source_id": root_id,
-        "duplicate_student_variants": {
-            c.student_id: c.variant_key for c in source_copies
-        },
+        "duplicate_student_variants": student_variants,
     })
-    base_title = source.title
-    previous_suffix = f" v{version - 1}"
-    if version > 2 and base_title.endswith(previous_suffix):
-        base_title = base_title[:-len(previous_suffix)]
     duplicate = Assessment(
-        class_id=source.class_id, type=source.type, subject_id=source.subject_id,
-        teacher_profile_id=source.teacher_profile_id, framework_id=source.framework_id,
-        group_id=source.group_id, created_by=db.info.get("actor_id"),
-        title=f"{base_title} v{version}", pages_target=source.pages_target,
+        class_id=target_id, type=source.type, subject_id=source.subject_id,
+        teacher_profile_id=teacher_profile_id, framework_id=source.framework_id,
+        group_id=group_id, created_by=db.info.get("actor_id"),
+        title=f"{base_title} v{version}" if version > 1 else base_title,
+        pages_target=source.pages_target,
         duplex=source.duplex, personalization_mode=source.personalization_mode,
         blueprint_json=cloned_blueprint, note_base=source.note_base,
     )
@@ -442,6 +492,41 @@ def duplicate_assessment(assessment_id: str, db: Session = Depends(get_db)):
     job = job_worker.enqueue_generation(db, duplicate, 10)
     return {"id": duplicate.id, "job_id": job.id, "status": "queued",
             "title": duplicate.title, "version": version}
+
+
+@router.post("/{assessment_id}/mark-printed")
+def mark_printed(assessment_id: str, db: Session = Depends(get_db)):
+    """Sujet imprimé hors de la plateforme : même état qu'après une impression
+    réussie par le connecteur."""
+    a = db.get(Assessment, assessment_id)
+    if not a:
+        raise HTTPException(404, "Sujet introuvable")
+    if a.status != "ready":
+        raise HTTPException(409, "Seul un sujet prêt peut être marqué comme imprimé")
+    a.status = "printed"
+    db.add(AuditLog(actor_id=db.info.get("actor_id"), action="assessment.mark_printed",
+                    entity_type="assessment", entity_id=a.id))
+    db.commit()
+    return {"ok": True, "status": a.status}
+
+
+@router.delete("/{assessment_id}")
+def delete_assessment(assessment_id: str, db: Session = Depends(get_db)):
+    """Suppression par le professeur, tant qu'aucune correction n'existe. La
+    suppression sans condition reste réservée à Paramètres → Données."""
+    a = db.get(Assessment, assessment_id)
+    if not a:
+        raise HTTPException(404, "Sujet introuvable")
+    if a.status in ("queued", "generating"):
+        raise HTTPException(409, "Sujet en cours de génération : attendez la fin pour le supprimer")
+    if _has_correction(a, db.query(ScanBatch).filter_by(assessment_id=a.id).first()):
+        raise HTTPException(409, "Ce sujet a déjà une correction : il ne peut pas être supprimé")
+    db.add(AuditLog(actor_id=db.info.get("actor_id"), action="assessment.delete",
+                    entity_type="assessment", entity_id=a.id,
+                    before_json={"title": a.title, "class_id": a.class_id, "status": a.status}))
+    result = data_admin.delete_assessment(db, a)
+    db.commit()
+    return {"ok": True, **result}
 
 
 @router.get("/competency-matrix")

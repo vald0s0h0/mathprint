@@ -6,7 +6,8 @@ from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..deps import require_role
-from ..models import User
+from ..models import TeacherProfile, User
+from .operations import issue_invitation
 
 
 router = APIRouter(
@@ -58,6 +59,38 @@ def create_corrector(body: CorrectorIn, db: Session = Depends(get_db)):
     if db.query(User).filter_by(email=email).first(): raise HTTPException(409, "Adresse déjà utilisée")
     user = User(email=email, display_name=body.display_name.strip(), password_hash=hash_password(body.password), role="corrector")
     db.add(user); db.commit(); return {"id": user.id}
+
+
+# Professeurs autonomes : hors de l'onglet Établissements, ils ne sont invités
+# qu'ici et choisissent ensuite eux-mêmes leur programme et leur matière.
+
+class AutonomousTeacherIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+
+
+@router.get("/autonomous-teachers")
+def pending_autonomous_teachers(db: Session = Depends(get_db)):
+    """Fiches en attente d'inscription : une fois le compte ouvert, elles sont dans la liste des comptes."""
+    rows = db.query(TeacherProfile).filter_by(service_mode="autonomous", user_id=None, active=True)
+    return [{"id": t.id, "name": t.name} for t in rows.order_by(TeacherProfile.name)]
+
+
+@router.post("/autonomous-teachers")
+def create_autonomous_teacher(body: AutonomousTeacherIn, db: Session = Depends(get_db),
+                              user: User = Depends(require_role("admin"))):
+    name = body.name.strip()
+    if not name: raise HTTPException(422, "Nom requis")
+    teacher = TeacherProfile(name=name, service_mode="autonomous")
+    db.add(teacher); db.flush()
+    return issue_invitation(db, teacher, user)
+
+
+@router.post("/autonomous-teachers/{teacher_id}/invitation")
+def renew_autonomous_invitation(teacher_id: str, db: Session = Depends(get_db),
+                                user: User = Depends(require_role("admin"))):
+    teacher = db.get(TeacherProfile, teacher_id)
+    if not teacher or teacher.service_mode != "autonomous": raise HTTPException(404, "Professeur inconnu")
+    return issue_invitation(db, teacher, user)
 
 
 class AccountStatusIn(BaseModel):

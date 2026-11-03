@@ -121,6 +121,7 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, ...]]] = {
 
 # Organisation multi-programmes. Aucune suppression de données pédagogiques.
 for _table, _columns in {
+    "teacher_profiles": [("program_id", "TEXT", "NULL"), ("subject_id", "TEXT", "NULL")],
     "classes": [("school_id", "TEXT", "NULL"), ("program_id", "TEXT", "'fr'"),
                 ("series_id", "TEXT", "NULL")],
     "competency_frameworks": [("program_id", "TEXT", "'fr'"), ("subject_id", "TEXT", "'math'"),
