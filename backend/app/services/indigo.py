@@ -1238,7 +1238,7 @@ def _prepare_exercise(doc_eleve, grade, comp, ex, corrections, extraction_id, or
     row = IndigoExercise(id=ex_id, extraction_id=extraction_id, competency_id=comp.id,
                          grade_level=grade, source_page=ex["source_page"],
                          source_number=ex["number"], order_index=order,
-                         badge_type="exercice", difficulty=3, calculator="autorisee",
+                         badge_type="exercice", difficulty=3,
                          title=ex["title"], tags_json=ex["tags"])
     # sans blocs (exercice « placeholder » du pré-découpage Gemini), on ne crope
     # pas : ligne conservée sans image, l'admin ajustera l'énoncé si besoin.
@@ -1268,7 +1268,6 @@ def _prepare_exercise(doc_eleve, grade, comp, ex, corrections, extraction_id, or
         cv = indigo_cv.analyze(crop_img, ex["is_probleme"], number_box=local_num)
         row.badge_type = cv["badge_type"]
         row.difficulty = cv["difficulty"]
-        row.calculator = cv["calculator"]
         row.badge_color_json = cv["color"] or {}
     else:
         logger.warning("Indigo : crop de l'exercice n°%s absent (boîte dégénérée) "
@@ -1314,7 +1313,7 @@ def _prepare_vision_exercise(doc_eleve, grade, comp, ex, extraction_id, order):
         id=ex_id, extraction_id=extraction_id, competency_id=comp.id,
         grade_level=grade, source_page=page_index,
         source_number=str(ex.get("number") or ""), order_index=order,
-        badge_type="exercice", difficulty=2, calculator="autorisee",
+        badge_type="exercice", difficulty=2,
         title="", tags_json=[])
 
     raster = indigo_manual.raster_page(doc_eleve, page_index)
@@ -1346,7 +1345,6 @@ def _prepare_vision_exercise(doc_eleve, grade, comp, ex, extraction_id, order):
     cv = indigo_cv.analyze(crop_img, False, number_box=local_num)
     row.badge_type = cv["badge_type"]
     row.difficulty = cv["difficulty"]
-    row.calculator = cv["calculator"]
     row.badge_color_json = cv["color"] or {}
 
     if ex.get("has_figure"):
@@ -1521,7 +1519,7 @@ def _clone_for_variant(row: IndigoExercise, kind: str) -> IndigoExercise:
         id=new_id, extraction_id=row.extraction_id, competency_id=row.competency_id,
         grade_level=row.grade_level, source_page=row.source_page,
         source_number=row.source_number, order_index=row.order_index,
-        badge_type=row.badge_type, calculator=row.calculator, title=row.title,
+        badge_type=row.badge_type, title=row.title,
         tags_json=list(row.tags_json or []),
         badge_color_json=dict(row.badge_color_json or {}),
         crop_box_json=dict(row.crop_box_json or {}))
@@ -1897,7 +1895,7 @@ def exercise_out(db, ex: IndigoExercise) -> dict:
         # trio base / dérivé facile / dérivé difficile (§ services.indigo_qcm)
         "variant_kind": ex.variant_kind or "base",
         "derived_from_id": ex.derived_from_id,
-        "badge_color": ex.badge_color_json, "calculator": ex.calculator,
+        "badge_color": ex.badge_color_json,
         "title": ex.title, "tags": ex.tags_json,
         "has_figure": ex.has_figure,
         # exercice jugé DÉPENDANT d'un schéma/image (indice textuel + Claude,
@@ -1980,7 +1978,7 @@ def list_exercises(db, competency_id: str | None = None,
 
 _EDITABLE = {"statement", "response_type", "expected_json", "grading_json",
              "correction_solution", "correction_guide", "badge_type", "difficulty",
-             "calculator", "title", "tags_json",
+             "title", "tags_json",
              # rattachement manuel : c'est la sortie de secours des exercices
              # dont la compétence n'a pas pu être confirmée (§ indigo_multipass
              # ._resolve_competency). Sans elle, un exercice mal rangé ne
@@ -2378,7 +2376,9 @@ def delete_exercise(db, ex: IndigoExercise, *, cascade: bool = True) -> None:
                 p.unlink()
     ex_id = ex.id
     db.delete(ex)
-    db.query(GeneratedExercise).filter_by(id=ex_id, source="indigo").delete()
+    db.query(GeneratedExercise).filter(GeneratedExercise.id == ex_id,
+                                       GeneratedExercise.source.in_(PUBLISHED_SOURCES)).delete(
+        synchronize_session=False)
     _unpublish(ex_id)
     db.commit()
 
@@ -2422,6 +2422,10 @@ def delete_exercises_for_competency(db, competency_id: str) -> int:
 # le volume en archive (`export_bundle`) que l'on commite dans le repo — d'où
 # elle repart dans l'image au build suivant.
 _IMAGE_PUB_DIR = _APP_DIR / "data" / "indigo"
+# Ce qui transite par ce canal de publication : les exercices dérivés d'Indigo,
+# qui coexistent un temps, et ceux de la forge, qui les remplacent.
+PIPELINE_FORGE = "forge"
+PUBLISHED_SOURCES = ("indigo", PIPELINE_FORGE)
 
 
 def _volume_pub_dir():
@@ -2645,6 +2649,13 @@ def _published_record(db, ex: IndigoExercise, crops, figs) -> dict:
                   if ex.has_figure and not ex.figure_box_json
                   and spec.get("kind") in figures.DECLARATIVE_TYPES
                   and isinstance(spec.get("spec"), dict) else None)
+    # Provenance de la pipeline forge. Une clé absente désigne un exercice issu
+    # d'Indigo : les publications antérieures restent lues telles quelles.
+    raw = ex.raw_ocr_json or {}
+    forge = ({"source": PIPELINE_FORGE, "source_version": raw.get("source_version") or "",
+              "estimated_seconds": int(raw.get("estimated_seconds") or 0),
+              "quality": raw.get("quality") or {}}
+             if raw.get("pipeline") == PIPELINE_FORGE else {})
     # Typographie française (insécables, guillemets, LaTeX…) posée ICI, une
     # seule fois : c'est l'entonnoir par lequel TOUT exercice validé entre en
     # banque — Astra, Gemini, retouche du professeur après génération.
@@ -2654,7 +2665,7 @@ def _published_record(db, ex: IndigoExercise, crops, figs) -> dict:
         "badge_type": ex.badge_type, "difficulty": ex.difficulty,
         "variant_kind": ex.variant_kind or "base",
         "derived_from_id": ex.derived_from_id,
-        "calculator": ex.calculator, "title": ex.title, "tags": ex.tags_json,
+        "title": ex.title, "tags": ex.tags_json,
         "statement": ex.statement, "response_type": ex.response_type,
         # `grading` porte le barème (bareme_points) : rien à publier à côté
         "expected": ex.expected_json, "grading": ex.grading_json,
@@ -2663,6 +2674,7 @@ def _published_record(db, ex: IndigoExercise, crops, figs) -> dict:
         "has_figure": ex.has_figure, "crop_file": crop_file, "figure_file": fig_file,
         **({"figure_json": procedural} if procedural else {}),
         "model": ex.model, "prompt_version": ex.prompt_version,
+        **forge,
     })
 
 
@@ -2831,7 +2843,8 @@ def seed_published(db) -> int:
     Appelé au démarrage de TOUS les déploiements."""
     _, _crops, figs, _ = _pub_paths()
     data = load_published()
-    db.query(GeneratedExercise).filter_by(source="indigo").delete()
+    db.query(GeneratedExercise).filter(GeneratedExercise.source.in_(PUBLISHED_SOURCES)).delete(
+        synchronize_session=False)
     n = sum(1 for rec in data.get("exercises", []) if _seed_record(db, data, rec, figs))
     db.commit()
     total = len(data.get("exercises", []))
@@ -2863,11 +2876,14 @@ def _seed_record(db, data: dict, rec: dict, figs) -> bool:
         statement=rec.get("statement", ""), correction=rec.get("correction_guide", ""),
         response_type=rec.get("response_type", "short_text"),
         expected_json=rec.get("expected") or {}, grading_json=rec.get("grading") or {},
-        source="indigo",
+        source=rec.get("source") or "indigo",
+        source_version=rec.get("source_version") or "",
+        estimated_seconds=int(rec.get("estimated_seconds") or 0),
+        quality_json=rec.get("quality") or {},
         kind="probleme" if rec.get("badge_type") in ("probleme", "enigme") else "application",
         status="active", figure_json=fig_json,
-        raw_extract_json={"indigo": {k: rec.get(k) for k in (
-            "badge_type", "difficulty", "calculator", "title", "tags",
+        raw_extract_json={rec.get("source") or "indigo": {k: rec.get(k) for k in (
+            "badge_type", "difficulty", "title", "tags",
             "correction_solution", "crop_file", "source_number",
             "variant_kind", "derived_from_id")}},
         model=rec.get("model", ""), prompt_version=rec.get("prompt_version", "")))
@@ -2878,5 +2894,7 @@ def published_rows(db, competency, level: int) -> list:
     """Pool Indigo (fini) pour (compétence, niveau) — appelé par
     exercise_gen.ensure_bank via la source "indigo"."""
     return (db.query(GeneratedExercise)
-            .filter_by(competency_id=competency.id, difficulty_level=level,
-                       status="active", source="indigo").all())
+            .filter(GeneratedExercise.competency_id == competency.id,
+                    GeneratedExercise.difficulty_level == level,
+                    GeneratedExercise.status == "active",
+                    GeneratedExercise.source.in_(PUBLISHED_SOURCES)).all())

@@ -66,7 +66,6 @@ def test_cv_no_color_defaults_to_exercice():
     blank = np.full((120, 200, 3), 255, np.uint8)
     out = indigo_cv.analyze(blank, False)
     assert out["badge_type"] == "exercice"
-    assert out["calculator"] == "autorisee"
 
 
 def test_cv_enigme_only_from_badge_not_from_figure():
@@ -479,7 +478,7 @@ def test_regenerate_leaves_exercise_unchanged_when_llm_fails(db, monkeypatch):
     c = _comp(db)
     row = IndigoExercise(id="rg1", extraction_id="e", competency_id=c.id, grade_level="3e",
                          source_page=0, source_number="1", order_index=0,
-                         badge_type="exercice", difficulty=3, calculator="autorisee",
+                         badge_type="exercice", difficulty=3,
                          status="validated", response_type="qcm_single",
                          statement="Énoncé adapté.", correction_solution="Corrigé.",
                          correction_guide="Guide.",
@@ -1104,7 +1103,7 @@ def test_publish_seed_and_bank_source(db, tmp_path):
     cv2.imwrite(str(tmp_path / "indigo" / "drafts" / "x_fig.png"), np.full((30, 30, 3), 180, np.uint8))
     db.add(IndigoExercise(
         id="x", competency_id=c.id, grade_level="3e", source_number="12",
-        badge_type="probleme", difficulty=3, calculator="interdite", title="Le partage",
+        badge_type="probleme", difficulty=3, title="Le partage",
         statement="Combien de parts ?", response_type="short_text",
         expected_json={"type": "integer", "value": 4}, grading_json={"comparator": "numeric", "max_score": 1},
         correction_guide="Attention aux unités.", correction_solution="4 parts.",
@@ -1122,7 +1121,7 @@ def test_publish_seed_and_bank_source(db, tmp_path):
     ge = db.query(GeneratedExercise).filter_by(source="indigo").one()
     assert ge.kind == "probleme"
     assert ge.figure_json["type"] == "image"                    # figure = crop image
-    assert (ge.raw_extract_json["indigo"]["calculator"]) == "interdite"
+    assert "calculator" not in ge.raw_extract_json["indigo"]
 
     # publié sur l'échelle à 3 niveaux, sans repli de conversion (fichier v2)
     assert ge.difficulty_level == 3
@@ -1239,15 +1238,6 @@ def test_render_figure_image_type(tmp_path):
     out = figures.render_figure({"type": "image", "params": {"path": str(p)}})
     assert out[:4] == b"\x89PNG"
     assert figures.validate_figure({"type": "image", "params": {"path": str(p)}}) is not None
-
-
-def test_calc_icon_draws_without_error():
-    from reportlab.lib.pagesizes import A4
-    from reportlab.lib.units import mm
-    from reportlab.pdfgen import canvas
-    c = canvas.Canvas("/dev/null", pagesize=A4)
-    pdfgen._draw_calc_icon(c, 100 * mm, 200 * mm, 3.6 * mm, forbidden=False)
-    pdfgen._draw_calc_icon(c, 100 * mm, 200 * mm, 3.6 * mm, forbidden=True)
 
 
 # ------------------------------------------------ rédaction / mise en page (bug 30/07)

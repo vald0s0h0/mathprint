@@ -26,14 +26,14 @@ from ..config import settings
 
 
 FIGURE_TYPES = {"rectangle", "triangle", "circle", "angle", "number_line",
-                "coordinate_plane", "image", "geo", "chart"}
+                "coordinate_plane", "image", "geo", "chart", "template", "svg"}
 # figures déclaratives : spec contrôlée par leur propre moteur, erreur LISIBLE
-DECLARATIVE_TYPES = {"geo", "chart"}
+DECLARATIVE_TYPES = {"geo", "chart", "template", "svg"}
 
 
 def _engine(ftype: str):
-    from . import chartfig, geofig
-    return {"geo": geofig, "chart": chartfig}[ftype]
+    from . import chartfig, figtemplate, geofig, svgfig
+    return {"geo": geofig, "chart": chartfig, "template": figtemplate, "svg": svgfig}[ftype]
 
 
 def figure_error(figure_json) -> str | None:

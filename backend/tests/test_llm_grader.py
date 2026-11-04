@@ -112,6 +112,19 @@ def test_short_answer_right_or_wrong_stays_deterministic():
     assert llm_grader.plan(item, _verdict(0, 1, "ocr_low_confidence"), ocr_text="?") is None
 
 
+def test_rounding_demanded_reaches_the_llm():
+    """Faux et court : zéro sans appel. Faux et long : le correcteur connaît l'exigence."""
+    policy = {"comparator": "numeric", "max_score": 1, "bareme_points": 0.5, "answer_form": "exact_decimal"}
+    item = _item("short_text", {"type": "decimal", "value": 1.79}, policy)
+    assert llm_grader.plan(item, _verdict(0, 1), ocr_text="1,8") is None
+    task = llm_grader.plan(item, _verdict(0, 1), ocr_text="je garde 1,786 donc environ 1,8 euros")
+    assert task.fields[0].expected.startswith("1.79 (seule cette valeur est juste")
+
+    free = _item("short_text", {"type": "decimal", "value": 1.79}, {**policy, "answer_form": "any"})
+    task = llm_grader.plan(free, _verdict(0, 1), ocr_text="je garde 1,786 donc environ 1,8 euros")
+    assert task.fields[0].expected == "1.79"
+
+
 def test_long_wrong_answer_goes_to_the_llm():
     """« 50-32=19 » : le résultat est faux mais la méthode est écrite — c'est là
     qu'un correcteur humain donne des points, donc là qu'on appelle le LLM."""

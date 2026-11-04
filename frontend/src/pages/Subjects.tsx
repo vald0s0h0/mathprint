@@ -181,9 +181,8 @@ export default function Subjects() {
             <FileText size={36} strokeWidth={1.4} opacity={0.5} />
             <Text fw={600}>Aucun sujet {cycle !== 'all' && `en ${cycle}`}</Text>
             <Text size="sm" c="dimmed" ta="center" maw={520}>
-              Composez vos pages vous-même, ou laissez la plateforme préparer une
-              copie personnalisée pour chaque élève dès que la classe compte assez
-              de sujets corrigés.
+              Choisissez vos exercices vous-même, ou laissez la plateforme préparer une
+              copie personnalisée pour chaque élève dès que la classe a un sujet corrigé.
             </Text>
             <Button mt="xs" leftSection={<Plus size={16} />} onClick={() => setWizardOpen(true)}>
               Créer un sujet

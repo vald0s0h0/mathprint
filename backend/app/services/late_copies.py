@@ -26,7 +26,7 @@ from ..models import (
     CopyResult, DocumentPage, GradingDecision, ManualReview, OcrAttempt, ResponseZone,
     ScanBatch, ScannedPage, Student, StudentResponse,
 )
-from . import scoring, worker_cv
+from . import error_journal, scoring, worker_cv
 from .forgetting import replay_states
 
 # Feuilles présentes dans l'enchaînement sans rien à y corriger.
@@ -234,6 +234,9 @@ def release_page(db: Session, batch: ScanBatch, page_id: str, *,
                                    for d in decisions]},
         after_json={"wave": batch.overlay_wave or 0}))
 
+    # La page repart en lecture : ses erreurs ne comptent plus jusqu'à sa nouvelle
+    # correction, mais restent dans l'historique.
+    error_journal.withdraw_items(db, [z.item_id for z in zones if z.item_id])
     if decision_ids:
         db.query(ManualReview).filter(ManualReview.decision_id.in_(decision_ids)).delete(synchronize_session=False)
         db.query(GradingDecision).filter(GradingDecision.id.in_(decision_ids)).delete(synchronize_session=False)

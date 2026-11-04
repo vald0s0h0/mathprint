@@ -1,4 +1,4 @@
-# Instructions pour les agents (Codex)
+# Instructions pour les agents (Codex et Claude Code)
 
 ## Dossier `entreprise/` : hors du code
 
@@ -27,3 +27,19 @@ de lancer la pipeline Astra sur un chapitre (manuels Indigo 3e et 6e) :
 Les scripts se lancent depuis la racine du dépôt avec `backend/.venv/bin/python`.
 Ne modifie pas le code de l'application pendant un run Astra : ton travail est le
 fichier `astra_output.json` du run.
+
+## Commande « forge »
+
+Quand l'utilisateur écrit `forge <programme> <cycle> <cible>` (ex. `forge fr 3e A1.2`,
+`forge fr 3e A1`, `forge fr 3e A1 --problemes`, `forge fr 3e A1.2 --complement 10`,
+`forge reprendre`), ou demande de
+lancer la pipeline forge :
+
+1. lis **entièrement** `agents/forge/FORGE.md` puis `agents/forge/schema.md` ;
+2. suis la procédure de FORGE.md de bout en bout, jusqu'au bilan final.
+
+Si le programme ou le cycle manque, demande-le avant toute chose. Ne modifie pas le
+code de l'application pendant un run : ton travail est dans les fichiers du run.
+
+Ce fichier est la seule source d'instructions du dépôt : ne crée pas de `CLAUDE.md`,
+car Claude Code cesserait alors de lire `AGENTS.md`.

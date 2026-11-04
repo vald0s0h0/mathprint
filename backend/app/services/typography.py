@@ -199,12 +199,25 @@ _TEXT_KEYS = {"statement", "title", "correction_guide", "correction_solution"}
 _LIST_KEYS = {"choices", "cols", "left", "right"}
 
 
+def _feedback(node):
+    """Micro-corrections : seul le texte imprimé (clé `text`) passe en
+    typographie française ; codes d'erreur et identifiants restent intacts."""
+    if isinstance(node, dict):
+        return {k: (french(v) if k == "text" and isinstance(v, str) else _feedback(v))
+                for k, v in node.items()}
+    if isinstance(node, list):
+        return [_feedback(x) for x in node]
+    return node
+
+
 def _walk(node):
     if isinstance(node, dict):
         out = {}
         for k, v in node.items():
             if k in ("figure", "figure_json"):
                 out[k] = v
+            elif k == "feedback" and isinstance(v, dict):
+                out[k] = _feedback(v)
             elif k in _TEXT_KEYS or (k == "label" and isinstance(v, str)):
                 out[k] = french(v)
             elif k in _LIST_KEYS and isinstance(v, list):

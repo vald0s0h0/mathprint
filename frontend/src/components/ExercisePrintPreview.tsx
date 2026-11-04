@@ -31,7 +31,6 @@ export type PrintableExercise = {
   figure?: Record<string, any> | null
   correction_solution?: string | null
   correction_guide?: string | null
-  calculator?: string | null
 }
 
 type PreviewProps = {
@@ -52,7 +51,7 @@ type PreviewProps = {
   // (sujet « Inclure les guides »), masqués à false.
   guides?: boolean
   // largeur max de la carte (l'aperçu PNG est rendu à 180 dpi : net jusqu'à ~600 px)
-  maxWidth?: number
+  maxWidth?: number | null
   className?: string
 }
 
@@ -206,7 +205,7 @@ function PrintedCard({ exercise, guides, showAnswers }: {
   const [error, setError] = useState(false)
   const ex = Object.fromEntries([
     'statement', 'response_type', 'expected', 'grading', 'choices', 'figure', 'figure_url',
-    'calculator', 'title', 'badge_type', 'difficulty', 'level', 'kind', 'is_problem',
+    'title', 'badge_type', 'difficulty', 'level', 'kind', 'is_problem',
   ].map((k) => [k, (exercise as Record<string, any>)[k]]))
   const key = JSON.stringify({ exercise: ex, guides, show_answers: showAnswers })
   useEffect(() => {
@@ -254,7 +253,7 @@ export default function ExercisePrintPreview({ exercise, color = 'indigo', badge
   beforeFrame, afterFrame, showCorrection = false, showGuide = false, showAnswers = false,
   guides = true, maxWidth = 340, className }: PreviewProps) {
   return (
-    <Stack gap={3} className={className} style={{ width: '100%', maxWidth }}>
+    <Stack gap={3} className={className} style={{ width: '100%', maxWidth: maxWidth ?? undefined }}>
       {beforeFrame}
       {(badges || actions) && <Group justify="space-between" align="flex-start" wrap="nowrap">
         <Box style={{ minWidth: 0 }}>{badges}</Box>{actions}

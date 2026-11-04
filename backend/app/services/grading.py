@@ -7,6 +7,7 @@ la normalisation travaille sur une copie. Jamais de comparaison de LaTeX brut.
 Retourne (tier, score, confidence, reason_code) :
   A/B -> validation automatique ; C -> LLM ; D -> file professeur ; E -> blocage.
 """
+import math
 import re
 from fractions import Fraction
 
@@ -32,6 +33,7 @@ def normalize(raw: str) -> str:
     s = raw.strip()
     s = s.replace("\\times", "*").replace("×", "*").replace("÷", "/")
     s = s.replace("−", "-").replace("–", "-")
+    s = s.replace("\\approx", "≈").replace("\\simeq", "≃")
     # virgule décimale française balisée en LaTeX ($3{,}5$, cf. _GEN_FORMAT_RULES)
     # AVANT le dépliage des fractions : sinon les accolades de {,} sont prises
     # pour la fermeture du groupe \frac{...} et tronquent le numérateur.
@@ -82,9 +84,9 @@ _UNITS = ("km/h", "m/s", "cm/s", "m/min",
           "€", "$", "%", "°", "°C", "²", "³")
 _UNIT_RE = re.compile(
     r"(?i)(?:" + "|".join(re.escape(u) for u in sorted(_UNITS, key=len, reverse=True)) + r")\.?$")
-# « … = 42 » : tout ce qui précède le DERNIER « = » est un rappel de l'énoncé,
+# « … = 42 », « 1,786 ≈ 1,79 » : ce qui précède le signe est un rappel de l'énoncé,
 # la réponse est à droite. On ne coupe que si la droite est non vide.
-_LEFT_MEMBER_RE = re.compile(r"^[^=]*=(?=.)")
+_LEFT_MEMBER_RE = re.compile(r"^[^=≈≃]*[=≈≃](?=.)")
 
 
 def strip_answer_noise(norm: str) -> str:
@@ -101,6 +103,11 @@ def strip_answer_noise(norm: str) -> str:
 # Un arrondi correct n'est pas une faute de calcul : il vaut la MOITIÉ des
 # points, pas zéro (décision utilisateur du 02/08). Une troncature non plus.
 PARTIAL_CREDIT = 0.5
+# Forme de réponse : l'arrondi ou l'encadrement EST la compétence évaluée. Seule la
+# valeur attendue rapporte des points, ni demi-point, ni copie plus précise : sur
+# « arrondis 1,786 au centième », 1,79 est juste, 1,786 et 1,8 valent 0 (décision
+# utilisateur du 04/11). L'écriture reste libre tant que la valeur est la même.
+EXACT_DECIMAL = "exact_decimal"
 _DECIMALS_RE = re.compile(r"^-?\d+\.(\d+)$")
 
 
@@ -124,7 +131,7 @@ def _truncate(value: Fraction, k: int) -> Fraction:
 
 
 def numeric_credit(got_norm: str, got: Fraction, want: Fraction,
-                   want_text: str = "") -> float:
+                   want_text: str = "", *, exact: bool = False) -> float:
     """Crédit d'une réponse numérique : 1 (juste), PARTIAL_CREDIT (arrondi ou
     troncature corrects de la valeur exacte), 0 (faux).
 
@@ -133,9 +140,13 @@ def numeric_credit(got_norm: str, got: Fraction, want: Fraction,
         (« 0,7 » ou « 0,66 » pour 0,6667) -> crédit partiel ;
       • l'élève a écrit PLUS précis que la référence, ou la valeur exacte
         (« 0,6666 », « 2/3 » pour 0,67) -> crédit PLEIN : c'est la référence qui
-        est arrondie, pas la copie."""
+        est arrondie, pas la copie.
+
+    `exact` (forme EXACT_DECIMAL) retire ces deux tolérances."""
     if got == want:
         return 1.0
+    if exact:
+        return 0.0
     k_want = _decimals(want_text)
     if k_want is not None and _round_half_up(got, k_want) == want:
         return 1.0                      # copie plus précise que la référence
@@ -177,6 +188,81 @@ def qcm_credit(correct: set[int], chosen: set[int], n_choices: int = 0,
     return right / n_choices
 
 
+def _grade_matching_per_point(result: dict, grading: dict, expected: dict,
+                              expected_pairs: set, got: set) -> dict:
+    """Relier avec pièges : une décision par point de droite, comme une case de QCM
+    multiple. Un point utile est juste s'il a le bon lien, un piège s'il n'en a
+    aucun. Une copie sans aucun lien vaut zéro : ne rien faire n'est pas répondre."""
+    n_right = len(grading.get("right") or expected.get("right") or [])
+    result["max_score"] = float(n_right)
+    if not got:
+        result.update(tier="A", score=0.0, reason_code="matching_blank")
+        return result
+    wanted = {right: left for left, right in expected_pairs}
+    linked = {right: left for left, right in got}
+    score = float(sum(wanted.get(r) == linked.get(r) for r in range(n_right)))
+    result.update(tier="B", score=score,
+                  reason_code="matching_match" if score >= n_right else "matching_partial")
+    return result
+
+
+def form_matches(answer_form: str | None, raw: str) -> bool | None:
+    """La réponse est-elle écrite sous la forme demandée ? La VALEUR se vérifie à
+    part. None = illisible : on ne compte pas faux ce qu'on n'a pas su lire."""
+    if not answer_form or answer_form == "any":
+        return True
+    text = strip_answer_noise(normalize(raw or ""))
+    if answer_form == "irreducible":
+        match = re.fullmatch(r"\(?(-?\d+)\)?/\(?(-?\d+)\)?", text)
+        if match:
+            num, den = int(match[1]), int(match[2])
+            return den not in (0, 1, -1) and math.gcd(num, den) == 1
+        return bool(re.fullmatch(r"-?\d+", text))
+    if answer_form in ("decimal", EXACT_DECIMAL):
+        return bool(re.fullmatch(r"-?\d+(?:\.\d+)?", text))
+    if answer_form == "scientific":
+        match = re.fullmatch(r"(-?\d(?:\.\d+)?)\*10(?:\^|\*\*)\{?-?\d+\}?", text)
+        return bool(match) and abs(float(match[1])) >= 1
+    tree = _unevaluated(normalize(raw or ""))
+    if tree is None:
+        return None
+    if answer_form == "factored":
+        if tree.is_Mul:
+            return any(arg.is_Add or (arg.is_Pow and arg.base.is_Add) for arg in tree.args)
+        return bool(tree.is_Pow and tree.base.is_Add)
+    if answer_form == "expanded":
+        for node in sympy.preorder_traversal(tree):
+            if node.is_Mul and any(arg.is_Add for arg in node.args):
+                return False
+            if node.is_Pow and node.base.is_Add:
+                return False
+        return True
+    return True
+
+
+def _unevaluated(text: str):
+    """Arbre de l'expression telle qu'écrite : évaluée, 2(x+3) deviendrait 2x+6."""
+    written = text.replace("^", "**").replace("{", "(").replace("}", ")")
+    try:
+        return parse_expr(written, transformations=TRANSFORMS, evaluate=False)
+    except Exception:  # noqa: BLE001 - écriture illisible par le parseur
+        return None
+
+
+def _apply_form(result: dict, grading: dict, raw: str, max_score: float) -> dict:
+    """Une valeur juste dans la mauvaise forme est fausse si l'énoncé exigeait
+    cette forme ; illisible, elle part au correcteur suivant au lieu d'être jugée."""
+    form = grading.get("answer_form")
+    if not form or form == "any" or not result.get("score"):
+        return result
+    matches = form_matches(form, raw)
+    if matches is None:
+        result.update(tier="D", score=0.0, reason_code="form_unreadable")
+    elif not matches:
+        result.update(tier="A", score=0.0, reason_code="form_mismatch")
+    return result
+
+
 def _extract_answer_side(s: str, variable: str | None) -> str:
     """Pour 'x=5' ne garder que '5' quand on attend la solution d'une équation."""
     if variable and "=" in s:
@@ -186,7 +272,7 @@ def _extract_answer_side(s: str, variable: str | None) -> str:
     return s
 
 
-def cell_credit(exp_cell: dict, raw_cell: str) -> float | None:
+def cell_credit(exp_cell: dict, raw_cell: str, *, exact: bool = False) -> float | None:
     """Crédit d'une cellule de tableau à remplir : 1 (juste), PARTIAL_CREDIT
     (arrondi correct), 0 (fausse), None si illisible (parse impossible).
     Source unique de la comparaison par cellule, partagée par la NOTATION
@@ -215,9 +301,9 @@ def cell_credit(exp_cell: dict, raw_cell: str) -> float | None:
         return None
     if ctype == "rational":
         num, den = exp_cell["value"]
-        return numeric_credit(norm, got, Fraction(int(num), int(den)))
+        return numeric_credit(norm, got, Fraction(int(num), int(den)), exact=exact)
     want_text = str(exp_cell["value"])
-    return numeric_credit(norm, got, Fraction(want_text), want_text)
+    return numeric_credit(norm, got, Fraction(want_text), want_text, exact=exact)
 
 
 def _fold(s: str) -> str:
@@ -288,8 +374,17 @@ def table_credits(grading: dict, cell_texts: list[str] | None) -> list[float | N
     flat = fillable_cells(grading)
     texts = list(cell_texts or [])
     texts += [""] * max(0, len(flat) - len(texts))
+    form = grading.get("answer_form")
+
+    def credit_of(cell: dict, raw: str) -> float | None:
+        credit = cell_credit(cell, raw, exact=form == EXACT_DECIMAL)
+        if not credit or not form or form == "any":
+            return credit
+        matches = form_matches(form, raw)
+        return None if matches is None else (credit if matches else 0.0)
+
     if not grading.get("unordered"):
-        return [cell_credit(exp, raw) for exp, raw in zip(flat, texts)]
+        return [credit_of(exp, raw) for exp, raw in zip(flat, texts)]
 
     free = list(range(len(flat)))
     credits: list[float | None] = []
@@ -299,7 +394,7 @@ def table_credits(grading: dict, cell_texts: list[str] | None) -> list[float | N
             continue
         best_i, best_c, readable = None, 0.0, False
         for i in free:
-            c = cell_credit(flat[i], raw)
+            c = credit_of(flat[i], raw)
             readable = readable or c is not None
             if c is not None and c > best_c:
                 best_i, best_c = i, c
@@ -398,6 +493,8 @@ def grade(expected: dict, grading: dict, ocr_text: str, ocr_confidence: float,
             result.update(tier="D", reason_code="matching_ambiguous")
             return result
         got_set = set(got_pairs)
+        if grading.get("scoring") == "per_point":
+            return _grade_matching_per_point(result, grading, expected, expected_pairs, got_set)
         score = float(len(got_set & expected_pairs))
         ok = got_set == expected_pairs
         result.update(tier="B", score=score,
@@ -538,14 +635,15 @@ def grade(expected: dict, grading: dict, ocr_text: str, ocr_confidence: float,
                 result.update(tier="C" if comparator == "equation_solution" else "D",
                               reason_code="parse_failed")
                 return result
-            credit = numeric_credit(norm, got, want, want_text)
+            credit = numeric_credit(norm, got, want, want_text,
+                                    exact=grading.get("answer_form") == EXACT_DECIMAL)
             # le tier reste piloté par la CONFIANCE OCR, pas par la justesse :
             # A et B sont tous deux automatiques, un crédit partiel n'a pas à
             # déclencher de revue (décision utilisateur : demi-point auto).
             result.update(tier="A", score=max_score * credit,
                           reason_code="numeric_match" if credit == 1.0
                           else "numeric_rounded" if credit else "numeric_mismatch")
-            return result
+            return _apply_form(result, grading, ocr_text, max_score)
 
         if etype == "rational" or comparator == "rational_equiv":
             norm = strip_answer_noise(norm)
@@ -554,11 +652,12 @@ def grade(expected: dict, grading: dict, ocr_text: str, ocr_confidence: float,
             if got is None:
                 result.update(tier="D", reason_code="parse_failed")
                 return result
-            credit = numeric_credit(norm, got, want)
+            credit = numeric_credit(norm, got, want,
+                                    exact=grading.get("answer_form") == EXACT_DECIMAL)
             result.update(tier="B", score=max_score * credit,
                           reason_code="rational_equiv" if credit == 1.0
                           else "rational_rounded" if credit else "rational_mismatch")
-            return result
+            return _apply_form(result, grading, ocr_text, max_score)
 
         if etype == "expression" or comparator == "symbolic_equiv":
             var = sympy.Symbol(expected.get("variable", "x"))
@@ -574,7 +673,7 @@ def grade(expected: dict, grading: dict, ocr_text: str, ocr_confidence: float,
             ok = sympy.simplify(got_e - want_e) == 0
             result.update(tier="B", score=max_score if ok else 0.0,
                           reason_code="symbolic_equiv" if ok else "symbolic_mismatch")
-            return result
+            return _apply_form(result, grading, ocr_text, max_score)
 
         # type non couvert par le parseur -> refuser la comparaison (§6.5)
         result.update(tier="C", reason_code="type_not_covered")

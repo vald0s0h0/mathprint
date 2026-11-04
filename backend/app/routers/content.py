@@ -16,20 +16,21 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from ..deps import current_user, require_role
 from ..models import (
-    Competency, CompetencyFramework, GeneratedExercise,
-    SesamathsChapterExtraction, SesamathsLlmCache,
+    Competency, CompetencyFramework, ExercisePreference, GeneratedExercise,
+    SesamathsChapterExtraction, SesamathsLlmCache, User,
 )
-from ..services import exercise_gen, figures, scoring
+from ..services import bank_health, exercise_gen, figures, scoring
 
 router = APIRouter(prefix="/api/content", tags=["content"],
                    dependencies=[Depends(current_user)])
 
 
-def _exercise_out(ex: GeneratedExercise, comp: Competency | None) -> dict:
+def _exercise_out(ex: GeneratedExercise, comp: Competency | None,
+                  preference: str | None = None) -> dict:
     from ..services import generation
     grading = ex.grading_json or {}
     indigo = (ex.raw_extract_json or {}).get("indigo") or {}
-    display_statement, calculator, is_problem = generation.indigo_display(ex)
+    display_statement, is_problem = generation.indigo_display(ex)
     return {
         "id": ex.id, "competency_id": ex.competency_id,
         "competency_code": comp.code if comp else "",
@@ -48,7 +49,10 @@ def _exercise_out(ex: GeneratedExercise, comp: Competency | None) -> dict:
         "col_labels": grading.get("col_labels"),
         "lines": grading.get("lines"),
         "source": ex.source or "deepseek", "kind": ex.kind or "application",
-        "calculator": calculator, "is_problem": is_problem,
+        "source_version": ex.source_version or "",
+        "preference": preference,
+        "estimated_seconds": ex.estimated_seconds or 0,
+        "is_problem": is_problem,
         # barème d'EFFORT (ce que l'exercice vaut, cf. services.scoring) : il
         # vit dans grading_json, avec un repli déterministe quand le LLM n'en a
         # pas produit — la banque doit l'afficher comme l'onglet Exercices.
@@ -127,8 +131,8 @@ def summary(grade_level: str | None = None, db: Session = Depends(get_db), frame
 @router.get("/exercises")
 def list_exercises(competency_id: str | None = None, level: int | None = None,
                    include_retired: bool = False, chapter_id: str | None = None,
-                   category: str | None = None,
-                   db: Session = Depends(get_db)):
+                   category: str | None = None, preference: str | None = None,
+                   db: Session = Depends(get_db), user: User = Depends(current_user)):
     comp = db.get(Competency, chapter_id or competency_id)
     if not comp:
         raise HTTPException(404, "Compétence inconnue")
@@ -148,7 +152,47 @@ def list_exercises(competency_id: str | None = None, level: int | None = None,
         q = q.filter_by(difficulty_level=level)
     rows = q.order_by(GeneratedExercise.difficulty_level,
                       GeneratedExercise.variant).all()
-    return [_exercise_out(ex, db.get(Competency, ex.competency_id)) for ex in rows]
+    # Seules les préférences de l'utilisateur connecté : aucun autre professeur ne
+    # les voit, et aucun compteur n'est exposé.
+    mine = {p.exercise_id: p.value for p in db.query(ExercisePreference).filter_by(user_id=user.id).all()}
+    if preference:
+        rows = [ex for ex in rows if mine.get(ex.id) == preference]
+    return [_exercise_out(ex, db.get(Competency, ex.competency_id), mine.get(ex.id)) for ex in rows]
+
+
+class PreferenceIn(BaseModel):
+    value: Literal["like", "dislike"]
+
+
+@router.put("/exercises/{exercise_id}/preference")
+def set_preference(exercise_id: str, body: PreferenceIn, db: Session = Depends(get_db),
+                   user: User = Depends(current_user)):
+    """Aimer (choisi plus souvent) ou écarter (jamais tiré pour ce professeur)."""
+    if db.get(GeneratedExercise, exercise_id) is None:
+        raise HTTPException(404, "Exercice inconnu")
+    row = db.get(ExercisePreference, (user.id, exercise_id))
+    if row is None:
+        db.add(ExercisePreference(user_id=user.id, exercise_id=exercise_id, value=body.value))
+    else:
+        row.value = body.value
+    db.commit()
+    return {"exercise_id": exercise_id, "preference": body.value}
+
+
+@router.delete("/exercises/{exercise_id}/preference")
+def clear_preference(exercise_id: str, db: Session = Depends(get_db),
+                     user: User = Depends(current_user)):
+    row = db.get(ExercisePreference, (user.id, exercise_id))
+    if row is not None:
+        db.delete(row)
+        db.commit()
+    return {"exercise_id": exercise_id, "preference": None}
+
+
+@router.get("/bank-health", dependencies=[Depends(require_role("admin"))])
+def bank_health_report(db: Session = Depends(get_db)):
+    """Exercices manquants et comportement réel : onglet Exercices, administrateur."""
+    return {"exhaustion": bank_health.exhaustion(db), "field": bank_health.field_report(db)}
 
 
 @router.get("/sesamaths/raw")

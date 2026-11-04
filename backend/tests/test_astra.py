@@ -91,7 +91,7 @@ def _good() -> list[dict]:
     n44 = copy.deepcopy(ex["44"])
     matching_facile = copy.deepcopy(ex["matching"])
     n39 = {"source_number": "39", "source_page": "p075", "source_bbox_px": [50, 200, 900, 500],
-           "competency_code": "A3.2", "calculator": "interdite", "figure": None,
+           "competency_code": "A3.2",  "figure": None,
            "variants": {
                "base": {"response_type": "matching",
                         "statement": "Relie chaque expression à son écriture développée et réduite.",
@@ -101,7 +101,7 @@ def _good() -> list[dict]:
                         "pairs": [[0, 2], [1, 3], [2, 0], [3, 1]]},
                "facile": matching_facile}}
     n36 = {"source_number": "36", "source_page": "p075", "source_bbox_px": [40, 1215, 500, 1382],
-           "competency_code": "A3.2", "calculator": "interdite",
+           "competency_code": "A3.2", 
            "figure": {**ex["crop"], "masks": [[470, 1244, 492, 1300]]},
            "variants": {
                "base": {"response_type": "qcm_single",

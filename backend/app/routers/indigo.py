@@ -377,7 +377,7 @@ def summary(grade_level: str = "3e", db: Session = Depends(get_db),
     pub: dict[str, int] = {}
     problem_pub: dict[str, int] = {}
     published = (db.query(GeneratedExercise)
-                 .filter(GeneratedExercise.source == "indigo",
+                 .filter(GeneratedExercise.source.in_(indigo.PUBLISHED_SOURCES),
                          GeneratedExercise.competency_id.in_(list(by_id))).all())
     for ex in published:
         comp = by_id[ex.competency_id]
@@ -421,7 +421,8 @@ def published_count(db: Session = Depends(get_db)):
     """Exercices publiés + en banque, et surtout D'OÙ ils viennent : volume
     (publication de cette instance, persistante) ou image (contenu livré)."""
     status = indigo.published_status()
-    seeded = db.query(GeneratedExercise).filter_by(source="indigo").count()
+    seeded = (db.query(GeneratedExercise)
+              .filter(GeneratedExercise.source.in_(indigo.PUBLISHED_SOURCES)).count())
     return {"published": status["count"], "seeded": seeded,
             "source": status["source"], "on_volume": status["on_volume"],
             "generated_at": status["generated_at"]}
@@ -489,7 +490,6 @@ class ExercisePatch(BaseModel):
     correction_guide: str | None = None
     badge_type: str | None = None
     difficulty: int | None = None
-    calculator: str | None = None
     title: str | None = None
     tags: list[str] | None = None
     bareme_points: float | None = None

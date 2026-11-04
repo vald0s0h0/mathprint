@@ -51,7 +51,7 @@ from ..models import (
     Copy, CopyItem, GradingDecision, ManualReview, OcrAttempt, StudentResponse,
 )
 from . import grading as grader
-from . import providers, scoring
+from . import forge_contract, providers, scoring
 from .runtime_settings import llm_confidence_threshold
 
 logger = logging.getLogger(__name__)
@@ -63,6 +63,9 @@ _NO_LLM_COMPARATORS = ("qcm", "grid", "matching", "manual", "composite")
 # Motifs de décision qui ne SONT PAS une erreur de mathématiques : rien à faire
 # corriger par un LLM (copie blanche, scan trop faible pour être lu).
 _NO_LLM_REASONS = ("blank", "ocr_low_confidence", "table_unreadable")
+
+# Le comparateur n'a pas su analyser l'écriture : ce n'est pas encore une faute.
+_UNDECIDED_REASONS = ("parse_failed", "parse_error", "form_unreadable")
 
 # un mot isolé (« isocèle », « oui ») : réponse courte au même titre qu'un nombre
 _WORD_RE = re.compile(r"[^\W\d_]{1,24}\Z", re.UNICODE)
@@ -141,6 +144,8 @@ class Task:
     cell_texts: list[str] | None = None
     zone_id: str | None = None
     decision_id: str | None = None
+    brief: dict | None = None     # dossier rédigé pour le correcteur, jamais imprimé
+    messages: list | None = None  # micro-corrections prévues, à choisir plutôt qu'à écrire
 
 
 def _cell_label(grading: dict, index: int) -> str:
@@ -177,6 +182,25 @@ def _expected_text(expected: dict) -> str:
     return "" if value is None else str(value)
 
 
+def _expected_for_grader(text: str, grading: dict) -> str:
+    """La réponse attendue, avec l'exigence d'un arrondi ou d'un encadrement : le
+    correcteur ne doit pas rendre le demi-point que le moteur a refusé."""
+    if grading.get("answer_form") != grader.EXACT_DECIMAL:
+        return text
+    return (f"{text} (seule cette valeur est juste : toute autre valeur finale vaut 0, "
+            "même proche ou plus précise)")
+
+
+def _grader_messages(grading: dict) -> list[dict]:
+    """Messages prévus, proposés au correcteur : il en choisit un au lieu d'écrire."""
+    feedback = grading.get("feedback")
+    if not isinstance(feedback, dict):
+        return []
+    return [{"id": key, "erreur": node.get("error"), "texte": node.get("text")}
+            for key, node in (feedback.get("options") or {}).items()
+            if isinstance(node, dict) and node.get("text")]
+
+
 def plan(item, verdict: dict, *, ocr_text: str = "",
          cell_texts: list[str] | None = None) -> Task | None:
     """Ce qui, dans cette réponse, mérite un correcteur LLM — ou None si le
@@ -195,11 +219,13 @@ def plan(item, verdict: dict, *, ocr_text: str = "",
     max_score = float(verdict.get("max_score") or grading.get("max_score") or 1)
     if max_score <= 0:
         return None               # question annulée par le professeur
+    forced = grading.get("route") == forge_contract.ROUTE_LLM
     bareme = scoring.item_bareme(grading, item.response_type)
     key = f"{item.catalog_id}|{hashlib.sha1(item.statement.encode()).hexdigest()[:8]}"
     task = Task(exercise_key=key, statement=item.statement,
                 correction=item.correction or "", max_score=max_score,
-                base_score=0.0, fields=[])
+                base_score=0.0, fields=[],
+                brief=grading.get("llm_brief"), messages=_grader_messages(grading))
 
     # --- raisonnement rédigé : TOUJOURS le LLM (décision utilisateur du 03/08).
     # Une rubrique de mots-clés ne sait pas lire un raisonnement, et la confiance
@@ -251,17 +277,22 @@ def plan(item, verdict: dict, *, ocr_text: str = "",
             task.cell_credits[k] = None
             task.fields.append(Field(
                 label=_cell_label(grading, k),
-                expected=(all_expected if grading.get("unordered")
-                          else grader.cell_reference_text(cell)),
+                expected=_expected_for_grader(all_expected if grading.get("unordered")
+                                              else grader.cell_reference_text(cell), grading),
                 student=raw, bareme=unit_bareme, weight=1.0, cell_index=k))
         return task if task.fields else None
 
     # --- réponse courte en un bloc
     if float(verdict.get("score") or 0) > 0:
         return None               # juste, ou arrondi déjà crédité à demi
-    if answer_shape(ocr_text) != LONG:
+    shape = answer_shape(ocr_text)
+    # Route LLM, ou écriture que le comparateur n'a pas su analyser : le correcteur
+    # passe avant le professeur.
+    undecided = (grading.get("route") == forge_contract.ROUTE_OCR_LLM
+                 and verdict.get("reason_code") in _UNDECIDED_REASONS)
+    if shape in (BLANK, ILLEGIBLE) or (shape != LONG and not forced and not undecided):
         return None
-    task.fields.append(Field(label="", expected=_expected_text(expected),
+    task.fields.append(Field(label="", expected=_expected_for_grader(_expected_text(expected), grading),
                              student=ocr_text, bareme=bareme, weight=max_score))
     return task
 
@@ -389,6 +420,15 @@ SYSTEM = (
     "2 (2 étapes) -> élève : « 4x7=28 et 50-28=22, il lui reste 22 € » -> "
     "juste, 2.\n"
     "0,375 -> « 8 » -> « /\\_/\\ ?? » -> illisible, 0.\n"
+    "\n"
+    "── \"dossier\" et \"messages\", quand l'exercice en porte ──\n"
+    "\"dossier\" est écrit pour toi : objectif, étapes, autres méthodes valables, "
+    "erreurs attendues, ce qu'il ne faut pas pénaliser. Suis-le pour noter.\n"
+    "\"messages\" liste de courtes corrections prévues pour l'élève. Si la réponse "
+    "n'a pas tous les points, ajoute \"message_id\" : l'identifiant du message qui "
+    "décrit son erreur. Si aucun ne convient, ajoute plutôt \"message_libre\" : une "
+    "ou deux phrases adressées à l'élève (« Tu as… »), 200 caractères au plus, qui "
+    "disent ce qu'il a fait et ce qu'il faut faire. Sans \"messages\", n'ajoute rien.\n"
 )
 
 
@@ -496,6 +536,8 @@ def _normalize_grading_response(raw, batch: list[tuple[Task, Field]]) -> dict:
             "id": rid, "verdict": verdict, "points": points,
             "confiance": confidence,
             "motif": str(row.get("motif") or row.get("raison") or row.get("reason") or "")[:120],
+            **({"message_id": str(row["message_id"])} if row.get("message_id") else {}),
+            **({"message_libre": str(row["message_libre"])[:400]} if row.get("message_libre") else {}),
         })
     missing = sorted(set(expected) - seen)
     if missing:
@@ -528,6 +570,10 @@ def _payload(batch: list[tuple[Task, Field]]) -> dict:
             ex = {"ref": ref, "enonce": task.statement}
             if task.correction:
                 ex["corrige"] = task.correction
+            if task.brief:
+                ex["dossier"] = task.brief
+            if task.messages:
+                ex["messages"] = task.messages
             if task.steps:
                 ex["etapes_attendues"] = [
                     {"description": s.get("description"),
@@ -753,7 +799,9 @@ def _apply(db: Session, task: Task) -> bool:
                       "weight": f.weight,
                       "confidence": confidence,
                       "verdict": verdict or "indisponible",
-                      "motif": str(result.get("motif") or "")[:120] or f.error})
+                      "motif": str(result.get("motif") or "")[:120] or f.error,
+                      **({"message_id": result["message_id"]} if result.get("message_id") else {}),
+                      **({"message_libre": result["message_libre"]} if result.get("message_libre") else {})})
 
     decision.score = max(0.0, min(task.max_score, score))
     decision.source = "deepseek" if graded else "deterministic"

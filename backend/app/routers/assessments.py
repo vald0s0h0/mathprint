@@ -78,9 +78,10 @@ class AutoPlanIn(BaseModel):
     """Création AUTOMATIQUE : le professeur fixe le périmètre, la plateforme
     compose une copie personnalisée par élève (services.student_history)."""
     competency_ids: list[str]
-    # part d'exercices guidés pour un élève MOYEN (niveau 6) ; les autres
-    # niveaux suivent en dégradé (student_history.guide_ratio)
-    guides_medium_pct: int = 50
+    # réglage du dégradé selon le niveau (student_history.guide_ratio)
+    guides_reach_pct: int = student_history.DEFAULT_GUIDE_REACH
+    # « auto » : selon le niveau ; « include » : pour tous les élèves
+    guides: Literal["auto", "include", "none"] = "auto"
     # problèmes des chapitres touchés, dosés selon le niveau (7+ seulement)
     problems: bool = False
 
@@ -91,9 +92,14 @@ class ManualPlanIn(BaseModel):
     competency_ids: list[str] = []
     # « overlay » / « print_fragile » : valeurs d'avant la refonte des guides,
     # encore envoyées par un onglet resté ouvert — lues « include ».
-    guides: Literal["include", "none", "overlay", "print_fragile"] = "include"
+    # « auto » : guides imprimés selon le niveau de l'élève, dosés par guides_reach_pct.
+    guides: Literal["include", "none", "auto", "overlay", "print_fragile"] = "include"
+    guides_reach_pct: int = student_history.DEFAULT_GUIDE_REACH
     variant_kind: Literal["none", "anticheat", "level"] = "none"
     variants: list[VariantIn] = []
+    # « engine » : seules les cartes comptent, le moteur les place et chaque copie
+    # a son propre ordre. « placed » : plan figé page, colonne et rang.
+    composition: Literal["placed", "engine"] = "placed"
 
 
 def _has_correction(a: Assessment, scan_batch: ScanBatch | None) -> bool:
@@ -261,21 +267,21 @@ def ai_bank_status(competency_id: str, db: Session = Depends(get_db)):
 
 @router.get("/manual/pool")
 def manual_pool(competency_ids: str = "", pages: int = 1,
-                db: Session = Depends(get_db)):
+                db: Session = Depends(get_db), user: User = Depends(current_user)):
     """Exercices ET problèmes proposés au mode manuel de l'assistant « Créer un sujet », avec
     la hauteur réelle (points PDF) de chaque carte et la géométrie des colonnes
     — l'assistant dessine ses pages à l'échelle du rendu final."""
     ids = [c for c in competency_ids.split(",") if c]
     if not ids:
         raise HTTPException(422, "Aucune compétence sélectionnée")
-    return manual_subject.pool(db, ids, pages=max(1, min(6, pages)))
+    return manual_subject.pool(db, ids, pages=max(1, min(6, pages)), user_id=user.id)
 
 
 @router.get("/auto-eligibility")
 def auto_eligibility(class_id: str, db: Session = Depends(get_db), subject_id: str = "math", group_id: str | None = None):
-    """La création automatique est-elle ouverte pour cette classe ? Il faut
-    `AUTO_MIN_CORRECTED` sujets corrigés pour que le niveau des élèves soit
-    fiable. Renvoie aussi la répartition des niveaux 1-10 de la classe : c'est
+    """La création automatique est-elle ouverte pour cette classe ? Il faut au
+    moins `AUTO_MIN_CORRECTED` sujet corrigé ; sous `AUTO_RECOMMENDED_CORRECTED`,
+    l'assistant prévient que le niveau des élèves est encore imprécis. Renvoie aussi la répartition des niveaux 1-10 de la classe : c'est
     elle que l'assistant montre face au dégradé des guides et aux problèmes."""
     cls = db.get(SchoolClass, class_id)
     if not cls:
@@ -287,6 +293,7 @@ def auto_eligibility(class_id: str, db: Session = Depends(get_db), subject_id: s
     for st in students:
         levels[generation._student_level(db, st.id, subject_id)] += 1
     return {"corrected": corrected, "required": student_history.AUTO_MIN_CORRECTED,
+            "recommended": student_history.AUTO_RECOMMENDED_CORRECTED,
             "eligible": corrected >= student_history.AUTO_MIN_CORRECTED,
             "students": len(students),
             "levels": [{"level": k, "count": v} for k, v in levels.items()]}
@@ -328,20 +335,19 @@ def save_auto_plan(assessment_id: str, body: AutoPlanIn, db: Session = Depends(g
     corrected = student_history.corrected_subjects(db, a.class_id, a.subject_id, a.group_id)
     if corrected < student_history.AUTO_MIN_CORRECTED:
         raise HTTPException(
-            409, f"Création automatique : {student_history.AUTO_MIN_CORRECTED} sujets "
-                 f"corrigés sont nécessaires pour connaître le niveau des élèves "
-                 f"({corrected} pour l'instant).")
+            409, "Création automatique : il faut au moins un sujet corrigé "
+                 "pour connaître le niveau des élèves.")
     ids = list(dict.fromkeys(body.competency_ids))
     validate_competencies(db, a, ids)
     if not ids:
         raise HTTPException(422, "Aucune compétence sélectionnée")
-    if not 0 <= body.guides_medium_pct <= 100:
-        raise HTTPException(422, "Part de guides : entre 0 et 100 %")
+    if not 0 <= body.guides_reach_pct <= 100:
+        raise HTTPException(422, "Réglage des guides : entre 0 et 100 %")
     a.blueprint_json = {**(a.blueprint_json or {}), "mode": "auto",
                         "competency_ids": ids,
                         "exercise_source": exercise_gen.BANK_SOURCE,
-                        "guides": "auto",
-                        "guides_medium_pct": body.guides_medium_pct,
+                        "guides": body.guides,
+                        "guides_reach_pct": body.guides_reach_pct,
                         "problems": body.problems}
     a.personalization_mode = "individual"
     db.commit()
@@ -387,9 +393,23 @@ def save_manual_plan(assessment_id: str, body: ManualPlanIn,
         raise HTTPException(422, "Un exercice est absent de la banque ou incompatible avec les compétences")
     if any(it.page < 0 or it.col not in (0, 1) or it.rank < 0 for v in variants for it in v.items):
         raise HTTPException(422, "Placement invalide")
+    if not 0 <= body.guides_reach_pct <= 100:
+        raise HTTPException(422, "Réglage des guides : entre 0 et 100 %")
+    guides = (manual_subject.GUIDES_BY_LEVEL if body.guides == manual_subject.GUIDES_BY_LEVEL
+              else manual_subject.normalize_guide_mode(body.guides))
+    composition = {}
+    if body.composition == manual_subject.COMPOSITION_ENGINE:
+        for v in variants:
+            try:
+                manual_subject.assert_selection_fits(
+                    db, [it.exercise_id for it in v.items], a.pages_target or 1, guides)
+            except ValueError as e:
+                raise HTTPException(422, str(e))
+        composition = {"composition": manual_subject.COMPOSITION_ENGINE,
+                       "guides_reach_pct": body.guides_reach_pct}
     a.blueprint_json = {**(a.blueprint_json or {}), "mode": "manual",
                         "competency_ids": competency_ids,
-                        "guides": manual_subject.normalize_guide_mode(body.guides),
+                        "guides": guides, **composition,
                         "variant_kind": body.variant_kind,
                         "variants": [v.model_dump() for v in variants]}
     # pas de sujet individuel dans cet assistant : commun, avec ou sans variantes

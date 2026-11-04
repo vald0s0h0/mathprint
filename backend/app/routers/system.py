@@ -56,7 +56,9 @@ def _indigo_status(db: Session) -> dict:
         pub = indigo.published_status()
     except Exception:
         pub = {"count": 0, "source": "?", "generated_at": ""}
-    in_bank = db.query(GeneratedExercise).filter_by(source="indigo", status="active").count()
+    in_bank = (db.query(GeneratedExercise)
+               .filter(GeneratedExercise.source.in_(indigo.PUBLISHED_SOURCES),
+                       GeneratedExercise.status == "active").count())
     return {"published": pub.get("count", 0), "in_bank": in_bank,
             "source": pub.get("source"), "generated_at": pub.get("generated_at", "")}
 

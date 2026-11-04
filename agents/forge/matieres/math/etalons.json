@@ -1,0 +1,505 @@
+{
+ "statut": "Validés par l'humain le 2026-11-04 ; guides ajoutés ensuite, à relire",
+ "usage": "Modeles de qualite, jamais a recopier : ni les situations, ni les valeurs.",
+ "cartes": [
+  {
+   "niveau": 1,
+   "pourquoi": "Facile : une etape. Chaque distracteur correspond a une erreur reelle et calculee.",
+   "exercice": {
+    "response_type": "qcm_single",
+    "statement": "Calcule $5 + 2 \\times 6$.",
+    "estimated_seconds": 40,
+    "micro_skill": "Priorité de la multiplication sur l'addition",
+    "family_id": "calcul-priorite",
+    "figure": null,
+    "leak_keys": [
+     "valeur:17"
+    ],
+    "gives": [],
+    "choices": [
+     {
+      "id": "a",
+      "text": "$17$",
+      "correct": true
+     },
+     {
+      "id": "b",
+      "text": "$42$",
+      "correct": false,
+      "calc": "(5+2)*6",
+      "error": "math.calc.priorite_operations",
+      "feedback": "Tu as additionné d'abord : la multiplication passe avant l'addition."
+     },
+     {
+      "id": "c",
+      "text": "$13$",
+      "correct": false,
+      "calc": "5+2+6",
+      "error": "math.calc.operation_inversee",
+      "feedback": "Tu as additionné $2$ et $6$ : le signe $\\times$ demande de les multiplier."
+     }
+    ],
+    "answer_expr": "5+2*6",
+    "blank_feedback": "Commence par la multiplication, puis ajoute $5$.",
+    "fallback_feedback": "Calcule d'abord $2 \\times 6$, puis ajoute $5$.",
+    "guides": [
+     {
+      "text": "Repère l'opération à effectuer en premier, avant de regarder les propositions.",
+      "position": "apres_question"
+     }
+    ]
+   }
+  },
+  {
+   "niveau": 1,
+   "pourquoi": "Facile multiple : chaque case est une vraie decision.",
+   "exercice": {
+    "response_type": "qcm_multiple",
+    "statement": "Coche les nombres divisibles par $3$.",
+    "estimated_seconds": 50,
+    "micro_skill": "Critère de divisibilité par 3",
+    "family_id": "divisibilite-critere",
+    "figure": null,
+    "leak_keys": [],
+    "gives": [],
+    "choices": [
+     {
+      "id": "a",
+      "text": "$27$",
+      "correct": true
+     },
+     {
+      "id": "b",
+      "text": "$41$",
+      "correct": false,
+      "error": "math.num.multiple_diviseur",
+      "feedback": "$4 + 1 = 5$ : la somme des chiffres n'est pas un multiple de $3$."
+     },
+     {
+      "id": "c",
+      "text": "$102$",
+      "correct": true
+     },
+     {
+      "id": "d",
+      "text": "$53$",
+      "correct": false,
+      "error": "math.num.multiple_diviseur",
+      "feedback": "Un nombre finissant par $3$ n'est pas forcément divisible par $3$ : additionne ses chiffres."
+     }
+    ],
+    "no_check_reason": "Plusieurs bonnes réponses, vérifiées une à une par le critère.",
+    "blank_feedback": "Additionne les chiffres de chaque nombre : la somme doit être un multiple de $3$.",
+    "fallback_feedback": "Un nombre est divisible par $3$ si la somme de ses chiffres l'est.",
+    "guides": [
+     {
+      "text": "Additionne les chiffres de chaque nombre, puis regarde si cette somme est dans la table de $3$.",
+      "position": "apres_question"
+     }
+    ]
+   }
+  },
+  {
+   "niveau": 1,
+   "pourquoi": "Grille : phrases courtes, une erreur par ligne.",
+   "exercice": {
+    "response_type": "checkbox_grid",
+    "statement": "Vrai ou faux ?",
+    "estimated_seconds": 45,
+    "micro_skill": "Signification d'une puissance",
+    "family_id": "puissance-vrai-faux",
+    "figure": null,
+    "leak_keys": [],
+    "gives": [],
+    "cols": [
+     "Vrai",
+     "Faux"
+    ],
+    "rows": [
+     {
+      "id": "r1",
+      "label": "$3^2 = 6$",
+      "correct": 1,
+      "error": "math.calc.puissance_produit",
+      "feedback": "$3^2$ signifie $3 \\times 3$, donc $9$ : ce n'est pas $3 \\times 2$."
+     },
+     {
+      "id": "r2",
+      "label": "$2^3 = 8$",
+      "correct": 0,
+      "error": "math.calc.puissance_produit",
+      "feedback": "$2^3 = 2 \\times 2 \\times 2 = 8$ : cette égalité est juste."
+     },
+     {
+      "id": "r3",
+      "label": "$10^2 = 100$",
+      "correct": 0,
+      "error": "math.calc.puissance_produit",
+      "feedback": "$10^2 = 10 \\times 10 = 100$ : cette égalité est juste."
+     }
+    ],
+    "blank_feedback": "Écris chaque puissance comme un produit, puis calcule.",
+    "fallback_feedback": "L'exposant indique combien de fois on multiplie le nombre par lui-même.",
+    "guides": [
+     {
+      "text": "Écris chaque puissance sous forme de produit avant de la calculer.",
+      "position": "apres_question"
+     }
+    ]
+   }
+  },
+  {
+   "niveau": 2,
+   "pourquoi": "Relier asymetrique : 3 vraies paires, 2 pieges. Le script ajoute la consigne sur les pieges.",
+   "exercice": {
+    "response_type": "matching",
+    "statement": "Relie chaque mot à sa définition.",
+    "estimated_seconds": 100,
+    "micro_skill": "Vocabulaire des opérations",
+    "family_id": "vocabulaire-relier",
+    "figure": null,
+    "leak_keys": [],
+    "gives": [],
+    "left": [
+     "Somme",
+     "Produit",
+     "Quotient"
+    ],
+    "right": [
+     {
+      "id": "d1",
+      "text": "Résultat d'une addition",
+      "error": "math.geo.vocabulaire",
+      "feedback": "La somme est le résultat d'une addition."
+     },
+     {
+      "id": "d2",
+      "text": "Résultat d'une multiplication",
+      "error": "math.geo.vocabulaire",
+      "feedback": "Le produit est le résultat d'une multiplication."
+     },
+     {
+      "id": "d3",
+      "text": "Résultat d'une division",
+      "error": "math.geo.vocabulaire",
+      "feedback": "Le quotient est le résultat d'une division."
+     },
+     {
+      "id": "p1",
+      "text": "Résultat d'une soustraction",
+      "error": "math.geo.vocabulaire",
+      "feedback": "Ce résultat s'appelle une différence : aucun des trois mots ne le désigne."
+     },
+     {
+      "id": "p2",
+      "text": "Nombre situé au-dessus d'une fraction",
+      "error": "math.geo.vocabulaire",
+      "feedback": "Ce nombre s'appelle le numérateur : aucun des trois mots ne le désigne."
+     }
+    ],
+    "pairs": [
+     [
+      0,
+      "d1"
+     ],
+     [
+      1,
+      "d2"
+     ],
+     [
+      2,
+      "d3"
+     ]
+    ],
+    "correct_feedback": "Bien vu : tu as écarté la différence et le numérateur.",
+    "blank_feedback": "Pense à l'opération qui donne chacun de ces résultats.",
+    "fallback_feedback": "Somme, produit et quotient désignent chacun le résultat d'une opération.",
+    "guides": [
+     {
+      "text": "Pour chaque mot, rappelle-toi sa définition dans le cours avant de regarder les propositions.",
+      "position": "apres_question"
+     }
+    ]
+   }
+  },
+  {
+   "niveau": 2,
+   "pourquoi": "Reponse ecrite : la forme demandee est dans l'enonce et dans answer_form.",
+   "exercice": {
+    "response_type": "short_text",
+    "statement": "Calcule $\\dfrac{1}{3} + \\dfrac{1}{6}$. Donne le résultat sous forme de fraction irréductible : {{blank}}",
+    "estimated_seconds": 120,
+    "micro_skill": "Additionner des fractions et simplifier",
+    "family_id": "fraction-somme-irreductible",
+    "figure": null,
+    "leak_keys": [
+     "valeur:1/2"
+    ],
+    "gives": [],
+    "answer": {
+     "type": "rational",
+     "value": [
+      1,
+      2
+     ]
+    },
+    "answer_form": "irreducible",
+    "answer_expr": "Rational(1,3)+Rational(1,6)",
+    "wrong_answers": [
+     {
+      "value": "3/6",
+      "error": "math.frac.non_simplifiee",
+      "feedback": "Ta fraction est juste, mais elle n'est pas irréductible : simplifie par $3$."
+     },
+     {
+      "value": "2/9",
+      "error": "math.frac.addition_num_den",
+      "feedback": "Tu as additionné numérateurs et dénominateurs : mets d'abord au même dénominateur."
+     }
+    ],
+    "correct_feedback": "Oui : $2/6 + 1/6 = 3/6$, soit $1/2$.",
+    "blank_feedback": "Écris $1/3$ avec le dénominateur $6$, additionne, puis simplifie.",
+    "fallback_feedback": "Mets au même dénominateur, additionne les numérateurs, puis simplifie.",
+    "guides": [
+     {
+      "text": "Mets les deux fractions au même dénominateur, additionne, puis simplifie si c'est possible.",
+      "position": "apres_question"
+     }
+    ]
+   }
+  },
+  {
+   "niveau": 2,
+   "pourquoi": "Figure utile : on ne peut pas repondre sans la lire. Figure compacte.",
+   "exercice": {
+    "response_type": "qcm_single",
+    "statement": "Le triangle $ABC$ est rectangle en $B$. Quelle égalité est vraie ?",
+    "estimated_seconds": 80,
+    "micro_skill": "Repérer l'hypoténuse dans le théorème de Pythagore",
+    "family_id": "pythagore-egalite",
+    "figure": {
+     "kind": "geo",
+     "spec": {
+      "points": {
+       "A": [
+        0,
+        3
+       ],
+       "B": [
+        0,
+        0
+       ],
+       "C": [
+        4,
+        0
+       ]
+      },
+      "polygons": [
+       [
+        "A",
+        "B",
+        "C"
+       ]
+      ],
+      "angles": [
+       {
+        "at": "B",
+        "from": "A",
+        "to": "C",
+        "right": true
+       }
+      ],
+      "width_mm": 32
+     }
+    },
+    "leak_keys": [],
+    "gives": [],
+    "choices": [
+     {
+      "id": "a",
+      "text": "$AC^2 = AB^2 + BC^2$",
+      "correct": true
+     },
+     {
+      "id": "b",
+      "text": "$AB^2 = AC^2 + BC^2$",
+      "correct": false,
+      "error": "math.geo.pythagore_hypotenuse",
+      "feedback": "$[AB]$ touche l'angle droit : l'hypoténuse est le côté en face de cet angle."
+     },
+     {
+      "id": "c",
+      "text": "$AC = AB + BC$",
+      "correct": false,
+      "error": "math.geo.pythagore_carres",
+      "feedback": "Le théorème de Pythagore porte sur les carrés des longueurs."
+     }
+    ],
+    "no_check_reason": "Égalité littérale, sans valeur à calculer.",
+    "correct_feedback": "Oui : $[AC]$ est opposé à l'angle droit, c'est l'hypoténuse.",
+    "blank_feedback": "Repère l'angle droit : le côté en face est l'hypoténuse.",
+    "fallback_feedback": "Le carré de l'hypoténuse est égal à la somme des carrés des deux autres côtés.",
+    "guides": [
+     {
+      "text": "Repère l'angle droit : le côté en face de lui est l'hypoténuse.",
+      "position": "apres_question"
+     }
+    ]
+   }
+  },
+  {
+   "niveau": 2,
+   "pourquoi": "Tableau : les cases se corrigent une a une, un piege additif est prevu.",
+   "exercice": {
+    "response_type": "table_fill",
+    "statement": "Ce tableau est un tableau de proportionnalité. Complète-le.",
+    "estimated_seconds": 110,
+    "micro_skill": "Compléter un tableau de proportionnalité",
+    "family_id": "proportionnalite-tableau",
+    "figure": null,
+    "leak_keys": [],
+    "gives": [],
+    "rows_count": 2,
+    "cols_count": 3,
+    "row_labels": [
+     "Masse (kg)",
+     "Prix (€)"
+    ],
+    "cells": [
+     [
+      {
+       "type": "integer",
+       "value": 2,
+       "given": true
+      },
+      {
+       "type": "integer",
+       "value": 5,
+       "given": true
+      },
+      {
+       "type": "integer",
+       "value": 8
+      }
+     ],
+     [
+      {
+       "type": "integer",
+       "value": 6,
+       "given": true
+      },
+      {
+       "type": "integer",
+       "value": 15
+      },
+      {
+       "type": "integer",
+       "value": 24,
+       "given": true
+      }
+     ]
+    ],
+    "wrong_answers": [
+     {
+      "cell": [
+       1,
+       1
+      ],
+      "value": "9",
+      "error": "math.prop.additif",
+      "feedback": "Tu as ajouté $3$ : ici, on multiplie la masse par un même coefficient."
+     }
+    ],
+    "correct_feedback": "Oui : le prix vaut toujours $3$ fois la masse.",
+    "blank_feedback": "Cherche par quel nombre on multiplie la masse pour obtenir le prix.",
+    "fallback_feedback": "Trouve le coefficient avec la colonne complète, puis applique-le partout.",
+    "guides": [
+     {
+      "text": "Cherche par quel nombre on multiplie une valeur du haut pour obtenir celle du bas.",
+      "position": "apres_question"
+     }
+    ]
+   }
+  },
+  {
+   "niveau": 3,
+   "pourquoi": "Redaction difficile : la consigne impose une justification, et le dossier guide le correcteur LLM.",
+   "exercice": {
+    "response_type": "multiline_text",
+    "statement": "Léa a $4$ € de plus que Noé. Ensemble, ils ont $26$ €. Combien d'euros a Noé ? Rédige ta démarche.",
+    "estimated_seconds": 240,
+    "micro_skill": "Mettre un problème en équation",
+    "family_id": "mise-en-equation-partage",
+    "figure": null,
+    "leak_keys": [
+     "valeur:11"
+    ],
+    "gives": [],
+    "steps": [
+     {
+      "description": "Choisit l'inconnue et exprime l'autre montant",
+      "expected_text": "$x$ : l'argent de Noé ; Léa a $x + 4$.",
+      "points": 1
+     },
+     {
+      "description": "Pose l'équation",
+      "expected_text": "$x + x + 4 = 26$",
+      "points": 1
+     },
+     {
+      "description": "Résout",
+      "expected_text": "$2x = 22$ donc $x = 11$",
+      "points": 1
+     },
+     {
+      "description": "Conclut",
+      "expected_text": "Noé a $11$ €.",
+      "points": 1
+     }
+    ],
+    "expected_errors": [
+     {
+      "id": "e1",
+      "error": "math.eq.transposition",
+      "feedback": "Pour isoler $2x$, retire $4$ des deux membres : on ne peut pas ajouter $4$ à $26$."
+     },
+     {
+      "id": "e2",
+      "error": "math.raison.lecture_enonce",
+      "feedback": "Tu as donné l'argent de Léa : la question porte sur celui de Noé. Relis-la avant de conclure."
+     }
+    ],
+    "llm_brief": {
+     "objective": "Mettre en équation une situation de partage, résoudre et répondre à la question posée",
+     "expected_steps": [
+      "Définir l'inconnue",
+      "Poser x + x + 4 = 26",
+      "Trouver x = 11",
+      "Conclure : Noé a 11 €"
+     ],
+     "other_methods": [
+      "Retirer 4 à 26, puis diviser par 2",
+      "Essais organisés, s'ils sont justifiés"
+     ],
+     "expected_errors": [
+      {
+       "message_id": "e1",
+       "trap": "Écrit 2x = 30"
+      },
+      {
+       "message_id": "e2",
+       "trap": "Répond 15, le montant de Léa"
+      }
+     ],
+     "do_not_penalize": [
+      "Une conclusion sans phrase complète",
+      "Une autre lettre pour l'inconnue"
+     ]
+    },
+    "correct_feedback": "Oui : l'équation $2x + 4 = 26$ donne $x = 11$, et $11 + 15 = 26$ le confirme.",
+    "blank_feedback": "Appelle $x$ l'argent de Noé, puis exprime celui de Léa en fonction de $x$.",
+    "fallback_feedback": "Choisis une inconnue, traduis les deux phrases par une équation, résous, puis réponds à la question posée."
+   }
+  }
+ ]
+}

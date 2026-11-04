@@ -138,7 +138,7 @@ def test_problem_title_is_bold_on_the_card():
     row = SimpleNamespace(source="indigo", statement="Malo prend un quart.",
                           raw_extract_json={"indigo": {"badge_type": "probleme",
                                                        "title": "Partage"}})
-    shown, _calc, is_probleme = generation.indigo_display(row)
+    shown, is_probleme = generation.indigo_display(row)
     assert is_probleme and shown == "**Partage**\nMalo prend un quart."
     lay = pdfgen._rich_layout(shown, 200.0, 9)
     title = lay["lines"][0]["segs"]

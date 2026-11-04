@@ -28,7 +28,7 @@ from . import mathrender  # noqa: E402
 RENDER_DPI = 300
 # version du rendu : entre dans la clé du cache disque (services.figures), pour
 # qu'une amélioration du moteur ne serve jamais une ancienne image
-ENGINE_VERSION = "3.4"
+ENGINE_VERSION = "3.5"
 DEFAULT_WIDTH_MM = 70.0
 MIN_WIDTH_MM, MAX_WIDTH_MM = 25.0, 93.0
 MAX_HEIGHT_MM = 90.0            # plafond de pdfgen._figure_image

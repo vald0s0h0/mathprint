@@ -30,7 +30,6 @@ export default function Establishments() {
   const [catalog, setCatalog] = useState<Catalog | null>(null); const [schools, setSchools] = useState<SchoolRow[]>([])
   const [teachers, setTeachers] = useState<TeacherRow[]>([]); const [classes, setClasses] = useState<ClassRow[]>([])
   const [years, setYears] = useState<YearRow[]>([]); const [role, setRole] = useState('')
-  const [yearId, setYearId] = useState<string | null>(null)
   const [stage, setStage] = useState<string | null>(null); const [search, setSearch] = useState(''); const [tab, setTab] = useState<string | null>('work')
   const [dashboard, setDashboard] = useState<Dashboard>({ counts: {}, assessments: [], lots_at_schools: 0, overdue_collection_count: 0 }); const [error, setError] = useState('')
   const [schoolModal, setSchoolModal] = useState(false); const [schoolEdit, setSchoolEdit] = useState<string | null>(null); const [schoolForm, setSchoolForm] = useState(emptySchool)
@@ -57,10 +56,10 @@ export default function Establishments() {
   }, [shareSchools])
   const refreshWork = useCallback(async () => {
     try {
-      const q = new URLSearchParams(); if (schoolId) q.set('school_id', schoolId); if (yearId) q.set('year_id', yearId)
+      const q = new URLSearchParams(); if (schoolId) q.set('school_id', schoolId)
       setDashboard(await api.get<Dashboard>(`/api/operations/dashboard?${q}`)); setError('')
     } catch (e) { setError((e as Error).message) }
-  }, [schoolId, yearId])
+  }, [schoolId])
   useEffect(() => { refreshLists().catch(showError) }, [refreshLists])
   useEffect(() => { void refreshWork(); const timer = setInterval(refreshWork, 5000); return () => clearInterval(timer) }, [refreshWork])
   async function act(fn: () => Promise<unknown>, after?: () => void) {
@@ -70,7 +69,7 @@ export default function Establishments() {
   }
   const school = schools.find(s => s.id === schoolId)
   // Une classe sans établissement est celle d'un professeur autonome : pas supervisée ici.
-  const visibleClasses = classes.filter(c => c.school_id && (!schoolId || c.school_id === schoolId) && (yearId ? c.school_year_id === yearId : !c.archived))
+  const visibleClasses = classes.filter(c => c.school_id && (!schoolId || c.school_id === schoolId) && !c.archived)
   const work = dashboard.assessments.filter(a => (!stage || (stage === 'collect' ? a.at_school : a.stage === stage)) && `${a.title} ${a.class_name} ${a.teacher_name} ${a.school_name}`.toLowerCase().includes(search.toLowerCase()))
     .sort((a, b) => stage === 'collect' ? (b.days_at_school ?? -1) - (a.days_at_school ?? -1) : 0)
   function newSubject(c?: ClassRow) { setWizardClass(c || null); setWizard(true) }
@@ -89,10 +88,10 @@ export default function Establishments() {
       <Group><Button variant="subtle" leftSection={<RefreshCw size={15} />} onClick={() => { void refreshWork(); refreshLists().catch(showError) }}>Actualiser</Button>
         <Button leftSection={<Plus size={16} />} onClick={() => newSubject()} disabled={!visibleClasses.some(c => !c.archived) || school?.service_active === false}>Créer un sujet</Button></Group></Group>
     {error && <Alert color="red">{error}</Alert>}
-    <Group align="end"><Select label="Année scolaire" placeholder="Années actives" clearable w={200} data={years.map(y => ({ value: y.id, label: `${y.label}${y.active ? '' : ' · archivée'}` }))} value={yearId} onChange={setYearId} />
-      {school && <><Badge color={school.service_active ? 'green' : 'orange'}>{school.service_active ? 'Service actif' : 'Service suspendu'}</Badge>
-        <Button size="xs" variant="light" onClick={() => editSchool(school)}>Modifier l’établissement</Button></>}
-    </Group>
+    {school && <Group align="end">
+      <Badge color={school.service_active ? 'green' : 'orange'}>{school.service_active ? 'Service actif' : 'Service suspendu'}</Badge>
+      <Button size="xs" variant="light" onClick={() => editSchool(school)}>Modifier l’établissement</Button>
+    </Group>}
     {school?.service_active === false && <Alert color="orange">Service suspendu : les nouvelles générations et impressions sont bloquées. Les données et corrections restent accessibles.</Alert>}
     <Tabs value={tab} onChange={setTab}>
       <Tabs.List><Tabs.Tab value="work">Suivi des sujets</Tabs.Tab><Tabs.Tab value="schools">Établissements</Tabs.Tab>

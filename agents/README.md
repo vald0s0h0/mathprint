@@ -18,6 +18,7 @@ repo** ; d'autres agents du même type viendront s'ajouter ici.
 | Dossier | Rôle | Modèles |
 |---|---|---|
 | [`astra/`](astra/) | Crée les exercices d'un CHAPITRE entier du manuel. L'agent Codex `gpt-6-astra` lit les pages (leçon + exercices) et écrit, pour chaque exercice, les versions Base + Facile : réponses à cocher ou relier, guides intégrés à l'énoncé, figures redessinées (`geo`/`chart`) ou découpées. Les scripts valident, prévisualisent et écrivent les brouillons `IndigoExercise`. Commande dans le chat Codex : `astra "<chapitre>"`. | GPT-6 Astra (Codex, abonnement) |
+| [`forge/`](forge/) | Crée 20 exercices ORIGINAUX par compétence et 20 problèmes par chapitre, avec micro-corrections, route de correction et barème codé. L'agent en session rédige, les scripts contrôlent, rendent et compactent, un lecteur sans contexte (goldfish) relit l'image de chaque carte. Commande : `forge fr 3e A1.2`. | Opus ou GPT Sol (session d'agent) |
 | [`cli-exos/`](cli-exos/) | Reprend des exercices d'un manuel réel (même pipeline qu'« Indigo » côté app) mais fait passer les 3 étapes LLM par le CLI Claude. Écrit des brouillons `IndigoExercise` → onglet **Exercices** de l'app (valider / modifier / supprimer / publier). | Sonnet (découpage), Sonnet (génération), Opus (vérification) |
 
 ## Principes communs

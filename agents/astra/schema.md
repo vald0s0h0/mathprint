@@ -23,7 +23,6 @@ vérifie tout ce qui est décrit ici et nomme chaque écart.
 | `source_bbox_px` | recommandé | `[x0, y0, x1, y1]` en pixels de cette page : tout l'exercice (extrait montré au professeur à la relecture). |
 | `competency_code` | exercices | Code d'une compétence de `payload.competencies` (3e : bandeau rose au-dessus de l'exercice ; 6e : titre numéroté en haut des pages d'exercices). |
 | `badge` | non | `exercice` (défaut), `flash` (questions flash), `expert` (mode expert), `probleme`, `enigme`. |
-| `calculator` | non | `autorisee` (défaut), `interdite` (calculatrice barrée), `necessaire` (pictogramme calculatrice). |
 | `title` | non | Titre d'un problème ou d'une énigme (« Course cycliste »). |
 | `source_statement` | recommandé | Transcription FIDÈLE de l'énoncé du manuel (texte, LaTeX `$...$`). |
 | `figure` | non | FIGURE commune aux deux niveaux, ou `null`. |

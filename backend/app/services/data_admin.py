@@ -15,7 +15,8 @@ from ..models import (
     CopyResult, CompetencyEvidence, CompetencyStateHistory, DocumentPage,
     FileObject, GeneratedExercise, GradingDecision, Job, ManualReview,
     OcrAttempt, ResponseZone, SchoolClass, ScanBatch, ScannedPage, Student,
-    StudentCompetencyState, StudentLevel, StudentReport, StudentResponse,
+    OcrShadowReading, StudentCompetencyState, StudentLearningEvent, StudentLevel, StudentReport,
+    StudentResponse,
 )
 from .print_connectors import _job_document_path
 
@@ -41,9 +42,13 @@ def _delete_copies(db: Session, copy_ids: list[str]) -> None:
     d'une suppression d'élève au sein d'une classe intacte)."""
     if not copy_ids:
         return
+    db.query(StudentLearningEvent).filter(
+        StudentLearningEvent.copy_id.in_(copy_ids)).delete(synchronize_session=False)
     item_ids = [i.id for i in db.query(CopyItem.id).filter(CopyItem.copy_id.in_(copy_ids)).all()]
     page_ids = [p.id for p in db.query(DocumentPage.id).filter(DocumentPage.copy_id.in_(copy_ids)).all()]
     zone_ids = [z.id for z in db.query(ResponseZone.id).filter(ResponseZone.item_id.in_(item_ids)).all()]
+    if zone_ids:
+        db.query(OcrShadowReading).filter(OcrShadowReading.zone_id.in_(zone_ids)).delete(synchronize_session=False)
     response_ids = [r.id for r in
                     db.query(StudentResponse.id).filter(StudentResponse.copy_item_id.in_(item_ids)).all()]
     decision_ids = [d.id for d in
@@ -115,6 +120,7 @@ def delete_student(db: Session, student: Student) -> dict:
     db.query(CompetencyStateHistory).filter_by(student_id=student.id).delete(synchronize_session=False)
     db.query(StudentLevel).filter_by(student_id=student.id).delete(synchronize_session=False)
     db.query(StudentReport).filter_by(student_id=student.id).delete(synchronize_session=False)
+    db.query(StudentLearningEvent).filter_by(student_id=student.id).delete(synchronize_session=False)
     n_copies = len(copy_ids)
     db.delete(student)
     return {"copies": n_copies}
@@ -154,6 +160,9 @@ def purge_correction_tracking(db: Session, assessment: Assessment) -> dict:
     evidence = (db.query(CompetencyEvidence).filter(CompetencyEvidence.item_id.in_(item_ids)).all()
                 if item_ids else [])
     ev_ids = [e.id for e in evidence]
+    if copy_ids:
+        db.query(StudentLearningEvent).filter(
+            StudentLearningEvent.copy_id.in_(copy_ids)).delete(synchronize_session=False)
     student_ids = sorted({e.student_id for e in evidence})
     if ev_ids:
         db.query(CompetencyEvidence).filter(
@@ -292,6 +301,7 @@ _ORPHAN_CHECKS: list[tuple] = [
     ("Sujets sans classe", Assessment.class_id, SchoolClass.id, False),
     ("Élèves sans classe", Student.class_id, SchoolClass.id, True),
     ("Preuves de compétence sans élève", CompetencyEvidence.student_id, Student.id, False),
+    ("Journal d'erreurs sans élève", StudentLearningEvent.student_id, Student.id, False),
     ("Historique de compétence sans élève", CompetencyStateHistory.student_id, Student.id, False),
     ("Niveaux sans élève", StudentLevel.student_id, Student.id, False),
     ("Comptes rendus sans élève", StudentReport.student_id, Student.id, False),

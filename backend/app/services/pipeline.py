@@ -27,7 +27,7 @@ from ..models import (
     ScannedPage, Student, StudentResponse, CompetencyEvidence, ExerciseCompetency,
 )
 from . import grading as grader
-from . import llm_grader, providers, scoring
+from . import error_journal, llm_grader, microcorrection, ocr_shadow, providers, scoring, typography
 from .runtime_settings import ocr_confidence_threshold
 from .appreciation import build_appreciation
 from . import late_copies
@@ -157,8 +157,11 @@ def _recognized_answer_issue(item: CopyItem, *, selected: list[int] | None,
             return "table_reading_mismatch"
     elif comparator == "matching" and selected_pairs is not None:
         pairs = expected.get("pairs") or []
-        left_ids = {p[0] for p in pairs}
-        right_ids = {p[1] for p in pairs}
+        # Les colonnes du contrat font foi : un point de droite sans paire attendue
+        # est un piège, et le relier est une réponse fausse, pas une lecture invalide.
+        left, right = policy.get("left"), policy.get("right")
+        left_ids = set(range(len(left))) if left else {p[0] for p in pairs}
+        right_ids = set(range(len(right))) if right else {p[1] for p in pairs}
         valid = all(isinstance(p, (list, tuple)) and len(p) == 2 for p in selected_pairs)
         if not valid:
             return "matching_reading_mismatch"
@@ -645,6 +648,7 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
                 boxes = (zone.meta_json or {}).get("boxes", [])
                 selected, _dens = worker_cv.detect_grid(res.warped, boxes, qcm_thr)
                 cv_conf = worker_cv.qcm_decision_confidence(_dens, qcm_thr)
+                row_states = worker_cv.grid_row_states(boxes, _dens, qcm_thr)
                 if selected is None:
                     cv_conf = 0.0   # double coche sur une ligne -> OCRiser
                 second = False
@@ -660,6 +664,10 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
                         cv_conf = 0.5   # ligne vide non confirmée -> OCRiser
                 db.add(OcrAttempt(zone_id=zone.id, provider="cv_local",
                                   raw_json={"grid_selected": selected,
+                                            # conservé même sur une double coche : la revue
+                                            # et la micro-correction en ont besoin par ligne
+                                            "densities": [round(float(d), 4) for d in _dens],
+                                            "row_states": row_states,
                                             "threshold": round(qcm_thr.value, 4),
                                             "adapted": qcm_thr.adapted,
                                             "second_pass": second}, confidence=cv_conf))
@@ -764,6 +772,9 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
                     db.add(OcrAttempt(zone_id=zone.id, provider="mathpix",
                                       raw_json=ocr["raw"], latex=ocr["latex"],
                                       text=ocr["text"], confidence=ocr["confidence"]))
+                    ocr_shadow.record(db, item=item, zone=zone, image=crop_path.read_bytes(),
+                                      ocr_text=ocr["text"], ocr_confidence=float(ocr["confidence"]),
+                                      threshold=ocr_confidence_threshold(db), correlation_id=corr_id)
                     n_review += _decide_and_store(
                         db, item=item, zone=zone, student=student,
                         ocr_text=ocr["text"], conf=ocr["confidence"],
@@ -1107,6 +1118,7 @@ def _finalize_batch(db: Session, batch: ScanBatch) -> dict:
         # corrigé, l'élève a quand même une note (§ barème).
         if scoring.compute_copy_result(db, copy, assessment) is not None:
             n_results += 1
+        error_journal.sync_copy(db, copy, assessment)
         items = db.query(CopyItem).filter_by(copy_id=copy.id).all()
         # Une preuve par exercice et compétence, quel que soit le nombre de
         # validations : la courbe d'oubli ne compte jamais deux fois un devoir.
@@ -1333,7 +1345,17 @@ def _zone_marks(db: Session, item: CopyItem, zone: ResponseZone,
         got = set(exp_pairs) if full else _student_pairs(db, zone, decision)
         by_right = {rj: (li, rj) for li, rj in exp_pairs}
         horizontal = meta.get("orientation") == "horizontal"
+        trap_links = {pair[1] for pair in got} - set(by_right)
         for rj in sorted(right, key=lambda j: -_center_y(right[j])):
+            if rj in trap_links:
+                # piège relié par l'élève : une croix sur ce point, sans trait attendu
+                rp = right[rj]
+                if horizontal:
+                    marks["edge"].append({"x": rp["x_pt"] + rp["w_pt"] + EDGE_MARK_SIZE / 2 + 0.6 * mm,
+                                          "y": _center_y(rp), "ok": False})
+                else:
+                    marks["edge"].append({"y": _center_y(rp), "ok": False})
+                continue
             if rj not in by_right:
                 continue
             pair = by_right[rj]
@@ -1426,6 +1448,8 @@ def copy_overlay_pages(db: Session, assessment: Assessment, copy: Copy,
     # une page PDF = une page scannée), et n° de page pour l'ordre
     zones_by_page: dict[str, list] = {}
     page_no: dict[str, int] = {}
+    group_messages: dict[tuple, list[str]] = {}
+    group_zones: dict[tuple, tuple] = {}
     for item in items:
         resp = db.query(StudentResponse).filter_by(copy_item_id=item.id).first()
         zone = db.query(ResponseZone).filter_by(item_id=item.id).first()
@@ -1454,6 +1478,18 @@ def copy_overlay_pages(db: Session, assessment: Assessment, copy: Copy,
                  "marks": _zone_marks(db, item, zone, decision),
                  # repères de l'aperçu interactif, ignorés par le rendu PDF
                  "response_id": resp.id, "sequence": item.sequence}
+        # Micro-correction : recalculée à chaque rendu, jamais stockée. Absente des
+        # exercices sans contrat, dont l'overlay reste donc strictement identique.
+        selection = microcorrection.select(item, decision, resp, _latest_ocr(db, zone.id))
+        if selection is not None and selection.text:
+            if zdict["strip"]:
+                zdict["feedback"] = typography.french(selection.text)
+                zdict["dyslexic"] = bool(student.dyslexic)
+            else:
+                group_messages.setdefault((zone.page_id, item.sequence), []).append(selection.text)
+        group_strip = (zone.meta_json or {}).get("group_correction_strip")
+        if group_strip:
+            group_zones[(zone.page_id, item.sequence)] = (zdict, group_strip)
         zones_by_page.setdefault(zone.page_id, []).append(zdict)
         if zone.page_id not in page_no:
             dp = db.get(DocumentPage, zone.page_id)
@@ -1465,6 +1501,14 @@ def copy_overlay_pages(db: Session, assessment: Assessment, copy: Copy,
                               geometry_json={"x_pt": zone.x_pt, "y_pt": zone.y_pt}))
     if not zones_by_page:
         return []  # copie non scannée : pas d'overlay
+    # Parties d'un composite : une seule bande, messages dans l'ordre tant qu'ils tiennent.
+    for key, messages in group_messages.items():
+        if key in group_zones:
+            first, strip = group_zones[key]
+            text = microcorrection.group_text(messages)
+            if text:
+                first.update(group_strip=strip, group_feedback=typography.french(text),
+                             dyslexic=bool(student.dyslexic))
 
     # Résultats consolidés à la finalisation (services.scoring) : la note
     # imprimée est CELLE STOCKÉE, jamais un second calcul — deux formules
@@ -1654,6 +1698,11 @@ def build_overlays(db: Session, batch: ScanBatch) -> str:
     waves.setdefault(0, [])
 
     color = correction_ink(db)
+    # Rattrape les décisions tranchées en revue, qui ne repassent pas par le calcul
+    # du résultat : le journal suit toujours la correction imprimée.
+    for copy in db.query(Copy).filter(Copy.assessment_id == assessment.id,
+                                      Copy.status.notin_(("absent", "generated", "printed"))).all():
+        error_journal.sync_copy(db, copy, assessment)
     # Annotations et appréciations écrites : on valide AVANT le rendu pour ne
     # pas garder la base verrouillée pendant que le professeur continue
     # d'affiner d'autres copies.

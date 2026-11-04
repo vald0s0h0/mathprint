@@ -475,3 +475,60 @@ def test_second_pass_disagreement_on_dark_printed_outline_goes_to_review():
     sel = W.second_pass_selection(boxes, False, dc, W.adapt_qcm_threshold(dc),
                                   dr, W.adapt_qcm_threshold(dr))
     assert sel is None
+
+
+def _matching_page_3x6(lines):
+    """Relier avec pièges : 3 points à gauche, 6 à droite, à la géométrie d'une copie."""
+    import cv2
+    from app.services import worker_cv as W
+    from app.services.pdfgen import PAGE_H
+
+    img = np.full((int(PAGE_H * W.SCALE), 1700, 3), 255, dtype=np.uint8)
+
+    def dot(x_pt, y_pt):
+        return {"x_pt": x_pt, "y_pt": y_pt, "w_pt": 6.24, "h_pt": 6.24}
+
+    left = [dot(393.0, 557.0 - 18.4 * k) for k in range(3)]
+    right = [dot(438.9, 557.0 - 18.4 * k) for k in range(6)]
+
+    def center(p):
+        return W.pt_to_px(p["x_pt"] + p["w_pt"] / 2, p["y_pt"] + p["h_pt"] / 2)
+    for i, j in lines:
+        (lx, ly), (rx, ry) = center(left[i]), center(right[j])
+        cv2.line(img, (int(lx), int(ly)), (int(rx), int(ry)), (40, 30, 20), 3)
+    return img, left, right
+
+
+def test_detect_matching_reads_a_full_3x6_answer():
+    from app.services import worker_cv as W
+    img, left, right = _matching_page_3x6([(0, 0), (1, 1), (2, 2)])
+    pairs, confidence = W.detect_matching(img, left, right)
+    assert sorted(map(tuple, pairs)) == [(0, 0), (1, 1), (2, 2)]
+    assert confidence >= 0.9
+
+
+def test_detect_matching_reads_a_link_to_a_trap():
+    from app.services import worker_cv as W
+    img, left, right = _matching_page_3x6([(0, 0), (1, 1), (2, 5)])
+    pairs, confidence = W.detect_matching(img, left, right)
+    assert sorted(map(tuple, pairs)) == [(0, 0), (1, 1), (2, 5)]
+    assert confidence >= 0.9
+
+
+def test_detect_matching_reads_partial_and_empty_3x6_answers():
+    from app.services import worker_cv as W
+    img, left, right = _matching_page_3x6([(1, 3)])
+    pairs, confidence = W.detect_matching(img, left, right)
+    assert [tuple(p) for p in pairs] == [(1, 3)]
+    assert confidence >= 0.9
+    img, left, right = _matching_page_3x6([])
+    pairs, _confidence = W.detect_matching(img, left, right)
+    assert pairs == []
+
+
+def test_grid_row_states_keep_a_double_check_line_by_line():
+    from app.services import worker_cv as W
+    boxes = [{"row": r, "col": c} for r in range(2) for c in range(2)]
+    threshold = W.QcmThreshold(value=0.3, band=(0.2, 0.25), adapted=False)
+    assert W.grid_selection(boxes, [0.9, 0.9, 0.9, 0.0], threshold) is None
+    assert W.grid_row_states(boxes, [0.9, 0.9, 0.9, 0.0], threshold) == [[0, 1], [0]]

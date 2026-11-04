@@ -33,7 +33,7 @@ from ..models import (
     Assessment, Competency, Copy, CopyItem, DocumentPage, FileObject, Job,
     ResponseZone, SchoolClass, StudentLevel,
 )
-from . import blocks, distribution, exercise_gen, scoring, student_history
+from . import blocks, distribution, draw_rules, error_journal, exercise_gen, scoring, student_history
 from . import statement as statement_mod
 from . import pdfgen
 from .runtime_settings import doc_templates
@@ -62,20 +62,45 @@ def _set_progress(db: Session, job: Job | None, progress: int, message: str) -> 
     db.commit()
 
 
-def indigo_display(row) -> tuple[str, str, bool]:
-    """(énoncé affiché, statut calculette, est-un-problème) d'une ligne de
-    banque. Le titre concret des problèmes Indigo précède leur énoncé, EN GRAS
-    (balisage `**` de services/blocks, lu à l'identique par le PDF et le web),
-    sans rubrique éditoriale. Le statut calculette est dessiné en icône par
-    pdfgen. Les types et tags du manuel restent dans les métadonnées."""
+def assert_competencies_in_framework(assessment: Assessment, competencies) -> None:
+    """Dernier verrou avant l'impression : un sujet ne contient que des
+    exercices de son référentiel, donc de son programme et de son cycle. Les
+    routes le vérifient déjà (`validate_competencies`), mais `framework_id` est
+    sans clé étrangère et le job de fond ne repasse pas par elles. Un sujet
+    ancien sans `framework_id` reste accepté, faute de référence."""
+    framework_id = assessment.framework_id
+    if not framework_id:
+        return
+    foreign = [c.code for c in competencies if c.framework_id != framework_id]
+    if foreign:
+        raise ValueError("Compétences hors du programme de ce sujet : "
+                         + ", ".join(sorted(foreign)))
+
+
+def forge_display(row) -> tuple[str, bool]:
+    """Même contrat qu'`indigo_display`, pour un exercice de la pipeline forge :
+    le titre d'un problème précède son énoncé, en gras."""
+    meta = (row.raw_extract_json or {}).get("forge") or {}
+    if row.kind != "probleme":
+        return row.statement, False
+    title = blocks.strip_bold(meta.get("title") or "").strip()
+    return f"**{title}**\n{row.statement}" if title else row.statement, True
+
+
+def indigo_display(row) -> tuple[str, bool]:
+    """(énoncé affiché, est-un-problème) d'une ligne de banque. Le titre concret
+    des problèmes Indigo précède leur énoncé, EN GRAS (balisage `**` de
+    services/blocks, lu à l'identique par le PDF et le web), sans rubrique
+    éditoriale. Les types et tags du manuel restent dans les métadonnées."""
+    if row.source == "forge":
+        return forge_display(row)
     meta = (row.raw_extract_json or {}).get("indigo") if row.source == "indigo" else None
     if not meta:
-        return row.statement, "autorisee", False
-    calc = meta.get("calculator") or "autorisee"
+        return row.statement, False
     if meta.get("badge_type") not in ("probleme", "enigme"):
-        return row.statement, calc, False
+        return row.statement, False
     title = blocks.strip_bold(meta.get("title") or "").strip()
-    return f"**{title}**\n{row.statement}" if title else row.statement, calc, True
+    return f"**{title}**\n{row.statement}" if title else row.statement, True
 
 
 def legible_matching(grading: dict, expected: dict) -> tuple[dict, dict]:
@@ -109,6 +134,10 @@ def legible_matching(grading: dict, expected: dict) -> tuple[dict, dict]:
             d["right"] = [d["right"][old] for old in order]
         if "pairs" in d:
             d["pairs"] = [[int(a), pos[int(b)]] for a, b in d["pairs"]]
+        # identifiants stables des points de droite : la micro-correction se
+        # retrouve par identifiant, jamais par position imprimée
+        if "right_ids" in d:
+            d["right_ids"] = [d["right_ids"][old] for old in order]
         return d
     return permuted(grading), permuted(expected)
 
@@ -126,11 +155,13 @@ def render_shape(row, guides: str = pdfgen.GUIDES_INCLUDE) -> dict:
     # porter le barème avec lequel le sujet a été composé, pas dépendre d'un
     # repli recalculé à la correction.
     grading_json = scoring.with_bareme(row.grading_json, row.response_type)
-    disp_statement, calc, is_probleme = indigo_display(row)
+    disp_statement, is_probleme = indigo_display(row)
     common = {"kind": "exercise", "statement": disp_statement,
               "correction": row.correction, "level3": row.difficulty_level,
-              "calc": calc, "is_probleme": is_probleme, "figure": row.figure_json,
-              "guides": guides}
+              "is_probleme": is_probleme, "figure": row.figure_json,
+              "guides": guides,
+              "figure_layout": (row.grading_json or {}).get("figure_layout"),
+              "figure_scale": (row.grading_json or {}).get("figure_scale")}
     if row.response_type == "composite":
         parts = (row.expected_json or {}).get("parts") \
             or (grading_json or {}).get("parts") or []
@@ -157,23 +188,48 @@ def render_shape(row, guides: str = pdfgen.GUIDES_INCLUDE) -> dict:
             "inline": bool((row.expected_json or {}).get("inline"))}
 
 
+def card_has_guides(row) -> bool:
+    """Un composite peut ne porter ses guides que dans ses sous-questions."""
+    if statement_mod.has_guides(row.statement or ""):
+        return True
+    parts = (row.expected_json or {}).get("parts") or (row.grading_json or {}).get("parts") or []
+    return any(statement_mod.has_guides(p.get("statement") or "") for p in parts)
+
+
+def _part_catalog(db: Session, row, part: dict, default: str) -> str:
+    """Une partie de problème crédite SA compétence, pas la première du chapitre."""
+    code = (part.get("grading") or {}).get("competency_code")
+    if not code:
+        return default
+    owner = db.get(Competency, row.competency_id)
+    competency = (db.query(Competency).filter_by(framework_id=owner.framework_id)
+                  .filter((Competency.short_id == code) | (Competency.code == code)).first()
+                  if owner else None)
+    return exercise_gen.ensure_catalog_ref(db, competency).id if competency else default
+
+
 def build_render_item(db: Session, *, row, copy_id: str, catalog_id: str, seq: int,
-                      guides: str = pdfgen.GUIDES_INCLUDE) -> dict | None:
+                      guides: str = pdfgen.GUIDES_INCLUDE,
+                      shape: dict | None = None) -> dict | None:
     """Crée la (ou les) CopyItem d'une ligne de banque et retourne la carte à
     rendre par pdfgen. UNE seule définition, partagée par la génération
     automatique (distribution par compétences) et par l'assistant « Créer mon
     sujet » (placement manuel) : deux constructions parallèles finiraient par
     diverger sur le barème figé, les composites ou l'étiquette Indigo.
 
+    `shape` : carte déjà préparée (champs de réponse mélangés pour cette copie).
+    Elle est figée telle quelle sur la CopyItem, si bien que la correction lit
+    exactement l'ordre imprimé.
+
     Retourne None si la ligne est inexploitable (composite sans partie)."""
-    render = render_shape(row, guides)
+    render = {**shape, "guides": guides} if shape is not None else render_shape(row, guides)
     if row.response_type == "composite":
         # une CopyItem PAR PARTIE (chacune un type feuille normal, corrigée par
         # la pipeline existante) mais UNE seule carte unifiée à l'impression.
         part_ids = []
         for part in render["grading"]["parts"]:
             p_item = CopyItem(
-                copy_id=copy_id, catalog_id=catalog_id, sequence=seq,
+                copy_id=copy_id, catalog_id=_part_catalog(db, row, part, catalog_id), sequence=seq,
                 generated_exercise_id=row.id,
                 difficulty=row.difficulty_level * 3,
                 response_type=part["response_type"],
@@ -226,8 +282,7 @@ def generate_assessment_job(db: Session, assessment: Assessment,
     guide_mode = (pdfgen.GUIDES_NONE if blueprint.get("guides") == pdfgen.GUIDES_NONE
                   else pdfgen.GUIDES_INCLUDE)
     guides_by_level = auto_mode and blueprint.get("guides") == "auto"
-    guide_medium_share = max(0, min(100, int(blueprint.get(
-        "guides_medium_pct", 100 * student_history.DEFAULT_GUIDE_MEDIUM_SHARE)))) / 100
+    guide_reach = blueprint.get("guides_reach_pct", student_history.DEFAULT_GUIDE_REACH)
     # Problèmes : en création automatique, JAMAIS piochés comme des exercices —
     # ils n'arrivent que par l'option « Problèmes », dosés selon le niveau.
     exclude_kinds = ("probleme",) if auto_mode else ()
@@ -238,6 +293,7 @@ def generate_assessment_job(db: Session, assessment: Assessment,
     ordered_ids = [cid for cid in competency_ids if cid in competencies]
     if not ordered_ids:
         raise ValueError("Aucune compétence sélectionnée")
+    assert_competencies_in_framework(assessment, [competencies[cid] for cid in ordered_ids])
     catalog_refs = {cid: exercise_gen.ensure_catalog_ref(db, competencies[cid])
                     for cid in ordered_ids}
 
@@ -262,6 +318,7 @@ def generate_assessment_job(db: Session, assessment: Assessment,
                                 GeneratedExercise.status == "active",
                                 GeneratedExercise.kind == "probleme")
                         .order_by(GeneratedExercise.id).all())
+        problem_rows = [r for r in problem_rows if r.id not in draw_rules.load_context(db, assessment).dislikes]
     logger.info("Génération sujet %s — source d'exercices : %s | %s élève(s), "
                 "%s compétence(s) : %s", assessment.id, exercise_source,
                 len(students), len(ordered_ids),
@@ -283,12 +340,26 @@ def generate_assessment_job(db: Session, assessment: Assessment,
     # d'une boucle infinie au lieu d'échouer vite avec un message clair.
     _bank_exhausted: dict[str, Exception] = {}
 
+    draw = draw_rules.load_context(db, assessment)
+
     def bank_rows_near_level(comp: Competency, lvl: int):
+        """Banque du niveau le plus proche, sans les cartes écartées par le
+        professeur : si le niveau voulu n'a plus que celles-là, on prend le voisin."""
         if comp.id in _bank_exhausted:
             raise _bank_exhausted[comp.id]
         try:
-            return exercise_gen.bank_rows_near_level(db, comp, lvl, source=exercise_source,
-                                                     exclude_kinds=exclude_kinds)
+            rows, used = exercise_gen.bank_rows_near_level(db, comp, lvl, source=exercise_source,
+                                                           exclude_kinds=exclude_kinds)
+            kept = draw_rules.allowed(rows, draw)
+            if kept or not rows:
+                return kept, used
+            for other in sorted((1, 2, 3), key=lambda x: abs(x - lvl)):
+                rows, used = exercise_gen.bank_rows_near_level(db, comp, other, source=exercise_source,
+                                                               exclude_kinds=exclude_kinds)
+                kept = draw_rules.allowed(rows, draw)
+                if kept:
+                    return kept, used
+            raise ValueError("tous ses exercices ont été écartés par le professeur")
         except Exception as e:
             _bank_exhausted[comp.id] = e
             raise
@@ -338,10 +409,17 @@ def generate_assessment_job(db: Session, assessment: Assessment,
         # chaque compétence. Un dérivé PAR COMPÉTENCE, pas un niveau unique
         # pour toute la copie.
         ex_log = student_history.exercise_log(db, student.id) if individual else {}
+        # Remédiation : sujets individuels seulement, jamais les sujets communs.
+        student_draw = draw.for_student(
+            error_journal.active_errors(db, student.id, assessment.subject_id or "math")
+            if individual else set())
+        sheet = draw_rules.SheetState()
         if individual:
             slots, _stats = student_history.student_plan(
                 db, student.id, ordered_ids, level,
-                n_slots=len(ordered_ids) * MAX_FILL_ROUNDS)
+                n_slots=len(ordered_ids) * MAX_FILL_ROUNDS,
+                boost=error_journal.active_error_competencies(
+                    db, student.id, assessment.subject_id or "math"))
             priority = [sl.competency_id for sl in slots]
             slot_levels = [sl.level3 for sl in slots]
         else:
@@ -354,14 +432,14 @@ def generate_assessment_job(db: Session, assessment: Assessment,
         # Guides en dégradé (création automatique) : la part d'exercices guidés
         # glisse avec le niveau de l'élève (cf. student_history.guide_ratio).
         quota = (student_history.GuideQuota(
-            student_history.guide_ratio(level, guide_medium_share))
+            student_history.guide_ratio(level, guide_reach))
             if guides_by_level else None)
 
         def _guide_for(row) -> tuple[str, bool, bool]:
             """(mode pdfgen, la carte a-t-elle un guide, est-il imprimé)."""
             if quota is None:
                 return guide_mode, False, False
-            has = statement_mod.has_guides(row.statement)
+            has = card_has_guides(row)
             on = quota.decide(has)
             return (pdfgen.GUIDES_INCLUDE if on else pdfgen.GUIDES_NONE), has, on
 
@@ -406,6 +484,16 @@ def generate_assessment_job(db: Session, assessment: Assessment,
                                 if distribution.exercise_identity(r) not in picked_keys]
                         if not bank:
                             return False    # banque épuisée pour cette compétence
+                    compatible = draw_rules.without_conflicts(bank, sheet)
+                    if compatible:
+                        bank = compatible
+                    elif allow_repeat:
+                        warnings.append(f"{comp.code} ({student.llm_pseudonym}) : cette carte peut "
+                                        "révéler la réponse d'une autre du même sujet, à vérifier")
+                    else:
+                        return False
+                    # à rang égal : remédiation, puis cartes aimées, puis forge
+                    bank = draw_rules.preferred(bank, student_draw)
                     row = distribution.pick_balanced_exercise(
                         bank, kind_counts, target_mix, item_seed, exclude_keys=picked_keys)
             except Exception as e:
@@ -422,6 +510,9 @@ def generate_assessment_job(db: Session, assessment: Assessment,
             nonlocal total_non_qcm
             identity = distribution.exercise_identity(row)
             picked_keys.add(identity)
+            sheet.add(row)
+            if draw_rules.is_remediation(row, student_draw):
+                student_draw.remediation_left -= 1
             # les cartes de remplissage ne passent pas par le tirage équilibré
             # (kind_counts), donc pas de bucket à décrémenter si retirées.
             bucket = None if filler else distribution.exercise_bucket(row)
@@ -604,7 +695,7 @@ def generate_assessment_job(db: Session, assessment: Assessment,
             # rang croissant d'abord (ce que l'élève n'a pas encore vu), puis
             # hauteur décroissante : à préférence égale, la plus grande carte qui
             # tient laisse le plus petit trou derrière elle.
-            measured.sort(key=lambda m: (m[0], -m[1]))
+            measured.sort(key=lambda m: (m[0], draw_rules.preference_key(m[3], student_draw), -m[1]))
 
             # Cartes qui, à l'essai, faisaient déborder malgré un trou annoncé
             # suffisant : le re-packing FFD peut redistribuer les colonnes et
@@ -628,7 +719,8 @@ def generate_assessment_job(db: Session, assessment: Assessment,
                 pick = next(
                     (m for m in measured
                      if _h_for(m[3]) <= biggest and m[3].id not in blocked
-                     and distribution.exercise_identity(m[3]) not in picked_keys),
+                     and distribution.exercise_identity(m[3]) not in picked_keys
+                     and not draw_rules.conflicts(m[3], sheet)),
                     None)
                 if pick is None:
                     return              # plus rien ne rentre : place inexploitable
@@ -676,7 +768,8 @@ def generate_assessment_job(db: Session, assessment: Assessment,
                 want = student_history.next_problem_level(mix, counts)
                 ordered = sorted(candidates, key=lambda r: (
                     abs(r.difficulty_level - want),
-                    student_history.candidate_rank(r, ex_log), tiebreak(r)))
+                    student_history.candidate_rank(r, ex_log),
+                    draw_rules.preference_key(r, student_draw), tiebreak(r)))
                 added = False
                 for row in ordered:
                     h = _h_for(row)

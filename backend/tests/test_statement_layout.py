@@ -191,7 +191,7 @@ def _lines(text: str, **kw) -> list[dict]:
 
 
 def _words(line: dict) -> str:
-    return " ".join(s[1] for s in line["segs"] if s[0] == "word")
+    return " ".join(s[1] for s in line["segs"] if s[0] == "word").replace(" \u00a0", " ")
 
 
 def test_rich_layout_breaks_hard_on_newlines():

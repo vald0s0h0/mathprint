@@ -218,7 +218,8 @@ def _append_blank(statement: str) -> str:
     ligne du marqueur de figure, qui n'est pas une question."""
     lines = (statement or "").split("\n")
     for i in range(len(lines) - 1, -1, -1):
-        if lines[i].strip() and not statement_mod.has_figure_marker(lines[i]):
+        if (lines[i].strip() and not statement_mod.has_figure_marker(lines[i])
+                and not statement_mod.is_guide_line(lines[i])):
             lines[i] = lines[i].rstrip() + " " + BLANK
             return "\n".join(lines)
     return f"{statement}\n{BLANK}".strip()

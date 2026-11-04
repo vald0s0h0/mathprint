@@ -1,3 +1,5 @@
+import json
+
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
@@ -51,6 +53,8 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, ...]]] = {
         ("kind", "TEXT"),
         ("quality_json", "JSON"),
         ("raw_extract_json", "JSON"),
+        ("source_version", "TEXT", "''"),
+        ("estimated_seconds", "INTEGER", "0"),
     ],
     "jobs": [
         ("created_by", "TEXT", "NULL"),
@@ -161,7 +165,7 @@ _DROPPED_COLUMNS: dict[str, list[str]] = {
     # présente et faisait échouer tout nouvel INSERT dans `classes`, car le
     # modèle courant ne lui fournit plus de valeur.
     "classes": ["is_mock"],
-    "indigo_exercises": ["effort_points"],
+    "indigo_exercises": ["effort_points", "calculator"],
     # `next_plan_json`/`next_plan_updated_at` portaient la « trame » d'exercices
     # écrite par le LLM après chaque correction. Supprimée : elle pariait sur
     # une date de sujet suivant que personne ne connaissait (cf. modèle Student).
@@ -289,9 +293,43 @@ def run_migrations():
                 "WHERE personalization_mode IN ('guided_individual','free_individual')"))
             conn.execute(text(
                 "UPDATE assessments SET status='ready' WHERE status='generated'"))
+        _purge_calculator(conn, tables)
         _migrate_difficulty_to_3_levels(conn, tables)
         _backfill_item_history(conn, tables)
         _clamp_stability_to_mastery(conn, tables)
+
+
+# Colonnes JSON qui ont porté le statut calculatrice d'un exercice. L'attribut a été
+# retiré partout : il disparaît aussi des exercices déjà en base.
+_CALCULATOR_JSON = {"generated_exercises": ("raw_extract_json",),
+                    "indigo_exercises": ("raw_ocr_json", "payload_json")}
+
+
+def _without_calculator(value):
+    if isinstance(value, dict):
+        return {k: _without_calculator(v) for k, v in value.items() if k != "calculator"}
+    if isinstance(value, list):
+        return [_without_calculator(v) for v in value]
+    return value
+
+
+def _purge_calculator(conn, tables: set[str]) -> None:
+    """Idempotente : seules les lignes qui portent encore la clé sont lues."""
+    for table, columns in _CALCULATOR_JSON.items():
+        if table not in tables:
+            continue
+        existing = {c["name"] for c in inspect(conn).get_columns(table)}
+        for column in columns:
+            if column not in existing:
+                continue
+            rows = conn.execute(text(
+                f"SELECT id, {column} FROM {table} "
+                f"WHERE CAST({column} AS TEXT) LIKE '%\"calculator\"%'")).fetchall()
+            for row_id, value in rows:
+                data = json.loads(value) if isinstance(value, str) else value
+                conn.execute(text(f"UPDATE {table} SET {column} = :value WHERE id = :id"),
+                             {"value": json.dumps(_without_calculator(data), ensure_ascii=False),
+                              "id": row_id})
 
 
 # Passage de 5 à 3 niveaux de difficulté (§ exercise_gen.DIFFICULTY_LEVELS).

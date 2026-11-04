@@ -49,7 +49,6 @@ def exercise_level(ex: dict, kind: str) -> int:
 LEAF_TYPES = ("qcm_single", "qcm_multiple", "checkbox_grid", "matching")
 COMPOSITE = "composite"
 BADGES = ("exercice", "flash", "expert", "probleme", "enigme")
-CALCULATORS = ("interdite", "autorisee", "necessaire")
 GUIDE_MIN_WORDS, GUIDE_MAX_WORDS = 4, 45
 MATCH_MIN, MATCH_MAX = 2, 6
 PAGE_DPI = 220                          # ≈ résolution native du manuel (2560 px par double page)
@@ -612,8 +611,6 @@ def validate(db, run: Path) -> tuple[Report, dict]:
             e_err.append(f"competency_code {code!r} hors du chapitre ({', '.join(comps)})")
         if ex.get("badge", "exercice") not in BADGES:
             e_err.append(f"badge {ex.get('badge')!r} ∉ {BADGES}")
-        if ex.get("calculator", "autorisee") not in CALCULATORS:
-            e_err.append(f"calculator {ex.get('calculator')!r} ∉ {CALCULATORS}")
         pages = {p["id"] for p in payload["pages"]}
         if ex.get("source_page") not in pages:
             e_err.append(f"source_page {ex.get('source_page')!r} : id de page du payload attendu "
@@ -825,8 +822,7 @@ def _render_row(num: str, kind: str, valid: dict, ex: dict, fig_path: Path | Non
         grading_json=grading, expected_json=expected, source="indigo",
         figure_json={"type": "image", "params": {"path": str(fig_path)}} if fig_path else None,
         raw_extract_json={"indigo": {"badge_type": ex.get("badge", "exercice"),
-                                     "title": ex.get("title") or "",
-                                     "calculator": ex.get("calculator", "autorisee")}})
+                                     "title": ex.get("title") or ""}})
 
 
 def preview(db, run: Path, *, variant: str, guides: bool = True) -> Path:
@@ -948,7 +944,6 @@ def persist(db, run: Path, *, replace: bool = False) -> dict:
                 source_page=page["pdf_page"] - 1, source_number=num, order_index=order,
                 badge_type=ex.get("badge", "exercice"), difficulty=exercise_level(ex, kind),
                 title=(ex.get("title") or "")[:200], tags_json=list(ex.get("tags") or []),
-                calculator=ex.get("calculator", "autorisee"),
                 statement=statement, response_type=valid["response_type"],
                 expected_json=expected, grading_json=grading,
                 correction_solution=str(((ex.get("variants") or {}).get(kind) or {})

@@ -229,6 +229,9 @@ class Settings(BaseSettings):
     gemini_max_batches: int = 10
 
     # --- Budgets / quotas par défaut ---
+    # Avis du LLM avec image sur les écritures incertaines, enregistré sans effet sur
+    # les notes, pour décider sur preuves de le faire passer avant le professeur.
+    ocr_llm_shadow: bool = False
     mathpix_concurrency: int = 3
     mathpix_daily_limit: int = 500
     # plafond de dépense Mathpix sur 24 h glissantes (OCR des copies élèves).

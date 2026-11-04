@@ -230,6 +230,9 @@ def _level_for(stats: Stats, wanted: int) -> int:
     return max(1, min(3, level))
 
 
+ERROR_PRIORITY_BOOST = 0.2
+
+
 @dataclass
 class Slot:
     """Une case de la copie : quelle compétence, quel dérivé."""
@@ -281,7 +284,8 @@ def _assign_levels(stats: dict[str, Stats], order: list[str],
 
 def student_plan(db: Session, student_id: str, competency_ids: list[str],
                  student_level_1_10: int, n_slots: int,
-                 at: datetime | None = None) -> tuple[list[Slot], dict[str, Stats]]:
+                 at: datetime | None = None,
+                 boost: set[str] | None = None) -> tuple[list[Slot], dict[str, Stats]]:
     """Trame de la copie : la liste ordonnée des cases à remplir.
 
     Les `len(competency_ids)` premières cases couvrent UNE FOIS CHACUNE toutes
@@ -294,6 +298,11 @@ def student_plan(db: Session, student_id: str, competency_ids: list[str],
     génération s'arrête quand la page est pleine."""
     ordered = [cid for cid in competency_ids]
     stats = competency_stats(db, student_id, ordered, at)
+    # Une erreur active relève la priorité de sa compétence, sans changer les bornes
+    # de difficulté : on ne teste toujours pas une lacune en « difficile ».
+    for cid in boost or ():
+        if cid in stats:
+            stats[cid].priority = min(1.0, stats[cid].priority + ERROR_PRIORITY_BOOST)
     by_priority = sorted(ordered, key=lambda cid: (-stats[cid].priority,
                                                    ordered.index(cid)))
     n_slots = max(n_slots, len(ordered))
@@ -360,19 +369,21 @@ def preferred_rows(rows: list[GeneratedExercise], log: dict[str, Seen],
 # LEVEL_MIX : dix niveaux ne se traduisent pas en deux états.
 # ============================================================================
 
-# Il faut assez de corrections pour que le niveau 1-10 et la courbe d'oubli
-# veuillent dire quelque chose : en deçà, la personnalisation choisirait sur du
-# bruit. Compté en SUJETS CORRIGÉS de la classe.
-AUTO_MIN_CORRECTED = 5
+# Compté en SUJETS CORRIGÉS de la classe. Il en faut au moins un pour disposer
+# d'un niveau et d'une courbe d'oubli ; sous le seuil conseillé, la création
+# reste possible mais l'assistant prévient qu'elle sera moins précise.
+AUTO_MIN_CORRECTED = 1
+AUTO_RECOMMENDED_CORRECTED = 3
 
-# Guides (encadrés « {{aide}} ») : part des exercices guidés selon le niveau.
-# Tout guider jusqu'à GUIDE_FULL_MAX_LEVEL, plus rien à partir de
-# GUIDE_NONE_MIN_LEVEL ; entre les deux, deux pentes qui passent par la part
-# réglée par le professeur pour l'élève MOYEN (GUIDE_MEDIUM_LEVEL).
-GUIDE_FULL_MAX_LEVEL = 3
-GUIDE_MEDIUM_LEVEL = 6
-GUIDE_NONE_MIN_LEVEL = 9
-DEFAULT_GUIDE_MEDIUM_SHARE = 0.5
+# Guides (encadrés « {{aide}} ») : part des exercices guidés selon le niveau. Tout
+# est guidé jusqu'à un niveau, plus rien à partir d'un autre, en ligne droite entre
+# les deux. Le réglage du professeur (0-100) fait glisser cette rampe le long des
+# niveaux. Ancrages : (réglage, dernier niveau tout guidé, premier niveau sans guide).
+#     0 → 100 50 0 …   seuls les tout premiers niveaux sont aidés
+#    25 → 100 100 100 67 33 0 …   réglage par défaut
+#   100 → 100 … 100 50   seul le niveau 10 perd la moitié de ses guides
+GUIDE_CURVE = ((0, 1, 3), (25, 3, 6), (100, 9, 11))
+DEFAULT_GUIDE_REACH = 25
 
 
 def corrected_subjects(db: Session, class_id: str, subject_id: str = "math", group_id: str | None = None) -> int:
@@ -385,25 +396,20 @@ def corrected_subjects(db: Session, class_id: str, subject_id: str = "math", gro
                     Assessment.group_id == group_id).count())
 
 
-def guide_ratio(level_1_10: int, medium_share: float = DEFAULT_GUIDE_MEDIUM_SHARE) -> float:
-    """Part (0-1) des exercices à guides d'une copie, pour un élève de ce
-    niveau. Interpolation linéaire entre trois points d'ancrage :
-
-        niveau ≤ 3 → 1 (tout guidé)   niveau 6 → medium_share   niveau ≥ 9 → 0
-
-    Avec la part moyenne par défaut (50 %) : 100 · 100 · 100 · 83 · 67 · 50 ·
-    33 · 17 · 0 · 0 %."""
-    m = max(0.0, min(1.0, float(medium_share)))
+def guide_ratio(level_1_10: int, reach: float = DEFAULT_GUIDE_REACH) -> float:
+    """Part (0-1) des exercices à guides d'une copie, pour un élève de ce niveau.
+    `frontend/src/pages/subjects/guideCurve.ts` en est le miroir exact."""
+    r = max(0.0, min(100.0, float(reach)))
+    lo, hi = (GUIDE_CURVE[0], GUIDE_CURVE[1]) if r <= GUIDE_CURVE[1][0] else (GUIDE_CURVE[1], GUIDE_CURVE[2])
+    t = (r - lo[0]) / (hi[0] - lo[0])
+    full = lo[1] + (hi[1] - lo[1]) * t
+    none = lo[2] + (hi[2] - lo[2]) * t
     lvl = max(1, min(10, int(level_1_10 or 5)))
-    if lvl <= GUIDE_FULL_MAX_LEVEL:
+    if lvl <= full:
         return 1.0
-    if lvl >= GUIDE_NONE_MIN_LEVEL:
+    if lvl >= none:
         return 0.0
-    if lvl <= GUIDE_MEDIUM_LEVEL:
-        t = (lvl - GUIDE_FULL_MAX_LEVEL) / (GUIDE_MEDIUM_LEVEL - GUIDE_FULL_MAX_LEVEL)
-        return 1.0 + (m - 1.0) * t
-    t = (lvl - GUIDE_MEDIUM_LEVEL) / (GUIDE_NONE_MIN_LEVEL - GUIDE_MEDIUM_LEVEL)
-    return m * (1.0 - t)
+    return (none - lvl) / (none - full)
 
 
 class GuideQuota:

@@ -200,6 +200,59 @@ def with_qcm_bareme(grading: dict, response_type: str) -> dict:
             "bareme_points": qcm_bareme(response_type, grading or {})}
 
 
+# ------------------------------------------------------ barème de la forge
+#
+# Le barème suit la DIFFICULTÉ et le travail demandé, jamais la structure : un
+# QCM facile à 6 cases ne vaut pas plus qu'un QCM facile à 3 cases, ses cases se
+# partagent le même total (`earned_points` applique déjà ce ratio). Repère commun
+# à tous les niveaux : environ 1 point par minute de travail.
+#
+#                  (facile, moyen, difficile)
+FORGE_BAREME: dict[str, tuple[float, float, float]] = {
+    # Limité : une bonne réponse au hasard rapporterait tout le barème.
+    "qcm_single": (1.0, 1.5, 2.0),
+    "qcm_multiple": (1.0, 2.0, 3.0),
+    "checkbox_grid": (1.0, 2.0, 3.0),
+    "matching": (1.0, 2.0, 3.0),
+    "geo_construction": (1.0, 2.0, 3.0),
+    "short_text": (1.0, 2.0, 3.0),
+    "multi_blank": (1.0, 2.0, 3.0),
+    "table_fill": (1.0, 2.0, 3.0),
+    "multiline_text": (1.5, 2.5, 4.0),
+}
+# Total d'un problème : plafonné par BAREME_MAX pour ne pas peser un quart du sujet.
+FORGE_PROBLEM_BAREME = (2.0, 3.5, 5.0)
+FORGE_ADJUST = 0.5
+
+
+def forge_bareme(response_type: str, level: int, seconds: int = 0,
+                 problem: bool = False) -> float:
+    """Barème CODÉ d'un exercice forge. ±0,5 point si le temps estimé s'écarte
+    nettement du repère d'une minute par point ; jamais décidé par le modèle."""
+    index = max(1, min(3, int(level))) - 1
+    if problem:
+        return FORGE_PROBLEM_BAREME[index]
+    points = FORGE_BAREME[response_type][index]
+    if seconds > 0:
+        if seconds > points * 90:
+            points += FORGE_ADJUST
+        elif seconds < points * 30:
+            points -= FORGE_ADJUST
+    return min(BAREME_MAX, max(FORGE_ADJUST, points))
+
+
+def split_bareme(total: float, weights: list[float]) -> list[float]:
+    """Répartit `total` sur des parties, au pas du barème, sans perdre un
+    huitième : le reste d'arrondi va à la partie la plus lourde."""
+    if not weights:
+        return []
+    denominator = sum(weights) or float(len(weights))
+    shares = [max(BAREME_STEP, round(total * (w or 1.0) / denominator / BAREME_STEP) * BAREME_STEP)
+              for w in weights]
+    shares[shares.index(max(shares))] += total - sum(shares)
+    return shares
+
+
 def item_bareme(grading: dict, response_type: str) -> float:
     """Barème d'un exercice, en points professeur. Source de vérité unique :
     tout ce qui a besoin du barème passe ici, jamais par grading_json en

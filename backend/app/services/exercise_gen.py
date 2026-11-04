@@ -1482,7 +1482,8 @@ def _source_pool(source: str) -> tuple[str, ...] | None:
         from .gemini_gen import SOURCE
         return (SOURCE,)
     if source == "indigo":
-        return ("indigo",)
+        from .indigo import PUBLISHED_SOURCES
+        return PUBLISHED_SOURCES
     return None
 
 

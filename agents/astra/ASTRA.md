@@ -15,7 +15,7 @@ le demande explicitement. Lance les commandes depuis la racine avec
    notations, vocabulaire. Lis ensuite CHAQUE page d’exercices dans l’ordre.
 3. Recense chaque numéro, y compris flash, expert, bilan, problèmes et énigmes.
    Ignore les activités, pages « Travailler autrement » et l’interface de liseuse.
-   Note le numéro, la page et le cadre source, la rubrique, le titre et la calculette.
+   Note le numéro, la page et le cadre source, la rubrique, et le titre.
 4. Écris la sortie par lots (une page à la fois), en validant à chaque lot.
 5. `figures RUN` : ouvre CHAQUE PNG utile, y compris les figures de sous-questions.
    Vérifie cadrage, valeurs, noms, lisibilité et absence de chevauchement.
@@ -57,8 +57,6 @@ Pour produire des sujets séparés à la demande de l’utilisateur :
 - Trie les problèmes par difficulté, puis par numéro. Les énigmes et les problèmes
   de brevet suivent la même règle. Une démonstration transverse peut être classée
   Difficile si aucun code du manuel n’est disponible.
-
-Calculette : barrée `interdite`, pictogramme seul `necessaire`, absente `autorisee`.
 
 ### Manuel 6e (Mission Indigo 6e, `payload.grade = "6e"`)
 
@@ -286,7 +284,6 @@ n°44 : aires de deux rectangles de côtés $7x+3$ × $4x+5$ et $14x+3$ × $2x+5
     1255
   ],
   "competency_code": "A3.2",
-  "calculator": "interdite",
   "figure": {
     "kind": "geo",
     "spec": {

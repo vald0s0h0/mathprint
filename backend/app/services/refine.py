@@ -40,7 +40,7 @@ from ..models import (
     ResponseZone, ScanBatch, Student, StudentResponse,
 )
 from . import grading as grader
-from . import scoring
+from . import error_journal, scoring
 from .appreciation import compute_competency_progress
 from .forgetting import replay_states
 from .pdfgen import PAGE_H, PAGE_W, render_page_marks
@@ -448,6 +448,7 @@ def refresh_copy(db: Session, copy: Copy, item: CopyItem,
     est conservée telle quelle."""
     assessment = db.get(Assessment, copy.assessment_id)
     result = scoring.compute_copy_result(db, copy, assessment)
+    error_journal.sync_copy(db, copy, assessment)
     ratio = (max(0.0, min(1.0, decision.score / decision.max_score))
              if decision.max_score else 0.0)
     changed: list[str] = []

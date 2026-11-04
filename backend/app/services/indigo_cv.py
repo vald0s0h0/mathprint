@@ -198,6 +198,5 @@ def analyze(crop_bgr: np.ndarray, is_probleme: bool,
     return {
         "badge_type": badge_type,
         "difficulty": difficulty,
-        "calculator": "autorisee",
         "color": color,
     }

@@ -213,7 +213,7 @@ def test_bold_words_carry_their_own_font():
     Coche » n'a qu'une partie en gras, et la mesure doit suivre le dessin."""
     segs = pdfgen._paragraph_segs("**Vrai ou faux ?** Coche.", 9, 9)
     bold = {seg[1]: seg[2] for seg in segs if seg[0] == "word"}
-    assert bold == {"Vrai": True, "ou": True, "faux": True, "?": True, "Coche.": False}
+    assert bold == {"Vrai": True, "ou": True, "faux": True, "\u00a0?": True, "Coche.": False}
     assert pdfgen._seg_font(("word", "Vrai", True, False)) == pdfgen._font("bold")
 
 

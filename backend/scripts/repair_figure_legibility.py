@@ -171,8 +171,7 @@ def main():
                     statement=row.statement, correction=row.correction_guide, difficulty_level=row.difficulty,
                     response_type=row.response_type, expected_json=expected, grading_json=grading,
                     source="indigo", kind="application", figure_json=fig,
-                    raw_extract_json={"indigo": {"badge_type": row.badge_type, "title": row.title,
-                                                  "calculator": row.calculator}})
+                    raw_extract_json={"indigo": {"badge_type": row.badge_type, "title": row.title}})
                 return pdfgen.estimate_item_height(generation.render_shape(simulated), 9, 9,
                                                    pdfgen.DEFAULT_TEMPLATES["exercise"])
             # Deux grandes planches dans une carte longue : trois colonnes

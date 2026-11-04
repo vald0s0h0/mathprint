@@ -62,6 +62,7 @@ def scope_session(db, user):
         (m.Annotation, m.Annotation.copy_id.in_(copies)),
         (m.StudentCompetencyState, tuple_(m.StudentCompetencyState.student_id, m.StudentCompetencyState.competency_id).in_(student_comps)),
         (m.CompetencyEvidence, tuple_(m.CompetencyEvidence.student_id, m.CompetencyEvidence.competency_id).in_(student_comps)),
+        (m.StudentLearningEvent, m.StudentLearningEvent.copy_id.in_(copies)),
         (m.StudentLevel, tuple_(m.StudentLevel.student_id, m.StudentLevel.subject_id).in_(student_subjects)),
         (m.StudentReport, tuple_(m.StudentReport.student_id, m.StudentReport.subject_id).in_(student_subjects)),
         (m.SandboxUpload, m.SandboxUpload.uploaded_by == user.id),

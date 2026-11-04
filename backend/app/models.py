@@ -290,6 +290,11 @@ class GeneratedExercise(Base):
     figure_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     # Provenance (deepseek) et nature (application | probleme)
     source: Mapped[str] = mapped_column(String, default="deepseek")
+    # Version de la pipeline qui l'a produit (ex. "forge-1.0"), vide sinon :
+    # filtrer la banque, comparer les versions, en retirer une défectueuse.
+    source_version: Mapped[str] = mapped_column(String, default="")
+    # Temps estimé pour l'élève, en secondes (0 = inconnu : exercice ancien).
+    estimated_seconds: Mapped[int] = mapped_column(Integer, default=0)
     kind: Mapped[str] = mapped_column(String, default="application")
     # Scores qualité du vérificateur (justesse, adéquation compétence/niveau, clarté)
     quality_json: Mapped[dict] = mapped_column(JSON, default=dict)
@@ -540,7 +545,6 @@ class IndigoExercise(Base):
     badge_color_json: Mapped[dict] = mapped_column(JSON, default=dict) # {rgb, category, confidence} recalibrable
     title: Mapped[str] = mapped_column(String, default="")             # titre (problème/énigme)
     tags_json: Mapped[list] = mapped_column(JSON, default=list)        # ["Raisonner","Calculer"] (problèmes)
-    calculator: Mapped[str] = mapped_column(String, default="autorisee")  # necessaire|interdite|autorisee
     # --- contenu mis au propre par Gemini ---
     statement: Mapped[str] = mapped_column(Text, default="")
     response_type: Mapped[str] = mapped_column(String, default="short_text")
@@ -816,6 +820,60 @@ class CompetencyEvidence(Base):
     difficulty: Mapped[int] = mapped_column(Integer, default=5)
     weight: Mapped[float] = mapped_column(Float, default=1.0)
     observed_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
+class StudentLearningEvent(Base):
+    """Journal d'erreurs de l'élève, en ajout seul (services.error_journal) : à
+    cette date, sur cette carte, cette erreur type a été observée ou évitée. La
+    ligne de plus haute révision de chaque couple (carte, erreur) fait foi. Pas de
+    clé étrangère vers la carte ni la banque : le journal survit à une purge."""
+    __tablename__ = "student_learning_events"
+    __table_args__ = (UniqueConstraint("copy_item_id", "error_code", "revision",
+                                       name="uq_learning_event_revision"),)
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
+    student_id: Mapped[str] = mapped_column(String, index=True)
+    subject_id: Mapped[str] = mapped_column(String, default="math", index=True)
+    competency_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    copy_id: Mapped[str] = mapped_column(String, index=True)
+    copy_item_id: Mapped[str] = mapped_column(String, index=True)
+    exercise_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    error_code: Mapped[str] = mapped_column(String, index=True)
+    observed: Mapped[bool] = mapped_column(Boolean, default=False)
+    kind: Mapped[str] = mapped_column(String, default="erreur")     # erreur | retrait
+    option_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    message: Mapped[str] = mapped_column(Text, default="")          # texte figé
+    source: Mapped[str] = mapped_column(String, default="")         # cv, ocr, llm, prof…
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    occurred_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)   # jour du devoir
+    recorded_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    withdrawn_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+
+
+class OcrShadowReading(Base):
+    """Ce que le LLM aurait lu sur une écriture incertaine (services.ocr_shadow).
+    Table à part : aucune lecture ni aucune note n'en dépend."""
+    __tablename__ = "ocr_shadow_readings"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
+    zone_id: Mapped[str] = mapped_column(String, index=True)
+    copy_item_id: Mapped[str] = mapped_column(String)
+    ocr_text: Mapped[str] = mapped_column(Text, default="")
+    ocr_confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    transcription: Mapped[str] = mapped_column(Text, default="")
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    unreadable: Mapped[bool] = mapped_column(Boolean, default=False)
+    model: Mapped[str] = mapped_column(String, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
+class ExercisePreference(Base):
+    """Avis privé d'un professeur sur un exercice de la banque : aimé (choisi plus
+    souvent) ou écarté (jamais tiré pour lui). Aucun autre professeur ne le voit."""
+    __tablename__ = "exercise_preferences"
+    user_id: Mapped[str] = mapped_column(String, primary_key=True)
+    exercise_id: Mapped[str] = mapped_column(String, primary_key=True)
+    value: Mapped[str] = mapped_column(String)      # like | dislike
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now)
 
 
 class StudentCompetencyState(Base):

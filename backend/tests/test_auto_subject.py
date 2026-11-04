@@ -112,12 +112,25 @@ def test_pack_placement_is_what_render_copy_draws():
 
 # ------------------------------------------------- guides et problèmes : dosage
 
-def test_guide_ratio_is_a_gradient_anchored_on_the_teacher_setting():
-    ratios = [student_history.guide_ratio(lvl, 0.4) for lvl in range(1, 11)]
-    assert ratios[:3] == [1.0, 1.0, 1.0]
-    assert ratios[5] == pytest.approx(0.4)          # niveau 6 = élève moyen
-    assert ratios[8:] == [0.0, 0.0]
-    assert all(a >= b for a, b in zip(ratios, ratios[1:])), "dégradé monotone"
+def _guide_curve(reach):
+    return [round(student_history.guide_ratio(lvl, reach), 2) for lvl in range(1, 11)]
+
+
+def test_guide_setting_slides_the_gradient_along_the_levels():
+    assert _guide_curve(0) == [1, 0.5, 0, 0, 0, 0, 0, 0, 0, 0]
+    assert _guide_curve(25) == [1, 1, 1, 0.67, 0.33, 0, 0, 0, 0, 0]
+    assert _guide_curve(100) == [1, 1, 1, 1, 1, 1, 1, 1, 1, 0.5]
+    assert student_history.DEFAULT_GUIDE_REACH == 25
+
+
+def test_guide_setting_only_ever_adds_help():
+    previous = _guide_curve(0)
+    for reach in range(5, 101, 5):
+        curve = _guide_curve(reach)
+        assert all(a >= b for a, b in zip(curve, curve[1:])), f"{reach} : dégradé non monotone"
+        assert all(now >= before for now, before in zip(curve, previous)), f"{reach} : moins d'aide"
+        assert curve != previous, f"{reach} : réglage sans effet"
+        previous = curve
 
 
 @pytest.mark.parametrize("ratio", [0.0, 0.25, 0.5, 0.67, 1.0])
@@ -230,7 +243,7 @@ def _seed(db, levels: list[int], corrected: int = 5, pages: int = 2, problems=Tr
                    personalization_mode="individual", note_base=20)
     a.blueprint_json = {"mode": "auto", "competency_ids": [c.id for c in comps],
                         "exercise_source": "bank", "guides": "auto",
-                        "guides_medium_pct": 50, "problems": problems}
+                        "problems": problems}
     db.add(a)
     db.commit()
     return a, students
@@ -300,12 +313,23 @@ def test_every_copy_reads_from_easy_to_hard(db, rendered):
         assert copy.total_pages <= 2
 
 
-def test_medium_students_follow_the_teacher_share(db, rendered):
-    a, students = _seed(db, levels=[6], problems=False)
+def test_students_follow_the_teacher_setting(db, rendered):
+    a, students = _seed(db, levels=[10], problems=False)
+    a.blueprint_json = {**a.blueprint_json, "guides_reach_pct": 100}
+    db.commit()
     generation.generate_assessment_job(db, a, job=None, font_size=9)
     guidable = [it for it in rendered[students[0].name] if "{{aide}}" in it["statement"]]
     on = sum(it["guides"] == pdfgen.GUIDES_INCLUDE for it in guidable)
     assert guidable and abs(on / len(guidable) - 0.5) <= 1 / len(guidable) + 1e-9
+
+
+def test_guides_can_go_to_every_student_whatever_the_level(db, rendered):
+    a, students = _seed(db, levels=[10], problems=False)
+    a.blueprint_json = {**a.blueprint_json, "guides": "include"}
+    db.commit()
+    generation.generate_assessment_job(db, a, job=None, font_size=9)
+    guidable = [it for it in rendered[students[0].name] if "{{aide}}" in it["statement"]]
+    assert guidable and all(it["guides"] == pdfgen.GUIDES_INCLUDE for it in guidable)
 
 
 # --------------------------------------------------------------------- l'API
@@ -332,12 +356,34 @@ def _draft(db, class_id):
     return a
 
 
-def test_auto_needs_five_corrected_subjects(client, db):
-    a, students = _seed(db, levels=[4, 7], corrected=3)
+def test_auto_opens_at_one_corrected_subject_and_recommends_three(client, db):
+    a, _students = _seed(db, levels=[4, 7], corrected=1)
+    e = client.get(f"/api/assessments/auto-eligibility?class_id={a.class_id}").json()
+    assert e["eligible"] is True and e["corrected"] == 1
+    assert e["required"] == 1 and e["recommended"] == 3
+    assert {lv["level"]: lv["count"] for lv in e["levels"]}[7] == 1
+
+    draft = _draft(db, a.class_id)
+    r = client.post(f"/api/assessments/{draft.id}/auto-plan",
+                    json={"competency_ids": a.blueprint_json["competency_ids"]})
+    assert r.status_code == 200, r.text
+
+
+def test_auto_can_print_no_guide_at_all(client, db):
+    a, _students = _seed(db, levels=[2], corrected=1)
+    draft = _draft(db, a.class_id)
+    r = client.post(f"/api/assessments/{draft.id}/auto-plan",
+                    json={"competency_ids": a.blueprint_json["competency_ids"], "guides": "none"})
+    assert r.status_code == 200, r.text
+    db.refresh(draft)
+    assert draft.blueprint_json["guides"] == "none"
+
+
+def test_auto_is_refused_without_any_corrected_subject(client, db):
+    a, _students = _seed(db, levels=[4, 7], corrected=0)
     cls_id = a.class_id
     e = client.get(f"/api/assessments/auto-eligibility?class_id={cls_id}").json()
-    assert e["eligible"] is False and e["corrected"] == 3 and e["required"] == 5
-    assert {lv["level"]: lv["count"] for lv in e["levels"]}[7] == 1
+    assert e["eligible"] is False and e["corrected"] == 0
 
     draft = _draft(db, cls_id)
     comp_ids = a.blueprint_json["competency_ids"]
@@ -351,13 +397,13 @@ def test_auto_plan_saves_an_individual_subject(client, db):
     draft = _draft(db, a.class_id)
     comp_ids = a.blueprint_json["competency_ids"]
     r = client.post(f"/api/assessments/{draft.id}/auto-plan",
-                    json={"competency_ids": comp_ids, "guides_medium_pct": 30,
+                    json={"competency_ids": comp_ids, "guides_reach_pct": 30,
                           "problems": True})
     assert r.status_code == 200, r.text
     db.refresh(draft)
     assert draft.personalization_mode == "individual"
     bp = draft.blueprint_json
-    assert (bp["mode"], bp["guides"], bp["guides_medium_pct"], bp["problems"]) == \
+    assert (bp["mode"], bp["guides"], bp["guides_reach_pct"], bp["problems"]) == \
         ("auto", "auto", 30, True)
     row = next(x for x in client.get("/api/assessments").json() if x["id"] == draft.id)
     assert row["auto"] is True and row["manual"] is False
@@ -381,3 +427,52 @@ def test_the_first_cards_already_follow_the_level_mix():
         mix = student_history.LEVEL_MIX[level]
         for lvl in (1, 2, 3):
             assert abs(head.count(lvl) - mix[lvl - 1] * 8) <= 1, (level, head)
+
+
+def _served(db, student_id=None):
+    from app.models import Copy, CopyItem
+    query = db.query(CopyItem.generated_exercise_id).join(Copy, Copy.id == CopyItem.copy_id)
+    if student_id:
+        query = query.filter(Copy.student_id == student_id)
+    return [row[0] for row in query.all()]
+
+
+def test_disliked_exercises_are_never_served_and_forge_comes_first(db, rendered):
+    from app.models import ExercisePreference
+    a, students = _seed(db, [5, 5], problems=False)
+    a.created_by = "prof"
+    rows = db.query(GeneratedExercise).filter_by(kind="application").all()
+    disliked = {r.id for r in rows[:6]}
+    forged = rows[6:10]
+    for row in forged:
+        row.source = "forge"
+    db.add_all([ExercisePreference(user_id="prof", exercise_id=i, value="dislike") for i in disliked])
+    db.commit()
+    generation.generate_assessment_job(db, a)
+    served = set(_served(db))
+    assert served and not served & disliked
+    assert {r.id for r in forged} & served
+
+
+def test_another_teacher_preferences_change_nothing(db, rendered):
+    from app.models import ExercisePreference
+    a, _students = _seed(db, [5], problems=False)
+    a.created_by = "prof"
+    other = db.query(GeneratedExercise).filter_by(kind="application").first()
+    db.add(ExercisePreference(user_id="autre", exercise_id=other.id, value="dislike"))
+    db.commit()
+    plan = generation.draw_rules.load_context(db, a)
+    assert plan.dislikes == set()
+
+
+def test_all_exercises_disliked_warns_instead_of_serving_them(db, rendered):
+    from app.models import ExercisePreference
+    a, _students = _seed(db, [5], problems=False)
+    a.created_by = "prof"
+    rows = db.query(GeneratedExercise).filter_by(kind="application").all()
+    target = rows[0].competency_id
+    gone = {r.id for r in rows if r.competency_id == target}
+    db.add_all([ExercisePreference(user_id="prof", exercise_id=i, value="dislike") for i in gone])
+    db.commit()
+    generation.generate_assessment_job(db, a)
+    assert not set(_served(db)) & gone

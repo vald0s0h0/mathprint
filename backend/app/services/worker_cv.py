@@ -568,6 +568,18 @@ def grid_selection(boxes: list[dict], densities: list[float], thr: QcmThreshold
     return selected
 
 
+def grid_row_states(boxes: list[dict], densities: list[float], thr: QcmThreshold) -> list[list[int]]:
+    """Colonnes cochées de CHAQUE ligne, y compris quand `grid_selection` refuse
+    la grille entière : une double coche reste en revue, mais la ligne fautive et
+    les autres réponses ne sont plus perdues."""
+    rows: dict[int, list[int]] = {}
+    for box, density in zip(boxes, densities):
+        rows.setdefault(int(box.get("row", 0)), [])
+        if density >= thr.value:
+            rows[int(box.get("row", 0))].append(int(box.get("col", 0)))
+    return [sorted(rows.get(i, [])) for i in range((max(rows) + 1) if rows else 0)]
+
+
 def detect_grid(warped: np.ndarray, boxes: list[dict], thr: QcmThreshold
                 ) -> tuple[list[int] | None, list[float]]:
     """Grille cochée (checkbox_grid) : une case cochée PAR LIGNE. Réutilise les
