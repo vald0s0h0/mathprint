@@ -7,6 +7,7 @@ utilisateur/correcteur. Les manuels PDF restent locaux à l'instance admin.
 """
 import io
 import zipfile
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
@@ -416,6 +417,15 @@ def publish(force: bool = False, db: Session = Depends(get_db)):
         raise HTTPException(409, str(e))
 
 
+@router.post("/competencies/{competency_id}/publish")
+def publish_competency(competency_id: str, db: Session = Depends(get_db),
+                       user: User = Depends(require_role("admin"))):
+    """Bouton « Tout publier » : les exercices d'une compétence, sauf ceux à reprendre."""
+    if db.get(Competency, competency_id) is None:
+        raise HTTPException(404, "Compétence introuvable")
+    return indigo.publish_competency(db, competency_id, user.id)
+
+
 @router.get("/published")
 def published_count(db: Session = Depends(get_db)):
     """Exercices publiés + en banque, et surtout D'OÙ ils viennent : volume
@@ -609,6 +619,19 @@ def validate_exercise(exercise_id: str, db: Session = Depends(get_db),
         raise HTTPException(404, "Exercice introuvable")
     indigo.validate_exercise(db, ex, user.id)
     return indigo.exercise_out(db, ex)
+
+
+class ReviewVerdictIn(BaseModel):
+    value: Literal["like", "dislike"] | None = None
+
+
+@router.put("/exercises/{exercise_id}/review-verdict")
+def set_review_verdict(exercise_id: str, body: ReviewVerdictIn, db: Session = Depends(get_db)):
+    ex = db.get(IndigoExercise, exercise_id)
+    if ex is None:
+        raise HTTPException(404, "Exercice introuvable")
+    indigo.set_review_verdict(db, ex, body.value)
+    return {"id": exercise_id, "review_verdict": body.value}
 
 
 @router.delete("/exercises/{exercise_id}")

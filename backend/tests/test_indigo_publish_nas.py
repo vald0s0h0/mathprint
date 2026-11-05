@@ -237,6 +237,70 @@ def test_publishing_nothing_answers_409_not_a_silent_wipe(db):
         app.dependency_overrides.clear()
 
 
+def _admin_client(db):
+    from fastapi.testclient import TestClient
+
+    from app.db import get_db
+    from app.deps import current_user
+    from app.main import app
+    from app.models import User
+
+    app.dependency_overrides[get_db] = lambda: db
+    app.dependency_overrides[current_user] = lambda: User(
+        id="u", email="admin@test.fr", role="admin")
+    return TestClient(app), app
+
+
+def test_publish_competency_skips_disliked_cards_and_problems(db):
+    _validated(db, 3)
+    comp = db.query(Competency).first()
+    db.add(IndigoExercise(
+        competency_id=comp.id, grade_level="3e", status="draft", source_number="pb",
+        badge_type="probleme", difficulty=2, statement="Un problème du chapitre entier.",
+        response_type="short_text", expected_json={"value": 1}, grading_json={"bareme_points": 1.0}))
+    rows = db.query(IndigoExercise).filter_by(badge_type="exercice").order_by(IndigoExercise.source_number).all()
+    rows[0].status = rows[1].status = "draft"
+    db.commit()
+    client, app = _admin_client(db)
+    try:
+        assert client.put(f"/api/indigo/exercises/{rows[1].id}/review-verdict",
+                          json={"value": "dislike"}).status_code == 200
+        response = client.post(f"/api/indigo/competencies/{comp.id}/publish")
+        assert response.status_code == 200
+        assert response.json() == {"published": 2, "skipped": 1}
+        assert client.get(f"/api/indigo/exercises/{rows[1].id}").json()["review_verdict"] == "dislike"
+    finally:
+        app.dependency_overrides.clear()
+    db.expire_all()
+    assert rows[0].status == "validated" and rows[1].status == "draft"
+    published = {e["id"] for e in indigo.load_published()["exercises"]}
+    assert published == {rows[0].id, rows[2].id}
+    assert db.get(GeneratedExercise, rows[0].id) is not None
+    assert db.get(GeneratedExercise, rows[1].id) is None
+
+
+def test_review_verdict_can_be_cleared_without_touching_the_rest(db):
+    _validated(db, 1)
+    row = db.query(IndigoExercise).one()
+    row.raw_ocr_json = {"review_notes": ["À vérifier"]}
+    db.commit()
+    stamp = row.updated_at
+    indigo.set_review_verdict(db, row, "like")
+    assert indigo.exercise_out(db, row)["review_verdict"] == "like"
+    indigo.set_review_verdict(db, row, None)
+    assert indigo.exercise_out(db, row)["review_verdict"] is None
+    assert row.raw_ocr_json == {"review_notes": ["À vérifier"]}
+    assert row.updated_at == stamp
+
+
+def test_publish_competency_needs_a_known_competency(db):
+    client, app = _admin_client(db)
+    try:
+        assert client.post("/api/indigo/competencies/absente/publish").status_code == 404
+    finally:
+        app.dependency_overrides.clear()
+
+
 # ------------------------------------------- le dépôt, source de vérité livrée
 
 def test_a_newer_image_replaces_a_stale_volume(db):

@@ -356,6 +356,26 @@ def test_the_read_timeout_is_never_shorter_than_the_total_deadline(db, monkeypat
 
 # ------------------------------------------------------- tableaux à ordre libre
 
+def test_interchangeable_blanks_accept_both_orders_and_keep_the_others_in_place():
+    """$(x - a)(x + b) = 0$, puis « x = … ou x = … » : seules les solutions s'échangent."""
+    cells = [[{"type": "integer", "value": v} for v in (7, 7, 7, -7)]]
+    g = {"comparator": "table_cells", "max_score": 4, "cells": cells, "interchangeable": [[2, 3]]}
+    assert grading.table_credits(g, ["7", "7", "7", "-7"]) == [1.0] * 4
+    assert grading.table_credits(g, ["7", "7", "-7", "7"]) == [1.0] * 4
+    # une solution donnée deux fois ne paie qu'une fois, dans les deux sens
+    assert grading.table_credits(g, ["7", "7", "7", "7"]) == [1.0, 1.0, 1.0, 0.0]
+    assert grading.table_credits(g, ["7", "7", "-7", "-7"]) == [1.0, 1.0, 1.0, 0.0]
+    # hors du groupe, la place compte : un facteur faux reste faux
+    assert grading.table_credits(g, ["-7", "7", "7", "-7"]) == [0.0, 1.0, 1.0, 1.0]
+    assert grading.table_credits(g, ["7", "7", "", "-7"]) == [1.0, 1.0, 0.0, 1.0]
+    assert grading.table_credits(g, ["7", "7", "49", "-7"]) == [1.0, 1.0, 0.0, 1.0]
+    assert grading.cell_marks(g, ["7", "7", "-7", "7"]) == [1.0] * 4
+    assert grading.grade({"type": "table", "cells": cells}, g, "", 1.0,
+                         cell_texts=["7", "7", "-7", "7"])["score"] == 4
+    assert [c["value"] for c in grading.expected_alternatives(g, 3)] == [7, -7]
+    assert [c["value"] for c in grading.expected_alternatives(g, 1)] == [7]
+
+
 def test_unordered_table_credits_a_shuffled_list():
     """« Écris tous les diviseurs de 6 » : l'élève les écrit dans le désordre, et
     c'est juste. Sans appariement, la même copie valait 1 case sur 4."""

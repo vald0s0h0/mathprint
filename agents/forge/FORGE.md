@@ -23,7 +23,11 @@ Le programme et le cycle sont obligatoires : s'il en manque un, demande-le avant
 9. **Persister.** `run.py persist` écrit les brouillons. Rien n'est publié : la relecture revient à l'humain.
 10. **Bilan.** Cartes écrites, cartes à relire, réserves, codes d'erreur proposés. Ne publie pas.
 
+Ce que le relecteur doit regarder sur une carte précise va aussi dans son champ `review_flags` : ce texte s'affiche en rouge sur la carte, dans l'onglet Exercices. Écris-le avant `persist`.
+
 `run.py reprendre` liste les runs inachevés : après une coupure, reprends au premier emplacement vide. Un fichier écrit n'est jamais perdu.
+
+**Cartes écartées.** Quand l'utilisateur écrit `forge ecartes [filtre]`, `run.py ecartes [filtre]` liste les cartes qu'il a marquées d'un pouce baissé, avec leurs signalements. Pour chacune : relis le contexte du run, réécris `slots/<emplacement>.json` en réglant le problème signalé, puis enchaîne `check`, `render`, `goldfish --slots <emplacements>` et `persist <run> --slots <emplacements>`. Seuls ces emplacements sont remplacés : les autres cartes, relues ou publiées, ne bougent pas. Le nouveau brouillon repart sans avis. Si un signalement ne suffit pas à comprendre ce qui ne va pas, demande à l'utilisateur plutôt que de deviner.
 
 **Second run.** `forge fr 3e A1.2 --complement 10` (ou `--difficile 6`) ne produit que ce qui manque. La fiche existe déjà : ne relis aucune page. Le fichier `existants.md`, à la fin de l'ordre de lecture, résume la banque : ne reprends ni ces structures ni ces valeurs.
 

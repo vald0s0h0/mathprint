@@ -358,6 +358,26 @@ def fillable_cells(grading: dict) -> list[dict]:
             if not c.get("given")]
 
 
+def interchangeable_groups(grading: dict) -> list[list[int]]:
+    """Groupes de cases (rangs dans `fillable_cells`) dont l'ordre n'a aucun sens.
+    `unordered` : toutes les cases. `interchangeable` : seulement celles citées,
+    comme les deux solutions d'une résolution dont les facteurs restent à leur place."""
+    count = len(fillable_cells(grading))
+    if grading.get("unordered"):
+        return [list(range(count))]
+    return [[i for i in group if 0 <= i < count] for group in grading.get("interchangeable") or []]
+
+
+def expected_alternatives(grading: dict, index: int) -> list[dict]:
+    """Ce que la case de rang `index` peut valoir : son groupe s'il en a un, elle seule
+    sinon. Le professeur et le correcteur LLM jugent sur la même attente que la note."""
+    flat = fillable_cells(grading)
+    for group in interchangeable_groups(grading):
+        if index in group:
+            return [flat[i] for i in group]
+    return flat[index:index + 1]
+
+
 def table_credits(grading: dict, cell_texts: list[str] | None) -> list[float | None]:
     """Crédit de CHAQUE case écrite par l'élève (1 juste, 0,5 arrondi correct,
     0 faux, None illisible), dans l'ordre des cases de la copie.
@@ -366,11 +386,10 @@ def table_credits(grading: dict, cell_texts: list[str] | None) -> list[float | N
     (`grade`), les marques d'overlay (`cell_marks`) et la modale de correction
     (routers.scans._cell_units) : trois lectures divergeraient.
 
-    `grading["unordered"]` — le tableau attend une LISTE de résultats dont
-    l'ordre n'a aucun sens (les diviseurs de 24, les solutions d'une équation) :
-    l'élève remplit alors les cases dans l'ordre qu'il veut, et on APPARIE
-    chaque case écrite à une réponse attendue encore libre. Sans ça, une liste
-    juste mais dans le désordre valait zéro."""
+    Dans un groupe de cases interchangeables (les diviseurs de 24, les solutions
+    d'une équation), l'élève écrit dans l'ordre qu'il veut, et on APPARIE chaque
+    case écrite à une réponse attendue encore libre : une réponse donnée deux fois
+    ne compte qu'une fois. Sans ça, une liste juste mais dans le désordre valait zéro."""
     flat = fillable_cells(grading)
     texts = list(cell_texts or [])
     texts += [""] * max(0, len(flat) - len(texts))
@@ -383,30 +402,29 @@ def table_credits(grading: dict, cell_texts: list[str] | None) -> list[float | N
         matches = form_matches(form, raw)
         return None if matches is None else (credit if matches else 0.0)
 
-    if not grading.get("unordered"):
-        return [credit_of(exp, raw) for exp, raw in zip(flat, texts)]
-
-    free = list(range(len(flat)))
-    credits: list[float | None] = []
-    for raw in texts[:len(flat)]:
-        if not normalize(raw or ""):
-            credits.append(0.0)         # case laissée vide = réponse non donnée
-            continue
-        best_i, best_c, readable = None, 0.0, False
-        for i in free:
-            c = credit_of(flat[i], raw)
-            readable = readable or c is not None
-            if c is not None and c > best_c:
-                best_i, best_c = i, c
-                if c >= 1.0:
-                    break
-        if best_i is None:
-            # aucune réponse attendue ne colle : faux si on a su lire la case,
-            # illisible si AUCUNE comparaison n'a pu aboutir (OCR défaillant).
-            credits.append(0.0 if readable else None)
-        else:
-            free.remove(best_i)
-            credits.append(best_c)
+    credits = [credit_of(exp, raw) for exp, raw in zip(flat, texts)]
+    for group in interchangeable_groups(grading):
+        free = list(group)
+        for k in group:
+            raw = texts[k]
+            if not normalize(raw or ""):
+                credits[k] = 0.0        # case laissée vide = réponse non donnée
+                continue
+            best_i, best_c, readable = None, 0.0, False
+            for i in free:
+                c = credit_of(flat[i], raw)
+                readable = readable or c is not None
+                if c is not None and c > best_c:
+                    best_i, best_c = i, c
+                    if c >= 1.0:
+                        break
+            if best_i is None:
+                # aucune réponse attendue ne colle : faux si on a su lire la case,
+                # illisible si AUCUNE comparaison n'a pu aboutir (OCR défaillant).
+                credits[k] = 0.0 if readable else None
+            else:
+                free.remove(best_i)
+                credits[k] = best_c
     return credits
 
 

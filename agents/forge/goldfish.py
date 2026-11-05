@@ -154,29 +154,42 @@ def _correct_answers(leaf: dict) -> list[str]:
     return []
 
 
+_NUMBER_RE = re.compile(r"-?\s?\d+(?:,\d+)?(?:/\d+)?")
+
+
 def answer_matches(reader: str, expected: list[str]) -> bool | None:
     """La réponse du lecteur correspond-elle au corrigé ? None = non comparable
     par script (relier, tableau, rédaction) : son avis reste dans le rapport."""
     from app.services import mathrender
     if not expected:
         return None
-    given = [p for p in re.split(r"\s*(?:;|\bet\b)\s*", str(reader or "")) if p.strip()]
+    # Le lecteur écrit « x² » et « − » là où le corrigé a « x^2 » et « - » : même réponse.
+    reader = str(reader or "").replace("\u2212", "-")
+    given = [p for p in re.split(r"\s*(?:;|\bet\b)\s*", reader) if p.strip()]
     if not given:
         return False
 
+    def flat(text: str) -> str:
+        folded = forge.fold(mathrender.strip_math(text)).replace("\u2212", "-").replace("^", "")
+        return re.sub(r"\s+", "", folded).rstrip(".")
+
     def same(a: str, b: str) -> bool:
-        flat_a, flat_b = forge.fold(mathrender.strip_math(a)), forge.fold(mathrender.strip_math(b))
-        if flat_a == flat_b:
+        if flat(a) == flat(b):
             return True
         left, right = forge._value_of(a), forge._value_of(b)
         return left is not None and right is not None and forge._same_value(left, right)
 
     if len(expected) == 1:
+        if any(same(g, expected[0]) for g in given) or same(reader, expected[0]):
+            return True
+        if forge._value_of(expected[0]) is None:
+            return False
         # « 8/3 d'une tablette (soit 2 + 2/3) » : la valeur vient d'abord, le lecteur commente.
-        words = str(reader).split()
-        first = words[0].rstrip(",;:.") if words else ""
-        return (any(same(g, expected[0]) for g in given) or same(str(reader), expected[0])
-                or (forge._value_of(expected[0]) is not None and same(first, expected[0])))
+        # « donc x = 11. Inaya a choisi 11. » : le lecteur raisonne, puis il conclut.
+        words = reader.split()
+        numbers = _NUMBER_RE.findall(reader)
+        return ((bool(words) and same(words[0].rstrip(",;:."), expected[0]))
+                or (bool(numbers) and same(numbers[-1].replace(" ", ""), expected[0])))
     return all(any(same(g, e) for g in given) for e in expected)
 
 

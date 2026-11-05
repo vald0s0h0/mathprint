@@ -32,8 +32,12 @@ type Props<T> = {
   columnGroupLabel?: ReactNode
   selectedKey?: string | null
   onRowClick?: (row: T) => void
-  chapterAside?: (chapter: CompetencyHierarchyChapter<T>) => ReactNode
-  showColumnHeaders?: boolean
+  // Remplace le décompte « N compétences » à côté du titre du chapitre.
+  chapterCount?: (chapter: CompetencyHierarchyChapter<T>) => ReactNode
+  // Porte les libellés de colonnes dans le bandeau du chapitre, sans ligne
+  // d'en-tête : le bandeau devient la ligne d'en-tête du tableau, ce qui garde
+  // chaque libellé aligné sur sa colonne.
+  columnsInChapterBand?: boolean
   // Largeur minimale commune à toutes les tables de chapitre : au-delà, le
   // parent fait défiler horizontalement. Même largeur partout + colonnes à
   // largeur fixe => les colonnes restent alignées d'un chapitre à l'autre.
@@ -49,9 +53,22 @@ type Props<T> = {
  */
 export default function CompetencyHierarchy<T>({
   domains, getRowKey, getShortId, getLabel, columns = [], columnGroupLabel,
-  selectedKey, onRowClick, chapterAside, showColumnHeaders = true, tableMinWidth,
+  selectedKey, onRowClick, chapterCount, columnsInChapterBand = false, tableMinWidth,
 }: Props<T>) {
   const accordionKey = domains.map((domain) => domain.key).join('|')
+  const bandHeaders = columnsInChapterBand && columns.length > 0
+  const chapterTitle = (chapter: CompetencyHierarchyChapter<T>) => (
+    <Group gap={7} wrap="wrap">
+      <Text size="xs" fw={750} c="var(--mp-text-strong)">
+        {chapter.code ? `${chapter.code} — ` : ''}{chapter.name || 'Chapitre'}
+      </Text>
+      <Text size="xs" fw={400} c="dimmed" style={{ whiteSpace: 'nowrap' }}>
+        {chapterCount
+          ? chapterCount(chapter)
+          : `${chapter.rows.length} compétence${chapter.rows.length > 1 ? 's' : ''}`}
+      </Text>
+    </Group>
+  )
 
   return (
     <Accordion key={accordionKey} multiple variant="separated" radius="md"
@@ -80,21 +97,14 @@ export default function CompetencyHierarchy<T>({
                   <Box key={chapter.key} style={{
                     paddingLeft: 12,
                   }}>
-                    <Group justify="space-between" gap="sm" wrap="wrap" mb={8} px={10} py={7}
-                      style={{
+                    {!bandHeaders && (
+                      <Box mb={8} px={10} py={7} style={{
                         background: 'var(--mantine-color-gray-light)',
                         borderRadius: 'var(--mantine-radius-sm)',
                       }}>
-                      <Group gap={7} wrap="nowrap">
-                        <Text size="xs" fw={750} c="var(--mp-text-strong)">
-                          {chapter.code ? `${chapter.code} — ` : ''}{chapter.name || 'Chapitre'}
-                        </Text>
-                        <Text size="xs" c="dimmed" style={{ whiteSpace: 'nowrap' }}>
-                          {chapter.rows.length} compétence{chapter.rows.length > 1 ? 's' : ''}
-                        </Text>
-                      </Group>
-                      {chapterAside?.(chapter)}
-                    </Group>
+                        {chapterTitle(chapter)}
+                      </Box>
+                    )}
 
                     <Table highlightOnHover verticalSpacing={5} horizontalSpacing="sm" fz="sm"
                       style={{ width: '100%', minWidth: tableMinWidth, tableLayout: 'fixed' }}>
@@ -104,7 +114,28 @@ export default function CompetencyHierarchy<T>({
                           <col key={column.key} style={{ width: column.width }} />
                         ))}
                       </colgroup>
-                      {columns.length > 0 && showColumnHeaders && (
+                      {bandHeaders ? (
+                        <Table.Thead>
+                          <Table.Tr>
+                            <Table.Th py={7} style={{
+                              background: 'var(--mantine-color-gray-light)',
+                              borderRadius: 'var(--mantine-radius-sm) 0 0 var(--mantine-radius-sm)',
+                            }}>
+                              {chapterTitle(chapter)}
+                            </Table.Th>
+                            {columns.map((column, index) => (
+                              <Table.Th key={column.key} py={7} fz="xs" ta={column.align ?? 'left'} style={{
+                                background: 'var(--mantine-color-gray-light)',
+                                borderRadius: index === columns.length - 1
+                                  ? '0 var(--mantine-radius-sm) var(--mantine-radius-sm) 0'
+                                  : undefined,
+                              }}>
+                                {column.label}
+                              </Table.Th>
+                            ))}
+                          </Table.Tr>
+                        </Table.Thead>
+                      ) : columns.length > 0 && (
                         <Table.Thead>
                           {columnGroupLabel ? (
                             <>

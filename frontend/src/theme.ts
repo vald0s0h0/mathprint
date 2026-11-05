@@ -38,6 +38,10 @@ export const cssVariablesResolver: CSSVariablesResolver = () => {
     '--mp-guide-border': '#E4B42D',
     '--mp-guide-text': '#4D3B05',
     '--mp-guide-icon': '#C99A12',
+    '--mp-review-bg': '#FFF1F1',
+    '--mp-review-border': '#FFC9C9',
+    '--mp-review-strong-bg': '#FFA8A8',
+    '--mp-review-strong-border': '#E03131',
   }
   const dark: Record<string, string> = {
     '--mp-text-strong': 'var(--mantine-color-dark-0)',
@@ -49,6 +53,10 @@ export const cssVariablesResolver: CSSVariablesResolver = () => {
     '--mp-guide-border': '#8A6A12',
     '--mp-guide-text': '#FFE8A3',
     '--mp-guide-icon': '#F0C239',
+    '--mp-review-bg': 'rgba(250, 82, 82, 0.1)',
+    '--mp-review-border': 'rgba(250, 82, 82, 0.35)',
+    '--mp-review-strong-bg': 'rgba(250, 82, 82, 0.45)',
+    '--mp-review-strong-border': '#FF6B6B',
     // Badges color="dark" (problème « Difficile ») : en sombre Mantine écrit
     // dark-3 sur un fond quasi transparent, illisible.
     '--mantine-color-dark-light': 'rgba(201, 201, 201, 0.12)',

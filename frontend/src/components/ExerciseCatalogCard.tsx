@@ -15,7 +15,11 @@ export type CatalogExercise = PrintableExercise & {
   family_id?: string
   raw?: Record<string, any> | null
   raw_ocr?: Record<string, any> | null
+  status?: string
+  review_notes?: string[]
+  review_verdict?: ReviewVerdict | null
 }
+export type ReviewVerdict = 'like' | 'dislike'
 export const exerciseDifficulty = (ex: CatalogExercise) => Math.max(1, Math.min(3, ex.difficulty ?? ex.level ?? 2))
 export const formatPoints = (v: number) => v.toLocaleString('fr-FR', { maximumFractionDigits: 3 })
 
@@ -68,9 +72,45 @@ function routes(ex: CatalogExercise): string[] {
   return [...values]
 }
 
-export default function ExerciseCatalogCard({ exercise: ex, admin, onPreference, guides = true, caption }: {
+/** Relecture admin : ce qu'il faut vérifier, puis l'avis. Rouge clair tant que rien n'est
+ * tranché, sans rouge une fois la carte acceptée, rouge fort si elle est à reprendre. */
+function ReviewPanel({ notes, verdict, onChange }: {
+  notes: string[]; verdict?: ReviewVerdict | null
+  onChange: (value: ReviewVerdict | null) => Promise<void>
+}) {
+  const [busy, setBusy] = useState(false)
+  const strong = verdict === 'dislike'
+  const red = strong || (notes.length > 0 && verdict !== 'like')
+  const lines = strong && !notes.length ? ['À reprendre'] : notes
+  const choose = async (value: ReviewVerdict) => {
+    setBusy(true)
+    try { await onChange(verdict === value ? null : value) }
+    catch (error) { notifications.show({ color: 'red', message: error instanceof Error ? error.message : 'Avis non enregistré.' }) }
+    finally { setBusy(false) }
+  }
+  return <Group data-review={strong ? 'strong' : red ? 'light' : 'none'} gap={8} mt={6} align="flex-start" wrap="nowrap"
+    justify={lines.length ? 'space-between' : 'flex-end'} style={red ? {
+      background: `var(--mp-review-${strong ? 'strong-' : ''}bg)`,
+      border: `1px solid var(--mp-review-${strong ? 'strong-' : ''}border)`,
+      borderRadius: 'var(--mantine-radius-sm)', padding: '6px 8px',
+    } : undefined}>
+    {lines.length > 0 && <Stack gap={4} style={{ minWidth: 0 }}>
+      {lines.map((line, i) => <Box key={i} c={red ? undefined : 'dimmed'}><MathText text={line} size="xs" /></Box>)}
+    </Stack>}
+    <Group gap={2} wrap="nowrap" style={{ flexShrink: 0 }}>
+      <Tooltip label="Rien à reprendre"><ActionIcon aria-label="Rien à reprendre" aria-pressed={verdict === 'like'} size="sm"
+        disabled={busy} color="teal" variant={verdict === 'like' ? 'filled' : 'subtle'} onClick={() => choose('like')}><ThumbsUp size={14} /></ActionIcon></Tooltip>
+      <Tooltip label="À reprendre"><ActionIcon aria-label="À reprendre" aria-pressed={strong} size="sm"
+        disabled={busy} color="red" variant={strong ? 'filled' : 'subtle'} onClick={() => choose('dislike')}><ThumbsDown size={14} /></ActionIcon></Tooltip>
+    </Group>
+  </Group>
+}
+
+export default function ExerciseCatalogCard({ exercise: ex, admin, onPreference, onReview, guides = true, caption }: {
   exercise: CatalogExercise; admin?: boolean
   onPreference?: (value: 'like' | 'dislike' | null) => Promise<void>
+  // avis de relecture, côté admin
+  onReview?: (value: ReviewVerdict | null) => Promise<void>
   // encadrés d'aide affichés sur la carte (false : sujet sans guides)
   guides?: boolean
   // ligne de contexte au-dessus de la carte, quand les compétences sont mélangées
@@ -133,6 +173,7 @@ export default function ExerciseCatalogCard({ exercise: ex, admin, onPreference,
           <Text component="summary" size="xs" fw={600} style={{ cursor: 'pointer' }}>Micro-corrections</Text>
           <Box pt={8}><Feedback grading={grading} /></Box>
         </Box>}
+        {onReview && <ReviewPanel notes={ex.review_notes ?? []} verdict={ex.review_verdict} onChange={onReview} />}
       </>} />
   </Paper>
 }

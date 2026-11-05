@@ -1,8 +1,7 @@
 """Mélange anti-triche des champs de réponse d'une carte, propre à une copie.
 
-Propositions de QCM, lignes de grille cochée, colonnes nommées des tableaux
-(lignes pour les tableaux sans plusieurs en-têtes), colonne de droite des
-points à relier. La permutation s'applique ensemble au barème, à la réponse
+Propositions de QCM, lignes de grille cochée, lignes OU colonnes des tableaux,
+colonne de droite des points à relier. La permutation s'applique ensemble au barème, à la réponse
 attendue et aux identifiants de micro-correction. La carte étant ensuite figée
 sur sa CopyItem, le CV, la note et l'overlay lisent tous l'ordre imprimé.
 
@@ -92,9 +91,16 @@ def _mix_table(grading: dict, expected: dict, rng: random.Random) -> tuple[dict,
             or any(len(row) != cols for row in expected_cells)):
         return grading, expected
     col_labels = grading.get("col_labels") or []
-    if len(col_labels) > 1:
-        # Produits, rectangles, etc. : chaque colonne est une entité complète.
-        # Les lignes décrivent ses grandeurs (masse, prix, aire…) et restent fixes.
+    declared = grading.get("mix")
+    if declared == "none":
+        return grading, expected
+    # Deux axes nommés : seul l'auteur sait lequel porte les entités (des produits en
+    # colonnes, ou des équations en lignes dont les colonnes se lisent dans l'ordre).
+    # Sans déclaration on ne devine pas : le mélange ne doit jamais casser la lecture.
+    two_axes = len(col_labels) > 1 and bool(grading.get("row_labels")) and len(cells) > 1
+    if two_axes and declared not in ("rows", "columns"):
+        return grading, expected
+    if len(col_labels) > 1 and not (two_axes and declared == "rows"):
         # Si les en-têtes imposent un ordre, on conserve le tableau entier.
         if len(col_labels) != cols or not _labels_are_free(col_labels):
             return grading, expected

@@ -257,10 +257,6 @@ def plan(item, verdict: dict, *, ocr_text: str = "",
         # c'est le RATIO points/barème qui note la case, et annoncer « barème
         # 0,01 » à un correcteur ne veut rien dire.
         unit_bareme = max(scoring.BAREME_MIN, round(bareme / len(flat), 3))
-        # tableau-LISTE : la case n'a pas de réponse attendue PROPRE (l'ordre est
-        # libre), on montre donc l'ensemble — sinon le correcteur jugerait une
-        # réponse sur une attente qui n'est pas la sienne.
-        all_expected = " ou ".join(grader.cell_reference_text(c) for c in flat)
         for k, (cell, raw, credit) in enumerate(zip(flat, cell_texts, credits)):
             shape = answer_shape(raw)
             if credit is not None and credit > 0:
@@ -277,8 +273,10 @@ def plan(item, verdict: dict, *, ocr_text: str = "",
             task.cell_credits[k] = None
             task.fields.append(Field(
                 label=_cell_label(grading, k),
-                expected=_expected_for_grader(all_expected if grading.get("unordered")
-                                              else grader.cell_reference_text(cell), grading),
+                # case interchangeable : on montre tout son groupe, sinon le correcteur
+                # jugerait la réponse sur une attente qui n'est pas la sienne.
+                expected=_expected_for_grader(" ou ".join(
+                    grader.cell_reference_text(c) for c in grader.expected_alternatives(grading, k)), grading),
                 student=raw, bareme=unit_bareme, weight=1.0, cell_index=k))
         return task if task.fields else None
 

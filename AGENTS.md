@@ -32,7 +32,7 @@ fichier `astra_output.json` du run.
 
 Quand l'utilisateur écrit `forge <programme> <cycle> <cible>` (ex. `forge fr 3e A1.2`,
 `forge fr 3e A1`, `forge fr 3e A1 --problemes`, `forge fr 3e A1.2 --complement 10`,
-`forge reprendre`), ou demande de
+`forge reprendre`, `forge ecartes fr-3e-A4`), ou demande de
 lancer la pipeline forge :
 
 1. lis **entièrement** `agents/forge/FORGE.md` puis `agents/forge/schema.md` ;

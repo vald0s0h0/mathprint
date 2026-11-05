@@ -347,7 +347,7 @@ def test_a3_3_tables_mix_columns_without_moving_measurement_rows(slot, columns, 
              for r, row in enumerate(cells) for c, cell in enumerate(row) if not cell.get("given")]
     shape = {"response_type": "table_fill", "statement": "Complète le tableau.",
              "grading": {"comparator": "table_cells", "max_score": len(wrong), "cells": cells,
-                         "row_labels": labels, "col_labels": columns,
+                         "row_labels": labels, "col_labels": columns, "mix": "columns",
                          "feedback": {"wrong_answers": wrong}},
              "expected": {"type": "table", "rows": len(cells), "cols": len(columns), "cells": cells}}
     original = deepcopy(shape)
@@ -391,12 +391,50 @@ def test_ordered_table_columns_never_fall_back_to_moving_measurement_rows():
     cells = [[{"type": "integer", "value": r + c} for c in range(3)] for r in range(2)]
     for columns in (["1", "2", "3"], ["Étape 1", "Étape 2", "Étape 3"], ["Cour", "Potager", "Total"]):
         shape = {"response_type": "table_fill", "statement": "Complète.",
-                 "grading": {"cells": cells, "col_labels": columns, "row_labels": ["Longueur", "Aire"]},
+                 "grading": {"cells": cells, "col_labels": columns, "row_labels": ["Longueur", "Aire"],
+                             "mix": "columns"},
                  "expected": {"cells": cells}}
         for seed in range(8):
             mixed = answer_mix.mix_shape(shape, random.Random(seed), COL_W, 9)
             assert mixed["grading"] == shape["grading"]
             assert mixed["expected"] == shape["expected"]
+
+
+def _two_axes_table(**declared):
+    cells = [[{"type": "integer", "value": 10 * r + c} for c in range(3)] for r in range(4)]
+    grading = {"cells": cells, "col_labels": ["Valeur", "Plus petite", "Plus grande"],
+               "row_labels": ["E1", "E2", "E3", "E4"], **declared}
+    return {"response_type": "table_fill", "statement": "Complète.", "grading": grading,
+            "expected": {"cells": cells}}
+
+
+def test_two_axes_table_never_mixes_without_a_declaration():
+    for declared in ({}, {"mix": "none"}):
+        shape = _two_axes_table(**declared)
+        for seed in range(8):
+            assert answer_mix.mix_shape(shape, random.Random(seed), COL_W, 9)["grading"] == shape["grading"]
+
+
+def test_two_axes_table_mixes_only_the_declared_axis():
+    rows = _two_axes_table(mix="rows")
+    orders = set()
+    for seed in range(8):
+        mixed = answer_mix.mix_shape(rows, random.Random(seed), COL_W, 9)
+        assert mixed["grading"]["col_labels"] == rows["grading"]["col_labels"]
+        orders.add(tuple(mixed["grading"]["row_labels"]))
+        # chaque équation garde ses réponses, dans le même ordre de colonnes
+        for label, line in zip(mixed["grading"]["row_labels"], mixed["expected"]["cells"]):
+            r = int(label[1]) - 1
+            assert [c["value"] for c in line] == [10 * r, 10 * r + 1, 10 * r + 2]
+    assert len(orders) > 1
+
+    columns = _two_axes_table(mix="columns")
+    orders = set()
+    for seed in range(8):
+        mixed = answer_mix.mix_shape(columns, random.Random(seed), COL_W, 9)
+        assert mixed["grading"]["row_labels"] == columns["grading"]["row_labels"]
+        orders.add(tuple(mixed["grading"]["col_labels"]))
+    assert len(orders) > 1
 
 
 def _matching_shape():

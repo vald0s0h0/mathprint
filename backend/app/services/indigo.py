@@ -1910,6 +1910,8 @@ def exercise_out(db, ex: IndigoExercise) -> dict:
         # su réparer (réponse fausse, consigne incompréhensible, figure
         # indispensable et muette). À traiter avant de valider l'exercice.
         "review_blocking": list((ex.raw_ocr_json or {}).get("review_blocking") or []),
+        # Avis de l'admin sur la carte : « like », « dislike » (à reprendre en CLI) ou rien.
+        "review_verdict": (ex.raw_ocr_json or {}).get("review_verdict"),
         # Rattachement à la compétence non confirmé : exercice à ranger.
         "competency_confirmed": bool(
             (ex.raw_ocr_json or {}).get("competency_confirmed", True)),
@@ -2353,6 +2355,29 @@ def validate_exercise(db, ex: IndigoExercise, user_id: str | None) -> IndigoExer
     ex.updated_at = ex.validated_at
     db.commit()
     return ex
+
+
+def set_review_verdict(db, ex: IndigoExercise, value: str | None) -> IndigoExercise:
+    """Avis de relecture de l'admin. `updated_at` ne bouge pas : il versionne l'URL
+    de la figure, et un avis ne change rien à la carte imprimée."""
+    raw = {k: v for k, v in (ex.raw_ocr_json or {}).items() if k != "review_verdict"}
+    ex.raw_ocr_json = {**raw, "review_verdict": value} if value else raw
+    db.commit()
+    return ex
+
+
+def publish_competency(db, competency_id: str, user_id: str | None) -> dict:
+    """Valide et publie d'un coup les exercices d'une compétence, sans toucher aux
+    autres. Une carte au pouce baissé attend sa reprise : elle ne part pas en banque.
+    Les problèmes appartiennent au chapitre entier et restent hors de ce geste."""
+    rows = [ex for ex in list_exercises(db, competency_id)
+            if ex.badge_type not in ("probleme", "enigme")]
+    kept = [ex for ex in rows if (ex.raw_ocr_json or {}).get("review_verdict") != "dislike"]
+    now = datetime.now(timezone.utc)
+    for ex in kept:
+        if ex.status != "validated":
+            ex.status, ex.validated_by, ex.validated_at, ex.updated_at = "validated", user_id, now, now
+    return {"published": publish_rows(db, kept), "skipped": len(rows) - len(kept)}
 
 
 def delete_exercise(db, ex: IndigoExercise, *, cascade: bool = True) -> None:

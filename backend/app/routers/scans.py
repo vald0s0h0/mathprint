@@ -675,12 +675,6 @@ def _cell_units(item: CopyItem, ocr: OcrAttempt | None,
     auto_credits = ((ocr.raw_json or {}).get("cell_credits") if ocr else None)
     if auto_credits is None:
         auto_credits = grading.table_credits(g, ocr_cells)
-    # tableau-LISTE : la place d'une case ne désigne aucune réponse précise, on
-    # montre donc au professeur l'ensemble attendu, pas la cellule de même rang.
-    unordered = bool(g.get("unordered"))
-    all_expected = "  ·  ".join(
-        _fmt_value_latex(c["type"], c["value"])
-        for c in grading.fillable_cells(g)) if unordered else ""
     # verdicts professeur déjà enregistrés (set_cells) — pour rouvrir la modale
     # sur SES choix, pas re-déduire d'un texte de cellule réécrit "" côté faux.
     teacher = None
@@ -704,8 +698,11 @@ def _cell_units(item: CopyItem, ocr: OcrAttempt | None,
                 label = f"Case {k + 1}"
             out.append({
                 "index": k, "label": label,
-                "expected_display": (all_expected if unordered
-                                     else _fmt_value_latex(cell["type"], cell["value"])),
+                # case interchangeable : sa place ne désigne aucune réponse précise,
+                # on montre au professeur tout son groupe, pas la cellule de même rang.
+                "expected_display": "  ·  ".join(
+                    _fmt_value_latex(c["type"], c["value"])
+                    for c in grading.expected_alternatives(g, k) or [cell]),
                 "ocr_text": raw or "",
                 # transcription LaTeX Mathpix, séparée du texte normalisé qui
                 # reste la donnée d'entrée du moteur de notation.

@@ -18,6 +18,7 @@ Un fichier par exercice. `run.py check` vérifie ce contrat et renvoie une erreu
 | `gives` | ce que l'énoncé affiche, dans la même notation |
 | `slot_swap` | facultatif : `{"reason": "..."}` pour changer de format ou de taille |
 | `proposed_errors` | facultatif : `[{"code": "math.x.y", "label": "..."}]` |
+| `review_flags` | facultatif : `["..."]`, ce que le relecteur doit regarder sur cette carte. Jamais imprimé |
 | `title` | problème seulement |
 
 ## Guides, sur chaque facile et chaque moyen
@@ -115,6 +116,8 @@ Ne mets `{{blank}}` dans l'énoncé que pour une amorce courte qui tient sur une
 
 Un `{{blank}}` par valeur, dans l'ordre : `"blanks": [{"type": "integer", "value": 12}, ...]`, avec `answer_form` et `wrong_answers` (ajoute `"cell": [0, k]` pour viser une case).
 
+Quand plusieurs réponses sont justes dans n'importe quel ordre, déclare-le : `"interchangeable": [[2, 3]]` (rangs des cases, à partir de 0). Sur `$x =$ {{blank}} ou $x =$ {{blank}}`, $7$ puis $-7$ et $-7$ puis $7$ rapportent alors tous les points, et une valeur écrite deux fois ne compte qu'une fois. Les autres cases restent comparées à leur place. Une `wrong_answers` d'une telle case ne doit pas être une réponse du groupe. Deux cases séparées par « ou » sans cette déclaration sont refusées. N'impose jamais un ordre artificiel à l'élève.
+
 Réservé aux égalités courtes à trous, sur une ligne. Deux cas sont refusés, car ils s'impriment mal :
 - des cases étiquetées (`Abscisse de $A$ : {{blank}}`) : utilise `table_fill` ;
 - une phrase à trous qui se replie : les cases écartent son interligne. Utilise `table_fill`, ou mets-la sur sa propre ligne.
@@ -129,6 +132,14 @@ Réservé aux égalités courtes à trous, sur une ligne. Deux cas sont refusés
             {"type": "integer", "value": 6}]],
  "wrong_answers": [{"cell": [0, 1], "value": "3", "error": "math.prop.additif", "feedback": "..."}]}
 ```
+
+Si le tableau nomme ses lignes **et** ses colonnes, déclare ce qui peut être mélangé d'une copie à l'autre, car le moteur ne le devine pas, et une carte sans `mix` est refusée :
+
+| `mix` | Quand le choisir |
+|---|---|
+| `rows` | chaque ligne est une entité (une équation, un point) et les colonnes se lisent dans l'ordre (« puis ») |
+| `columns` | chaque colonne est une entité (un produit, un point) et les lignes décrivent ses grandeurs ou des étapes |
+| `none` | aucun des deux axes ne peut bouger |
 
 Le tableau exige au moins 2 lignes (`rows_count`) ; pour une seule série de valeurs, mets les libellés dans `row_labels`, une valeur par ligne. Les colonnes sont égales sauf si l'écriture de la réponse l'empêche. Avec un libellé de ligne, compte 4 colonnes au plus pour des nombres de 4 chiffres.
 

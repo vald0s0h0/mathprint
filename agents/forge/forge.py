@@ -630,11 +630,15 @@ def leaf_to_raw(leaf: dict, level: int) -> tuple[dict, dict]:
         raw["answer"] = leaf.get("answer") or {}
     elif rtype == "multi_blank":
         raw["answer"] = {"type": "blanks", "values": leaf.get("blanks") or []}
+        if leaf.get("interchangeable"):
+            extra["policy"] = {"interchangeable": leaf["interchangeable"]}
     elif rtype == "table_fill":
         raw["answer"] = {"type": "table", "rows": leaf.get("rows_count"), "cols": leaf.get("cols_count"),
                          "cells": leaf.get("cells") or [], "col_labels": leaf.get("col_labels"),
                          "row_labels": leaf.get("row_labels"),
                          "unordered": bool(leaf.get("unordered"))}
+        if leaf.get("mix"):
+            extra["policy"] = {"mix": leaf["mix"]}
     elif rtype == "multiline_text":
         raw["answer"] = {"type": "rubric", "steps": leaf.get("steps") or []}
         expected_errors = [e for e in leaf.get("expected_errors") or [] if isinstance(e, dict)]
@@ -837,6 +841,49 @@ def _figure_problems(figure) -> list[str]:
 
 
 _LABELLED_BLANK_RE = re.compile(r"[^\s{}.?!]\s*:\s*\{\{blank\}\}")
+_MIX_VALUES = ("rows", "columns", "none")
+
+
+def _alternative_blanks(statement: str) -> list[tuple[int, int]]:
+    """Cases voisines séparées par « ou » (ou un simple « et ») : deux réponses justes
+    dans n'importe quel ordre, comme « $x =$ … ou $x =$ … »."""
+    between = str(statement or "").split("{{blank}}")[1:-1]
+    return [(i, i + 1) for i, text in enumerate(between)
+            if "\n" not in text and len(text) <= 30
+            and (re.search(r"\bou\b", text) or re.fullmatch(r"[\s$]*et[\s$]*", text))]
+
+
+def _answer_order_problems(leaf: dict) -> list[str]:
+    """Quelles réponses s'échangent, et quel axe du tableau peut être mélangé : le moteur
+    ne devine ni l'un ni l'autre, c'est l'auteur qui sait ce que la carte veut dire."""
+    rtype = leaf.get("response_type")
+    groups = leaf.get("interchangeable")
+    problems = []
+    if groups is not None and rtype != "multi_blank":
+        problems.append("interchangeable : réservé à multi_blank")
+    if rtype == "multi_blank":
+        count = str(leaf.get("statement") or "").count("{{blank}}")
+        valid = isinstance(groups or [], list) and all(
+            isinstance(g, list) and len(g) >= 2 and all(isinstance(i, int) and 0 <= i < count for i in g)
+            for g in groups or [])
+        flat = [i for g in groups or [] for i in g] if valid else []
+        if not valid or len(flat) != len(set(flat)):
+            problems.append(f"interchangeable : groupes distincts de rangs de cases, de 0 à {count - 1}")
+        elif any(not any(a in g and b in g for g in groups or [])
+                 for a, b in _alternative_blanks(leaf.get("statement"))):
+            problems.append("deux cases séparées par « ou » acceptent les deux ordres : "
+                            "déclare-les dans interchangeable")
+    declared = leaf.get("mix")
+    if declared is not None and rtype != "table_fill":
+        problems.append("mix : réservé à table_fill")
+    if rtype == "table_fill":
+        two_axes = (len(leaf.get("col_labels") or []) > 1 and bool(leaf.get("row_labels"))
+                    and len(leaf.get("cells") or []) > 1)
+        if declared is not None and declared not in _MIX_VALUES:
+            problems.append(f"mix : {' , '.join(_MIX_VALUES)}")
+        elif two_axes and declared is None:
+            problems.append("tableau à lignes et colonnes nommées : déclare mix (rows, columns ou none)")
+    return problems
 
 
 def _leaf_problems(leaf: dict, level: int, subject: str) -> tuple[list[str], dict, dict]:
@@ -867,6 +914,7 @@ def _leaf_problems(leaf: dict, level: int, subject: str) -> tuple[list[str], dic
     problems += _guide_leaks(leaf, _guides(leaf))
     if rtype == "multi_blank" and len(_LABELLED_BLANK_RE.findall(raw["statement"])) >= 2:
         problems.append("cases étiquetées (« Abscisse de A : … ») : utilise table_fill, plus lisible")
+    problems += _answer_order_problems(leaf)
     if rtype in ("short_text", "multi_blank", "table_fill"):
         problem = fc.form_problem(raw["statement"], extra["answer_form"])
         if problem:
@@ -976,7 +1024,7 @@ def build_contract(db, exercise: dict, slot: dict, comp, subject: str, seen: set
                                 llm_brief=extra.get("llm_brief"), answer_form=extra["answer_form"],
                                 option_ids=extra["option_ids"], right_ids=extra["right_ids"],
                                 competency_code=leaf.get("competency"))
-            new_parts.append({**part, "grading": grading})
+            new_parts.append({**part, "grading": {**grading, **extra.get("policy", {})}})
         valid["expected"] = {**valid["expected"], "parts": new_parts}
         valid["grading"] = {**valid["grading"], "parts": new_parts}
         if layout:
@@ -989,6 +1037,7 @@ def build_contract(db, exercise: dict, slot: dict, comp, subject: str, seen: set
                                      llm_brief=extra.get("llm_brief"), answer_form=extra["answer_form"],
                                      option_ids=extra["option_ids"], right_ids=extra["right_ids"],
                                      figure_layout=layout)
+        valid["grading"].update(extra.get("policy", {}))
         if _guides(exercise):
             valid["grading"]["guides_placed"] = True
     seconds = int(exercise.get("estimated_seconds") or 0)
@@ -1501,8 +1550,26 @@ def _apply_layout(grading: dict, layout: dict | None) -> dict:
     return {**kept, **{k: v for k, v in layout.items() if v not in (None, 1.0)}}
 
 
-def persist(db, run: Path, *, replace: bool = False) -> dict:
-    """Brouillons dans l'onglet Exercices. Rien n'est publié ici."""
+def disliked(db, filtre: str = "") -> list[dict]:
+    """Cartes au pouce baissé dans l'onglet Exercices : celles à reprendre en CLI."""
+    from app.models import Competency, IndigoExercise
+
+    out = []
+    for row in db.query(IndigoExercise).all():
+        raw = row.raw_ocr_json or {}
+        if raw.get("review_verdict") != "dislike" or filtre not in (row.source_number or ""):
+            continue
+        run, _, slot = (row.source_number or "").rpartition("/")
+        competency = db.get(Competency, row.competency_id)
+        out.append({"run": run, "slot": slot, "forge": raw.get("pipeline") == PIPELINE,
+                    "competency": competency.short_id if competency else "", "status": row.status,
+                    "notes": list(raw.get("review_notes") or []), "ref": row.source_number or row.id})
+    return sorted(out, key=lambda card: card["ref"])
+
+
+def persist(db, run: Path, *, replace: bool = False, slots: list[str] | None = None) -> dict:
+    """Brouillons dans l'onglet Exercices. Rien n'est publié ici. Avec `slots`, seuls ces
+    emplacements sont remplacés : le reste du run, relu ou publié, ne bouge pas."""
     from app.models import Competency, IndigoExercise, IndigoExtraction
     from app.services import indigo, indigo_fields, typography
 
@@ -1513,6 +1580,10 @@ def persist(db, run: Path, *, replace: bool = False) -> dict:
     grid = {s["slot"]: s for s in load_json(run / "grid.json")}
     if set(contracts) != set(grid):
         raise SystemExit(f"Run incomplet : {sorted(set(grid) - set(contracts))}")
+    if slots and set(slots) - set(contracts):
+        raise SystemExit(f"Emplacements inconnus : {sorted(set(slots) - set(contracts))}")
+    targets = {f"{run.name}/{key}" for key in (slots or contracts)}
+    replace = replace or bool(slots)
     rendered = load_json(run / "render.json") if (run / "render.json").exists() else {}
     if "writing" not in rendered:
         raise SystemExit("Lance `render` d'abord : le contrôle d'écriture n'a pas tourné.")
@@ -1528,7 +1599,8 @@ def persist(db, run: Path, *, replace: bool = False) -> dict:
     existing = [r for r in db.query(IndigoExercise).filter(
         IndigoExercise.competency_id.in_(list(by_code.values()))).all()
         if (r.raw_ocr_json or {}).get("pipeline") == PIPELINE
-        and (r.raw_ocr_json or {}).get("run") == run.name]
+        and (r.raw_ocr_json or {}).get("run") == run.name
+        and r.source_number in targets]
     if existing:
         if not replace:
             raise SystemExit("Ce run est déjà en brouillon (relance avec --replace).")
@@ -1547,6 +1619,8 @@ def persist(db, run: Path, *, replace: bool = False) -> dict:
     flagged = {k for k, v in (goldfish.get("verdicts") or {}).items() if v.get("flag")}
     written = []
     for order, key in enumerate(sorted(contracts)):
+        if f"{run.name}/{key}" not in targets:
+            continue
         contract, exercise, slot = contracts[key], exercises[key], grid[key]
         code = slot.get("competency") or slot["competencies"][0]
         statement, expected, grading = indigo_fields.adapt_fields(
@@ -1601,7 +1675,8 @@ def persist(db, run: Path, *, replace: bool = False) -> dict:
             "competencies": slot.get("competencies") or [code],
             "figure_spec": figure,
             "quality": {"goldfish": (goldfish.get("verdicts") or {}).get(key)},
-            "review_notes": list((goldfish.get("verdicts") or {}).get(key, {}).get("notes") or []),
+            "review_notes": [*((goldfish.get("verdicts") or {}).get(key, {}).get("notes") or []),
+                             *(str(flag) for flag in exercise.get("review_flags") or [])],
             "review_blocking": [], "adapted": True}
         written.append(f"{key} → {row.id}")
     extraction.stats_json = {"pipeline": PIPELINE, "version": VERSION, "exercises": len(written),

@@ -1,12 +1,13 @@
-import { Alert, Box, Button, Group, Loader, Paper, ScrollArea, SegmentedControl, Stack, Text, TextInput, Title, Tooltip } from '@mantine/core'
-import { ArrowLeft, ChevronLeft, ChevronRight, Library, Search } from 'lucide-react'
+import { Alert, Box, Button, Group, Loader, Modal, Paper, ScrollArea, SegmentedControl, Stack, Text, TextInput, Title, Tooltip, VisuallyHidden } from '@mantine/core'
+import { notifications } from '@mantine/notifications'
+import { ArrowLeft, ChevronLeft, ChevronRight, Library, Search, Send } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api } from '../api'
 import { useAppState } from '../state/AppState'
 import CompetencyHierarchy, { type CompetencyHierarchyColumn } from './CompetencyHierarchy'
 import GradeSelectionRequired from './GradeSelectionRequired'
-import ExerciseCatalogCard, { exerciseDifficulty, type CatalogExercise } from './ExerciseCatalogCard'
+import ExerciseCatalogCard, { exerciseDifficulty, type CatalogExercise, type ReviewVerdict } from './ExerciseCatalogCard'
 import ExerciseMasonry from './ExerciseMasonry'
 import BankHealthPanel from './BankHealthPanel'
 
@@ -37,6 +38,8 @@ export default function ExerciseCatalog({ admin = false }: { admin?: boolean }) 
   const [level, setLevel] = useState('all')
   const [preference, setPreference] = useState('all')
   const [search, setSearch] = useState('')
+  const [confirmPublish, setConfirmPublish] = useState(false)
+  const [publishing, setPublishing] = useState(false)
   const detailRef = useRef<HTMLDivElement>(null)
   const title = admin ? 'Exercices' : 'Banque de contenus'
   const frameworkIds = frameworks.filter(f => f.grade_level === grade && f.subject_id === subjectId && teaching.programs.includes(f.program_id)).map(f => f.id).join(',')
@@ -45,6 +48,7 @@ export default function ExerciseCatalog({ admin = false }: { admin?: boolean }) 
     : `grade_level=${grade}&subject_id=${subjectId}`
   const endpoint = admin ? '/api/indigo' : '/api/content'
   const selected = summary?.find(s => s.competency_id === params.get('competency')) ?? null
+  const selectedId = selected?.competency_id
 
   useEffect(() => {
     if (admin) return
@@ -74,9 +78,9 @@ export default function ExerciseCatalog({ admin = false }: { admin?: boolean }) 
 
   useEffect(() => {
     setExercises(null); setProblems(null); setDetailError('')
-    if (!selected) return
+    if (!selectedId) return
     let current = true
-    const id = encodeURIComponent(selected.competency_id)
+    const id = encodeURIComponent(selectedId)
     Promise.all([
       api.get<CatalogExercise[]>(`${endpoint}/exercises?competency_id=${id}&category=exercise`),
       api.get<CatalogExercise[]>(`${endpoint}/exercises?chapter_id=${id}`),
@@ -84,7 +88,7 @@ export default function ExerciseCatalog({ admin = false }: { admin?: boolean }) 
       if (current) { setExercises(items); setProblems(chapter) }
     }).catch(e => { if (current) setDetailError(e.message) })
     return () => { current = false }
-  }, [selected, endpoint])
+  }, [selectedId, endpoint])
 
   const mastery = useMemo(() => {
     const out = new Map<string, Record<string, number | null>>()
@@ -93,7 +97,7 @@ export default function ExerciseCatalog({ admin = false }: { admin?: boolean }) 
     return out
   }, [matrix])
   const columns = useMemo<CompetencyHierarchyColumn<Summary>[]>(() => [
-    { key: 'total', label: 'Total', width: 72, align: 'center', render: s => <Text size="sm">{s.total ?? (s.draft ?? 0) + (s.validated ?? 0)}</Text> },
+    { key: 'total', label: <VisuallyHidden>Total</VisuallyHidden>, width: 72, align: 'center', render: s => <Text size="sm">{s.total ?? (s.draft ?? 0) + (s.validated ?? 0)}</Text> },
     ...(admin ? [{ key: 'published', label: 'Publiés', width: 80, align: 'center' as const, render: (s: Summary) => <Text size="sm">{s.published ?? 0}</Text> }] : []),
     ...(matrix?.classes ?? []).map(cls => ({
       key: cls.id, label: cls.name, width: 100, align: 'center' as const,
@@ -135,6 +139,28 @@ export default function ExerciseCatalog({ admin = false }: { admin?: boolean }) 
     const update = (items: CatalogExercise[] | null) => items?.map(e => e.id === id ? { ...e, preference: value } : e) ?? null
     setExercises(update); setProblems(update)
   }
+  const changeReview = async (id: string, value: ReviewVerdict | null) => {
+    await api.put(`/api/indigo/exercises/${id}/review-verdict`, { value })
+    const update = (items: CatalogExercise[] | null) => items?.map(e => e.id === id ? { ...e, review_verdict: value } : e) ?? null
+    setExercises(update); setProblems(update)
+  }
+  const drafts = (exercises ?? []).filter(e => e.status === 'draft')
+  const toPublish = drafts.filter(e => e.review_verdict !== 'dislike')
+  const setAside = drafts.length - toPublish.length
+  const unsettled = toPublish.filter(e => e.review_notes?.length && !e.review_verdict).length
+  const publishAll = async () => {
+    if (!selectedId) return
+    setPublishing(true)
+    try {
+      const result = await api.post<{ published: number; skipped: number }>(`/api/indigo/competencies/${encodeURIComponent(selectedId)}/publish`)
+      setExercises(items => items?.map(e => e.status === 'draft' && e.review_verdict !== 'dislike' ? { ...e, status: 'validated' } : e) ?? null)
+      setSummary(await api.get<Summary[]>(`${endpoint}/summary?${scope}`))
+      notifications.show({ color: 'teal', message: `${result.published} exercice${result.published > 1 ? 's' : ''} publié${result.published > 1 ? 's' : ''}${result.skipped ? `, ${result.skipped} à reprendre laissé${result.skipped > 1 ? 's' : ''} de côté` : ''}.` })
+      setConfirmPublish(false)
+    } catch (e) {
+      notifications.show({ color: 'red', message: e instanceof Error ? e.message : 'Publication impossible.' })
+    } finally { setPublishing(false) }
+  }
   const renderCards = (items: CatalogExercise[] | null) => {
     if (items === null) return detailError ? null : <Loader size="sm" />
     const shown = filtered(items)
@@ -147,7 +173,8 @@ export default function ExerciseCatalog({ admin = false }: { admin?: boolean }) 
           <Text size="xs" c="dimmed">{group.length} exercice{group.length > 1 ? 's' : ''}</Text>
         </Group>
         <ExerciseMasonry>{group.map(ex => <ExerciseCatalogCard key={ex.id} exercise={ex} admin={admin}
-          onPreference={admin ? undefined : value => changePreference(ex.id, value)} />)}</ExerciseMasonry>
+          onPreference={admin ? undefined : value => changePreference(ex.id, value)}
+          onReview={admin ? value => changeReview(ex.id, value) : undefined} />)}</ExerciseMasonry>
       </Stack>
     })}</Stack>
       : <Text c="dimmed" size="sm">Aucun exercice disponible pour cette sélection.</Text>
@@ -179,20 +206,35 @@ export default function ExerciseCatalog({ admin = false }: { admin?: boolean }) 
         {selected && <>
           {!admin && <SegmentedControl size="xs" aria-label="Préférence" value={preference} onChange={setPreference}
             data={[{ value: 'all', label: 'Tous' }, { value: 'like', label: 'Aimés' }, { value: 'dislike', label: 'Écartés' }]} />}
+          {admin && <Button size="xs" leftSection={<Send size={14} />} disabled={!toPublish.length} onClick={() => setConfirmPublish(true)}>
+            {toPublish.length ? `Tout publier (${toPublish.length})` : 'Rien à publier'}
+          </Button>}
           <SegmentedControl size="xs" aria-label="Difficulté" value={level} onChange={setLevel}
             data={[{ value: 'all', label: 'Toutes' }, { value: '1', label: 'Facile' }, { value: '2', label: 'Moyen' }, { value: '3', label: 'Difficile' }]} />
         </>}
       </Group>
     </Group>
+    <Modal opened={confirmPublish} onClose={() => setConfirmPublish(false)} title={<Text fw={650}>Publier {selected?.short_id || selected?.code} ?</Text>}>
+      <Stack gap="sm">
+        <Text size="sm">{toPublish.length > 1 ? `${toPublish.length} exercices partiront en banque, utilisables` : '1 exercice partira en banque, utilisable'} par les professeurs.</Text>
+        {setAside > 0 && <Text size="sm">{setAside} à reprendre (pouce baissé) reste{setAside > 1 ? 'nt' : ''} en brouillon.</Text>}
+        {unsettled > 0 && <Text size="sm" c="red">{unsettled > 1 ? `${unsettled} ont encore un signalement que tu n'as pas tranché, et seront publiés` : `1 a encore un signalement que tu n'as pas tranché, et sera publié`} quand même.</Text>}
+        <Group justify="flex-end" gap="xs">
+          <Button variant="default" onClick={() => setConfirmPublish(false)}>Annuler</Button>
+          <Button loading={publishing} onClick={publishAll}>Publier</Button>
+        </Group>
+      </Stack>
+    </Modal>
     {error && <Alert color="red">{error}</Alert>}
     {!selected ? <>
       {admin && <BankHealthPanel />}
       {summary === null ? (!error && (admin || frameworkIds) ? <Loader /> : !error && <Text c="dimmed">Aucune compétence disponible pour ce cycle.</Text>) : summary.length === 0 ? <Text c="dimmed">Aucune compétence disponible pour ce cycle.</Text> :
         <ScrollArea><CompetencyHierarchy domains={domains} columns={columns} tableMinWidth={360 + columns.length * 100}
           getRowKey={s => s.competency_id} getShortId={s => s.short_id || s.code || ''} getLabel={s => s.label}
-          onRowClick={open} chapterAside={chapter => <Text size="xs" c="dimmed">
-            {chapter.rows.reduce((sum, row) => sum + (row.total ?? (row.draft ?? 0) + (row.validated ?? 0)), 0)} exercices
-          </Text>} /></ScrollArea>}
+          onRowClick={open} columnsInChapterBand chapterCount={chapter => {
+            const count = chapter.rows.reduce((sum, row) => sum + (row.total ?? (row.draft ?? 0) + (row.validated ?? 0)), 0)
+            return `${count} exercice${count > 1 ? 's' : ''}`
+          }} /></ScrollArea>}
     </> : <>
       {navigation}
       <Box>

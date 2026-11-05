@@ -560,6 +560,105 @@ def test_persist_writes_drafts_with_provenance(db):
     assert db.query(IndigoExercise).count() == 1
 
 
+def test_review_flags_reach_the_card_and_never_the_print(db):
+    run = _run(db, [ETALONS[0]])
+    slot_file = run / "slots" / "s01.json"
+    slot = forge.load_json(slot_file)
+    before = forge.check(db, run)[1]["s01"]
+    forge.dump_json(slot_file, {**slot, "review_flags": ["Le piège est-il juste ?"]})
+    report, contracts = forge.check(db, run)
+    assert report.ok and contracts["s01"] == before
+    forge.render(db, run)
+    forge.persist(db, run)
+    assert db.query(IndigoExercise).one().raw_ocr_json["review_notes"] == ["Le piège est-il juste ?"]
+
+
+def test_persist_slots_replaces_only_those_cards(db):
+    run = _run(db, [ETALONS[0], ETALONS[1]])
+    forge.render(db, run)
+    forge.persist(db, run)
+    first, second = (db.query(IndigoExercise).filter_by(source_number=f"{run.name}/{key}").one()
+                     for key in ("s01", "s02"))
+    kept_id, replaced_id = first.id, second.id
+    first.status = "validated"
+    second.raw_ocr_json = {**second.raw_ocr_json, "review_verdict": "dislike"}
+    db.commit()
+    assert [c["ref"] for c in forge.disliked(db, run.name)] == [f"{run.name}/s02"]
+    assert forge.disliked(db, "autre-run") == []
+    with pytest.raises(SystemExit, match="déjà validés"):
+        forge.persist(db, run, replace=True)
+    forge.persist(db, run, slots=["s02"])
+    db.expire_all()
+    assert db.query(IndigoExercise).count() == 2
+    assert db.get(IndigoExercise, kept_id).status == "validated"
+    assert db.get(IndigoExercise, replaced_id) is None
+    assert forge.disliked(db, run.name) == []
+    with pytest.raises(SystemExit, match="déjà validés"):
+        forge.persist(db, run, slots=["s01"])
+    with pytest.raises(SystemExit, match="inconnus"):
+        forge.persist(db, run, slots=["s99"])
+
+
+def _order_leaf(**fields):
+    return {"response_type": "multi_blank", "statement": "$x =$ {{blank}} ou $x =$ {{blank}}", **fields}
+
+
+def test_alternative_blanks_must_be_declared_interchangeable():
+    assert "interchangeable" in forge._answer_order_problems(_order_leaf())[0]
+    assert forge._answer_order_problems(_order_leaf(interchangeable=[[0, 1]])) == []
+    for bad in ([[0, 2]], [[0]], [[0, 1], [1, 0]], "01"):
+        assert forge._answer_order_problems(_order_leaf(interchangeable=bad))
+    # des cases sans « ou » gardent leur place, et rien n'est exigé
+    assert forge._answer_order_problems(
+        {"response_type": "multi_blank", "statement": "$a =$ {{blank}}\n$b =$ {{blank}}"}) == []
+    assert forge._answer_order_problems(
+        {"response_type": "table_fill", "interchangeable": [[0, 1]]})
+
+
+def test_two_axes_table_must_declare_what_can_mix():
+    cells = [[{"value": 1}], [{"value": 2}]]
+    table = {"response_type": "table_fill", "col_labels": ["A", "B"], "row_labels": ["L1", "L2"], "cells": cells}
+    assert "mix" in forge._answer_order_problems(table)[0]
+    for value in ("rows", "columns", "none"):
+        assert forge._answer_order_problems({**table, "mix": value}) == []
+    assert forge._answer_order_problems({**table, "mix": "diagonale"})
+    # un seul axe nommé, ou une seule ligne : il n'y a rien à trancher
+    assert forge._answer_order_problems({**table, "col_labels": ["A"]}) == []
+    assert forge._answer_order_problems({**table, "row_labels": None}) == []
+    assert forge._answer_order_problems({**table, "cells": cells[:1]}) == []
+    assert forge._answer_order_problems({"response_type": "qcm_single", "mix": "rows"})
+
+
+def test_answer_order_reaches_the_draft_grading(db):
+    blanks = {"niveau": 2, "exercice": {
+        "response_type": "multi_blank", "statement": "Résous $(x - 3)(x + 2) = 0$.\n$x =$ {{blank}} ou $x =$ {{blank}}",
+        "estimated_seconds": 60, "micro_skill": "m", "family_id": "f1", "figure": None, "leak_keys": [], "gives": [],
+        "blanks": [{"type": "integer", "value": 3}, {"type": "integer", "value": -2}],
+        "interchangeable": [[0, 1]], "answer_form": "any",
+        "correct_feedback": "Oui, ce sont les deux solutions.", "blank_feedback": "Annule chaque facteur.",
+        "fallback_feedback": "Annule chaque facteur, l'un après l'autre.",
+        "guides": [{"text": "Annule le premier facteur, puis le second.", "position": "avant_question"}]}}
+    table = {"niveau": 2, "exercice": {
+        "response_type": "table_fill", "statement": "Pour chaque équation, écris la solution, puis son double.",
+        "estimated_seconds": 90, "micro_skill": "m", "family_id": "f2", "figure": None, "leak_keys": [], "gives": [],
+        "rows_count": 2, "cols_count": 2, "col_labels": ["Solution", "Double"],
+        "row_labels": ["$x + 1 = 3$", "$x + 2 = 5$"], "mix": "rows",
+        "cells": [[{"type": "integer", "value": 2}, {"type": "integer", "value": 4}],
+                  [{"type": "integer", "value": 3}, {"type": "integer", "value": 6}]],
+        "answer_form": "any", "correct_feedback": "Oui, chaque ligne est juste.",
+        "blank_feedback": "Résous chaque équation.", "fallback_feedback": "Résous, puis multiplie par deux.",
+        "guides": [{"text": "Résous chaque équation avant de doubler la solution.", "position": "apres_question"}]}}
+    run = _run(db, [blanks, table])
+    report, _contracts = forge.check(db, run)
+    assert report.ok, report.errors
+    forge.render(db, run)
+    forge.persist(db, run)
+    first, second = (db.query(IndigoExercise).filter_by(source_number=f"{run.name}/{key}").one()
+                     for key in ("s01", "s02"))
+    assert first.grading_json["interchangeable"] == [[0, 1]]
+    assert second.grading_json["mix"] == "rows"
+
+
 def test_persist_refuses_an_incomplete_run(db):
     run = _run(db, [ETALONS[0]])
     grid = forge.load_json(run / "grid.json")
@@ -985,6 +1084,25 @@ def test_persisted_draft_is_typeset_like_the_reviewed_card():
 def test_goldfish_reader_may_comment_after_the_value():
     assert goldfish.answer_matches("8/3 d'une tablette (soit 2 tablettes et 2/3)", ["8/3"]) is True
     assert goldfish.answer_matches("8/9 d'une tablette", ["8/3"]) is False
+
+
+def test_goldfish_reads_the_conclusion_and_the_typography_of_a_right_answer():
+    # Réponses justes réellement rejetées sur le run 3e A4.
+    reasoned = "5(x \u2212 3) = 40, donc x \u2212 3 = 8, donc x = 11. Inaya a choisi 11."
+    assert goldfish.answer_matches(reasoned, ["11"]) is True
+    assert goldfish.answer_matches("x = 0,6 ou x = \u22120,6", ["$x = 0{,}6$ ou $x = -0{,}6$"]) is True
+    assert goldfish.answer_matches("x = 11 ou x = \u221211", ["$x = 11$ ou $x = -11$"]) is True
+    assert goldfish.answer_matches(
+        "x² = 25, donc x = 5 ou x = \u22125. ; 4x² \u2212 100 = 0, soit 4(x \u2212 5)(x + 5) = 0, donc x = 5 ou x = \u22125.",
+        ["$x^2 = 25$, donc $x = 5$ ou $x = -5$.",
+         "$4x^2 - 100 = 0$, soit $4(x - 5)(x + 5) = 0$, donc $x = 5$ ou $x = -5$."]) is True
+    assert goldfish.answer_matches("Le nombre est \u22124.", ["$-4$"]) is True
+    assert goldfish.answer_matches("Il mesure 7,5 cm", ["$7{,}5$"]) is True
+    # Une réponse fausse reste fausse, même bien rédigée.
+    assert goldfish.answer_matches("donc x = 12. Inaya a choisi 12.", ["11"]) is False
+    assert goldfish.answer_matches("Le nombre est 4.", ["$-4$"]) is False
+    assert goldfish.answer_matches("x = 11 ou x = 11", ["$x = 11$ ou $x = -11$"]) is False
+    assert goldfish.answer_matches("x² = 25, donc x = 5.", ["$x^2 = 25$, donc $x = 5$ ou $x = -5$."]) is False
 
 
 def test_goldfish_keeps_the_first_json_object():

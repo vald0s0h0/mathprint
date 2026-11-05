@@ -8,8 +8,9 @@
     backend/.venv/bin/python agents/forge/run.py check   [RUN]
     backend/.venv/bin/python agents/forge/run.py render  [RUN]
     backend/.venv/bin/python agents/forge/run.py goldfish [RUN] [--slots s03 s07]
-    backend/.venv/bin/python agents/forge/run.py persist [RUN] [--replace]
+    backend/.venv/bin/python agents/forge/run.py persist [RUN] [--replace] [--slots s03 s07]
     backend/.venv/bin/python agents/forge/run.py reprendre
+    backend/.venv/bin/python agents/forge/run.py ecartes [fr-3e-A4]
 
 RUN = identifiant ou dossier du run (défaut : le plus récent). Procédure :
 agents/forge/FORGE.md. Sorties courtes volontairement : ce texte entre dans le
@@ -123,10 +124,20 @@ def _cmd_goldfish(args, db):
 
 def _cmd_persist(args, db):
     run = forge.resolve_run(args.run)
-    result = forge.persist(db, run, replace=args.replace)
+    result = forge.persist(db, run, replace=args.replace, slots=args.slots)
     print(f"{len(result['written'])} brouillon(s) dans l'onglet Exercices "
           f"(extraction {result['extraction_id']}).")
     print("À relire : " + ", ".join(result["review"]))
+    return 0
+
+
+def _cmd_disliked(args, db):
+    cards = forge.disliked(db, args.filtre)
+    for card in cards:
+        origin = "" if card["forge"] else " [hors forge : à reprendre à la main]"
+        note = " | ".join(card["notes"]) or "aucun signalement"
+        print(f"{card['ref']} ({card['competency']}, {card['status']}){origin} : {note}")
+    print(f"{len(cards)} carte(s) à reprendre.")
     return 0
 
 
@@ -162,18 +173,21 @@ def main(argv=None) -> int:
         cmd.add_argument("run", nargs="?")
         if name == "persist":
             cmd.add_argument("--replace", action="store_true")
+            cmd.add_argument("--slots", nargs="*", help="Remplace seulement ces emplacements")
         if name == "suivant":
             cmd.add_argument("--lot", type=int, default=5)
         if name == "goldfish":
             cmd.add_argument("--slots", nargs="*")
             cmd.add_argument("--cli", choices=("claude", "codex"))
     sub.add_parser("reprendre", help="Liste les runs inachevés.")
+    ecartes = sub.add_parser("ecartes", help="Liste les cartes au pouce baissé.")
+    ecartes.add_argument("filtre", nargs="?", default="", help="Morceau du run, ex. fr-3e-A4")
     args = parser.parse_args(argv)
     db = SessionLocal()
     try:
         return {"prepare": _cmd_prepare, "suivant": _cmd_next, "check": _cmd_check,
                 "render": _cmd_render, "goldfish": _cmd_goldfish, "persist": _cmd_persist,
-                "reprendre": _cmd_resume}[args.cmd](args, db) or 0
+                "reprendre": _cmd_resume, "ecartes": _cmd_disliked}[args.cmd](args, db) or 0
     finally:
         db.close()
 
