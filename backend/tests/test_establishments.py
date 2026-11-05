@@ -28,7 +28,7 @@ def env():
         corrector = User(email='corrector@test.fr', password_hash='x', role='corrector')
         year = SchoolYear(label='2026-2027', active=True)
         db.add_all([admin, corrector, year]); db.commit()
-        tokens = {u.role: {'Authorization': 'Bearer ' + make_token(u.id, u.role)} for u in (admin, corrector)}
+        tokens = {u.role: {'Authorization': 'Bearer ' + make_token(u)} for u in (admin, corrector)}
         year_id = year.id
     app = FastAPI()
     for mod in (auth, operations, org, assessments, students, content, printing, grades, misc, users_admin): app.include_router(mod.router)

@@ -104,7 +104,7 @@ export default function Competencies() {
         render: (c: Comp) => <MasteryCell value={masteryById.get(c.id)?.[cls.id]} hint={cls.name} />,
       })),
       {
-        key: '__moyenne', label: <Text size="sm" fw={700}>Moyenne</Text>,
+        key: '__moyenne', label: 'Moyenne',
         width: CLASS_COL_WIDTH, align: 'center' as const,
         render: (c: Comp) => <MasteryCell value={average(c)} strong hint="Toutes classes" />,
       },
@@ -172,12 +172,12 @@ export default function Competencies() {
         </Group>
       </Group>
 
-      <Select label="Référentiel" searchable value={sel} onChange={v => { setSel(v); setTree([]) }}
-        data={available.map(f => ({ value: f.id, label: `${f.program_id.toUpperCase()} · ${f.name}` }))} />
+      {/* Seul accès aux autres référentiels quand il y en a plusieurs (deux programmes, spécialités du lycée). */}
+      {available.length > 1 && <Select aria-label="Programme" allowDeselect={false} value={sel} onChange={v => { setSel(v); setTree([]) }}
+        data={available.map(f => ({ value: f.id, label: `${f.program_id.toUpperCase()} · ${f.name}` }))} />}
       {total === 0 && <Text size="sm" c="dimmed">Structure prête. Les compétences seront ajoutées ultérieurement.</Text>}
-      <ScrollArea h="calc(100vh - 180px)">
-        <CompetencyHierarchy domains={hierarchy} columns={columns}
-          columnGroupLabel="Compétences acquises"
+      <ScrollArea>
+        <CompetencyHierarchy domains={hierarchy} columns={columns} columnsInChapterBand
           tableMinWidth={columns.length ? LABEL_MIN_WIDTH + columns.length * CLASS_COL_WIDTH : undefined}
           getRowKey={(competency) => competency.id}
           getShortId={(competency) => competency.short_id || competency.code}

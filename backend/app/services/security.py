@@ -11,6 +11,9 @@ import jwt
 
 from ..config import settings
 
+SESSION_TOKEN_HEADER = "X-Session-Token"
+SESSION_RENEW_AFTER = timedelta(days=1)
+
 
 def hash_password(p: str) -> str:
     salt = secrets.token_hex(16)
@@ -27,17 +30,36 @@ def verify_password(p: str, h: str) -> bool:
     return hmac.compare_digest(candidate, digest)
 
 
-def make_token(user_id: str, role: str) -> str:
+def _password_stamp(password_hash: str) -> str:
+    """Empreinte du mot de passe portée par le jeton : la changer invalide les
+    sessions ouvertes ailleurs. HMAC : le jeton ne révèle rien du hash."""
+    return hmac.new(settings.secret_key.encode(), password_hash.encode(), hashlib.sha256).hexdigest()[:16]
+
+
+def make_token(user) -> str:
+    now = datetime.now(timezone.utc)
     payload = {
-        "sub": user_id,
-        "role": role,
-        "exp": datetime.now(timezone.utc) + timedelta(hours=settings.session_hours),
+        "sub": user.id,
+        "role": user.role,
+        "pwd": _password_stamp(user.password_hash),
+        "iat": now,
+        "exp": now + timedelta(hours=settings.session_hours),
     }
     return jwt.encode(payload, settings.secret_key, algorithm="HS256")
 
 
 def decode_token(token: str) -> dict:
     return jwt.decode(token, settings.secret_key, algorithms=["HS256"])
+
+
+def token_matches_password(payload: dict, user) -> bool:
+    return hmac.compare_digest(str(payload.get("pwd", "")), _password_stamp(user.password_hash))
+
+
+def token_needs_renewal(payload: dict) -> bool:
+    """Un renouvellement par jour d'utilisation suffit à garder la session vivante."""
+    issued = datetime.fromtimestamp(payload["iat"], timezone.utc)
+    return datetime.now(timezone.utc) - issued >= SESSION_RENEW_AFTER
 
 
 def new_pseudonym() -> str:

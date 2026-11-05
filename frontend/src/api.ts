@@ -33,6 +33,10 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
     window.location.href = '/login'
     throw new ApiError(401, 'Session expirée')
   }
+  // Session glissante. Le jeton n'est remplacé que s'il n'a pas changé entre-temps
+  // (déconnexion ou nouveau mot de passe pendant que la requête était en vol).
+  const renewed = res.headers.get('X-Session-Token')
+  if (renewed && getToken() === token) setToken(renewed)
   if (!res.ok) {
     let msg = ''
     try {

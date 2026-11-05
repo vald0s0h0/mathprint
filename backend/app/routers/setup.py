@@ -67,6 +67,6 @@ def create_first_admin(body: SetupIn, db: Session = Depends(get_db)):
                               encrypted_secret=cfg.secret.strip(), active=True))
 
     db.commit()
-    return {"token": make_token(user.id, user.role),
+    return {"token": make_token(user),
             "user": {"id": user.id, "email": user.email,
                      "display_name": user.display_name, "role": user.role}}

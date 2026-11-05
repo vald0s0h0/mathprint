@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     data_dir: Path = _DATA_DIR
     secret_key: str = "change-me-on-nas"          # JWT — voir bootstrap.py
     hmac_key: str = "change-me-hmac-key"          # signature des QR pages — idem
-    session_hours: int = 12
+    session_hours: int = 24 * 30  # 30 jours : le professeur ne ressaisit pas son mot de passe chaque jour
 
     # --- Registre de modèles par défaut (RM-011 : jamais codé en dur ailleurs) ---
     deepseek_model: str = "deepseek-v4-flash"

@@ -148,18 +148,18 @@ export default function ExerciseCatalogCard({ exercise: ex, admin, onPreference,
           <Text size="xs" c="dimmed" style={{ whiteSpace: 'nowrap' }}>{ex.bareme_points != null ? `${formatPoints(ex.bareme_points)} pt` : 'Barème —'}</Text>
         </Group>
         <Group gap={6} wrap="nowrap" style={{ flexShrink: 0 }}>
+          <Tooltip label="Temps estimé pour un élève">
+            <Text size="xs" c="dimmed" ta="right" style={{ whiteSpace: 'nowrap' }}>
+              {seconds > 0 ? (seconds < 60 ? `${seconds} s` : `${Math.floor(seconds / 60)} min${seconds % 60 ? ` ${seconds % 60} s` : ''}`) : 'Temps —'}
+            </Text>
+          </Tooltip>
           {onPreference && <Group gap={2} wrap="nowrap">
             <Tooltip label="Aimer cet exercice"><ActionIcon aria-label="Aimer cet exercice" aria-pressed={ex.preference === 'like'}
               disabled={busy} color="blue" variant={ex.preference === 'like' ? 'filled' : 'subtle'} onClick={() => setPreference('like')}><ThumbsUp size={16} /></ActionIcon></Tooltip>
             <Tooltip label="Écarter cet exercice"><ActionIcon aria-label="Écarter cet exercice" aria-pressed={ex.preference === 'dislike'}
               disabled={busy} color="red" variant={ex.preference === 'dislike' ? 'filled' : 'subtle'} onClick={() => setPreference('dislike')}><ThumbsDown size={16} /></ActionIcon></Tooltip>
           </Group>}
-            <Tooltip label="Temps estimé pour un élève">
-              <Text size="xs" c="dimmed" ta="right" style={{ whiteSpace: 'nowrap' }}>
-                {seconds > 0 ? (seconds < 60 ? `${seconds} s` : `${Math.floor(seconds / 60)} min${seconds % 60 ? ` ${seconds % 60} s` : ''}`) : 'Temps —'}
-              </Text>
-            </Tooltip>
-          </Group>
+        </Group>
       </Group></>}
       afterFrame={<>
         {admin && <Tooltip label="Cliquer pour copier l’ID">

@@ -29,7 +29,6 @@ type Props<T> = {
   getShortId: (row: T) => string
   getLabel: (row: T) => string
   columns?: CompetencyHierarchyColumn<T>[]
-  columnGroupLabel?: ReactNode
   selectedKey?: string | null
   onRowClick?: (row: T) => void
   // Remplace le décompte « N compétences » à côté du titre du chapitre.
@@ -52,7 +51,7 @@ type Props<T> = {
  * lisible sans ajouter de filets verticaux.
  */
 export default function CompetencyHierarchy<T>({
-  domains, getRowKey, getShortId, getLabel, columns = [], columnGroupLabel,
+  domains, getRowKey, getShortId, getLabel, columns = [],
   selectedKey, onRowClick, chapterCount, columnsInChapterBand = false, tableMinWidth,
 }: Props<T>) {
   const accordionKey = domains.map((domain) => domain.key).join('|')
@@ -137,39 +136,17 @@ export default function CompetencyHierarchy<T>({
                         </Table.Thead>
                       ) : columns.length > 0 && (
                         <Table.Thead>
-                          {columnGroupLabel ? (
-                            <>
-                              <Table.Tr>
-                                <Table.Th rowSpan={2}>Compétence</Table.Th>
-                                <Table.Th colSpan={columns.length} ta="center"
-                                  style={{ borderLeft: '1px solid var(--mp-border-subtle)' }}>
-                                  {columnGroupLabel}
-                                </Table.Th>
-                              </Table.Tr>
-                              <Table.Tr>
-                                {columns.map((column, index) => (
-                                  <Table.Th key={column.key} w={column.width} ta={column.align ?? 'left'}
-                                    style={index === 0
-                                      ? { borderLeft: '1px solid var(--mp-border-subtle)' }
-                                      : undefined}>
-                                    {column.label}
-                                  </Table.Th>
-                                ))}
-                              </Table.Tr>
-                            </>
-                          ) : (
-                            <Table.Tr>
-                              <Table.Th>Compétence</Table.Th>
-                              {columns.map((column, index) => (
-                                <Table.Th key={column.key} w={column.width} ta={column.align ?? 'left'}
-                                  style={index === 0
-                                    ? { borderLeft: '1px solid var(--mp-border-subtle)' }
-                                    : undefined}>
-                                  {column.label}
-                                </Table.Th>
-                              ))}
-                            </Table.Tr>
-                          )}
+                          <Table.Tr>
+                            <Table.Th>Compétence</Table.Th>
+                            {columns.map((column, index) => (
+                              <Table.Th key={column.key} w={column.width} ta={column.align ?? 'left'}
+                                style={index === 0
+                                  ? { borderLeft: '1px solid var(--mp-border-subtle)' }
+                                  : undefined}>
+                                {column.label}
+                              </Table.Th>
+                            ))}
+                          </Table.Tr>
                         </Table.Thead>
                       )}
                       <Table.Tbody>

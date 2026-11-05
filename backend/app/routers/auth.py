@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -8,7 +8,7 @@ from ..db import get_db
 from ..deps import current_user
 from ..models import User
 from ..services import login_throttle
-from ..services.security import hash_password, make_token, verify_password
+from ..services.security import SESSION_TOKEN_HEADER, hash_password, make_token, verify_password
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -29,7 +29,7 @@ def login(body: LoginIn, db: Session = Depends(get_db), request: Request = None)
     login_throttle.record_success(email)
     user.last_login_at = datetime.now(timezone.utc)
     db.commit()
-    return {"token": make_token(user.id, user.role),
+    return {"token": make_token(user),
             "user": {"id": user.id, "email": user.email,
                      "display_name": user.display_name, "role": user.role}}
 
@@ -71,14 +71,17 @@ class ChangePasswordIn(BaseModel):
 
 
 @router.post("/me/password")
-def change_password(body: ChangePasswordIn, db: Session = Depends(get_db),
+def change_password(body: ChangePasswordIn, response: Response, db: Session = Depends(get_db),
                     user: User = Depends(current_user)):
     if not verify_password(body.current_password, user.password_hash):
-        raise HTTPException(401, "Mot de passe actuel incorrect")
+        # Pas 401 : le frontend y voit une session expirée et déconnecte.
+        raise HTTPException(400, "Mot de passe actuel incorrect")
     if len(body.new_password) < 8:
         raise HTTPException(422, "Le nouveau mot de passe doit compter au moins 8 caractères")
     user.password_hash = hash_password(body.new_password)
     db.commit()
+    # Les autres appareils sont déconnectés ; celui-ci reste connecté.
+    response.headers[SESSION_TOKEN_HEADER] = make_token(user)
     return {"ok": True}
 
 
@@ -135,4 +138,4 @@ def register(body: RegistrationIn, db: Session = Depends(get_db)):
     except IntegrityError:
         db.rollback()
         raise HTTPException(409, "Ce compte a déjà été activé")
-    return {"token": make_token(user.id, user.role)}
+    return {"token": make_token(user)}
