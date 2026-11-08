@@ -78,6 +78,106 @@ def _seed_image(image_dir: Path, ids=("livre-1",)):
 
 # ------------------------------------------------ la publication doit survivre
 
+def test_publication_updates_tracks_content_not_review_or_validation_dates(db):
+    _validated(db, 1)
+    row = db.query(IndigoExercise).one()
+    assert indigo.publication_updates(db, [row]) == {row.id: False}
+    indigo.publish(db)
+    assert not indigo.publication_updates(db, [row])[row.id]
+    indigo.set_review_verdict(db, row, 'like', 'Relu')
+    indigo.validate_exercise(db, row, None)
+    assert not indigo.publication_updates(db, [row])[row.id]
+    indigo.update_exercise(db, row, {'grading_json': {
+        **row.grading_json, 'feedback': {'fallback': {'text': 'Nouvelle correction'}}}})
+    assert indigo.publication_updates(db, [row])[row.id]
+    from app.routers.indigo import summary
+    assert summary('3e', db)[0]['needs_update'] == 1
+    indigo.publish_competency(db, row.competency_id, None)
+    assert not indigo.publication_updates(db, [row])[row.id]
+    assert summary('3e', db)[0]['needs_update'] == 0
+
+
+def test_publication_updates_detects_figure_changes_at_same_path(db):
+    from PIL import Image
+    _validated(db, 1)
+    row = db.query(IndigoExercise).one()
+    row.has_figure = True
+    row.figure_path = 'indigo/drafts/figure.png'
+    image = indigo.crop_abs_path(row.figure_path)
+    image.parent.mkdir(parents=True, exist_ok=True)
+    Image.new('RGB', (20, 20), 'white').save(image)
+    db.commit()
+    indigo.publish(db)
+    assert not indigo.publication_updates(db, [row])[row.id]
+    Image.new('RGB', (20, 20), 'black').save(image)
+    assert indigo.publication_updates(db, [row])[row.id]
+    # Lire le compteur ne recopie jamais la nouvelle image dans la publication.
+    assert indigo.publication_updates(db, [row])[row.id]
+    indigo.publish_rows(db, [row])
+    assert not indigo.publication_updates(db, [row])[row.id]
+
+
+def test_publish_displayed_selection_is_incremental_and_includes_problems(db):
+    from types import SimpleNamespace
+    from app.routers.indigo import PublishSelection, preview_publication_selection, publish_selection
+    _validated(db, 3)
+    comp = db.query(Competency).one()
+    rows = db.query(IndigoExercise).order_by(IndigoExercise.source_number).all()
+    other = Competency(framework_id=comp.framework_id, code='A1.2', short_id='A1.2', label='Autre')
+    db.add(other); db.flush()
+    outside = IndigoExercise(competency_id=other.id, grade_level='3e', status='validated',
+                             statement='Hors sélection', response_type='short_text')
+    db.add(outside); db.commit()
+    indigo.publish(db)
+    indigo.update_exercise(db, rows[0], {'statement': 'Version corrigée'})
+    indigo.update_exercise(db, rows[1], {'statement': 'À reprendre'})
+    indigo.set_review_verdict(db, rows[1], 'dislike')
+    indigo.update_exercise(db, outside, {'statement': 'Autre modification hors sélection'})
+    problem = IndigoExercise(competency_id=comp.id, grade_level='3e', status='draft',
+                             statement='Problème nouveau', badge_type='probleme', response_type='short_text')
+    db.add(problem); db.commit()
+    body = PublishSelection(grade_level='3e', program_id='fr', subject_id='math', competency_ids=[comp.id])
+    plan = preview_publication_selection(body, db)
+    assert plan['pending'] == 2 and plan['skipped'] == 1
+    body.fingerprint = plan['fingerprint']
+    result = publish_selection(body, db, SimpleNamespace(id=None))
+    assert result == {'published': 2, 'skipped': 1}
+    records = {r['id']: r for r in indigo.load_published()['exercises']}
+    assert records[rows[0].id]['statement'] == rows[0].statement
+    assert records[outside.id]['statement'] == 'Hors sélection'
+    assert rows[1].status == outside.status == 'draft'
+    assert problem.id in records and rows[2].id in records
+    assert not preview_publication_selection(body, db)['pending']
+
+
+def test_publish_displayed_selection_rejects_another_cycle_or_country(db):
+    from fastapi import HTTPException
+    from app.routers.indigo import PublishSelection, preview_publication_selection
+    _validated(db, 1)
+    comp = db.query(Competency).one()
+    for country, cycle in [('ci', '3e'), ('fr', '6e')]:
+        body = PublishSelection(grade_level=cycle, program_id=country, subject_id='math', competency_ids=[comp.id])
+        with pytest.raises(HTTPException) as error:
+            preview_publication_selection(body, db)
+        assert error.value.status_code == 400
+    assert not indigo.load_published().get('exercises')
+
+
+def test_publish_displayed_selection_rejects_changed_review_since_preview(db):
+    from types import SimpleNamespace
+    from fastapi import HTTPException
+    from app.routers.indigo import PublishSelection, preview_publication_selection, publish_selection
+    _validated(db, 1)
+    row = db.query(IndigoExercise).one()
+    body = PublishSelection(grade_level='3e', program_id='fr', subject_id='math', competency_ids=[row.competency_id])
+    body.fingerprint = preview_publication_selection(body, db)['fingerprint']
+    indigo.set_review_verdict(db, row, 'dislike', 'Nouvelle erreur')
+    with pytest.raises(HTTPException) as error:
+        publish_selection(body, db, SimpleNamespace(id=None))
+    assert error.value.status_code == 409
+    assert not indigo.load_published().get('exercises')
+
+
 def test_publish_writes_to_the_volume_not_the_image(db, tmp_path):
     _validated(db)
     indigo.publish(db)
@@ -289,8 +389,36 @@ def test_review_verdict_can_be_cleared_without_touching_the_rest(db):
     assert indigo.exercise_out(db, row)["review_verdict"] == "like"
     indigo.set_review_verdict(db, row, None)
     assert indigo.exercise_out(db, row)["review_verdict"] is None
-    assert row.raw_ocr_json == {"review_notes": ["À vérifier"]}
+    assert row.raw_ocr_json["review_notes"] == ["À vérifier"]
+    assert [e["status"] for e in row.raw_ocr_json["review_history"]] == ["accepted", "unrated"]
     assert row.updated_at == stamp
+
+
+def test_review_comment_survives_reload_and_verdict_changes(db):
+    _validated(db, 1)
+    row = db.query(IndigoExercise).one()
+    goldfish = {"flag": True, "notes": ["Consigne ambiguë"], "severity": "corriger"}
+    row.raw_ocr_json = {"quality": {"goldfish": goldfish}}
+    db.commit()
+    client, app = _admin_client(db)
+    url = f"/api/indigo/exercises/{row.id}/review-verdict"
+    try:
+        response = client.put(url, json={"value": "dislike", "comment": "  Préciser l’unité.  "})
+        assert response.status_code == 200
+        assert response.json()["review_comment"] == "Préciser l’unité."
+        db.expire_all()
+        card = client.get(f"/api/indigo/exercises/{row.id}").json()
+        assert card["review_comment"] == "Préciser l’unité."
+        assert card["review_notes"] == goldfish["notes"]
+        assert client.put(url, json={"value": "like"}).status_code == 200
+        db.refresh(row)
+        assert row.raw_ocr_json["quality"]["goldfish"] == goldfish
+        assert row.raw_ocr_json["review_comment"] == "Préciser l’unité."
+        assert not indigo.needs_review(row)
+        assert client.put(url, json={"value": "dislike", "comment": ""}).json()["review_comment"] == ""
+        assert client.put(url, json={"value": "dislike", "comment": "x" * 5001}).status_code == 422
+    finally:
+        app.dependency_overrides.clear()
 
 
 def test_publish_competency_needs_a_known_competency(db):

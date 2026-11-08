@@ -73,9 +73,11 @@ def test_placement_puts_each_card_on_the_requested_page_and_column():
     plan = [(0, 0), (0, 1), (1, 0), (1, 1)]
     order = [0, 1, 2, 3]
     zones, _ = _render([items[i] for i in order], placement=plan)
-    got = {z["item_id"]: (z["page_index"], round(z["x_pt"])) for z in zones}
-    left_x = round(pdfgen.MARGIN)
-    right_x = round(pdfgen.MARGIN + pdfgen.COL_W + pdfgen.COL_GAP)
+    # Les réponses courtes sont désormais étroites et centrées dans la carte.
+    # Leur centre, et non leur bord gauche, identifie la colonne demandée.
+    got = {z["item_id"]: (z["page_index"], round(z["x_pt"] + z["w_pt"] / 2)) for z in zones}
+    left_x = round(pdfgen.MARGIN + pdfgen.COL_W / 2)
+    right_x = round(pdfgen.MARGIN + pdfgen.COL_W + pdfgen.COL_GAP + pdfgen.COL_W / 2)
     assert got["i0"] == (0, left_x)
     assert got["i1"] == (0, right_x)
     assert got["i2"] == (1, left_x)

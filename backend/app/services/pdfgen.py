@@ -43,7 +43,7 @@ from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfbase.ttfonts import TTFont
 
 from ..config import settings
-from . import blocks, exercise_gen, handwriting, scoring
+from . import blocks, construction, exercise_gen, handwriting, scoring
 from . import statement as statement_mod
 from .runtime_settings import DEFAULT_TEMPLATES
 
@@ -157,6 +157,9 @@ STRIP_NOTE_W = 17 * mm  # réserve droite pour la note de barème (imprimée en 
 CORR_FS_DELTA = 1.0     # le corrigé s'imprime un cran plus petit que l'énoncé
 FEEDBACK_MAX_LINES = 4  # une carte ne réserve jamais plus de 4 lignes de micro-correction
 FEEDBACK_FIT_SLACK = 0.5 * mm
+# Débord toléré d'une formule en ligne au-dessus ou au-dessous du texte, en part du
+# corps : moins que l'interligne (2,2 pt), donc sans toucher la ligne voisine.
+MATH_OVERHANG = 0.15
 
 # --- modes de guide (§ assistants de création de sujet) ---------------------
 # Les guides sont des ENCADRÉS intégrés à l'énoncé (lignes « {{aide}} », cf.
@@ -412,9 +415,10 @@ def _wrap(text: str, width_pt: float, font_size: int) -> list[str]:
 # haute résolution (mathtext, cache disque) et posé sur la ligne de base du
 # texte — mêmes formules à l'écran (KaTeX) et sur papier.
 
+# « œ » et « Œ » restent : WinAnsi (Helvetica) et OpenDyslexic ont ces glyphes.
 _PDF_CHAR_MAP = {
     "\u2192": "->", "\u21d2": "=>", "\u2264": "<=", "\u2265": ">=",
-    "\u2260": "!=", "\u0153": "oe", "\u0152": "OE", "\u2026": "...",
+    "\u2260": "!=", "\u2026": "...",
     "\u00a0": " ", "\u202f": " ", "\u2212": "-", "\u2013": "-",
 }
 
@@ -518,11 +522,18 @@ def _seg_glue(seg: tuple) -> bool:
     return bool(seg[-1])
 
 
+_FIELD_SIZE: ContextVar[tuple[float, float] | None] = ContextVar("answer_field_size", default=None)
+_FIELD_CENTER: ContextVar[bool] = ContextVar("answer_field_center", default=False)
+
+
 def _blank_seg(kind: str, fs: float, glue: bool, extra_h: float = 0.0) -> tuple:
     """Segment de case selon sa variante (cf. statement tokens). Format :
     ("blank", w, asc, desc, kind, glue). Pour "right", `w` est un MINIMUM que la
     mise en page étirera ensuite jusqu'au bord de colonne."""
     desc = fs * 0.24
+    natural = _FIELD_SIZE.get()
+    if natural is not None:
+        return ("blank", natural[0], natural[1] - desc, desc, "normal", glue)
     if kind == "mini":
         return ("blank", MINI_BLANK_W, MINI_BLANK_H + extra_h - desc,
                 desc, "mini", glue)
@@ -1063,10 +1074,16 @@ def _rich_layout(text: str, width: float, fs: float, math_fs: float | None = Non
                 asc = max(asc, first_min_asc)
             if badge is not None and i == 0:
                 asc = max(asc, _badge_min_asc(p_fs))
+            # Crochets, parenthèses et primes dépassent à peine le texte : ils
+            # débordent dans l'interligne sans hausser la ligne, comme en
+            # typographie. Seule une formule vraiment haute (fraction) l'agrandit.
+            overhang = p_fs * MATH_OVERHANG
             for seg in line:
                 if seg[0] == "math":
-                    asc = max(asc, seg[3] - seg[4])
-                    desc = max(desc, seg[4])
+                    if seg[3] - seg[4] > asc + overhang:
+                        asc = seg[3] - seg[4]
+                    if seg[4] > desc + overhang:
+                        desc = seg[4]
                 elif seg[0] == "blank":
                     asc = max(asc, seg[2])
                     desc = max(desc, seg[3])
@@ -1075,7 +1092,7 @@ def _rich_layout(text: str, width: float, fs: float, math_fs: float | None = Non
             line_w = sum(_seg_w(s, p_fs) for s in line) + space_w * n_spaces
             lines.append({
                 "segs": line, "asc": asc, "desc": desc, "h": lh, "fs": p_fs,
-                "indent": (max(0.0, (width - line_w) / 2) if opens_on_blank
+                "indent": (max(0.0, (width - line_w) / 2) if opens_on_blank or (_FIELD_CENTER.get() and any(s[0] == "blank" for s in line))
                            else head_indent if i == 0 else cont_indent),
                 "w": line_w,
                 "badge": badge if i == 0 else None,
@@ -1725,15 +1742,17 @@ def _column_need(cells: list[list[dict]], col_labels: list | None, j: int, fs: f
     Ce n'est pas une largeur souhaitée. S'en servir comme telle a déjà produit des
     tableaux aberrants : le type de réponse (mini/normal/large) gonflait une colonne
     et écrasait les autres, alors que toutes auraient tenu à largeur égale."""
-    width = _TABLE_MINI_COL_W
+    width = 14 * mm + 2 * _TABLE_CELL_PAD
     for row in cells:
         cell = row[j] if j < len(row) else None
         if not cell:
             continue
-        if cell.get("given"):
+        if cell.get("input") == "single_choice":
+            width = max(width, sum(4 * mm + _natural_w(label, fs) + 3 * mm for label in cell["choices"]) + 2 * _TABLE_CELL_PAD)
+        elif cell.get("given"):
             width = max(width, _natural_w(_cell_display_text(cell), fs) + 2 * _TABLE_CELL_PAD)
         else:
-            width = max(width, handwriting.need_w(cell) + 2 * _TABLE_CELL_PAD)
+            width = max(width, handwriting.field_size([cell])[0] + 2 * _TABLE_CELL_PAD)
     if col_labels and j < len(col_labels):
         width = max(width, _unbreakable_w(str(col_labels[j]), fs) + 2 * mm)
     return width
@@ -1803,16 +1822,15 @@ def _shortest_label_column(row_labels: list, cells: list[list[dict]], fs: float,
 
 def _table_geometry(w: float, col_labels: list | None, row_labels: list | None,
                     cells: list[list[dict]], font_size: int,
-                    sub_badge_color: Color | None = None) -> dict:
+                    sub_badge_color: Color | None = None,
+                    response_layout: dict | None = None, wrong_answers: list | None = None) -> dict:
     """Géométrie complète d'un tableau à remplir — UNE définition, partagée par
     la mesure (_table_zone_height) et le dessin (_draw_table_zone).
 
     Le tableau est un vrai mini-tableau à cadre : la 1re colonne porte l'énoncé
     (row_labels[i], sans pastille a./b./c.), les suivantes les cases à remplir.
-    Il occupe TOUJOURS toute la largeur de la carte (jamais un petit tableau
-    compact perdu au milieu) : les colonnes de réponse gardent la taille
-    adaptée à ce qu'elles contiennent (mini/normal/wide), c'est la colonne
-    ÉNONCÉ qui absorbe l'espace restant — priorité aux cases élèves. Un tableau
+    Sa largeur naturelle laisse assez de place à l’écriture et aux libellés.
+    Il se centre dans la carte ; width=full peut demander toute la largeur. Un tableau
     FIN (≤ 2 colonnes) avec BEAUCOUP de lignes est coupé en DEUX BANDES posées
     côte à côte (la 2de moitié des lignes à droite de la 1re) : moins de
     hauteur, largeur mieux occupée — d'où deux petits tableaux visuellement
@@ -1826,6 +1844,13 @@ def _table_geometry(w: float, col_labels: list | None, row_labels: list | None,
     lab_fs = max(6, font_size - 1)
     has_labels = bool(row_labels)
     needs = [_column_need(cells, col_labels, j, lab_fs) for j in range(cols)]
+    for wrong in wrong_answers or []:
+        target = wrong.get("cell")
+        if wrong.get("value") is None:
+            continue
+        for j in range(cols):
+            if target is None or (len(target) == 2 and target[1] == j):
+                needs[j] = max(needs[j], handwriting.field_size([wrong["value"]])[0] + 2 * _TABLE_CELL_PAD)
     thin = cols <= 2
 
     col_kinds = [_col_kind(cells, j) for j in range(cols)]
@@ -1837,13 +1862,17 @@ def _table_geometry(w: float, col_labels: list | None, row_labels: list | None,
                   + _TABLE_BANK_GAP) else 1
     avail = inner if banks == 1 else (inner - _TABLE_BANK_GAP) / 2
 
-    # tableau TOUJOURS pleine largeur (une bande occupe tout `avail`). La colonne
+    # Largeur naturelle bornée par la carte ; la colonne
     # ÉNONCÉ (rowlab_w) prend ce qu'il lui FAUT — pas plus : sinon elle absorbait
     # tout le blanc et les cases élève finissaient riquiqui (bug « colonne énoncé
     # pleine de blanc, colonne élève étroite »). On la dimensionne sur la largeur
     # NATURELLE du plus long libellé (bornée), et l'espace restant va aux CASES,
     # qui s'ÉLARGISSENT (scale ≥ 1) — priorité à l'espace d'écriture de l'élève.
-    bank_w = avail
+    response_layout = response_layout or {}
+    natural_labels = max((_natural_w(str(x), lab_fs) for x in row_labels or []), default=0) + (2 * _TABLE_CELL_PAD if has_labels else 0)
+    if response_layout.get("uniform_fields"):
+        needs = [max(needs)] * len(needs)
+    bank_w = avail if response_layout.get("width") == "full" else min(avail, max(needs, default=0) * len(needs) + max(natural_labels, _TABLE_ROWLAB_MIN_W if has_labels else 0))
     if has_labels:
         rowlab_w = _shortest_label_column(row_labels, cells, lab_fs, bank_w, sum(needs))
     else:
@@ -1868,19 +1897,17 @@ def _table_geometry(w: float, col_labels: list | None, row_labels: list | None,
     for i in range(rows):
         label_h = ((row_lays[i]["height"] + 2 * _TABLE_CELL_PAD)
                    if i < len(row_lays) else 0.0)
-        # Une ligne gagne 3 mm dès qu'une de ses cellules ÉDITABLES attend une
-        # fraction. Toutes les cellules de la ligne partagent nécessairement sa
-        # hauteur dans un tableau.
+        # La même mesure manuscrite fixe la hauteur, y compris les fractions.
         row_cells = cells[i] if i < len(cells) else []
-        fraction_extra = FRACTION_EXTRA_H if any(
-            _is_fraction_value(cell) and not (cell or {}).get("given")
-            for cell in row_cells) else 0.0
         # une valeur imprimée haute (fraction donnée) ne doit pas toucher les traits
         given_h = max((_rich_layout(_cell_display_text(cell), col_ws[j] - 2 * mm, lab_fs,
                                     parse_blocks=False)["height"] + 2 * _TABLE_CELL_PAD
                        for j, cell in enumerate(row_cells) if (cell or {}).get("given")),
                       default=0.0)
-        row_hs.append(max(_TABLE_ROW_MIN_H + fraction_extra, label_h, given_h))
+        written_values = [cell for cell in row_cells if cell and not cell.get("given") and cell.get("input") != "single_choice"]
+        written_values += [wrong["value"] for wrong in wrong_answers or [] if wrong.get("value") is not None and (wrong.get("cell") is None or wrong["cell"][0] == i)]
+        writing_h = handwriting.field_size(written_values)[1] + 2 * _TABLE_CELL_PAD if written_values else _TABLE_ROW_MIN_H
+        row_hs.append(max(writing_h, label_h, given_h))
     # Lignes de même hauteur quand l'écart ne vient que d'une fraction à écrire.
     if row_hs and max(row_hs) - min(row_hs) <= FRACTION_EXTRA_H + 0.1:
         row_hs = [max(row_hs)] * len(row_hs)
@@ -1904,9 +1931,10 @@ def _table_geometry(w: float, col_labels: list | None, row_labels: list | None,
 
 def _table_zone_height(w: float, col_labels: list | None, row_labels: list | None,
                        cells: list[list[dict]], font_size: int,
-                       sub_badge_color: Color | None = None) -> float:
+                       sub_badge_color: Color | None = None, response_layout: dict | None = None,
+                       wrong_answers: list | None = None) -> float:
     return _table_geometry(w, col_labels, row_labels, cells, font_size,
-                           sub_badge_color)["height"]
+                           sub_badge_color, response_layout, wrong_answers)["height"]
 
 
 def _matching_column_ys(left_h: list[float], right_h: list[float]) -> tuple[list[list[float]], float]:
@@ -2182,8 +2210,7 @@ def _zone_height(response_type: str, choices: list[str], width: float,
     if response_type == "checkbox_grid":
         return _grid_zone_height(width, grading.get("cols"), grading.get("rows"), font_size)
     if response_type == "short_text":
-        return 0.0 if inline else 13 * mm + (
-            FRACTION_EXTRA_H if _expected_has_fraction(expected) else 0.0)
+        return 0.0 if inline else _response_field_size(expected or {}, grading)[1] + 2 * mm
     if response_type == "multi_blank":
         return 0.0  # cases dessinées en ligne dans l'énoncé, jamais de zone dédiée
     if response_type == "multiline_text":
@@ -2194,11 +2221,13 @@ def _zone_height(response_type: str, choices: list[str], width: float,
         cells = grading.get("cells") or [[]]
         return _table_zone_height(width, grading.get("col_labels"),
                                   grading.get("row_labels"), cells, font_size,
-                                  sub_badge_color)
+                                  sub_badge_color, grading.get("response_layout"), (grading.get("feedback") or {}).get("wrong_answers"))
     if response_type == "matching":
         return _matching_zone_height(grading.get("left", []), grading.get("right", []),
                                      font_size, width)
     if response_type == "manual_drawing":
+        if grading.get("construction"):
+            return construction.zone_height(grading["construction"])
         return _MANUAL_DRAWING_H
     return 13 * mm
 
@@ -2232,16 +2261,18 @@ def _table_frame(c: canvas.Canvas, x: float, y: float, w: float, h: float,
 def _draw_table_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float,
                      col_labels: list | None, row_labels: list | None,
                      cells: list[list[dict]], font_size: int,
-                     sub_badge_color: Color | None = None) -> dict:
+                     sub_badge_color: Color | None = None, response_layout: dict | None = None,
+                     wrong_answers: list | None = None) -> dict:
     geo = _table_geometry(w, col_labels, row_labels, cells, font_size,
-                          sub_badge_color)
+                          sub_badge_color, response_layout, wrong_answers)
     cols = geo["cols"]
     head_h, lab_fs = geo["head_h"], geo["lab_fs"]
     col_ws, col_offsets = geo["col_ws"], geo["col_offsets"]
     rowlab_w, bank_w = geo["rowlab_w"], geo["bank_w"]
     inner = w - 2 * CARD_PAD
     # tableau CENTRÉ dans la carte (jamais justifié à droite)
-    x0 = x + CARD_PAD + max(0.0, (inner - geo["total_w"]) / 2)
+    x0 = x + CARD_PAD + (max(0.0, (inner - geo["total_w"]) / 2)
+                         if (response_layout or {}).get("align", "center") == "center" else 0)
     grid_top = y + h - 1 * mm
 
     # géométrie par INDICE D'ORIGINE : cells_meta[i][j] doit rester aligné sur
@@ -2303,7 +2334,22 @@ def _draw_table_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float,
                 bx = cx + (col_w - bw) / 2
                 by = ry_top - row_h + (row_h - bh) / 2
                 cell = cells[i][j] if i < len(cells) and j < len(cells[i]) else None
-                if cell and cell.get("given"):
+                boxes = []
+                if cell and cell.get("input") == "single_choice" and not cell.get("given"):
+                    labels = cell["choices"]
+                    box_size = 3 * mm
+                    sizes = [box_size + 1 * mm + _natural_w(label, lab_fs) + 2 * mm for label in labels]
+                    cursor = cx + max(0.0, (col_w - sum(sizes)) / 2)
+                    for index, (label, size) in enumerate(zip(labels, sizes)):
+                        box_y = ry_top - row_h / 2 - box_size / 2
+                        c.setStrokeColor(DROPOUT)
+                        c.rect(cursor, box_y, box_size, box_size)
+                        c.setFillColor(black)
+                        c.setFont(_font(), lab_fs)
+                        c.drawString(cursor + box_size + mm, box_y + 0.5 * mm, label)
+                        boxes.append({"index": index, "value": label, "x_pt": cursor, "y_pt": box_y, "w_pt": box_size, "h_pt": box_size})
+                        cursor += size
+                elif cell and cell.get("given"):
                     c.setFillColor(black)
                     lay = _rich_layout(_cell_display_text(cell), col_w - 2 * mm, lab_fs,
                                        parse_blocks=False)
@@ -2313,7 +2359,7 @@ def _draw_table_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float,
                     c.setStrokeColor(DROPOUT)
                     c.setLineWidth(0.7)
                     c.roundRect(bx, by, bw, bh, 0.8 * mm)
-                cells_meta[i][j] = {"x_pt": bx, "y_pt": by, "w_pt": bw, "h_pt": bh}
+                cells_meta[i][j] = {"x_pt": bx, "y_pt": by, "w_pt": bw, "h_pt": bh, **({"input": "single_choice", "boxes": boxes} if boxes else {})}
             ry_top -= row_h
     c.setStrokeColor(black)
     c.setFillColor(black)
@@ -2596,10 +2642,14 @@ def _draw_answer_zone(c: canvas.Canvas, x: float, y: float, w: float, h: float,
     elif response_type == "table_fill":
         meta = _draw_table_zone(c, x, y, w, h, grading.get("col_labels"),
                                 grading.get("row_labels"), grading.get("cells") or [],
-                                font_size, sub_badge_color)
+                                font_size, sub_badge_color, grading.get("response_layout"), (grading.get("feedback") or {}).get("wrong_answers"))
     elif response_type == "matching":
         meta = _draw_matching_zone(c, x, y, w, h, grading.get("left", []),
                                    grading.get("right", []), font_size)
+    elif response_type == "manual_drawing" and grading.get("construction"):
+        # géométrie à tracer : quadrillage saumon, figure de départ en noir
+        meta = construction.draw_zone(c, x + CARD_PAD, y, w - 2 * CARD_PAD, h,
+                                      grading["construction"], DROPOUT)
     elif response_type == "manual_drawing":
         c.roundRect(x + CARD_PAD, y + 1 * mm, w - 2 * CARD_PAD, h - 2 * mm, 1.5 * mm)
     else:
@@ -2826,6 +2876,10 @@ def _draw_exercise_card(c: canvas.Canvas, x: float, y_top: float, w: float,
             # sous l'énoncé, dans la colonne de contenu : le vide éventuel reste en bas
             zone_x, zone_w = x + layout["column_dx"], layout["column_w"]
             zone_y = ty - layout["intro"]["height"] - zone_h
+        if response_type == "short_text" and layout.get("response_field_size"):
+            field_w = layout["response_field_size"][0] + 2 * CARD_PAD
+            zone_x += (zone_w - field_w) / 2
+            zone_w = field_w
         meta = _draw_answer_zone(c, zone_x, zone_y, zone_w, zone_h, response_type, choices,
                                  zone_fs, grading, badge_color)
         zone_geo = {"x_pt": zone_x, "y_pt": zone_y, "w_pt": zone_w, "h_pt": zone_h}
@@ -3032,7 +3086,29 @@ def _guides_placed(item: dict) -> bool:
     return bool((item.get("grading") or {}).get("guides_placed"))
 
 
-def _exercise_layout(item: dict, font_size: int,
+def _response_field_size(expected: dict, grading: dict) -> tuple[float, float]:
+    values = ([cell for row in expected.get("cells", []) for cell in row if not cell.get("given")]
+              if expected.get("cells") else [expected])
+    values += [w.get("value") for w in (grading.get("feedback") or {}).get("wrong_answers") or []]
+    return handwriting.field_size(values)
+
+
+def _exercise_layout(item: dict, font_size: int, math_fs: int):
+    grading, expected = item.get("grading") or {}, item.get("expected") or {}
+    size = _response_field_size(expected, grading) if item.get("response_type") in ("short_text", "multi_blank") else None
+    token = _FIELD_SIZE.set(size)
+    center_token = _FIELD_CENTER.set((grading.get("response_layout") or {}).get("align", "center") == "center")
+    try:
+        result = _exercise_layout_impl(item, font_size, math_fs)
+        if size:
+            result[0]["response_field_size"] = size
+        return result
+    finally:
+        _FIELD_SIZE.reset(token)
+        _FIELD_CENTER.reset(center_token)
+
+
+def _exercise_layout_impl(item: dict, font_size: int,
                      math_fs: int) -> tuple[dict, float, float, dict]:
     """(layout de l'énoncé, corps de la zone de réponse, hauteur de zone, bande
     corrigé) d'un exercice — UNE définition, appelée à l'identique par la mesure
@@ -3072,6 +3148,20 @@ def _exercise_layout(item: dict, font_size: int,
                                figure_scale=item.get("figure_scale") or 1.0,
                                min_text_w=(_GRID_MIN_TEXT_W.get(rtype, _GRID_DEFAULT_MIN_TEXT_W)
                                            if figure_layout in FIGURE_GRID_LAYOUTS else None))
+    constraints = (item.get("grading") or {}).get("figure_constraints") or {}
+    if constraints and layout.get("figure"):
+        natural = _figure_image(item.get("figure"), 10000, 10000)
+        minimum = max(float(constraints.get("min_width_mm", 0)) * mm,
+                      float(constraints.get("min_scale", 0)) * (natural[1] if natural else 0))
+        if layout["figure"][1] < minimum - 0.1:
+            # Une colonne étroite ne peut pas contourner l'échelle demandée.
+            layout = _statement_layout(body, COL_W - 2 * CARD_PAD, font_size, math_fs,
+                                       item.get("figure"), first_indent=badge_w + BADGE_GAP,
+                                       first_min_asc=_badge_min_asc(font_size),
+                                       blank_fs=font_size + BLANK_FONT_BOOST,
+                                       sub_badge_color=sub_color, figure_scale=1.0)
+            if not layout.get("figure") or layout["figure"][1] < minimum - 0.1:
+                raise ValueError("Figure trop petite : contraintes de taille impossibles dans la colonne")
     layout["guides"] = _rich_layout(guides, COL_W - 2 * CARD_PAD, font_size)
     layout["guides_before_answer"] = item.get("guides_position") == "before_answer"
     layout["height"] += layout["guides"]["height"]
@@ -3244,10 +3334,14 @@ def _draw_composite_card(c: canvas.Canvas, x: float, y_top: float, w: float, seq
             line_y = _draw_rich(c, px + CARD_PAD, line_y, p["guides"])
         line_y -= _COMPOSITE_FRAG_GAP
         zone_y = line_y - p["zone_h"]
-        meta = _draw_answer_zone(c, px, zone_y, pw, p["zone_h"], p["response_type"],
+        answer_x, answer_w = px, pw
+        if p["response_type"] == "short_text":
+            answer_w = _response_field_size(p["expected"], p["grading"])[0] + 2 * CARD_PAD
+            answer_x += (pw - answer_w) / 2
+        meta = _draw_answer_zone(c, answer_x, zone_y, answer_w, p["zone_h"], p["response_type"],
                                  p["choices"], p["zone_fs"], p["grading"], badge_color)
         part_zones.append({"item_id": p["item_id"], "response_type": p["response_type"],
-                           "zone_geo": {"x_pt": px, "y_pt": zone_y, "w_pt": pw, "h_pt": p["zone_h"]},
+                           "zone_geo": {"x_pt": answer_x, "y_pt": zone_y, "w_pt": answer_w, "h_pt": p["zone_h"]},
                            "meta": meta})
         line_y = zone_y if guides_before else _draw_rich(c, px + CARD_PAD, zone_y, p["guides"])
     if not guides_before:
@@ -3594,13 +3688,15 @@ def _draw_appreciation_content(c: canvas.Canvas, geo: dict, progress: list[dict]
         for i, p in enumerate(visible):
             x = inner_x + i * (col_w + col_gap)
             pct = round(p["pct_acquired"] * 100)
-            name = _pdf_safe(p["competency_name"])
+            # libellé en texte simple : « x² = a », jamais « $x^2 = a$ »
+            full_name = _pdf_safe(handwriting.plain(p["competency_name"]))
+            name = full_name
             suffix = f"  {pct}%"
             # Coupe déterministe, mesurée dans la vraie police PDF : jamais de
             # collision entre deux colonnes, quel que soit le libellé H2/H3.
             while name and stringWidth(name + suffix, "Helvetica", 5.3) > col_w:
                 name = name[:-1]
-            label = (name.rstrip(" ·-") + ("…" if name != _pdf_safe(p["competency_name"]) else "")
+            label = (name.rstrip(" ·-") + ("…" if name != full_name else "")
                      + suffix)
             c.setFont("Helvetica", 5.3)
             c.setFillColor(black)

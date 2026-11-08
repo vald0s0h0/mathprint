@@ -4,6 +4,7 @@
     backend/.venv/bin/python agents/forge/run.py prepare fr 3e A1.2 --modele claude-opus-5-5
     backend/.venv/bin/python agents/forge/run.py prepare fr 3e A1 --problemes --modele gpt-6.1-sol
     backend/.venv/bin/python agents/forge/run.py prepare fr 3e A1.2 --complement 10 --modele ...
+    backend/.venv/bin/python agents/forge/run.py prepare fr 3e C1.2 --traces 4 --modele ...
     backend/.venv/bin/python agents/forge/run.py suivant [RUN]
     backend/.venv/bin/python agents/forge/run.py check   [RUN]
     backend/.venv/bin/python agents/forge/run.py render  [RUN]
@@ -19,6 +20,7 @@ contexte du modèle, et chaque ligne se relit à chaque envoi.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
@@ -52,12 +54,17 @@ def _cmd_prepare(args, db):
                       else forge.split_complement(args.complement))
     runs = forge.prepare(db, args.programme, args.cycle, args.cible, model=args.modele,
                          problems=args.problemes, subject=args.matiere, pilot=args.pilote,
-                         complement=complement)
+                         complement=complement, traces=args.traces)
     for run in runs:
         payload = forge.load_json(run / "payload.json")
         context = payload["context"]
         print(f"Run : {run.name}")
         print(f"  Fiche : {'prête' if context['fiche_ready'] else 'À ÉCRIRE'} — {context['fiche']}")
+        profile = payload.get("trace_profile")
+        if profile:
+            traces = sum(s["response_type"] in forge.DRAW_TYPES
+                         for s in forge.load_json(run / "grid.json"))
+            print(f"  Tracés : {profile['profile']} ({profile['source']}), {traces} sur 20")
     first = forge.load_json(runs[0] / "payload.json")["context"]
     if not first["fiche_ready"]:
         print(f"Sources de la fiche : {first['source']} "
@@ -72,6 +79,9 @@ def _cmd_prepare(args, db):
 
 def _cmd_next(args, db):
     run = forge.resolve_run(args.run)
+    refreshed = forge.refresh_grid(run)
+    if refreshed:
+        print(refreshed)
     slots = forge.remaining_slots(run)
     if not slots:
         print("Tous les emplacements sont écrits. Lance `check`.")
@@ -82,6 +92,8 @@ def _cmd_next(args, db):
         code = slot.get("competency") or ", ".join(slot.get("competencies", []))
         print(f"  {slot['slot']} {slot['difficulty']} {slot['response_type']} taille {slot['size']}"
               f"{' figure' if slot.get('figure') else ''} [{code}]")
+        if slot["response_type"] in forge.DRAW_TYPES:
+            print(f"    {forge.trace_brief(slot)}")
     return 0
 
 
@@ -98,7 +110,9 @@ def _cmd_render(args, db):
     run = forge.resolve_run(args.run)
     summary = forge.render(db, run)
     kind = forge.load_json(run / "grid.json")[0]["kind"]
-    _print_limited(forge.lot_hints(summary, kind))
+    _print_limited(forge.lot_hints(summary, kind) + forge.trace_lines(summary))
+    for slot in summary.get("field_whitespace", {}):
+        print(f"réserve {slot} : zone d’écriture trop large par rapport aux réponses (voir render.json)")
     simulation = summary["simulation"]
     print(f"{len(summary['cards'])} carte(s) rendue(s) dans {run / 'cards'}. "
           f"Remplissage simulé : médiane {simulation['median_fill']:.0%}, "
@@ -109,8 +123,23 @@ def _cmd_render(args, db):
 def _cmd_goldfish(args, db):
     import goldfish
     run = forge.resolve_run(args.run)
-    state = goldfish.run(run, slots=args.slots, cli=args.cli)
+    try:
+        state = goldfish.run(run, slots=args.slots, cli=args.cli, session_dir=args.session_dir, model=args.modele)
+    except goldfish.GoldfishError as error:
+        _record_failure(args, db, str(error))
+        raise
     verdicts = state["verdicts"]
+    if state.get("pending"):
+        print("Relecture en attente de réponses indépendantes : " + ", ".join(state["pending"]))
+        return 2
+    if args.slots:
+        # Re-contrôle ciblé : seules ces cartes ont été relues.
+        verdicts = {k: v for k, v in verdicts.items() if k in args.slots}
+        import hashlib
+        fresh = {k: v for k, v in verdicts.items() if v.get("image_sha256") == hashlib.sha256((run / "cards" / f"{k}.png").read_bytes()).hexdigest()}
+        if len(fresh) != len(args.slots):
+            print("Relecture non terminée : remplir les requêtes de session puis relancer Goldfish.")
+            return 2
     lines = []
     for key in sorted(verdicts):
         entry = verdicts[key]
@@ -122,21 +151,48 @@ def _cmd_goldfish(args, db):
     return 0
 
 
+def _record_failure(args, db, reason):
+    from app.models import IndigoExercise
+    import rework
+    run = forge.resolve_run(args.run)
+    refs = {f"{run.name}/{key}" for key in args.slots or []}
+    for row in db.query(IndigoExercise).filter(IndigoExercise.source_number.in_(refs)).all():
+        if (row.raw_ocr_json or {}).get("review_verdict") == "dislike":
+            rework.failed(db, row, reason)
+
+
 def _cmd_persist(args, db):
     run = forge.resolve_run(args.run)
-    result = forge.persist(db, run, replace=args.replace, slots=args.slots)
+    try:
+        result = forge.persist(db, run, replace=args.replace, slots=args.slots, reprise=args.reprise)
+    except SystemExit as error:
+        db.rollback()
+        _record_failure(args, db, str(error))
+        raise
     print(f"{len(result['written'])} brouillon(s) dans l'onglet Exercices "
           f"(extraction {result['extraction_id']}).")
     print("À relire : " + ", ".join(result["review"]))
+    rendered = forge.load_json(run / "render.json") if (run / "render.json").exists() else {}
+    for line in forge.trace_lines(rendered):
+        print(line)
     return 0
 
 
 def _cmd_disliked(args, db):
-    cards = forge.disliked(db, args.filtre)
+    cards = forge.disliked(db, args.filtre, programme=getattr(args, "programme", None), cycle=getattr(args, "cycle", None),
+                           domaine=getattr(args, "domaine", None), subject=getattr(args, "matiere", None))
+    if getattr(args, "export", None):
+        import rework
+        forge.dump_json(Path(args.export), rework.export(db, cards))
+        print("Manifeste : " + str(args.export))
     for card in cards:
         origin = "" if card["forge"] else " [hors forge : à reprendre à la main]"
         note = " | ".join(card["notes"]) or "aucun signalement"
         print(f"{card['ref']} ({card['competency']}, {card['status']}){origin} : {note}")
+        if card["comment"]:
+            print("  Commentaire admin : " + card["comment"])
+        if card["goldfish"]:
+            print("  Goldfish : " + json.dumps(card["goldfish"], ensure_ascii=False))
     print(f"{len(cards)} carte(s) à reprendre.")
     return 0
 
@@ -163,6 +219,7 @@ def main(argv=None) -> int:
     prep.add_argument("--problemes", action="store_true", help="Les 20 problèmes du chapitre")
     prep.add_argument("--pilote", action="store_true", help="Toutes les cartes à relire")
     prep.add_argument("--complement", type=int, help="Second run : nombre d'exercices à ajouter")
+    prep.add_argument("--traces", type=int, help="Run de géométrie à tracer : nombre de cartes")
     prep.add_argument("--facile", type=int, help="Second run : nombre de faciles")
     prep.add_argument("--moyen", type=int, help="Second run : nombre de moyens")
     prep.add_argument("--difficile", type=int, help="Second run : nombre de difficiles")
@@ -172,6 +229,7 @@ def main(argv=None) -> int:
         cmd = sub.add_parser(name, help=helptext)
         cmd.add_argument("run", nargs="?")
         if name == "persist":
+            cmd.add_argument("--reprise", type=Path, help="Manifeste de reprise à vérifier")
             cmd.add_argument("--replace", action="store_true")
             cmd.add_argument("--slots", nargs="*", help="Remplace seulement ces emplacements")
         if name == "suivant":
@@ -179,9 +237,14 @@ def main(argv=None) -> int:
         if name == "goldfish":
             cmd.add_argument("--slots", nargs="*")
             cmd.add_argument("--cli", choices=("claude", "codex"))
+            cmd.add_argument("--session-dir", type=Path, help="Transport de session indépendante : requêtes/réponses JSON")
+            cmd.add_argument("--modele", help="Modèle indépendant utilisé dans la session")
     sub.add_parser("reprendre", help="Liste les runs inachevés.")
     ecartes = sub.add_parser("ecartes", help="Liste les cartes au pouce baissé.")
     ecartes.add_argument("filtre", nargs="?", default="", help="Morceau du run, ex. fr-3e-A4")
+    for option in ("programme", "cycle", "domaine", "matiere"):
+        ecartes.add_argument("--" + option)
+    ecartes.add_argument("--export", type=Path, help="Exporte un manifeste de reprise")
     args = parser.parse_args(argv)
     db = SessionLocal()
     try:

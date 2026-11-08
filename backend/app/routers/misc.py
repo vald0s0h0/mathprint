@@ -207,6 +207,9 @@ def get_system_settings(db: Session = Depends(get_db)):
     rows.setdefault("llm_confidence_threshold",
                     {"value": settings.correction_confidence_min})
     rows.setdefault("appreciation_synthesis_enabled", {"value": False})
+    from ..services.runtime_settings import CONSTRUCTION_AUDIT_DEFAULT, CONSTRUCTION_THRESHOLD_DEFAULT
+    rows.setdefault("construction_confidence_threshold", {"value": CONSTRUCTION_THRESHOLD_DEFAULT})
+    rows.setdefault("construction_audit_share", {"value": CONSTRUCTION_AUDIT_DEFAULT})
     return rows
 
 

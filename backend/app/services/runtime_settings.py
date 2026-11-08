@@ -30,6 +30,35 @@ def ocr_confidence_threshold(db: Session) -> float:
     return value if 0.0 < value <= 1.0 else 0.90
 
 
+CONSTRUCTION_THRESHOLD_DEFAULT = 0.90
+CONSTRUCTION_AUDIT_DEFAULT = 0.20
+
+
+def construction_confidence_threshold(db: Session) -> float:
+    """Seuil de la lecture CV des tracés (géométrie à tracer) : au-dessus, la note
+    est appliquée ; en dessous, correction manuelle. Réglable en Pédagogie, et
+    écrit par scripts/calibrate_construction.py --apply. Au-delà de 1 : aucune
+    note automatique."""
+    saved = get_setting(db, "construction_confidence_threshold") or {}
+    try:
+        value = float(saved.get("value", CONSTRUCTION_THRESHOLD_DEFAULT))
+    except (TypeError, ValueError):
+        value = CONSTRUCTION_THRESHOLD_DEFAULT
+    return value if 0.0 < value <= 1.01 else CONSTRUCTION_THRESHOLD_DEFAULT
+
+
+def construction_audit_share(db: Session) -> float:
+    """Part des tracés notés automatiquement qui passent quand même chez le
+    professeur, tirée au hasard (stable par réponse) : elle alimente le calibrage
+    du seuil sur de vraies copies. 0 une fois le seuil établi."""
+    saved = get_setting(db, "construction_audit_share") or {}
+    try:
+        value = float(saved.get("value", CONSTRUCTION_AUDIT_DEFAULT))
+    except (TypeError, ValueError):
+        value = CONSTRUCTION_AUDIT_DEFAULT
+    return value if 0.0 <= value <= 1.0 else CONSTRUCTION_AUDIT_DEFAULT
+
+
 def appreciation_synthesis_enabled(db: Session) -> bool:
     """Phrase encourageante Claude Haiku de la zone Appréciation (services
     .appreciation) — désactivée par défaut : la partie déterministe

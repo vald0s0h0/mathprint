@@ -186,6 +186,8 @@ def french(text: str) -> str:
     les lignes de séparation de tableau ne sont pas touchées."""
     if not text or not isinstance(text, str):
         return text
+    text = re.sub(r"\b(sommet|centre) +(?=\$[A-Z](?:['′])?\$|[A-Z](?:['′])?\b)",
+                  lambda m: m.group(1) + NBSP, text, flags=re.I)
     masked, maths, tokens = _protect(text)
     lines = [ln if _TABLE_SEP_RE.match(ln) and "|" in ln else _line(ln)
              for ln in masked.split("\n")]

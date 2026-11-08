@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import base64
 import json
+import hashlib
 import os
 import random
 import re
@@ -126,8 +127,8 @@ def _ask_codex(system: str, text: str, images: list[Path]) -> dict:
                "--model", MODEL_BY_CLI["codex"]]
         for image in images:
             cmd += ["--image", str(image)]
-        cmd.append(f"{system}\n\n{text}")
-        proc = subprocess.run(cmd, capture_output=True, text=True, env=_clean_env(), timeout=TIMEOUT_S)
+        cmd += ["--", "-"]
+        proc = subprocess.run(cmd, input=f"{system}\n\n{text}", capture_output=True, text=True, env=_clean_env(), timeout=TIMEOUT_S)
     if proc.returncode != 0:
         raise GoldfishError(f"codex code {proc.returncode} : {(proc.stderr or '')[-400:]}")
     return _parse(proc.stdout)
@@ -214,6 +215,15 @@ def judge_student(verdict: dict, leaf: dict, level: int) -> tuple[str | None, li
     if verdict.get("guide_inutile"):
         severity = severity or "major"
         notes.append(f"guide peu utile : {verdict['guide_inutile']}")
+    if leaf.get("response_type") == "composite":
+        answers = verdict.get("reponses_parties")
+        parts = forge._leaves(leaf)
+        if not isinstance(answers, list) or len(answers) != len(parts):
+            severity = "blocker"
+            notes.append("réponses par partie manquantes dans le retour Goldfish")
+        elif any(answer_matches(answer, _correct_answers(part)) is False for part, answer in zip(parts, answers)):
+            severity = "blocker"
+            notes.append("réponse du lecteur différente du corrigé sur une partie")
     match = answer_matches(verdict.get("reponse"), _correct_answers(leaf))
     if match is False:
         severity = "blocker"
@@ -228,22 +238,47 @@ def judge_student(verdict: dict, leaf: dict, level: int) -> tuple[str | None, li
 def _correction_targets(exercise: dict, level: int, rng: random.Random) -> list[dict]:
     """Messages à faire relire : tous les pièges (au plus 2) sur un difficile, un
     seul tiré au hasard ailleurs."""
-    leaf = forge._leaves(exercise)[0]
+    if exercise.get("response_type") == "composite":
+        return [t for part in forge._leaves(exercise) for t in _correction_targets(part, level, rng)]
+    leaf = exercise
     options = []
     for key in ("choices", "right", "expected_errors", "wrong_answers"):
         for item in leaf.get(key) or []:
             if isinstance(item, dict) and item.get("feedback") and not item.get("correct"):
                 label = item.get("text") or item.get("value") or item.get("id")
-                # Au relier, un message vaut pour un lien faux vers ce point, même utile.
-                options.append({"reponse": f"un mauvais lien vers « {label} »" if key == "right" else label,
-                                "message": item["feedback"]})
+                if key == "right":
+                    # Au relier, un message vaut pour un lien faux vers ce point, même utile.
+                    label = f"un mauvais lien vers « {label} »"
+                elif key == "expected_errors" and leaf.get("response_type") in forge.DRAW_TYPES:
+                    # Un tracé faux n'a pas de texte : le relecteur juge le message seul.
+                    label = "un tracé faux (l'erreur que décrit le message)"
+                options.append({"reponse": label, "message": item["feedback"]})
     if not options:
         return []
     rng.shuffle(options)
     return options[:2 if level == 3 else 1]
 
 
-def run(run_dir: Path, *, slots: list[str] | None = None, cli: str | None = None) -> dict:
+class SessionPending(GoldfishError):
+    pass
+
+
+def session_ask(folder: Path, system: str, text: str, images: list[Path]) -> dict:
+    request = {"system": system, "text": text,
+               "images": [{"path": str(p), "sha256": hashlib.sha256(p.read_bytes()).hexdigest()} for p in images]}
+    key = hashlib.sha256(json.dumps(request, sort_keys=True).encode()).hexdigest()[:20]
+    forge.dump_json(folder / f"{key}.request.json", request)
+    response = folder / f"{key}.response.json"
+    if not response.exists():
+        raise SessionPending(f"Lecture indépendante attendue : {folder / (key + '.request.json')}")
+    answer = forge.load_json(response)
+    if not isinstance(answer, dict):
+        raise GoldfishError("Réponse de session invalide")
+    return answer
+
+
+def run(run_dir: Path, *, slots: list[str] | None = None, cli: str | None = None,
+        session_dir: Path | None = None, model: str | None = None) -> dict:
     """Relit les cartes valides et rendues. `slots` : re-contrôle ciblé après
     correction d'une carte, lue alors seule. Une carte déjà re-contrôlée qui
     échoue encore doit être réécrite depuis zéro."""
@@ -252,7 +287,8 @@ def run(run_dir: Path, *, slots: list[str] | None = None, cli: str | None = None
     exercises = forge.load_slots(run_dir)
     state_path = run_dir / "goldfish.json"
     state = forge.load_json(state_path) if state_path.exists() else {"verdicts": {}, "attempts": {}}
-    cli = cli or choose_cli(payload.get("model", ""))
+    cli = "session" if session_dir else (cli or choose_cli(payload.get("model", "")))
+    read = (lambda system, text, images: session_ask(session_dir, system, text, images)) if session_dir else (lambda system, text, images: ask(cli, system, text, images))
     rendered = sorted(p.stem for p in (run_dir / "cards").glob("*.png"))
     todo = [k for k in rendered if (k in slots if slots else k not in state["verdicts"])]
     if not todo:
@@ -262,29 +298,37 @@ def run(run_dir: Path, *, slots: list[str] | None = None, cli: str | None = None
     size = 1 if slots else PACK_SIZE
     system_student = _prompt("eleve")
     system_reader = _prompt("correction")
+    pending = []
     for start in range(0, len(todo), size):
         pack = todo[start:start + size]
         images = [run_dir / "cards" / f"{k}.png" for k in pack]
         labels = [f"carte {i + 1}" for i in range(len(pack))]
         text = (f"Niveau de la classe : {payload['cycle']}.\nVoici {len(pack)} carte(s), dans l'ordre : "
                 f"{', '.join(labels)}. Réponds par {{\"cartes\": [...]}} avec un objet par carte.")
-        answer = ask(cli, system_student, text, images)
+        try:
+            answer = read(system_student, text, images)
+        except SessionPending:
+            pending.extend(pack)
+            continue
         verdicts = answer.get("cartes") or []
         if len(verdicts) != len(pack):
             raise GoldfishError(f"{len(verdicts)} verdict(s) pour {len(pack)} carte(s)")
+        staged = {}
         for key, verdict in zip(pack, verdicts):
+            if not isinstance(verdict, dict) or not isinstance(verdict.get("comprehensible"), bool) or not str(verdict.get("reponse") or "").strip():
+                raise GoldfishError("Verdict élève incomplet")
             attempts = state["attempts"].get(key, 0) + 1
-            state["attempts"][key] = attempts
             exercise = exercises[key]
             level = grid[key]["level"]
             leaves = forge._leaves(exercise)
-            severity, notes = judge_student(verdict, leaves[0], level)
-            state["verdicts"][key] = {
-                "reader": cli, "severity": severity, "flag": bool(severity), "notes": notes,
+            severity, notes = judge_student(verdict, exercise, level)
+            staged[key] = {
+                "reader": model or MODEL_BY_CLI.get(cli, cli), "transport": cli,
+                "image_sha256": hashlib.sha256((run_dir / "cards" / f"{key}.png").read_bytes()).hexdigest(),
+                "student_raw": verdict, "severity": severity, "flag": bool(severity), "notes": notes,
                 "paraphrase": verdict.get("paraphrase"), "notion": verdict.get("notion"),
                 "reponse": verdict.get("reponse"), "attempts": attempts,
                 "rewrite": bool(severity == "blocker" and attempts >= 2)}
-        forge.dump_json(state_path, state)
         # Un seul appel par paquet aussi pour les messages : à plusieurs milliers de
         # cartes, un appel par carte consommerait vite le quota.
         targets = [(key, target) for key in pack
@@ -294,14 +338,29 @@ def run(run_dir: Path, *, slots: list[str] | None = None, cli: str | None = None
             listing = "\n".join(
                 f"{i + 1}. Carte {order[key]}. Réponse de l'élève : {t['reponse']}\n   Message : {t['message']}"
                 for i, (key, t) in enumerate(targets))
-            answer = ask(cli, system_reader, f"Niveau : {payload['cycle']}.\n{listing}\n"
-                         "Réponds par {\"messages\": [...]} avec un objet par message.", images)
+            try:
+                answer = read(system_reader, f"Niveau : {payload['cycle']}.\n{listing}\n"
+                              "Réponds par {\"messages\": [...]} avec un objet par message.", images)
+            except SessionPending:
+                pending.extend(pack)
+                continue
+            if len(answer.get("messages") or []) != len(targets):
+                raise GoldfishError("Relecture des micro-corrections incomplète")
             for (key, target), verdict in zip(targets, answer.get("messages") or []):
+                if not isinstance(verdict.get("comprend"), bool) or not isinstance(verdict.get("aide"), bool):
+                    raise GoldfishError("Verdict de micro-correction incomplet")
                 if verdict.get("comprend") is False or verdict.get("aide") is False:
-                    entry = state["verdicts"][key]
+                    entry = staged[key]
                     entry["flag"] = True
                     entry["severity"] = entry["severity"] or "major"
                     entry["notes"].append(f"micro-correction « {target['message'][:70]} » : "
                                           f"{verdict.get('probleme') or 'peu claire'}")
-            forge.dump_json(state_path, state)
+            for key in staged:
+                staged[key]["corrections_raw"] = answer.get("messages", [])
+        for key, entry in staged.items():
+            entry["complete"] = True
+            state["verdicts"][key] = entry
+            state["attempts"][key] = entry["attempts"]
+        forge.dump_json(state_path, state)
+    state["pending"] = pending
     return state

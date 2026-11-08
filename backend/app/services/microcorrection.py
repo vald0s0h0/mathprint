@@ -12,9 +12,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from . import grading as grader
-from . import pdfgen, typography
+from . import construction, pdfgen, typography
 
-BLANK_REASONS = ("blank", "qcm_blank", "matching_blank")
+BLANK_REASONS = ("blank", "qcm_blank", "matching_blank", "construction_blank")
 # Un verdict du professeur peut s'accompagner d'une réponse enregistrée fictive
 # (« Faux » écrit une colonne quelconque) : elle ne dit rien de l'erreur réelle.
 _TEACHER_PREFIX = "teacher_"
@@ -254,6 +254,18 @@ def select(item, decision, response=None, reading=None) -> Selection | None:
         if pairs is None:
             pairs = (response.selected_pairs if response else None) or []
         _select_matching(item, feedback, list(pairs), selection)
+    elif rtype == "manual_drawing" and isinstance(raw.get("construction"), dict):
+        # tracé : l'erreur typique reconnue par la lecture donne son message ;
+        # sinon, ce que les mesures disent (longueur fausse, élément manquant)
+        error_id = raw["construction"].get("error_id")
+        option = (feedback.get("options") or {}).get(error_id) if error_id else None
+        if option and option.get("text"):
+            selection.text, selection.kind, selection.option_id = option["text"], "option", error_id
+            selection.errors.append((option.get("error"), error_id))
+        else:
+            measured = construction.feedback_text(raw["construction"])
+            if measured and _fits(measured, int(feedback.get("lines") or 2)):
+                selection.text, selection.kind = measured, "measure"
     elif (decision.evidence_json or {}).get("llm"):
         _select_llm(feedback, decision, selection)
     else:

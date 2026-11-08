@@ -500,6 +500,206 @@
     "blank_feedback": "Appelle $x$ l'argent de Noé, puis exprime celui de Léa en fonction de $x$.",
     "fallback_feedback": "Choisis une inconnue, traduis les deux phrases par une équation, résous, puis réponds à la question posée."
    }
+  },
+  {
+   "niveau": 2,
+   "pourquoi": "Tracé : la figure de départ est imprimée, l'image est construite sur le quadrillage. Le tracé attendu et l'erreur typique (glissement au lieu de retournement) sont décrits par leurs sommets : la CV les reconnaît.",
+   "exercice": {
+    "response_type": "geo_construction",
+    "statement": "Construis le triangle $A'B'C'$, symétrique du triangle $ABC$ par rapport à la droite $(d)$.",
+    "estimated_seconds": 150,
+    "micro_skill": "Construire le symétrique d'un triangle par rapport à une droite, sur quadrillage",
+    "family_id": "symetrie-axiale-quadrillage",
+    "figure": null,
+    "leak_keys": [],
+    "gives": [],
+    "construction": {
+     "grid": true,
+     "cols": 16,
+     "rows": 9,
+     "points": {
+      "A": [
+       1,
+       1
+      ],
+      "B": [
+       6,
+       2
+      ],
+      "C": [
+       2,
+       7
+      ],
+      "P": [
+       8,
+       0
+      ],
+      "Q": [
+       8,
+       9
+      ],
+      "A'": [
+       15,
+       1
+      ],
+      "B'": [
+       10,
+       2
+      ],
+      "C'": [
+       14,
+       7
+      ],
+      "A1": [
+       9,
+       1
+      ],
+      "B1": [
+       14,
+       2
+      ],
+      "C1": [
+       10,
+       7
+      ]
+     },
+     "given": {
+      "points": [
+       "A",
+       "B",
+       "C"
+      ],
+      "polygons": [
+       [
+        "A",
+        "B",
+        "C"
+       ]
+      ],
+      "lines": [
+       {
+        "through": [
+         "P",
+         "Q"
+        ],
+        "label": "(d)"
+       }
+      ]
+     },
+     "expected": {
+      "polygons": [
+       [
+        "A'",
+        "B'",
+        "C'"
+       ]
+      ]
+     }
+    },
+    "expected_errors": [
+     {
+      "id": "glisse",
+      "error": "math.geo.symetrie",
+      "feedback": "Tu as fait glisser le triangle : la symétrie le retourne, chaque sommet passe de l'autre côté de $(d)$.",
+      "trace": {
+       "polygons": [
+        [
+         "A1",
+         "B1",
+         "C1"
+        ]
+       ]
+      }
+     }
+    ],
+    "correct_feedback": "Chaque sommet et son image sont à la même distance de $(d)$.",
+    "blank_feedback": "Place d'abord l'image de chaque sommet, à la même distance de $(d)$, puis relie-les.",
+    "fallback_feedback": "Compte les carreaux de chaque sommet jusqu'à $(d)$ et reporte-les de l'autre côté.",
+    "guides": [
+     {
+      "text": "Compte les carreaux entre chaque sommet et $(d)$ : son image est à la même distance, de l'autre côté.",
+      "position": "apres_question"
+     }
+    ]
+   }
+  },
+  {
+   "niveau": 1,
+   "pourquoi": "Tracé libre : aucune figure de départ, une case saumon. L'élève pose son angle où il veut ; la lecture retrouve la figure et mesure l'angle. L'erreur du rapporteur lu sur la mauvaise graduation (130° au lieu de 50°) est décrite par sa trace : la CV la reconnaît et imprime son message.",
+   "exercice": {
+    "response_type": "geo_construction",
+    "statement": "Construis un angle $\\widehat{xOy}$ de mesure $50^\\circ$.",
+    "estimated_seconds": 90,
+    "micro_skill": "Construire un angle de mesure donnée au rapporteur",
+    "family_id": "angle-rapporteur-libre",
+    "figure": null,
+    "leak_keys": [],
+    "gives": [
+     "valeur:50"
+    ],
+    "construction": {
+     "cols": 16,
+     "rows": 9,
+     "given": {},
+     "points": {
+      "O": [
+       2,
+       1.5
+      ],
+      "X": [
+       12,
+       1.5
+      ],
+      "Y": [
+       7.785,
+       8.394
+      ],
+      "Z": [
+       -2.5,
+       6.862
+      ]
+     },
+     "expected": {
+      "rays": [
+       [
+        "O",
+        "X"
+       ],
+       [
+        "O",
+        "Y"
+       ]
+      ]
+     }
+    },
+    "expected_errors": [
+     {
+      "id": "graduation",
+      "error": "math.geo.angle_mesure",
+      "feedback": "Ton angle mesure $130^\\circ$ : lis la graduation qui part de $0$ sur ton premier côté.",
+      "trace": {
+       "rays": [
+        [
+         "O",
+         "X"
+        ],
+        [
+         "O",
+         "Z"
+        ]
+       ]
+      }
+     }
+    ],
+    "blank_feedback": "Trace d'abord une demi-droite $[Ox)$, puis place le centre du rapporteur en $O$.",
+    "fallback_feedback": "Centre le rapporteur sur $O$, aligne le $0$ sur $[Ox)$, puis marque $50^\\circ$.",
+    "guides": [
+     {
+      "text": "Place le centre du rapporteur sur $O$ et son $0$ sur le premier côté.",
+      "position": "apres_question"
+     }
+    ]
+   }
   }
  ]
 }

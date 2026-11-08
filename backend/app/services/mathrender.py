@@ -217,7 +217,8 @@ def render_math_png(latex: str, font_size_pt: float = 10.0) -> tuple[bytes, floa
     # Même corps pour un nombre, une puissance et une fraction. Les fractions
     # en style display gardent leurs chiffres lisibles (pas de réduction 70 %).
     latex = re.sub(r"\\(?:tfrac|frac)(?![A-Za-z])", lambda _: r"\dfrac", latex)
-    key = hashlib.sha256(f"v4:{latex}:{font_size_pt}:dejavusans".encode()).hexdigest()
+    # Nouveau cache : les PNG v4 avaient un fond blanc opaque.
+    key = hashlib.sha256(f"v5-transparent:{latex}:{font_size_pt}:dejavusans".encode()).hexdigest()
     cache_dir = Path(settings.data_dir) / "mathcache"
     cache_dir.mkdir(parents=True, exist_ok=True)
     png_file = cache_dir / f"{key}.png"
@@ -229,9 +230,15 @@ def render_math_png(latex: str, font_size_pt: float = 10.0) -> tuple[bytes, floa
 
     prop = FontProperties(size=font_size_pt, math_fontfamily="dejavusans")
     buf = BytesIO()
-    # math_to_image rend serré et retourne la profondeur (descente) en points
-    depth_pt = mathtext.math_to_image(
-        f"${to_mathtext(latex)}$", buf, prop=prop, dpi=_PNG_DPI, format="png")
+    # Même géométrie que math_to_image, mais transparence explicite à l'export.
+    # Pas de rcParams global : un rendu concurrent ne doit pas changer de fond.
+    from matplotlib.figure import Figure
+    formula = f"${to_mathtext(latex)}$"
+    width, height, depth_pt, _, _ = mathtext.MathTextParser('path').parse(
+        formula, dpi=72, prop=prop)
+    fig = Figure(figsize=(width / 72.0, height / 72.0))
+    fig.text(0, depth_pt / height, formula, fontproperties=prop)
+    fig.savefig(buf, dpi=_PNG_DPI, format='png', transparent=True)
     png = buf.getvalue()
 
     from PIL import Image

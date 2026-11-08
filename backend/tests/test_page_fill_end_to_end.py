@@ -125,7 +125,7 @@ def _served_heights(db, copy_id):
     tpl = DEFAULT_TEMPLATES
     items = (db.query(CopyItem).filter_by(copy_id=copy_id)
              .order_by(CopyItem.sequence).all())
-    seen, shapes = set(), []
+    seen, shapes, tiers = set(), [], []
     for it in items:
         # un composite porte plusieurs CopyItem pour UNE carte : ici, aucun
         if it.generated_exercise_id in seen:
@@ -133,9 +133,10 @@ def _served_heights(db, copy_id):
         seen.add(it.generated_exercise_id)
         row = db.get(GeneratedExercise, it.generated_exercise_id)
         shapes.append(generation.render_shape(row))
+        tiers.append(pdfgen.reading_tier(row.difficulty_level, row.kind == 'probleme'))
     return [pdfgen.estimate_item_height(
         sh, int(tpl["exercise"].get("font_size", 9)),
-        int(tpl["exercise"].get("math_size", 12)), tpl["exercise"]) for sh in shapes], seen
+        int(tpl["exercise"].get("math_size", 12)), tpl["exercise"]) for sh in shapes], seen, tiers
 
 
 def _smallest_unused(db, comps, used_ids, levels):
@@ -165,8 +166,10 @@ def test_no_hole_big_enough_for_an_available_exercise(db, mode, pages):
     db.commit()
 
     copy = db.query(Copy).filter_by(assessment_id=a.id).first()
-    heights, used = _served_heights(db, copy.id)
-    holes = pdfgen.free_space(heights, pages)
+    heights, used, tiers = _served_heights(db, copy.id)
+    # La copie garde les problèmes après les exercices : mesurer un nouveau
+    # placement sans ces paliers inventerait des trous absents du PDF réel.
+    holes = pdfgen.free_space(heights, pages, tiers)
     levels = {db.get(GeneratedExercise, ex_id).difficulty_level for ex_id in used}
     smallest = _smallest_unused(db, comps, used, levels)
 

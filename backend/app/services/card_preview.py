@@ -11,7 +11,7 @@ import fitz
 from reportlab.pdfgen import canvas
 from reportlab.lib.colors import HexColor
 
-from . import blocks, generation, handwriting, pdfgen
+from . import blocks, construction, generation, handwriting, pdfgen
 
 _LOCK = RLock()
 
@@ -79,6 +79,16 @@ def _answers(c, meta: dict, expected: dict, rtype: str, zone: dict,
             p, q = left[i], right[j]
             c.line(p['x_pt'] + p['w_pt'] / 2, p['y_pt'] + p['h_pt'] / 2,
                    q['x_pt'] + q['w_pt'] / 2, q['y_pt'] + q['h_pt'] / 2)
+    if rtype == 'table_fill':
+        for i, row in enumerate(meta.get('cells') or []):
+            for j, cell in enumerate(row):
+                for box in (cell or {}).get('boxes', []):
+                    if box['value'] == expected['cells'][i][j]['value']:
+                        x, y, w, h = [box[k] for k in ('x_pt', 'y_pt', 'w_pt', 'h_pt')]
+                        c.line(x, y, x + w, y + h)
+                        c.line(x, y + h, x + w, y)
+    if meta.get('construction'):
+        construction.draw_expected(c, meta, _PEN)
     font, size = _hand_font()
     for field in _fields(rtype, zone, meta, expected, grading, inline):
         _pen_value(c, field['values'][0], field['rect'], font, size, _PEN)
@@ -139,6 +149,7 @@ def _render(key: str, guides: bool, show_answers: bool) -> bytes:
 _HAND_FONTS = (str(Path(__file__).resolve().parents[1] / "assets/fonts/PatrickHand-Regular.ttf"),
                "/System/Library/Fonts/Supplemental/Bradley Hand Bold.ttf",
                "/System/Library/Fonts/Supplemental/Comic Sans MS.ttf")
+_SUPERSCRIPT_BASE = dict(zip('⁰¹²³⁴⁵⁶⁷⁸⁹⁻⁺ⁿ', '0123456789-+n'))
 _PEN = HexColor('#3288D8')
 _FAIL = HexColor('#D21F3C')
 
@@ -169,7 +180,16 @@ def _pen_line(c, text: str, cx: float, baseline: float, font: str, size: float,
             x += handwriting.THOUSANDS_GAP
             continue
         step = handwriting.char_w(char)
-        if char != ' ':
+        raised = _SUPERSCRIPT_BASE.get(char)
+        if raised:
+            # exposant (x², 10⁻³) : le chiffre ordinaire, plus petit et surélevé,
+            # comme à la main (le glyphe ² de la police est minuscule)
+            small = size * 0.6
+            glyph = stringWidth(raised, font, small) or step
+            c.setFont(font, small)
+            c.drawString(x + (step - glyph) / 2, baseline + 0.5 * handwriting.DIGIT_H, raised)
+            c.setFont(font, size)
+        elif char != ' ':
             glyph = stringWidth(char, font, size) or step
             squeeze = min(1.0, step * 0.95 / glyph)
             c.saveState()
@@ -228,7 +248,7 @@ def _fields(rtype: str, zone: dict, meta: dict, expected: dict, grading: dict, i
         for i, row in enumerate(meta.get('cells') or []):
             for j, rect in enumerate(row):
                 cell = cells[i][j] if i < len(cells) and j < len(cells[i]) else None
-                if rect and cell and not cell.get('given'):
+                if rect and cell and not cell.get('given') and cell.get('input') != 'single_choice':
                     fields.append({'name': f'case {i + 1},{j + 1}', 'rect': rect,
                                    'values': [cell, *_wrong_values(grading, (i, j))]})
     return fields
@@ -248,7 +268,10 @@ def _check_field(c, field: dict, font: str, size: float) -> dict | None:
                        f"{handwriting.mm(need_w)} × {handwriting.mm(need_h)} mm, la case offre "
                        f"{handwriting.mm(rect['w_pt'])} × {handwriting.mm(rect['h_pt'])} mm")
     _pen_value(c, worst, rect, font, size, _FAIL if problem else _PEN)
-    return {'name': field['name'], 'problem': problem}
+    return {'name': field['name'], 'problem': problem,
+            'unused_width_ratio': round(max(0, rect['w_pt'] - handwriting.need_w(worst)) / max(1, rect['w_pt']), 3),
+            'allocated_width_mm': round(rect['w_pt'] / pdfgen.mm, 1),
+            'needed_width_mm': round(handwriting.need_w(worst) / pdfgen.mm, 1)}
 
 
 def _check_multiline(c, zone: dict, expected: dict, grading: dict, font: str, size: float,

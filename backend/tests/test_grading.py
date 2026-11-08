@@ -40,6 +40,30 @@ def test_symbolic_equivalence():
     assert r["score"] == 2
 
 
+@pytest.mark.parametrize('written', ['3x²', '3x^2', r'$3x^{2}$', '3*x**2', 'x*x*3'])
+def test_expression_powers_are_equivalent_in_cells_and_short_answers(written):
+    from app.services.grading import cell_credit
+    expected = {'type': 'expression', 'value': '3*x**2', 'variable': 'x'}
+    assert cell_credit(expected, written) == 1
+    result = grade(expected, {'max_score': 2, 'comparator': 'symbolic_equiv'}, written, .95)
+    assert result['score'] == 2
+
+
+@pytest.mark.parametrize('written', ['2x²', '3x³', '3x^12', r'3x^{12}', '3x⁻²'])
+def test_expression_power_normalization_does_not_accept_wrong_values(written):
+    from app.services.grading import cell_credit
+    assert cell_credit({'type': 'expression', 'value': '3*x**2'}, written) == 0
+
+
+def test_power_normalization_preserves_numeric_units_and_exponent_groups():
+    from app.services.grading import cell_credit, normalize_expression
+    assert normalize('12 cm²') == '12cm²'
+    assert cell_credit({'type': 'integer', 'value': 12}, '12 cm²') == 1
+    assert normalize_expression(r'x^{12}') == 'x**(12)'
+    assert normalize_expression('x⁻²') == 'x**(-2)'
+    assert cell_credit({'type': 'expression', 'value': 'x**12'}, 'x¹²') == 1
+
+
 def test_equation_solution_with_prefix():
     r = grade({"type": "integer", "value": 5, "variable": "x"},
               {"max_score": 3, "comparator": "equation_solution"}, "x = 5", 0.9)

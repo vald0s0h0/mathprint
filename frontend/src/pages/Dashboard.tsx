@@ -25,6 +25,8 @@ import { type LateJob, LateConflictButton, lateJobNames } from '../components/La
 import PrintButton from '../components/PrintButton'
 import { useAppState } from '../state/AppState'
 import { masteryColor } from '../utils/mastery'
+import MathText from '../components/MathText'
+import { mathPlain } from '../utils/mathPlain'
 
 // ------------------------------------------------------------------ données
 
@@ -1012,8 +1014,8 @@ export default function Dashboard() {
                           {r.code}
                         </Badge>
                         <div style={{ flex: 1, minWidth: 0 }}>
-                          <Tooltip label={r.label} multiline maw={360} openDelay={400}>
-                            <Text size="sm" fw={500} truncate>{r.label}</Text>
+                          <Tooltip label={mathPlain(r.label)} multiline maw={360} openDelay={400}>
+                            <Text size="sm" fw={500} truncate><MathText text={r.label} /></Text>
                           </Tooltip>
                           <Text size="xs" c="dimmed" truncate>
                             {cycle === 'all' ? `${r.grade} · ` : ''}{r.chapter}

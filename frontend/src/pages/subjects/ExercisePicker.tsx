@@ -11,6 +11,8 @@ import { AlertTriangle, Check, Clock, Layers, Search } from 'lucide-react'
 import { memo, useCallback, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import ExerciseCatalogCard, { formatPoints, type CatalogExercise } from '../../components/ExerciseCatalogCard'
 import ExerciseMasonry from '../../components/ExerciseMasonry'
+import MathText from '../../components/MathText'
+import { mathPlain } from '../../utils/mathPlain'
 import { packBest, pageFill, totalCapacity, type Capacities, type PackCard } from './packEngine'
 
 export type PoolItem = CatalogExercise & {
@@ -132,7 +134,7 @@ const SelectableCard = memo(function SelectableCard({ it, selected, blocked, gui
       <Box style={{ opacity: blocked ? 0.35 : 1, filter: blocked ? 'grayscale(1)' : undefined, transition: 'opacity 150ms' }}>
         <ExerciseCatalogCard exercise={it} guides={guidesOn}
           caption={<Text size="xs" c="dimmed" lineClamp={2}>
-            {it.source_number && <b>n°{it.source_number} · </b>}{it.competency_label}
+            {it.source_number && <b>n°{it.source_number} · </b>}<MathText text={it.competency_label} />
           </Text>} />
       </Box>
       {selected && (
@@ -229,7 +231,7 @@ export default function ExercisePicker({ pool, problems, metrics, guidesOn, page
       groups.set(it.competency_id, group)
     }
     return [...groups.entries()].map(([value, g]) => ({
-      value, label: `${g.label} (${g.chosen ? `${g.chosen} choisi${g.chosen > 1 ? 's' : ''} sur ` : ''}${g.total})`,
+      value, label: `${mathPlain(g.label)} (${g.chosen ? `${g.chosen} choisi${g.chosen > 1 ? 's' : ''} sur ` : ''}${g.total})`,
     }))
   }, [pool, selected])
 

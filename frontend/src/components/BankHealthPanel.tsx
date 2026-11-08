@@ -68,7 +68,7 @@ export default function BankHealthPanel() {
                       <Badge size="xs" color={a.severity === 'rouge' ? 'red' : 'orange'}>{a.severity}</Badge>
                       <Box>
                         <Text size="xs" fw={600}>{a.programme.toUpperCase()} {a.cycle} {a.target}</Text>
-                        <Text size="xs" c="dimmed">{a.label}</Text>
+                        <Text size="xs" c="dimmed"><MathText text={a.label} /></Text>
                       </Box>
                     </Group>
                   </Table.Td>
@@ -101,7 +101,7 @@ export default function BankHealthPanel() {
                 </Group>
                 <MathText text={item.statement} size="xs" />
                 <List size="xs" mt={4}>
-                  {item.notes.map((note) => <List.Item key={note.message}>{note.message}</List.Item>)}
+                  {item.notes.map((note) => <List.Item key={note.message}><MathText text={note.message} /></List.Item>)}
                 </List>
               </Paper>
             ))}

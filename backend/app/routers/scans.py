@@ -758,6 +758,24 @@ def _grid_units(item: CopyItem, ocr: OcrAttempt | None,
     return out
 
 
+def _construction_view(item: CopyItem, ocr: OcrAttempt | None) -> dict | None:
+    """Lecture CV d'un tracé, pour la modale : ce que la lecture a retrouvé et sa
+    confiance (la note n'est appliquée qu'au-dessus du seuil réglé, cf. le motif
+    de la décision). None si l'exercice n'est pas une géométrie à tracer."""
+    if item.response_type != "manual_drawing" or not (item.grading_json or {}).get("construction"):
+        return None
+    reading = ((ocr.raw_json or {}).get("construction") if ocr else None) or {}
+    options = ((item.grading_json or {}).get("feedback") or {}).get("options") or {}
+    error_id = reading.get("error_id")
+    return {"status": reading.get("status"), "fraction": reading.get("fraction"),
+            "confidence": reading.get("confidence"), "reasons": reading.get("reasons") or [],
+            "error_id": error_id,
+            "error_feedback": (options.get(error_id) or {}).get("text") if error_id else None,
+            "elements": [{"name": e.get("name"), "state": e.get("state"),
+                          "length_mm": e.get("length_mm")}
+                         for e in reading.get("elements") or []]}
+
+
 def _review_unit(db: Session, resp: StudentResponse, item: CopyItem, copy: Copy,
                  student: Student, *, review: ManualReview | None = None,
                  decision: GradingDecision | None = None) -> dict:
@@ -843,6 +861,8 @@ def _review_unit(db: Session, resp: StudentResponse, item: CopyItem, copy: Copy,
         "group_key": f"{item.catalog_id}|{sig}",
         "group_label": f"Ex. {item.sequence}",
         "response_type": item.response_type,
+        # géométrie à tracer : proposition de la CV en mode ombre (jamais appliquée)
+        "construction": _construction_view(item, ocr),
         "sequence": item.sequence,
         # correction manuelle : mode d'UI + réponse attendue LISIBLE (plus de
         # JSON brut), et le détail CASE PAR CASE pour les tableaux/cases à trous
@@ -1143,7 +1163,7 @@ def response_scan(response_id: str, cell: int | None = None,
     if not path.exists():
         raise HTTPException(404, "Crop indisponible")
     if expected_overlay and (item.response_type.startswith("qcm")
-                             or item.response_type == "matching"):
+                             or item.response_type in ("matching", "manual_drawing")):
         # Aperçu compact de correction : le scan filtré reste intact sur disque,
         # la réponse attendue rouge est dessinée uniquement dans la réponse HTTP.
         import cv2
@@ -1152,12 +1172,20 @@ def response_scan(response_id: str, cell: int | None = None,
         image = cv2.imread(str(path), cv2.IMREAD_COLOR)
         zone = db.get(ResponseZone, resp.zone_id)
         if image is not None and zone is not None:
+            meta = zone.meta_json or {}
+            if meta.get("construction"):
+                # tracé libre : poser l'attendu là où la lecture a trouvé la figure
+                reading = (db.query(OcrAttempt).filter_by(zone_id=zone.id, provider="cv_local")
+                           .order_by(OcrAttempt.created_at.desc()).first())
+                placement = (((reading.raw_json or {}).get("construction") or {}).get("placement")
+                             if reading else None)
+                meta = {**meta, "construction": {**meta["construction"], "placement": placement}}
             rendered = worker_cv.draw_expected_answer(
                 image,
                 zone_geo={"x_pt": zone.x_pt, "y_pt": zone.y_pt,
                           "w_pt": zone.w_pt, "h_pt": zone.h_pt,
                           "padding_pt": zone.padding_pt},
-                meta=zone.meta_json or {}, expected=item.expected_json or {},
+                meta=meta, expected=item.expected_json or {},
                 response_type=item.response_type,
                 color="#C62828",
             )

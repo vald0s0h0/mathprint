@@ -258,6 +258,12 @@ def plan(item, verdict: dict, *, ocr_text: str = "",
         # 0,01 » à un correcteur ne veut rien dire.
         unit_bareme = max(scoring.BAREME_MIN, round(bareme / len(flat), 3))
         for k, (cell, raw, credit) in enumerate(zip(flat, cell_texts, credits)):
+            if cell.get("input") == "single_choice":
+                if credit is None:
+                    task.unreadable += 1
+                else:
+                    task.base_score += credit
+                continue  # Une coche ambiguë revient au professeur ; jamais réinterprétée par LLM.
             shape = answer_shape(raw)
             if credit is not None and credit > 0:
                 task.base_score += credit          # juste ou arrondi correct
@@ -276,7 +282,8 @@ def plan(item, verdict: dict, *, ocr_text: str = "",
                 # case interchangeable : on montre tout son groupe, sinon le correcteur
                 # jugerait la réponse sur une attente qui n'est pas la sienne.
                 expected=_expected_for_grader(" ou ".join(
-                    grader.cell_reference_text(c) for c in grader.expected_alternatives(grading, k)), grading),
+                    grader.cell_reference_text(c) for c in grader.expected_alternatives(grading, k)),
+                    {**grading, **{key: cell[key] for key in ("answer_form", "precision") if key in cell}}),
                 student=raw, bareme=unit_bareme, weight=1.0, cell_index=k))
         return task if task.fields else None
 

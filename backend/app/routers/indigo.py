@@ -368,7 +368,15 @@ def summary(grade_level: str = "3e", db: Session = Depends(get_db),
     chapter_key = lambda c: f"{c.domain_code}\0{c.chapter_code}"
     work: dict[str, dict] = {}
     problem_work: dict[str, dict] = {}
-    for ex in db.query(IndigoExercise).filter(IndigoExercise.competency_id.in_(list(by_id))).all():
+    review_counts: dict[str, int] = {}
+    update_counts: dict[str, int] = {}
+    exercises = db.query(IndigoExercise).filter(IndigoExercise.competency_id.in_(list(by_id))).all()
+    updates = indigo.publication_updates(db, exercises)
+    for ex in exercises:
+        if updates.get(ex.id):
+            update_counts[ex.competency_id] = update_counts.get(ex.competency_id, 0) + 1
+        if indigo.needs_review(ex):
+            review_counts[ex.competency_id] = review_counts.get(ex.competency_id, 0) + 1
         status = "validated" if ex.status == "validated" else "draft"
         comp = by_id[ex.competency_id]
         if ex.badge_type in ("probleme", "enigme"):
@@ -400,6 +408,8 @@ def summary(grade_level: str = "3e", db: Session = Depends(get_db),
                     "chapter_code": c.chapter_code, "chapter_name": c.chapter_name,
                     "draft": w["draft"], "validated": w["validated"],
                     "published": p, "done": done,
+                    "needs_review": review_counts.get(c.id, 0),
+                    "needs_update": update_counts.get(c.id, 0),
                     "problem_draft": pw["draft"],
                     "problem_validated": pw["validated"],
                     "problem_published": pp})
@@ -415,6 +425,41 @@ def publish(force: bool = False, db: Session = Depends(get_db)):
         return indigo.publish(db, force=force)
     except indigo.PublishRefused as e:
         raise HTTPException(409, str(e))
+
+
+class PublishSelection(BaseModel):
+    grade_level: str
+    program_id: str
+    subject_id: str
+    competency_ids: list[str] = Field(min_length=1)
+    fingerprint: str | None = None
+
+
+def _publication_selection(body: PublishSelection, db: Session) -> dict:
+    allowed = {c.id for c in _catalog_competencies(db, body.grade_level, body.program_id, body.subject_id)}
+    if not set(body.competency_ids) <= allowed:
+        raise HTTPException(400, "Une compétence est hors du cycle, pays ou de la matière sélectionnés.")
+    return indigo.publication_selection(db, body.competency_ids)
+
+
+@router.post('/publish-selection/preview')
+def preview_publication_selection(body: PublishSelection, db: Session = Depends(get_db)):
+    plan = _publication_selection(body, db)
+    return {k: v for k, v in plan.items() if k != 'rows'}
+
+
+@router.post('/publish-selection')
+def publish_selection(body: PublishSelection, db: Session = Depends(get_db),
+                      user: User = Depends(require_role('admin'))):
+    plan = _publication_selection(body, db)
+    if not body.fingerprint or body.fingerprint != plan['fingerprint']:
+        raise HTTPException(409, 'La sélection a changé. Rouvrez la confirmation pour actualiser le bilan.')
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    for ex in plan['rows']:
+        if ex.status != 'validated':
+            ex.status, ex.validated_by, ex.validated_at, ex.updated_at = 'validated', user.id, now, now
+    return {'published': indigo.publish_rows(db, plan['rows']), 'skipped': plan['skipped']}
 
 
 @router.post("/competencies/{competency_id}/publish")
@@ -467,11 +512,13 @@ def list_exercises(competency_id: str | None = None, extraction_id: str | None =
         if status:
             rows = [r for r in rows if r.status == status]
         rows.sort(key=lambda r: (r.difficulty, indigo._exercise_number_key(r)))
-        return [indigo.exercise_out(db, ex) for ex in rows]
+        updates = indigo.publication_updates(db, rows)
+        return [{**indigo.exercise_out(db, ex), "needs_update": updates.get(ex.id, False)} for ex in rows]
     rows = indigo.list_exercises(db, competency_id, extraction_id, status)
     if category == "exercise":
         rows = [r for r in rows if r.badge_type not in ("probleme", "enigme")]
-    return [indigo.exercise_out(db, ex) for ex in rows]
+    updates = indigo.publication_updates(db, rows)
+    return [{**indigo.exercise_out(db, ex), "needs_update": updates.get(ex.id, False)} for ex in rows]
 
 
 @router.delete("/exercises")
@@ -623,6 +670,7 @@ def validate_exercise(exercise_id: str, db: Session = Depends(get_db),
 
 class ReviewVerdictIn(BaseModel):
     value: Literal["like", "dislike"] | None = None
+    comment: str | None = Field(default=None, max_length=5000)
 
 
 @router.put("/exercises/{exercise_id}/review-verdict")
@@ -630,8 +678,11 @@ def set_review_verdict(exercise_id: str, body: ReviewVerdictIn, db: Session = De
     ex = db.get(IndigoExercise, exercise_id)
     if ex is None:
         raise HTTPException(404, "Exercice introuvable")
-    indigo.set_review_verdict(db, ex, body.value)
-    return {"id": exercise_id, "review_verdict": body.value}
+    indigo.set_review_verdict(db, ex, body.value, body.comment)
+    return {"id": exercise_id, "review_verdict": body.value,
+            "review_comment": (ex.raw_ocr_json or {}).get("review_comment", ""),
+            "review_history": (ex.raw_ocr_json or {}).get("review_history", []),
+            "needs_review": indigo.needs_review(ex)}
 
 
 @router.delete("/exercises/{exercise_id}")

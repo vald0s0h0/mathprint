@@ -943,6 +943,22 @@ def _validate_cell(cell: dict) -> dict | None:
         v = {"type": "text", "value": val}
     else:
         return None
+    if cell.get("input") == "single_choice":
+        choices = cell.get("choices")
+        if ctype != "text" or not isinstance(choices, list) or not 2 <= len(choices) <= 4 or any(not isinstance(x, str) or not x.strip() or len(x) > 20 for x in choices) or len(set(choices)) != len(choices) or cell.get("value") not in choices:
+            return None
+        v.update(input="single_choice", choices=choices)
+    elif cell.get("input") not in (None, "text"):
+        return None
+    if "answer_form" in cell:
+        from .forge_contract import ANSWER_FORMS
+        if cell["answer_form"] not in ANSWER_FORMS:
+            return None
+        v["answer_form"] = cell["answer_form"]
+    if "precision" in cell:
+        if cell["precision"] != "exact_value":
+            return None
+        v["precision"] = cell["precision"]
     if cell.get("given"):
         v["given"] = True
     return v

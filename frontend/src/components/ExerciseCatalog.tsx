@@ -1,4 +1,4 @@
-import { Alert, Box, Button, Group, Loader, Modal, Paper, ScrollArea, SegmentedControl, Stack, Text, TextInput, Title, Tooltip, VisuallyHidden } from '@mantine/core'
+import { Alert, Box, Button, Group, Loader, Modal, Paper, ScrollArea, SegmentedControl, Stack, Switch, Text, TextInput, Title, Tooltip, VisuallyHidden } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
 import { ArrowLeft, ChevronLeft, ChevronRight, Library, Search, Send } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -9,14 +9,19 @@ import CompetencyHierarchy, { type CompetencyHierarchyColumn } from './Competenc
 import GradeSelectionRequired from './GradeSelectionRequired'
 import ExerciseCatalogCard, { exerciseDifficulty, type CatalogExercise, type ReviewVerdict } from './ExerciseCatalogCard'
 import ExerciseMasonry from './ExerciseMasonry'
+import MathText from './MathText'
 import BankHealthPanel from './BankHealthPanel'
 
 type Summary = {
   competency_id: string; code?: string; short_id: string; label: string; grade_level?: string
   domain_code: string; domain_name: string; chapter_code: string; chapter_name: string
-  framework_id?: string; total?: number; problems?: number; draft?: number; validated?: number; published?: number
+  needs_review?: number; needs_update?: number; framework_id?: string; total?: number; problems?: number; draft?: number; validated?: number; published?: number
 }
 type Framework = { id: string; grade_level: string; subject_id: string; program_id: string }
+type PublicationSelection = {
+  grade_level: string; program_id: string; subject_id: string; competency_ids: string[]
+  pending: number; skipped: number; unsettled: number; fingerprint: string
+}
 type Matrix = {
   classes: { id: string; name: string }[]
   domains: { chapters: { competencies: { id: string; mastery_by_class: Record<string, number | null> }[] }[] }[]
@@ -38,8 +43,12 @@ export default function ExerciseCatalog({ admin = false }: { admin?: boolean }) 
   const [level, setLevel] = useState('all')
   const [preference, setPreference] = useState('all')
   const [search, setSearch] = useState('')
+  const [onlyProblems, setOnlyProblems] = useState(false)
   const [confirmPublish, setConfirmPublish] = useState(false)
   const [publishing, setPublishing] = useState(false)
+  const [publicationSelection, setPublicationSelection] = useState<PublicationSelection | null>(null)
+  const [preparingPublication, setPreparingPublication] = useState(false)
+  const publicationRequest = useRef(0)
   const detailRef = useRef<HTMLDivElement>(null)
   const title = admin ? 'Exercices' : 'Banque de contenus'
   const frameworkIds = frameworks.filter(f => f.grade_level === grade && f.subject_id === subjectId && teaching.programs.includes(f.program_id)).map(f => f.id).join(',')
@@ -49,6 +58,10 @@ export default function ExerciseCatalog({ admin = false }: { admin?: boolean }) 
   const endpoint = admin ? '/api/indigo' : '/api/content'
   const selected = summary?.find(s => s.competency_id === params.get('competency')) ?? null
   const selectedId = selected?.competency_id
+  useEffect(() => {
+    publicationRequest.current += 1
+    setPublicationSelection(null); setPreparingPublication(false)
+  }, [scope, search, onlyProblems])
 
   useEffect(() => {
     if (admin) return
@@ -90,6 +103,28 @@ export default function ExerciseCatalog({ admin = false }: { admin?: boolean }) 
     return () => { current = false }
   }, [selectedId, endpoint])
 
+  useEffect(() => {
+    if (!admin || grade === 'all') return
+    let current = true
+    const refresh = async () => {
+      try {
+        const rows = await api.get<Summary[]>(`${endpoint}/summary?${scope}`)
+        if (current) setSummary(rows)
+        if (selectedId) {
+          const id = encodeURIComponent(selectedId)
+          const [items, chapter] = await Promise.all([
+            api.get<CatalogExercise[]>(`${endpoint}/exercises?competency_id=${id}&category=exercise`),
+            api.get<CatalogExercise[]>(`${endpoint}/exercises?chapter_id=${id}`),
+          ])
+          if (current) { setExercises(items); setProblems(chapter) }
+        }
+      } catch { /* Les données restent visibles ; le prochain rafraîchissement réessaie. */ }
+    }
+    window.addEventListener('focus', refresh)
+    const timer = window.setInterval(refresh, 30000)
+    return () => { current = false; window.removeEventListener('focus', refresh); window.clearInterval(timer) }
+  }, [admin, grade, scope, endpoint, selectedId])
+
   const mastery = useMemo(() => {
     const out = new Map<string, Record<string, number | null>>()
     for (const d of matrix?.domains ?? []) for (const ch of d.chapters)
@@ -99,6 +134,8 @@ export default function ExerciseCatalog({ admin = false }: { admin?: boolean }) 
   const columns = useMemo<CompetencyHierarchyColumn<Summary>[]>(() => [
     { key: 'total', label: <VisuallyHidden>Total</VisuallyHidden>, width: 72, align: 'center', render: s => <Text size="sm">{s.total ?? (s.draft ?? 0) + (s.validated ?? 0)}</Text> },
     ...(admin ? [{ key: 'published', label: 'Publiés', width: 80, align: 'center' as const, render: (s: Summary) => <Text size="sm">{s.published ?? 0}</Text> }] : []),
+    ...(admin ? [{ key: 'needs_update', label: 'Mettre à jour', width: 115, align: 'center' as const, render: (s: Summary) => <Tooltip label="Exercices déjà publiés dont la version actuelle diffère de la version en banque"><Text size="sm" fw={s.needs_update ? 650 : undefined} c={s.needs_update ? 'orange' : 'dimmed'}>{s.needs_update ?? 0}</Text></Tooltip> }] : []),
+    ...(admin ? [{ key: 'needs_review', label: 'À reprendre', width: 110, align: 'center' as const, render: (s: Summary) => <Text size="sm" c={s.needs_review ? 'red' : 'dimmed'}>{s.needs_review ?? 0}</Text> }] : []),
     ...(matrix?.classes ?? []).map(cls => ({
       key: cls.id, label: cls.name, width: 100, align: 'center' as const,
       render: (s: Summary) => {
@@ -113,6 +150,7 @@ export default function ExerciseCatalog({ admin = false }: { admin?: boolean }) 
   const domains = useMemo(() => {
     const groups = new Map<string, { key: string; code: string; name: string; chapters: { key: string; code: string; name: string; rows: Summary[] }[] }>()
     for (const s of summary ?? []) {
+      if (onlyProblems && !(s.needs_review ?? 0)) continue
       if (search && !`${s.short_id} ${s.label} ${s.chapter_name}`.toLocaleLowerCase('fr').includes(search.toLocaleLowerCase('fr'))) continue
       const key = `${s.framework_id ?? s.grade_level ?? grade}/${s.domain_code}`
       if (!groups.has(key)) groups.set(key, { key, code: s.domain_code, name: s.domain_name, chapters: [] })
@@ -122,7 +160,7 @@ export default function ExerciseCatalog({ admin = false }: { admin?: boolean }) 
       chapter.rows.push(s)
     }
     return [...groups.values()]
-  }, [summary, search, grade])
+  }, [summary, search, grade, onlyProblems])
 
   const open = (row: Summary) => {
     setParams(current => { const next = new URLSearchParams(current); next.set('competency', row.competency_id); return next })
@@ -131,6 +169,7 @@ export default function ExerciseCatalog({ admin = false }: { admin?: boolean }) 
   }
   const back = () => setParams(current => { const next = new URLSearchParams(current); next.delete('competency'); return next })
   const filtered = (items: CatalogExercise[]) => items.filter(e =>
+    (!onlyProblems || e.needs_review) &&
     (level === 'all' || exerciseDifficulty(e) === Number(level)) && (preference === 'all' || e.preference === preference))
     .sort((a, b) => exerciseDifficulty(a) - exerciseDifficulty(b))
   const changePreference = async (id: string, value: 'like' | 'dislike' | null) => {
@@ -139,12 +178,14 @@ export default function ExerciseCatalog({ admin = false }: { admin?: boolean }) 
     const update = (items: CatalogExercise[] | null) => items?.map(e => e.id === id ? { ...e, preference: value } : e) ?? null
     setExercises(update); setProblems(update)
   }
-  const changeReview = async (id: string, value: ReviewVerdict | null) => {
-    await api.put(`/api/indigo/exercises/${id}/review-verdict`, { value })
-    const update = (items: CatalogExercise[] | null) => items?.map(e => e.id === id ? { ...e, review_verdict: value } : e) ?? null
+  const changeReview = async (id: string, value: ReviewVerdict | null, comment?: string) => {
+    const saved = await api.put<Pick<CatalogExercise, 'review_comment' | 'review_history' | 'needs_review'>>(`/api/indigo/exercises/${id}/review-verdict`, { value, comment })
+    const update = (items: CatalogExercise[] | null) => items?.map(e => e.id === id ? { ...e, ...saved, review_verdict: value } : e) ?? null
     setExercises(update); setProblems(update)
+    try { setSummary(await api.get<Summary[]>(`${endpoint}/summary?${scope}`)) }
+    catch { notifications.show({ color: 'red', message: 'Avis enregistré. Actualisez la page pour mettre les compteurs à jour.' }) }
   }
-  const drafts = (exercises ?? []).filter(e => e.status === 'draft')
+  const drafts = (exercises ?? []).filter(e => e.status === 'draft' || e.needs_update)
   const toPublish = drafts.filter(e => e.review_verdict !== 'dislike')
   const setAside = drafts.length - toPublish.length
   const unsettled = toPublish.filter(e => e.review_notes?.length && !e.review_verdict).length
@@ -153,11 +194,38 @@ export default function ExerciseCatalog({ admin = false }: { admin?: boolean }) 
     setPublishing(true)
     try {
       const result = await api.post<{ published: number; skipped: number }>(`/api/indigo/competencies/${encodeURIComponent(selectedId)}/publish`)
-      setExercises(items => items?.map(e => e.status === 'draft' && e.review_verdict !== 'dislike' ? { ...e, status: 'validated' } : e) ?? null)
+      const id = encodeURIComponent(selectedId)
+      setExercises(await api.get<CatalogExercise[]>(`${endpoint}/exercises?competency_id=${id}&category=exercise`))
       setSummary(await api.get<Summary[]>(`${endpoint}/summary?${scope}`))
       notifications.show({ color: 'teal', message: `${result.published} exercice${result.published > 1 ? 's' : ''} publié${result.published > 1 ? 's' : ''}${result.skipped ? `, ${result.skipped} à reprendre laissé${result.skipped > 1 ? 's' : ''} de côté` : ''}.` })
       setConfirmPublish(false)
     } catch (e) {
+      notifications.show({ color: 'red', message: e instanceof Error ? e.message : 'Publication impossible.' })
+    } finally { setPublishing(false) }
+  }
+  const preparePublicationSelection = async () => {
+    const competency_ids = domains.flatMap(d => d.chapters.flatMap(ch => ch.rows.map(r => r.competency_id)))
+    if (!competency_ids.length) return
+    const selection = { grade_level: grade, program_id: catalog.program, subject_id: subjectId, competency_ids }
+    const request = ++publicationRequest.current
+    setPreparingPublication(true)
+    try {
+      const plan = await api.post<Omit<PublicationSelection, keyof typeof selection>>('/api/indigo/publish-selection/preview', selection)
+      if (publicationRequest.current === request) setPublicationSelection({ ...selection, ...plan })
+    } catch (e) {
+      notifications.show({ color: 'red', message: e instanceof Error ? e.message : 'Préparation impossible.' })
+    } finally { if (publicationRequest.current === request) setPreparingPublication(false) }
+  }
+  const publishSelection = async () => {
+    if (!publicationSelection) return
+    setPublishing(true)
+    try {
+      const result = await api.post<{ published: number; skipped: number }>('/api/indigo/publish-selection', publicationSelection)
+      setPublicationSelection(null)
+      setSummary(await api.get<Summary[]>(`${endpoint}/summary?${scope}`))
+      notifications.show({ color: 'teal', message: `${result.published} exercice(s) publié(s) / mis à jour ; ${result.skipped} disliké(s) laissé(s) de côté.` })
+    } catch (e) {
+      setPublicationSelection(null)
       notifications.show({ color: 'red', message: e instanceof Error ? e.message : 'Publication impossible.' })
     } finally { setPublishing(false) }
   }
@@ -174,24 +242,25 @@ export default function ExerciseCatalog({ admin = false }: { admin?: boolean }) 
         </Group>
         <ExerciseMasonry>{group.map(ex => <ExerciseCatalogCard key={ex.id} exercise={ex} admin={admin}
           onPreference={admin ? undefined : value => changePreference(ex.id, value)}
-          onReview={admin ? value => changeReview(ex.id, value) : undefined} />)}</ExerciseMasonry>
+          onReview={admin ? (value, comment) => changeReview(ex.id, value, comment) : undefined} />)}</ExerciseMasonry>
       </Stack>
     })}</Stack>
       : <Text c="dimmed" size="sm">Aucun exercice disponible pour cette sélection.</Text>
   }
-  const selectedIndex = selected ? (summary ?? []).indexOf(selected) : -1
-  const previous = summary?.[selectedIndex - 1]
-  const next = selectedIndex >= 0 ? summary?.[selectedIndex + 1] : undefined
+  const navigationRows = (summary ?? []).filter(s => !onlyProblems || (s.needs_review ?? 0) > 0)
+  const selectedIndex = selected ? navigationRows.indexOf(selected) : -1
+  const previous = navigationRows[selectedIndex - 1]
+  const next = selectedIndex >= 0 ? navigationRows[selectedIndex + 1] : undefined
   const navigation = <Group justify="space-between" gap="sm" wrap="wrap">
     <Button variant="subtle" leftSection={<ArrowLeft size={15} />} onClick={back}>Revenir à la liste</Button>
     <Group gap="xs" style={{ flex: 1, justifyContent: 'flex-end' }}>
       <Button variant="light" disabled={!previous} leftSection={<ChevronLeft size={16} />} onClick={() => previous && open(previous)}
         styles={{ root: { height: 'auto', minHeight: 36, maxWidth: '100%' }, label: { whiteSpace: 'normal', textAlign: 'left', padding: '6px 0' } }}>
-        {previous ? `${previous.short_id} — ${previous.label}` : 'Première compétence'}
+        {previous ? <>{previous.short_id} — <MathText text={previous.label} /></> : 'Première compétence'}
       </Button>
       <Button variant="light" disabled={!next} rightSection={<ChevronRight size={16} />} onClick={() => next && open(next)}
         styles={{ root: { height: 'auto', minHeight: 36, maxWidth: '100%' }, label: { whiteSpace: 'normal', textAlign: 'left', padding: '6px 0' } }}>
-        {next ? `${next.short_id} — ${next.label}` : 'Dernière compétence'}
+        {next ? <>{next.short_id} — <MathText text={next.label} /></> : 'Dernière compétence'}
       </Button>
     </Group>
   </Group>
@@ -201,19 +270,42 @@ export default function ExerciseCatalog({ admin = false }: { admin?: boolean }) 
     <Group justify="space-between" align="center">
       <Title order={2}><Group gap={8}><Library size={22} />{title}</Group></Title>
       <Group gap="xs" wrap="wrap">
+        {admin && !selected && <Button leftSection={<Send size={15} />} loading={preparingPublication}
+          disabled={!summary || !domains.length} onClick={preparePublicationSelection}>Tout publier / mettre à jour</Button>}
+        {admin && <Switch label="Uniquement les exercices nécessitant mon intervention" checked={onlyProblems} onChange={e => setOnlyProblems(e.currentTarget.checked)} />}
         {!selected && <TextInput aria-label="Rechercher une compétence" placeholder="Rechercher une compétence" leftSection={<Search size={15} />}
           value={search} onChange={e => setSearch(e.currentTarget.value)} />}
         {selected && <>
           {!admin && <SegmentedControl size="xs" aria-label="Préférence" value={preference} onChange={setPreference}
             data={[{ value: 'all', label: 'Tous' }, { value: 'like', label: 'Aimés' }, { value: 'dislike', label: 'Écartés' }]} />}
           {admin && <Button size="xs" leftSection={<Send size={14} />} disabled={!toPublish.length} onClick={() => setConfirmPublish(true)}>
-            {toPublish.length ? `Tout publier (${toPublish.length})` : 'Rien à publier'}
+            {toPublish.length ? `Publier / mettre à jour (${toPublish.length})` : 'Rien à publier'}
           </Button>}
           <SegmentedControl size="xs" aria-label="Difficulté" value={level} onChange={setLevel}
             data={[{ value: 'all', label: 'Toutes' }, { value: '1', label: 'Facile' }, { value: '2', label: 'Moyen' }, { value: '3', label: 'Difficile' }]} />
         </>}
       </Group>
     </Group>
+    {admin && summary !== null && <Text size="sm" fw={600} c={summary.some(s => s.needs_review) ? 'red' : 'teal'}>
+      {summary.reduce((sum, s) => sum + (s.needs_review ?? 0), 0)} exercice(s) à surveiller / reprendre
+      <Text component="span" size="xs" c="dimmed"> · Exercices et problèmes du cycle sélectionné. Les likes retirent le signalement ; seuls les dislikes seront repris par l’agent.</Text>
+    </Text>}
+    {admin && selected && !!selected.needs_update && <Text size="sm" c="orange">{selected.needs_update} exercice(s) publié(s) à mettre à jour avec leur version actuelle.</Text>}
+    <Modal opened={publicationSelection !== null} onClose={() => !publishing && setPublicationSelection(null)}
+      closeOnClickOutside={!publishing} closeOnEscape={!publishing} withCloseButton={!publishing}
+      title={<Text fw={650}>Tout publier / mettre à jour</Text>}>
+      {publicationSelection && <Stack gap="sm">
+        <Text size="sm">{publicationSelection.grade_level} · {({ fr: 'France', ci: 'Côte d’Ivoire', all: 'Tous les pays' } as Record<string, string>)[publicationSelection.program_id] ?? publicationSelection.program_id} · {publicationSelection.subject_id === 'math' ? 'Mathématiques' : publicationSelection.subject_id}</Text>
+        <Text size="sm">{publicationSelection.pending} exercice(s) et problème(s) à publier ou mettre à jour dans les {publicationSelection.competency_ids.length} compétences affichées.</Text>
+        <Text size="sm" c="dimmed">Les versions publiées déjà à jour sont conservées.</Text>
+        {publicationSelection.skipped > 0 && <Text size="sm">{publicationSelection.skipped} exercice(s) disliké(s) laissé(s) de côté.</Text>}
+        {publicationSelection.unsettled > 0 && <Text size="sm" c="red">{publicationSelection.unsettled} exercice(s) portent encore un signalement non tranché et seront publiés.</Text>}
+        <Group justify="flex-end">
+          <Button variant="default" disabled={publishing} onClick={() => setPublicationSelection(null)}>Annuler</Button>
+          <Button loading={publishing} disabled={!publicationSelection.pending} onClick={publishSelection}>Publier / mettre à jour ({publicationSelection.pending})</Button>
+        </Group>
+      </Stack>}
+    </Modal>
     <Modal opened={confirmPublish} onClose={() => setConfirmPublish(false)} title={<Text fw={650}>Publier {selected?.short_id || selected?.code} ?</Text>}>
       <Stack gap="sm">
         <Text size="sm">{toPublish.length > 1 ? `${toPublish.length} exercices partiront en banque, utilisables` : '1 exercice partira en banque, utilisable'} par les professeurs.</Text>
@@ -228,6 +320,7 @@ export default function ExerciseCatalog({ admin = false }: { admin?: boolean }) 
     {error && <Alert color="red">{error}</Alert>}
     {!selected ? <>
       {admin && <BankHealthPanel />}
+      {admin && onlyProblems && summary && domains.length === 0 && <Text c="teal">Aucun exercice ne nécessite votre intervention dans cette sélection.</Text>}
       {summary === null ? (!error && (admin || frameworkIds) ? <Loader /> : !error && <Text c="dimmed">Aucune compétence disponible pour ce cycle.</Text>) : summary.length === 0 ? <Text c="dimmed">Aucune compétence disponible pour ce cycle.</Text> :
         <ScrollArea><CompetencyHierarchy domains={domains} columns={columns} tableMinWidth={360 + columns.length * 100}
           getRowKey={s => s.competency_id} getShortId={s => s.short_id || s.code || ''} getLabel={s => s.label}
@@ -238,7 +331,7 @@ export default function ExerciseCatalog({ admin = false }: { admin?: boolean }) 
     </> : <>
       {navigation}
       <Box>
-        <Title order={3}>{selected.short_id || selected.code} — {selected.label}</Title>
+        <Title order={3}>{selected.short_id || selected.code} — <MathText text={selected.label} /></Title>
         <Text size="sm" c="dimmed">{selected.chapter_code} — {selected.chapter_name}</Text>
       </Box>
       {detailError && <Alert color="red">{detailError}</Alert>}

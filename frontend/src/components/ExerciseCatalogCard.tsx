@@ -1,7 +1,7 @@
-import { ActionIcon, Badge, Box, Group, Paper, Stack, Text, Tooltip, UnstyledButton } from '@mantine/core'
+import { ActionIcon, Badge, Box, Button, Group, Paper, Stack, Text, Textarea, Tooltip, UnstyledButton } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
 import { Copy, ThumbsDown, ThumbsUp } from 'lucide-react'
-import { useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import ExercisePrintPreview, { type PrintableExercise } from './ExercisePrintPreview'
 import MathText from './MathText'
 
@@ -17,7 +17,11 @@ export type CatalogExercise = PrintableExercise & {
   raw_ocr?: Record<string, any> | null
   status?: string
   review_notes?: string[]
+  review_comment?: string
   review_verdict?: ReviewVerdict | null
+  needs_review?: boolean
+  needs_update?: boolean
+  review_history?: { at: string; status: string; summary: string; actor?: string; comment?: string; reason?: string; model?: string; goldfish?: { reader?: string; flag?: boolean; notes?: string[] }; previous?: { comment?: string; notes?: string[] } }[]
 }
 export type ReviewVerdict = 'like' | 'dislike'
 export const exerciseDifficulty = (ex: CatalogExercise) => Math.max(1, Math.min(3, ex.difficulty ?? ex.level ?? 2))
@@ -74,21 +78,29 @@ function routes(ex: CatalogExercise): string[] {
 
 /** Relecture admin : ce qu'il faut vérifier, puis l'avis. Rouge clair tant que rien n'est
  * tranché, sans rouge une fois la carte acceptée, rouge fort si elle est à reprendre. */
-function ReviewPanel({ notes, verdict, onChange }: {
-  notes: string[]; verdict?: ReviewVerdict | null
-  onChange: (value: ReviewVerdict | null) => Promise<void>
+function ReviewPanel({ notes, verdict, comment = '', onChange }: {
+  notes: string[]; verdict?: ReviewVerdict | null; comment?: string
+  onChange: (value: ReviewVerdict | null, comment?: string) => Promise<void>
 }) {
   const [busy, setBusy] = useState(false)
+  const [draft, setDraft] = useState(comment)
+  useEffect(() => { setDraft(comment) }, [comment])
   const strong = verdict === 'dislike'
   const red = strong || (notes.length > 0 && verdict !== 'like')
   const lines = strong && !notes.length ? ['À reprendre'] : notes
   const choose = async (value: ReviewVerdict) => {
     setBusy(true)
-    try { await onChange(verdict === value ? null : value) }
+    try { await onChange(verdict === value ? null : value, draft) }
     catch (error) { notifications.show({ color: 'red', message: error instanceof Error ? error.message : 'Avis non enregistré.' }) }
     finally { setBusy(false) }
   }
-  return <Group data-review={strong ? 'strong' : red ? 'light' : 'none'} gap={8} mt={6} align="flex-start" wrap="nowrap"
+  const saveComment = async () => {
+    setBusy(true)
+    try { await onChange(verdict ?? null, draft); setDraft(draft.trim()) }
+    catch (error) { notifications.show({ color: 'red', message: error instanceof Error ? error.message : 'Commentaire non enregistré.' }) }
+    finally { setBusy(false) }
+  }
+  return <Stack gap={6}><Group data-review={strong ? 'strong' : red ? 'light' : 'none'} gap={8} mt={6} align="flex-start" wrap="nowrap"
     justify={lines.length ? 'space-between' : 'flex-end'} style={red ? {
       background: `var(--mp-review-${strong ? 'strong-' : ''}bg)`,
       border: `1px solid var(--mp-review-${strong ? 'strong-' : ''}border)`,
@@ -104,13 +116,24 @@ function ReviewPanel({ notes, verdict, onChange }: {
         disabled={busy} color="red" variant={strong ? 'filled' : 'subtle'} onClick={() => choose('dislike')}><ThumbsDown size={14} /></ActionIcon></Tooltip>
     </Group>
   </Group>
+    {strong && <Stack gap={6}>
+      <Textarea label="Pourquoi reprendre cet exercice ?" placeholder="Décrivez le problème et la correction souhaitée…"
+        description="Ce commentaire sera transmis à l’agent avec le retour Goldfish."
+        autosize minRows={2} maxLength={5000} value={draft} disabled={busy}
+        onChange={event => setDraft(event.currentTarget.value)} />
+      <Group justify="flex-end" gap="xs">
+        <Text size="xs" c="dimmed">{draft === comment ? (comment ? 'Commentaire enregistré' : 'Aucun commentaire') : 'Modifications non enregistrées'}</Text>
+        <Button size="compact-xs" loading={busy} disabled={draft === comment} onClick={saveComment}>Enregistrer</Button>
+      </Group>
+    </Stack>}
+  </Stack>
 }
 
 export default function ExerciseCatalogCard({ exercise: ex, admin, onPreference, onReview, guides = true, caption }: {
   exercise: CatalogExercise; admin?: boolean
   onPreference?: (value: 'like' | 'dislike' | null) => Promise<void>
   // avis de relecture, côté admin
-  onReview?: (value: ReviewVerdict | null) => Promise<void>
+  onReview?: (value: ReviewVerdict | null, comment?: string) => Promise<void>
   // encadrés d'aide affichés sur la carte (false : sujet sans guides)
   guides?: boolean
   // ligne de contexte au-dessus de la carte, quand les compétences sont mélangées
@@ -173,7 +196,24 @@ export default function ExerciseCatalogCard({ exercise: ex, admin, onPreference,
           <Text component="summary" size="xs" fw={600} style={{ cursor: 'pointer' }}>Micro-corrections</Text>
           <Box pt={8}><Feedback grading={grading} /></Box>
         </Box>}
-        {onReview && <ReviewPanel notes={ex.review_notes ?? []} verdict={ex.review_verdict} onChange={onReview} />}
+        {onReview && <ReviewPanel notes={ex.review_notes ?? []} verdict={ex.review_verdict} comment={ex.review_comment} onChange={onReview} />}
+        {admin && !!ex.review_history?.length && <Stack gap={6} mt="sm" pt="xs" style={{ borderTop: '1px solid var(--mantine-color-default-border)' }}>
+          <Text size="xs" fw={650}>Historique de correction et de reprise</Text>
+          {[...ex.review_history].reverse().map((entry, i) => <Box key={i}>
+            <Group gap={6}>
+              <Badge size="xs" color={entry.status === 'failed' ? 'red' : entry.status === 'ok' || entry.status === 'accepted' ? 'teal' : 'gray'}>
+                {entry.status === 'ok' ? 'Repris · OK agent' : entry.status === 'failed' ? 'Échec de reprise' : entry.status === 'accepted' ? 'Accepté par vous' : entry.status === 'disliked' ? 'À reprendre' : 'Avis retiré'}
+              </Badge>
+              <Text size="xs" c="dimmed">{new Date(entry.at).toLocaleString('fr-FR')}</Text>
+            </Group>
+            <Text size="xs" mt={3}>{entry.summary}</Text>
+            {entry.reason && <Text size="xs" c="red">{entry.reason}</Text>}
+            {(entry.comment || entry.previous?.comment) && <Text size="xs">Votre demande : {entry.comment || entry.previous?.comment}</Text>}
+            {entry.goldfish && <Text size="xs" c={entry.goldfish.flag ? 'red' : 'dimmed'}>
+              Goldfish{entry.goldfish.reader ? ` (${entry.goldfish.reader})` : ''} : {entry.goldfish.flag ? (entry.goldfish.notes ?? []).join(' · ') || 'Réserves à vérifier' : 'Aucun problème signalé'}
+            </Text>}
+          </Box>)}
+        </Stack>}
       </>} />
   </Paper>
 }

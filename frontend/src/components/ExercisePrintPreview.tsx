@@ -11,6 +11,7 @@ import { useEffect, useRef, useState } from 'react'
 import { parseBlocks, stripBold, type RichBlock } from '../utils/richblocks'
 import { getToken } from '../api'
 import MathText from './MathText'
+import { mathPlain } from '../utils/mathPlain'
 
 export type PrintableExercise = {
   statement: string
@@ -230,7 +231,7 @@ function PrintedCard({ exercise, guides, showAnswers }: {
     return () => { controller.abort(); if (url) URL.revokeObjectURL(url) }
   }, [key, visible])
   return <Box ref={ref} style={{ minHeight: src ? undefined : 100 }}>
-    {src ? <img src={src} alt={exercise.title || exercise.statement || 'Exercice de calcul'}
+    {src ? <img src={src} alt={mathPlain(exercise.title || exercise.statement) || 'Exercice de calcul'}
       style={{ width: '100%', height: 'auto', display: 'block' }} />
       : error ? <Text c="red" size="sm">Aperçu indisponible. Recharge la page pour réessayer.</Text>
       : <Box py="lg" ta="center"><Loader size="sm" /></Box>}

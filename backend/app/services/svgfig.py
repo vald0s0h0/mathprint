@@ -7,6 +7,7 @@ racine fixe la taille physique. Spec : {"svg": "<svg ...>...</svg>", "width_mm":
 from __future__ import annotations
 
 import io
+import math
 import re
 from xml.etree import ElementTree
 
@@ -65,6 +66,7 @@ def render(params: dict, *, dry: bool = False) -> bytes:
     if unknown:
         fail("params", f"clé(s) inconnue(s) {sorted(unknown)}")
     root = _check(spec.get("svg"))
+    _expand_dashes(root)
     w_mm = fk.width_mm(spec)
     source = ElementTree.tostring(root, encoding="utf-8")
     try:
@@ -87,3 +89,55 @@ def render(params: dict, *, dry: bool = False) -> bytes:
 def validate(params: dict) -> dict:
     render(params, dry=True)
     return params
+
+
+def _expand_dashes(root, inherited=None):
+    """MuPDF ignore les tirets sur certains éléments SVG : on trace chaque tiret.
+
+    Les courbes non prises en charge sont refusées, jamais imprimées en trait plein.
+    """
+    dash = root.attrib.pop("stroke-dasharray", inherited)
+    tag = _local(root.tag)
+    if dash and dash != "none" and tag not in ("g", "svg"):
+        try:
+            pattern = [float(n) for n in re.split(r"[ ,]+", dash.strip())]
+            if not pattern or any(n <= 0 for n in pattern):
+                raise ValueError()
+            if len(pattern) % 2:
+                pattern *= 2
+            points = []
+            if tag == "line":
+                points = [(float(root.get("x1", 0)), float(root.get("y1", 0))),
+                          (float(root.get("x2", 0)), float(root.get("y2", 0)))]
+            elif tag in ("polyline", "polygon"):
+                values = [float(n) for n in re.split(r"[ ,]+", root.get("points", "").strip())]
+                points = list(zip(values[::2], values[1::2]))
+                if tag == "polygon" and points:
+                    points.append(points[0])
+            elif tag in ("circle", "ellipse"):
+                cx, cy = float(root.get("cx", 0)), float(root.get("cy", 0))
+                rx, ry = float(root.get("r", root.get("rx", 0))), float(root.get("r", root.get("ry", 0)))
+                points = [(cx + rx * math.cos(i * math.pi / 180), cy + ry * math.sin(i * math.pi / 180)) for i in range(361)]
+            else:
+                fail("svg", f"pointillés sur {tag} non pris en charge : utilise line/polyline/ellipse")
+            pieces, index, remaining = [], 0, pattern[0]
+            for (x1, y1), (x2, y2) in zip(points, points[1:]):
+                length = math.hypot(x2 - x1, y2 - y1)
+                pos = 0.0
+                while pos < length - 1e-9:
+                    end = min(length, pos + remaining)
+                    if index % 2 == 0:
+                        pieces.append(f"M {x1+(x2-x1)*pos/length:g} {y1+(y2-y1)*pos/length:g} L {x1+(x2-x1)*end/length:g} {y1+(y2-y1)*end/length:g}")
+                    remaining -= end - pos
+                    pos = end
+                    if remaining < 1e-9:
+                        index = (index + 1) % len(pattern)
+                        remaining = pattern[index]
+            root.tag = "path"
+            root.attrib = {k: v for k, v in root.attrib.items() if k not in ("x1", "y1", "x2", "y2", "points", "cx", "cy", "rx", "ry", "r")}
+            root.set("d", " ".join(pieces))
+            root.set("fill", "none")
+        except (TypeError, ValueError, ZeroDivisionError):
+            fail("svg", "pointillés ou coordonnées invalides")
+    for child in root:
+        _expand_dashes(child, dash)

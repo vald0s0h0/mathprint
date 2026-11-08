@@ -179,6 +179,42 @@ def test_fraction_style_does_not_depend_on_latex_spelling():
     assert a[1:] == b[1:]
 
 
+def test_math_png_background_is_transparent_even_after_cache_read(tmp_path, monkeypatch):
+    import hashlib
+    import json
+    import numpy as np
+    from PIL import Image
+    from app.config import settings
+    monkeypatch.setattr(settings, 'data_dir', tmp_path)
+    cache = tmp_path / 'mathcache'; cache.mkdir()
+    old_key = hashlib.sha256('v4:x^2+1:10.0:dejavusans'.encode()).hexdigest()
+    Image.new('RGB', (20, 20), 'white').save(cache / f'{old_key}.png')
+    (cache / f'{old_key}.json').write_text(json.dumps({'w_pt': 2, 'h_pt': 2, 'd_pt': 0}))
+    first = mathrender.render_math_png('x^2+1')
+    assert mathrender.render_math_png('x^2+1') == first
+    pixels = np.asarray(Image.open(io.BytesIO(first[0])))
+    assert pixels.shape[2] == 4
+    assert (pixels[:, :, 3] == 0).mean() > .5
+    assert pixels[:, :, 3].max() == 255
+    assert first[1] > 2  # L'ancien PNG opaque n'est pas repris.
+
+
+def test_pdf_math_preserves_colored_background():
+    import numpy as np
+    buf = io.BytesIO(); c = canvas.Canvas(buf, pagesize=(140, 45))
+    c.setFillColorRGB(1, .85, .3)
+    c.rect(0, 0, 140, 45, fill=1, stroke=0)
+    layout = pdfgen._rich_layout(r'$x^2 + 1 = \dfrac{7}{3}$', 120, 12)
+    assert any(seg[0] == 'math' for line in layout['lines'] for seg in line.get('segs', []))
+    pdfgen._draw_rich(c, 8, 35, layout)
+    c.save()
+    with fitz.open(stream=buf.getvalue(), filetype='pdf') as doc:
+        pix = doc[0].get_pixmap(dpi=144)
+        rgb = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, 3)
+    assert not np.any(np.all(rgb > 245, axis=2))
+    assert np.count_nonzero(np.all(rgb < 80, axis=2)) > 20
+
+
 def test_screen_uses_pdf_and_accepts_an_empty_common_statement():
     ex={'response_type':'composite','statement':'','expected':{'parts':[leaf('$2+2$'),leaf('$3+1$')]}}
     png=card_preview.render(ex)

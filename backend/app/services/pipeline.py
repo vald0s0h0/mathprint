@@ -28,9 +28,10 @@ from ..models import (
 )
 from . import grading as grader
 from . import error_journal, llm_grader, microcorrection, ocr_shadow, providers, scoring, typography
-from .runtime_settings import ocr_confidence_threshold
+from .runtime_settings import (construction_audit_share, construction_confidence_threshold,
+                               ocr_confidence_threshold)
 from .appreciation import build_appreciation
-from . import late_copies
+from . import construction, late_copies
 from .forgetting import apply_evidence, replay_states, update_level_after_assessment
 from .overlay_queue import overlay_file
 from .pdfgen import (CARD_PAD, EDGE_MARK_SIZE, qcm_answer_rects, render_copy_review,
@@ -173,6 +174,19 @@ def _recognized_answer_issue(item: CopyItem, *, selected: list[int] | None,
     return None
 
 
+def read_choice_cell(warped, cell: dict, threshold) -> tuple[str, float]:
+    """Une décision CV par cellule ; double coche/ambiguïté restent à relire."""
+    from . import worker_cv
+    boxes = cell["boxes"]
+    densities = worker_cv.qcm_densities(warped, boxes)
+    selected, _, _ = worker_cv.select_qcm(boxes, densities, threshold)
+    confidence = worker_cv.qcm_decision_confidence(densities, threshold)
+    if selected is None or len(selected) > 1:
+        return "?", 0.0
+    by_index = {b["index"]: b["value"] for b in boxes}
+    return (by_index[selected[0]] if selected else ""), confidence
+
+
 def _set_status(db: Session, batch: ScanBatch, status: str, **progress):
     batch.status = status
     p = dict(batch.progress_json or {})
@@ -229,6 +243,30 @@ def _decide_and_store(db: Session, *, item: CopyItem, zone: ResponseZone,
         selected_pairs=selected_pairs, queue=queue)
 
 
+def _audit_pick(response_id: str, share: float) -> bool:
+    """Tirage stable : la même réponse est toujours (ou jamais) contrôlée."""
+    if share <= 0:
+        return False
+    return int(hashlib.sha1(f"audit:{response_id}".encode()).hexdigest()[:8], 16) / 0xFFFFFFFF < share
+
+
+def _construction_verdict(db: Session, resp: StudentResponse, zone: ResponseZone,
+                          gpolicy: dict) -> dict:
+    """Géométrie à tracer : note de la lecture CV au-dessus du seuil réglé, sinon
+    professeur. Une part des notes automatiques passe quand même chez lui
+    (contrôle par échantillon) : c'est ce qui permet de calibrer le seuil."""
+    reading = effective_reading(db, zone.id)
+    raw = ((reading.raw_json or {}).get("construction") if reading else None)
+    try:
+        max_score = float((gpolicy or {}).get("max_score", 1))
+    except (TypeError, ValueError):
+        max_score = 1.0
+    verdict = construction.verdict(raw, max_score, construction_confidence_threshold(db))
+    if verdict["tier"] in ("A", "B") and _audit_pick(resp.id, construction_audit_share(db)):
+        verdict = {**verdict, "tier": "D", "reason_code": "construction_audit"}
+    return verdict
+
+
 def _decide_existing(db: Session, *, resp: StudentResponse, item: CopyItem,
                      zone: ResponseZone, ocr_text: str, conf: float,
                      selected: list[int] | None,
@@ -253,6 +291,8 @@ def _decide_existing(db: Session, *, resp: StudentResponse, item: CopyItem,
             safe_max = 1.0
         verdict = {"max_score": safe_max, "score": 0.0, "tier": "D",
                    "confidence": 0.0, "reason_code": contract_issue}
+    elif item.response_type == "manual_drawing" and (gpolicy or {}).get("construction"):
+        verdict = _construction_verdict(db, resp, zone, gpolicy)
     else:
         verdict = grader.grade(expected, gpolicy, ocr_text, conf, selected,
                                cell_texts=cell_texts, selected_pairs=selected_pairs)
@@ -283,7 +323,8 @@ def _decide_existing(db: Session, *, resp: StudentResponse, item: CopyItem,
         cat = ("double_coche" if verdict["reason_code"] == "qcm_double_check"
                else "ocr_ambigu" if "ocr" in verdict["reason_code"]
                else "rature" if verdict["reason_code"] == "qcm_unreadable"
-               else "trace_dessin" if verdict["reason_code"] == "no_structured_answer"
+               else "trace_dessin" if (verdict["reason_code"] == "no_structured_answer"
+                                       or verdict["reason_code"].startswith("construction_"))
                else "points_a_relier" if verdict["reason_code"].startswith("matching_")
                else "ocr_ambigu" if verdict["reason_code"].startswith("table_")
                else "bareme")
@@ -584,6 +625,11 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
                 qcm_meta2[zone.id] = (d_color, d_ring)
                 pooled_color.extend(d_color)
                 pooled_ring.extend(d_ring)
+        for zone in zones:
+            for row in (zone.meta_json or {}).get("cells", []):
+                for cell in row:
+                    if cell and cell.get("input") == "single_choice":
+                        pooled.extend(worker_cv.qcm_densities(res.warped, cell["boxes"]))
         qcm_thr = worker_cv.adapt_qcm_threshold(pooled)
         thr_color = worker_cv.adapt_qcm_threshold(pooled_color)
         thr_ring = worker_cv.adapt_qcm_threshold(pooled_ring)
@@ -676,10 +722,21 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
                     ocr_text="", conf=cv_conf, selected=selected, corr_id=corr_id,
                     queue=queue, defer_grading=True)
             elif item.response_type == "manual_drawing":
-                # tracé/dessin : jamais de correction automatique — aucun appel
-                # Mathpix inutile, décision « revue » immédiate (§ tracés géométriques)
+                # tracé/dessin libre : jamais de correction automatique, aucun appel
+                # Mathpix (§ tracés géométriques). Géométrie à tracer : la CV lit le
+                # tracé ; sa note s'applique au-dessus du seuil réglé (cf.
+                # _construction_verdict), le professeur corrige le reste.
+                raw = {"manual": True}
+                if (zone.meta_json or {}).get("construction"):
+                    try:
+                        raw["construction"] = construction.read(res.warped, zone.meta_json)
+                    except Exception as exc:  # noqa: BLE001 - une lecture ratée part chez le professeur
+                        raw["construction"] = {"status": "error", "reasons": [str(exc)[:200]]}
+                    # copie entièrement blanche (absence) : même mesure que les autres zones
+                    raw["empty_score"] = (0.0 if raw["construction"].get("status") == "blank"
+                                          else 1.0)
                 db.add(OcrAttempt(zone_id=zone.id, provider="cv_local",
-                                  raw_json={"manual": True}, confidence=1.0))
+                                  raw_json=raw, confidence=1.0))
                 n_review += _decide_and_store(
                     db, item=item, zone=zone, student=student,
                     ocr_text="", conf=1.0, selected=None, corr_id=corr_id,
@@ -727,6 +784,10 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
                             (derived_dir / f"{zone.id}-c{k}.png").write_bytes(
                                 worker_cv.encode_png(worker_cv.dropout_filter(disp)))
                         k += 1
+                        if cell.get("input") == "single_choice":
+                            value, conf_cv = read_choice_cell(res.warped, cell, qcm_thr)
+                            cell_texts.append(value); cell_latex.append(""); confs.append(conf_cv)
+                            continue
                         cell_ink = worker_cv.ink_ratio(cfiltered)
                         if cell_ink < 0.01:
                             cell_texts.append("")
@@ -746,7 +807,7 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
                         cell_latex.append(ocr_c.get("latex") or "")
                         confs.append(ocr_c["confidence"])
                 min_conf = min(confs) if confs else 1.0
-                db.add(OcrAttempt(zone_id=zone.id, provider="mathpix",
+                db.add(OcrAttempt(zone_id=zone.id, provider="cv_ocr" if any(c.get("input") == "single_choice" for row in expected_cells for c in row) else "mathpix",
                                   raw_json={"cells": cell_texts,
                                             "cell_latex": cell_latex,
                                             "cell_confidences": confs},
@@ -1328,6 +1389,9 @@ def _zone_marks(db: Session, item: CopyItem, zone: ResponseZone,
                 if given or not cell:
                     continue
                 credit = 1.0 if full else (credits[k] if k < len(credits) else 0.0)
+                if cell.get("input") == "single_choice" and credit < 1.0:
+                    want = exp_cells[ri][ci]["value"]
+                    marks["fills"] += [box for box in cell.get("boxes", []) if box["value"] == want]
                 cells.append({**cell, "_ok": credit >= 1.0})
                 k += 1
         if not cells:

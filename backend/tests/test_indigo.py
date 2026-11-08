@@ -950,6 +950,30 @@ def test_summary_separates_competency_exercises_from_chapter_problems(db):
         assert (row["problem_draft"], row["problem_validated"], row["problem_published"]) == (1, 1, 1)
 
 
+def test_review_counts_include_goldfish_and_dislikes_but_exclude_likes(db):
+    comp = _comp(db)
+    signals = [
+        {},
+        {"review_notes": ["À vérifier"]},
+        {"quality": {"goldfish": {"flag": True, "notes": []}}},
+        {"review_verdict": "dislike"},
+        {"review_notes": ["Signalement"], "review_verdict": "dislike"},
+        {"review_notes": ["Signalement"], "review_verdict": "like"},
+    ]
+    cards = [IndigoExercise(competency_id=comp.id, badge_type="exercice", raw_ocr_json=raw)
+             for raw in signals]
+    problem = IndigoExercise(competency_id=comp.id, badge_type="probleme",
+                             raw_ocr_json={"review_verdict": "dislike"})
+    db.add_all([*cards, problem]); db.commit()
+    assert indigo_summary("3e", db)[0]["needs_review"] == 5
+    assert indigo.exercise_out(db, cards[2])["review_notes"] == ["Goldfish : exercice à vérifier."]
+    for card in [*cards, problem]:
+        indigo.set_review_verdict(db, card, "like")
+    assert indigo_summary("3e", db)[0]["needs_review"] == 0
+    indigo.set_review_verdict(db, cards[1], None)
+    assert indigo_summary("3e", db)[0]["needs_review"] == 1
+
+
 def test_figure_editor_recrops_original_and_keeps_white_masks(db, tmp_path, monkeypatch):
     """Dé-rogner repart de la page PDF et un cache validé ne réapparaît pas
     lorsque le cadrage est ensuite agrandi."""

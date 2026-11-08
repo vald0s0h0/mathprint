@@ -477,9 +477,14 @@ def test_manual_crop_is_forbidden():
 
 # ------------------------------------------------------------------ anti-copie
 def test_copy_detection():
-    source = "Un fermier possède un grand champ rectangulaire dont la longueur vaut 125 mètres et la largeur 48 mètres."
+    source = ("Un fermier possède un grand champ rectangulaire dont la longueur vaut 125 mètres et la "
+              "largeur 48 mètres. Le rectangle A'B'C'D' est l'image du rectangle ABCD par l'homothétie "
+              "de centre O et de rapport 3.")
     corpus = (set(forge._copy_shingles(source)), [{"125", "48", "12"}])
     assert "trop proche" in forge.copy_problem(source, corpus)
+    # Une consigne type, commune à tous les manuels, n'est pas une copie.
+    assert forge.copy_problem("Construis le triangle A'B'C', image du triangle ABC par l'homothétie "
+                              "de centre O et de rapport 2.", corpus) is None
     assert forge.copy_problem("Calcule l'aire d'un petit jardin carré de côté égal à sept mètres environ.", corpus) is None
     assert "mêmes valeurs" in forge.copy_problem("Mesure $125$ puis $48$ puis $12$.", corpus)
 
@@ -587,7 +592,14 @@ def test_persist_slots_replaces_only_those_cards(db):
     assert forge.disliked(db, "autre-run") == []
     with pytest.raises(SystemExit, match="déjà validés"):
         forge.persist(db, run, replace=True)
-    forge.persist(db, run, slots=["s02"])
+    import rework
+    manifest = run / "reprise.json"
+    forge.dump_json(manifest, rework.export(db, forge.disliked(db, run.name)))
+    import hashlib
+    forge.dump_json(run / "goldfish.json", {"verdicts": {"s02": {
+        "complete": True, "flag": False, "notes": [],
+        "image_sha256": hashlib.sha256((run / "cards" / "s02.png").read_bytes()).hexdigest()}}})
+    forge.persist(db, run, slots=["s02"], reprise=manifest)
     db.expire_all()
     assert db.query(IndigoExercise).count() == 2
     assert db.get(IndigoExercise, kept_id).status == "validated"
@@ -597,6 +609,28 @@ def test_persist_slots_replaces_only_those_cards(db):
         forge.persist(db, run, slots=["s01"])
     with pytest.raises(SystemExit, match="inconnus"):
         forge.persist(db, run, slots=["s99"])
+
+
+def test_disliked_export_includes_admin_comment_and_goldfish_only_for_dislikes(db, capsys):
+    import argparse
+    import run as forge_run
+
+    comp = db.query(Competency).first()
+    goldfish = {"flag": True, "notes": ["Question ambiguë"], "severity": "corriger"}
+    for i, verdict in enumerate((None, "like", "dislike")):
+        db.add(IndigoExercise(competency_id=comp.id, source_number=f"review-run/s0{i}",
+                             raw_ocr_json={"pipeline": forge.PIPELINE, "review_verdict": verdict,
+                                           "review_comment": "Préciser l’unité.",
+                                           "quality": {"goldfish": goldfish}}))
+    db.commit()
+    cards = forge.disliked(db, "review-run")
+    assert len(cards) == 1 and cards[0]["slot"] == "s02"
+    assert cards[0]["comment"] == "Préciser l’unité."
+    assert cards[0]["goldfish"] == goldfish
+    forge_run._cmd_disliked(argparse.Namespace(filtre="review-run"), db)
+    output = capsys.readouterr().out
+    assert "Préciser l’unité." in output and "Question ambiguë" in output
+    assert "s00" not in output and "s01" not in output
 
 
 def _order_leaf(**fields):
@@ -722,7 +756,7 @@ def test_goldfish_second_failure_means_rewrite(db, monkeypatch):
 
     def fake(_cli, _system, _text, images):
         seen_images.extend(images)
-        return answers if "cartes" in _text or "carte" in _text else {"messages": []}
+        return answers if "Voici" in _text else {"messages": [{"comprend": True, "aide": True}]}
     monkeypatch.setattr(goldfish, "ask", fake)
     state = goldfish.run(run, cli="claude")
     assert state["verdicts"]["s01"]["flag"] and not state["verdicts"]["s01"]["rewrite"]
@@ -774,6 +808,19 @@ def test_complement_remembers_existing_exercises_without_their_full_text(db):
     assert long_statement not in lines[0]
 
 
+def test_existing_memory_counts_unreviewed_drafts(db):
+    from app.models import IndigoExercise
+    comp = _comp(db)
+    db.add(IndigoExercise(competency_id=comp.id, statement="Construis le symétrique du triangle 7 4.",
+                          response_type="manual_drawing", difficulty=2, status="draft",
+                          grading_json={"family_id": "symetrique_triangle", "construction": {}}))
+    db.add(IndigoExercise(competency_id=comp.id, statement="Déjà publié.", difficulty=1, status="validated"))
+    db.commit()
+    lines = forge.existing_signatures(db, [comp.id], False)
+    assert len(lines) == 1
+    assert "geo_construction (brouillon)" in lines[0] and "symetrique_triangle" in lines[0]
+
+
 # ------------------------------------------------------- remarques de relecture du pilote
 def _cell(value, **extra):
     return {"type": "integer", "value": value, **extra}
@@ -792,14 +839,18 @@ def test_table_columns_stay_equal_when_answers_differ_in_kind():
     assert len({round(w, 2) for w in geometry["col_ws"]}) == 1
 
 
-def test_table_columns_stay_equal_with_many_given_values():
+def test_table_columns_keep_writing_room_with_many_given_values():
     """Pilote A2.2 s20 : colonnes A/B/C/D de largeurs différentes pour rien."""
     cells = [[_cell(2437, given=True), _cell(5006, given=True), _cell(4092), _cell(306, given=True)],
              [_cell(2, given=True), _cell(5), _cell(4, given=True), _cell(0)],
              [_cell(4, given=True), _cell(0), _cell(0, given=True), _cell(3)]]
     geometry = pdfgen._table_geometry(pdfgen.COL_W, ["$A$", "$B$", "$C$", "$D$"],
                                       ["Numérateur", "Unités", "Dixièmes"], cells, 9)
-    assert len({round(w, 2) for w in geometry["col_ws"]}) == 1
+    for row in cells:
+        for j, cell in enumerate(row):
+            if not cell.get("given"):
+                assert geometry["col_ws"][j] - 2 * pdfgen._TABLE_CELL_PAD >= pdfgen.handwriting.need_w(cell)
+    assert len({round(w, 2) for i, w in enumerate(geometry["col_ws"]) if i != 2}) == 1
 
 
 def test_only_the_column_that_needs_room_is_wider_and_the_others_stay_equal():
@@ -821,6 +872,20 @@ def test_handwriting_measures_what_a_student_writes():
     fraction = hw.need({"type": "rational", "value": [5, 6]})
     assert fraction[1] > four_digits[1]
     assert not hw.fits({"type": "integer", "value": 123456789}, 20 * hw.MM, 8 * hw.MM)
+
+
+def test_handwriting_never_shows_latex():
+    """L'élève écrit x², √11, ≤ : jamais « x^2 », « sqrt11 » ni « leq »."""
+    from app.services import handwriting as hw
+    assert hw.plain("$3x^2 - 12x = 0$") == "3x² - 12x = 0"
+    assert hw.plain("$x = \\sqrt{11}$ ou $x = -\\sqrt{11}$") == "x = √11 ou x = -√11"
+    assert hw.plain("$(x + 1)^2 = x^2 + 5^2$") == "(x + 1)² = x² + 5²"
+    assert hw.plain("$10^{-3}$") == "10⁻³"
+    assert hw.plain("$\\sqrt{\\dfrac{16}{49}}$") == "√(16/49)"
+    assert hw.plain("$x \\leq 5$ et $y \\ge 2$") == "x ≤ 5 et y ≥ 2"
+    assert hw.plain("$12{,}5\\text{ cm}$") == "12,5 cm"
+    assert hw.plain("$45^\\circ$") == "45°"
+    assert hw.plain("$\\left( 2 \\right)$") == "(2)"
 
 
 def test_a_table_gives_each_answer_the_room_to_be_handwritten():
@@ -1108,3 +1173,141 @@ def test_goldfish_reads_the_conclusion_and_the_typography_of_a_right_answer():
 def test_goldfish_keeps_the_first_json_object():
     assert goldfish._parse('{"messages": []}\n\n{"autre": 1}') == {"messages": []}
     assert goldfish._parse('Voici : {"cartes": [1]} merci') == {"cartes": [1]}
+
+
+# ------------------------------------------------------------------ géométrie à tracer
+def _trace_card():
+    return next(c for c in ETALONS if c["exercice"]["response_type"] == "geo_construction")
+
+
+def test_traces_run_holds_only_constructions(db):
+    run = forge.prepare(db, "fr", "3e", "Z1.1", model="test-model", traces=5)[0]
+    grid = forge.load_json(run / "grid.json")
+    assert [s["response_type"] for s in grid] == ["geo_construction"] * 5
+    assert sorted(s["level"] for s in grid) == [1, 1, 2, 2, 3]
+    assert forge.load_json(run / "payload.json")["traces"] == 5
+    with pytest.raises(SystemExit, match="--traces"):
+        forge.prepare(db, "fr", "3e", "Z1.1", model="test-model", traces=2, complement={1: 1})
+
+
+def test_construction_becomes_a_manual_drawing_with_its_bareme(db):
+    card = _trace_card()
+    contract, problems = forge.build_contract(db, {**card["exercice"], "slot": "s01"}, _slot(card),
+                                              _comp(db), "math", set())
+    assert problems == []
+    assert contract["response_type"] == "manual_drawing"
+    assert contract["grading"]["route"] == fc.ROUTE_GEO
+    assert contract["grading"]["construction"]["errors"][0]["id"] == "glisse"
+    assert contract["grading"]["bareme_points"] == scoring.forge_bareme("geo_construction", 2, 150)
+
+
+def test_construction_is_never_a_composite_part(db):
+    card = _trace_card()
+    part = {**card["exercice"], "competency": "Z1.1"}
+    exercise = {"slot": "s01", "response_type": "composite", "statement": "Voici une figure.",
+                "parts": [part, part], "estimated_seconds": 200}
+    slot = {**_slot(card), "response_type": "composite"}
+    _contract, problems = forge.build_contract(db, exercise, slot, _comp(db), "math", set())
+    assert any("un tracé ne peut pas être une partie" in p for p in problems)
+
+
+def test_traces_announce_their_bareme_and_time():
+    slot = {"slot": "s01", "kind": "exercise", "level": 2, "response_type": "geo_construction"}
+    assert forge.time_bounds(slot) == forge.GEO_TIME_BOUNDS[2]
+    assert forge.time_bounds({**slot, "response_type": "qcm_single"}) == forge.TIME_BOUNDS[2]
+    brief = forge.trace_brief(slot)
+    assert "barème 2 pt" in brief and "2 min 00 à 8 min 00" in brief
+    lines = forge.trace_lines({"cards": {"s01": {"trace": True, "points": 2.5, "seconds": 150}},
+                               "traces": {}})
+    assert lines == ["Tracé s01 : 2,5 pt, 2 min 30"]
+
+
+# ------------------------------------------------------------------ grille dynamique
+def test_trace_profiles_replace_cv_formats_and_keep_a_redaction():
+    plain = forge.exercise_grid("C1.1", 4)
+    for profile, counts in (("central", [2, 2, 2]), ("partiel", [0, 1, 1]), ("aucun", [0, 0, 0])):
+        grid = forge.exercise_grid("C1.1", 4, profile)
+        assert [sum(s["level"] == n for s in grid) for n in (1, 2, 3)] == [8, 8, 4]
+        traces = [s for s in grid if s["response_type"] == "geo_construction"]
+        assert [sum(s["level"] == n for s in traces) for n in (1, 2, 3)] == counts
+        assert all(not s["figure"] and "trace_mode" in s for s in traces)
+        assert sum(s["figure"] for s in grid) == 4
+        replaced = {plain[int(s["slot"][1:]) - 1]["response_type"] for s in traces}
+        assert replaced <= {"qcm_single", "qcm_multiple", "matching", "multiline_text"}
+        assert sum(s["response_type"] == "multiline_text" for s in grid) >= 1
+        assert {s["response_type"] for s in grid} >= {"short_text", "multi_blank", "table_fill"}
+    central = forge.exercise_grid("C1.1", 4, "central")
+    modes = [(s["level"], s["trace_mode"]) for s in central if s["response_type"] == "geo_construction"]
+    assert modes == [(1, "quadrillage"), (1, "quadrillage"), (2, "quadrillage"), (2, "libre"),
+                     (3, "libre"), (3, "case")]
+    assert forge.exercise_grid("C1.1", 4, "aucun") == plain
+
+
+def test_trace_profile_comes_from_the_fiche_then_from_the_label(tmp_path):
+    fiche = tmp_path / "fiche.md"
+    fiche.write_text("# Fiche\n\n## C1.1 : Symétries\n\n**Tracés : partiel.** Raison.\n\n"
+                     "## C1.2 : Rotation\n\nRien.\n", encoding="utf-8")
+    assert forge.trace_profile(fiche, "C1.1", "Transformer une figure") == ("partiel", "fiche")
+    assert forge.trace_profile(fiche, "C1.2", "Transformer une figure par rotation") == ("central", "libellé")
+    assert forge.trace_profile(fiche, "C1.3", "Calculer des volumes") == ("aucun", "libellé")
+    assert forge.trace_profile(None, "C4.3", "Construire des sections") == ("central", "libellé")
+
+
+def test_trace_mode_is_checked_against_the_grid():
+    card = _trace_card()
+    exercise = {**card["exercice"], "slot": "s01"}
+    assert forge.construction_mode(exercise) == "quadrillage"
+    slot = {**_slot(card), "trace_mode": "libre"}
+    problems = forge._slot_problems(exercise, slot, {})
+    assert any("au lieu de libre" in p for p in problems)
+    assert not any("tracé" in p for p in forge._slot_problems(exercise, {**slot, "trace_mode": None}, {}))
+    free = {**exercise, "construction": {**exercise["construction"], "given": {}}}
+    assert forge.construction_mode(free) == "libre"
+
+
+def test_traces_run_announces_the_mode_of_each_trace(db):
+    run = forge.prepare(db, "fr", "3e", "Z1.1", model="test-model", traces=4)[0]
+    grid = forge.load_json(run / "grid.json")
+    assert [s["trace_mode"] for s in grid] == ["quadrillage", "quadrillage", "quadrillage", "libre"]
+    assert "libre (case vide)" in forge.trace_brief(grid[-1])
+
+
+def test_grid_follows_the_fiche_written_after_prepare(db):
+    run = forge.prepare(db, "fr", "3e", "Z1.1", model="test-model")[0]
+    payload = forge.load_json(run / "payload.json")
+    assert payload["trace_profile"] == {"profile": "aucun", "source": "libellé"}
+    fiche = Path(payload["context"]["fiche"])
+    fiche.write_text("## Z1.1 : Test\n\nTracés : central\n", encoding="utf-8")
+    assert "central" in forge.refresh_grid(run)
+    grid = forge.load_json(run / "grid.json")
+    assert sum(s["response_type"] == "geo_construction" for s in grid) == 6
+    assert forge.refresh_grid(run) is None
+    fiche.write_text("## Z1.1 : Test\n\nTracés : aucun\n", encoding="utf-8")
+    forge.dump_json(run / "slots" / "s01.json", {"slot": "s01"})
+    assert forge.refresh_grid(run) is None          # un emplacement écrit fige la grille
+
+
+def test_brackets_and_primes_do_not_raise_a_message_line():
+    """Un message de deux lignes avec des segments `$[AB']$` tient dans sa bande :
+    un délimiteur déborde dans l'interligne, une fraction haute agrandit la ligne."""
+    assert fc.message_problems("Tu as fait un demi-tour : un quart de tour donne $[AB']$ "
+                               "perpendiculaire à $[AB]$.", 2) == []
+    fs = 8.0
+    plain = pdfgen._rich_layout("donne AB et CD", 400, fs)["lines"][0]["h"]
+    assert pdfgen._rich_layout("donne $[AB']$ et $(d)$", 400, fs)["lines"][0]["h"] == plain
+    assert pdfgen._rich_layout("donne $\\dfrac{1}{2}$", 400, fs)["lines"][0]["h"] > plain
+
+
+def test_diagonal_axis_needs_whole_steps():
+    spec = {"grid": True, "points": {"P": [0, 0], "Q": [8, 8], "A": [1, 3], "B": [4, 7], "C": [2, 7]},
+            "given": {"polygons": [["A", "B", "C"]], "lines": [{"through": ["P", "Q"], "label": "(d)"}]}}
+    problems = forge._diagonal_axis_problems(spec)
+    assert len(problems) == 2 and "B est à 1,5 pas" in " ".join(problems)
+    assert {p.split()[2] for p in problems} == {"B", "C"}
+    spec["points"].update(B=[4, 8], C=[2, 6])
+    assert forge._diagonal_axis_problems(spec) == []
+    assert forge._diagonal_axis_problems({**spec, "grid": False}) == []
+
+
+def test_oe_ligature_is_printed():
+    assert pdfgen._pdf_safe("les nœuds du quadrillage, Œuvre") == "les nœuds du quadrillage, Œuvre"

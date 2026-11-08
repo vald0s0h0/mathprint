@@ -1875,6 +1875,21 @@ def extraction_out(e: IndigoExtraction) -> dict:
             "created_at": e.created_at.isoformat() if e.created_at else None}
 
 
+def review_notes(ex: IndigoExercise) -> list[str]:
+    raw = ex.raw_ocr_json or {}
+    goldfish = (raw.get("quality") or {}).get("goldfish") or {}
+    notes = list(dict.fromkeys([*(raw.get("review_notes") or []),
+                               *(goldfish.get("notes") or [])]))
+    if goldfish.get("flag") and not notes:
+        notes.append("Goldfish : exercice à vérifier.")
+    return notes
+
+
+def needs_review(ex: IndigoExercise) -> bool:
+    from .exercise_review import requires_intervention
+    return requires_intervention(ex)
+
+
 def exercise_out(db, ex: IndigoExercise) -> dict:
     comp = db.get(Competency, ex.competency_id)
     grading = ex.grading_json or {}
@@ -1905,13 +1920,16 @@ def exercise_out(db, ex: IndigoExercise) -> dict:
         # Réserves de relecture posées par le mode « QCM multipass » : ce que les
         # portes reprochent encore à l'exercice conservé. Une liste vide veut
         # dire « rien à signaler », pas « pas encore contrôlé ».
-        "review_notes": list((ex.raw_ocr_json or {}).get("review_notes") or []),
+        "review_notes": review_notes(ex),
         # Sous-ensemble GRAVE des réserves : ce que la passe de retouche n'a pas
         # su réparer (réponse fausse, consigne incompréhensible, figure
         # indispensable et muette). À traiter avant de valider l'exercice.
         "review_blocking": list((ex.raw_ocr_json or {}).get("review_blocking") or []),
         # Avis de l'admin sur la carte : « like », « dislike » (à reprendre en CLI) ou rien.
         "review_verdict": (ex.raw_ocr_json or {}).get("review_verdict"),
+        "review_comment": (ex.raw_ocr_json or {}).get("review_comment", ""),
+        "review_history": (ex.raw_ocr_json or {}).get("review_history", []),
+        "needs_review": needs_review(ex),
         # Rattachement à la compétence non confirmé : exercice à ranger.
         "competency_confirmed": bool(
             (ex.raw_ocr_json or {}).get("competency_confirmed", True)),
@@ -2357,11 +2375,20 @@ def validate_exercise(db, ex: IndigoExercise, user_id: str | None) -> IndigoExer
     return ex
 
 
-def set_review_verdict(db, ex: IndigoExercise, value: str | None) -> IndigoExercise:
+def set_review_verdict(db, ex: IndigoExercise, value: str | None,
+                       comment: str | None = None) -> IndigoExercise:
     """Avis de relecture de l'admin. `updated_at` ne bouge pas : il versionne l'URL
     de la figure, et un avis ne change rien à la carte imprimée."""
     raw = {k: v for k, v in (ex.raw_ocr_json or {}).items() if k != "review_verdict"}
+    if comment is not None:
+        raw["review_comment"] = comment.strip()
     ex.raw_ocr_json = {**raw, "review_verdict": value} if value else raw
+    from . import exercise_review
+    exercise_review.append(ex, exercise_review.event(
+        "accepted" if value == "like" else "disliked" if value == "dislike" else "unrated",
+        "Accepté par l’administrateur" if value == "like" else
+        "À reprendre selon l’administrateur" if value == "dislike" else "Avis retiré",
+        actor="admin", comment=raw.get("review_comment", "")))
     db.commit()
     return ex
 
@@ -2378,6 +2405,22 @@ def publish_competency(db, competency_id: str, user_id: str | None) -> dict:
         if ex.status != "validated":
             ex.status, ex.validated_by, ex.validated_at, ex.updated_at = "validated", user_id, now, now
     return {"published": publish_rows(db, kept), "skipped": len(rows) - len(kept)}
+
+
+def publication_selection(db, competency_ids: list[str]) -> dict:
+    """Plan sans écriture pour la sélection affichée, problèmes compris."""
+    from . import exercise_review
+    rows = db.query(IndigoExercise).filter(
+        IndigoExercise.competency_id.in_(competency_ids)).order_by(IndigoExercise.id).all()
+    published = {r['id'] for r in load_published().get('exercises', [])}
+    updates = publication_updates(db, rows)
+    kept = [r for r in rows if (r.raw_ocr_json or {}).get('review_verdict') != 'dislike'
+            and (r.status != 'validated' or r.id not in published or updates.get(r.id))]
+    return {'rows': kept, 'pending': len(kept),
+            'skipped': sum((r.raw_ocr_json or {}).get('review_verdict') == 'dislike' for r in rows),
+            'unsettled': sum(needs_review(r) for r in kept),
+            'fingerprint': exercise_review.fingerprint({
+                'rows': [exercise_review.snapshot(r) for r in rows], 'pending': [r.id for r in kept]})}
 
 
 def delete_exercise(db, ex: IndigoExercise, *, cascade: bool = True) -> None:
@@ -2654,7 +2697,7 @@ def publish(db, force: bool = False) -> dict:
     return {"published": len(records), "seeded": seeded}
 
 
-def _published_record(db, ex: IndigoExercise, crops, figs) -> dict:
+def _published_record(db, ex: IndigoExercise, crops, figs, *, copy_images: bool = True) -> dict:
     """Un exercice validé figé en enregistrement publiable, ses images copiées.
 
     Extrait de `publish` pour être partagé avec `publish_rows` (publication
@@ -2665,10 +2708,12 @@ def _published_record(db, ex: IndigoExercise, crops, figs) -> dict:
     crop_file = fig_file = ""
     if ex.crop_path and crop_abs_path(ex.crop_path).exists():
         crop_file = f"{ex.id}.png"
-        shutil.copyfile(crop_abs_path(ex.crop_path), crops / crop_file)
+        if copy_images:
+            shutil.copyfile(crop_abs_path(ex.crop_path), crops / crop_file)
     if ex.has_figure and ex.figure_path and crop_abs_path(ex.figure_path).exists():
         fig_file = f"{ex.id}.png"
-        shutil.copyfile(crop_abs_path(ex.figure_path), figs / fig_file)
+        if copy_images:
+            shutil.copyfile(crop_abs_path(ex.figure_path), figs / fig_file)
     spec = (ex.raw_ocr_json or {}).get("figure_spec") or {}
     procedural = ({"type": spec["kind"], "params": spec["spec"]}
                   if ex.has_figure and not ex.figure_box_json
@@ -2701,6 +2746,45 @@ def _published_record(db, ex: IndigoExercise, crops, figs) -> dict:
         "model": ex.model, "prompt_version": ex.prompt_version,
         **forge,
     })
+
+
+def publication_updates(db, rows: list[IndigoExercise]) -> dict[str, bool]:
+    """Version admin différente de celle publiée, y compris les anciens exports.
+
+    Compare le contenu effectif plutôt que les dates : un like, une validation ou
+    une relecture ne change pas la version publiée. Aucun fichier n'est écrit.
+    """
+    import hashlib
+    from .exercise_review import fingerprint
+
+    records = {rec["id"]: rec for rec in load_published().get("exercises", [])}
+    _, crops, figs, _ = _pub_paths()
+    fields = ("competency_code", "grade_level", "source_number", "badge_type", "difficulty",
+              "variant_kind", "derived_from_id", "title", "tags", "statement", "response_type",
+              "expected", "grading", "correction_guide", "correction_solution", "has_figure", "figure_json")
+
+    def digest(path):
+        return hashlib.sha256(path.read_bytes()).hexdigest() if path and path.is_file() else None
+
+    def signature(record, crop, figure):
+        typed = typography.apply_to_record(record)
+        content = {key: typed.get(key) for key in fields}
+        content["crop_sha256"], content["figure_sha256"] = digest(crop), digest(figure)
+        return fingerprint(content)
+
+    updates = {}
+    for ex in rows:
+        old = records.get(ex.id)
+        if old is None:
+            updates[ex.id] = False  # Nouveau brouillon : à publier, pas à mettre à jour.
+            continue
+        current = _published_record(db, ex, None, None, copy_images=False)
+        updates[ex.id] = signature(
+            current, crop_abs_path(ex.crop_path) if ex.crop_path else None,
+            crop_abs_path(ex.figure_path) if ex.has_figure and ex.figure_path else None) != signature(
+                old, crops / old["crop_file"] if old.get("crop_file") else None,
+                figs / old["figure_file"] if old.get("figure_file") else None)
+    return updates
 
 
 def publish_rows(db, rows: list[IndigoExercise]) -> int:

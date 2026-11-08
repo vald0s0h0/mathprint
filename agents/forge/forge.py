@@ -28,7 +28,9 @@ LEVEL_NAMES = {1: "facile", 2: "moyen", 3: "difficile"}
 VARIANT_BY_LEVEL = {1: "facile", 2: "base", 3: "difficile"}
 CV_TYPES = ("qcm_single", "qcm_multiple", "checkbox_grid", "matching")
 WRITTEN_TYPES = ("short_text", "multi_blank", "table_fill", "multiline_text")
-LEAF_TYPES = CV_TYPES + WRITTEN_TYPES
+# Géométrie à tracer : `manual_drawing` dans l'application, lu par la CV en mode ombre.
+DRAW_TYPES = ("geo_construction",)
+LEAF_TYPES = CV_TYPES + WRITTEN_TYPES + DRAW_TYPES
 COMPOSITE = "composite"
 
 # Hauteur totale, bande de micro-correction et espacement compris : la plus petite
@@ -40,6 +42,8 @@ PART_MAX_EXERCISE, PART_MAX_PROBLEM = 3, 5
 FIGURE_MIN, FIGURE_MAX = 4, 14
 PROBLEM_FIGURE_MIN = 8
 TIME_BOUNDS = {1: (20, 180), 2: (45, 360), 3: (90, 720)}
+# Un tracé demande règle, équerre, compas : plus long qu'une réponse cochée.
+GEO_TIME_BOUNDS = {1: (60, 300), 2: (120, 480), 3: (180, 720)}
 PROBLEM_TIME_BOUNDS = {1: (90, 300), 2: (180, 540), 3: (300, 900)}
 POINTS_PER_MINUTE = (0.6, 1.5)
 PROBLEM_POINTS_PER_MINUTE = (0.3, 1.2)
@@ -50,8 +54,9 @@ FIGURE_SCALES = (1.0, 0.85, 0.7)
 FIGURE_MIN_RATIO = 0.7
 SIMULATIONS = 200
 FILL_MEDIAN_MIN, FILL_P10_MIN = 0.90, 0.80
-COPY_RATIO_MAX, COPY_MIN_WORDS = 0.30, 10
-SHINGLE = 5
+# Anti-copie : refus seulement d'une suite de 20 mots identique au manuel. Les
+# consignes types (« par l'homothétie de centre O et de rapport k ») restent libres.
+COPY_RUN_WORDS = 20
 _NOISE_RE = re.compile(r"QUITTER LE PLEIN|Hachette Livre|photocopie non autoris|^←$|^!\[img")
 _PRINT_ENCODING = "cp1252"
 
@@ -128,10 +133,61 @@ def comp_code(comp) -> str:
 
 
 # ================================================================== GRILLES
-def exercise_grid(code: str, n_figures: int) -> list[dict]:
+TRACE_PROFILES = ("central", "partiel", "aucun")
+# Mode d'un tracé : ancré sur quadrillage, ancré dans une case sans quadrillage
+# (compas, rapporteur), libre (case vide). None : au choix du rédacteur.
+TRACE_MODES = {"quadrillage": "ancré sur quadrillage", "case": "ancré sans quadrillage (compas, rapporteur)",
+               "libre": "libre (case vide)", None: "ancré ou libre, au choix"}
+# Profil -> {rang dans le plan de 20 : mode du tracé qui remplace ce format}.
+# Les tracés prennent la place des QCM et liaisons qui servaient à contourner la
+# construction (« choisis le point image ») ; calculs et une rédaction restent.
+TRACE_PLAN = {
+    "central": {4: "quadrillage", 6: "quadrillage",      # facile : qcm_multiple, qcm_single
+                10: "quadrillage", 14: "libre",           # moyen : les 2 qcm_multiple
+                16: "libre", 17: "case"},                 # difficile : matching, une rédaction
+    "partiel": {14: "libre", 16: None},                   # moyen : 1 qcm_multiple ; difficile : matching
+    "aucun": {},
+}
+TRACE_SIZES = {1: "M", 2: "L", 3: "L"}       # 6 rangées : M ; 9 rangées : L
+_TRACE_LINE_RE = re.compile(r"^\W*trac[ée]s\W*:\W*(central|partiel|aucun)\b", re.IGNORECASE | re.MULTILINE)
+_TRACE_LABEL_RE = re.compile(r"\b(construi|trac|transform|reprodui)", re.IGNORECASE)
+
+
+def _fiche_section(text: str, code: str) -> str:
+    """Section `## <code> …` d'une fiche, jusqu'au titre de même niveau suivant."""
+    match = re.search(rf"^##\s+{re.escape(code)}\b.*?(?=^##\s|\Z)", text, re.MULTILINE | re.DOTALL)
+    return match.group(0) if match else ""
+
+
+def trace_profile(fiche: Path | None, code: str, label: str = "") -> tuple[str, str]:
+    """(profil de tracés, origine). La fiche le déclare par une ligne
+    « Tracés : central | partiel | aucun » dans la section de la compétence ; sans
+    déclaration, le libellé le devine (« construire », « transformer », « tracer »)."""
+    if fiche is not None and fiche.exists():
+        match = _TRACE_LINE_RE.search(_fiche_section(fiche.read_text(encoding="utf-8"), code))
+        if match:
+            return match.group(1).lower(), "fiche"
+    return ("central" if _TRACE_LABEL_RE.search(fold(label)) else "aucun"), "libellé"
+
+
+def construction_mode(leaf: dict) -> str | None:
+    """Mode réel d'un tracé écrit : libre, quadrillage ou case."""
+    from app.services import construction
+    spec = leaf.get("construction")
+    if not isinstance(spec, dict):
+        return None
+    if construction.is_free(spec):
+        return "libre"
+    return "quadrillage" if spec.get("grid", True) else "case"
+
+
+def exercise_grid(code: str, n_figures: int, profile: str = "aucun") -> list[dict]:
     """Les 20 emplacements d'une compétence : 8 faciles, 8 moyens, 4 difficiles ;
-    14 réponses CV et 6 rédactions ; tailles variées. Déterministe : le même
-    appel redonne la même grille, y compris après une reprise."""
+    14 réponses CV et 6 rédactions ; tailles variées. Selon le profil de tracés,
+    des QCM et des liaisons deviennent des géométries à tracer (`TRACE_PLAN`).
+    Déterministe : le même appel redonne la même grille, y compris après une reprise."""
+    if profile not in TRACE_PROFILES:
+        raise ValueError(f"profil de tracés {profile!r} ∉ {TRACE_PROFILES}")
     plan = (
         # (niveau, format, taille)
         (1, "qcm_single", "XS"), (1, "qcm_single", "XS"), (1, "checkbox_grid", "XS"),
@@ -143,15 +199,25 @@ def exercise_grid(code: str, n_figures: int) -> list[dict]:
         (3, "matching", "M"), (3, "multiline_text", "L"), (3, "multiline_text", "L"),
         (3, "table_fill", "XL"),
     )
+    traces = TRACE_PLAN[profile]
     n_figures = max(FIGURE_MIN, min(FIGURE_MAX, n_figures))
     # Figures réparties sur les grandes cartes d'abord, à toutes les difficultés.
+    # Un tracé porte sa figure de départ dans `construction` : les figures vont
+    # aux autres cartes, dans le même nombre qu'une grille sans tracé.
     rng = random.Random(f"{code}/figures")
-    order = sorted(range(len(plan)), key=lambda i: (plan[i][2] in ("XS",), rng.random()))
+    order = sorted((i for i in range(len(plan)) if i not in traces),
+                   key=lambda i: (plan[i][2] in ("XS",), rng.random()))
     with_figure = set(order[:n_figures])
-    return [{"slot": f"s{i + 1:02d}", "kind": "exercise", "competency": code, "level": level,
-             "difficulty": LEVEL_NAMES[level], "response_type": rtype, "size": size,
-             "figure": i in with_figure}
-            for i, (level, rtype, size) in enumerate(plan)]
+    grid = []
+    for i, (level, rtype, size) in enumerate(plan):
+        slot = {"slot": f"s{i + 1:02d}", "kind": "exercise", "competency": code, "level": level,
+                "difficulty": LEVEL_NAMES[level], "response_type": rtype, "size": size,
+                "figure": i in with_figure}
+        if i in traces:
+            slot.update(response_type="geo_construction", size=TRACE_SIZES[level], figure=False,
+                        trace_mode=traces[i])
+        grid.append(slot)
+    return grid
 
 
 def problem_grid(codes: list[str]) -> list[dict]:
@@ -371,6 +437,23 @@ def complement_grid(code: str, counts: dict[int, int], *, problem_codes: list[st
     return slots
 
 
+def traces_grid(code: str, count: int) -> list[dict]:
+    """Run de tracés : seulement des cartes `geo_construction`, 40/40/20. Elles
+    s'ajoutent à une compétence déjà fournie, comme un second run. Les modes
+    suivent la progression de la grille dynamique : un élément à compter sur
+    quadrillage en facile, puis l'ancré et le libre, puis une construction en
+    plusieurs étapes (libre, ou ancrée sans quadrillage)."""
+    modes = {1: ("quadrillage",), 2: ("quadrillage", "libre"), 3: ("libre", "case")}
+    slots = []
+    for level, n in sorted(split_complement(count).items()):
+        for k in range(n):
+            slots.append({"slot": f"s{len(slots) + 1:02d}", "kind": "exercise", "competency": code,
+                          "level": level, "difficulty": LEVEL_NAMES[level],
+                          "response_type": "geo_construction", "size": TRACE_SIZES[level], "figure": False,
+                          "trace_mode": modes[level][k % len(modes[level])]})
+    return slots
+
+
 def split_complement(total: int) -> dict[int, int]:
     """Sans précision : même proportion que la grille complète (40/40/20)."""
     hard = round(total * 0.2)
@@ -381,42 +464,57 @@ def split_complement(total: int) -> dict[int, int]:
 def existing_signatures(db, comp_ids: list[str], problems: bool) -> list[str]:
     """Mémoire légère du second run : une ligne par exercice existant, sans son
     énoncé complet. Le modèle varie sans relire toute la banque."""
-    from app.models import GeneratedExercise
+    from app.models import GeneratedExercise, IndigoExercise
     query = db.query(GeneratedExercise).filter(GeneratedExercise.competency_id.in_(comp_ids),
                                                GeneratedExercise.status == "active")
     query = query.filter(GeneratedExercise.kind == "probleme") if problems else query.filter(
         GeneratedExercise.kind != "probleme")
+    rows = [(row.difficulty_level, row.id, row.response_type, row.grading_json, row.statement, "")
+            for row in query.all()]
+    # Les brouillons pas encore relus comptent aussi : sans eux, un second run lancé
+    # avant la relecture reprendrait les structures et les valeurs du premier.
+    drafts = db.query(IndigoExercise).filter(IndigoExercise.competency_id.in_(comp_ids),
+                                             IndigoExercise.status == "draft")
+    drafts = drafts.filter(IndigoExercise.badge_type == "probleme") if problems else drafts.filter(
+        IndigoExercise.badge_type != "probleme")
+    rows += [(row.difficulty, row.id, row.response_type, row.grading_json, row.statement, " (brouillon)")
+             for row in drafts.all()]
     lines = []
-    for row in query.order_by(GeneratedExercise.difficulty_level, GeneratedExercise.id).all():
-        grading = row.grading_json or {}
-        values = ",".join(re.findall(r"\d+(?:[.,]\d+)?", row.statement or "")[:5])
-        lines.append(f"- {LEVEL_NAMES.get(row.difficulty_level, row.difficulty_level)} | {row.response_type} | "
-                     f"{grading.get('family_id') or 'sans famille'} | {' '.join((row.statement or '').split()[:6])}… | {values}")
+    for level, _id, rtype, grading, statement, tag in sorted(rows, key=lambda r: (r[0] or 0, r[1])):
+        grading = grading or {}
+        rtype = "geo_construction" if "construction" in grading else rtype
+        values = ",".join(re.findall(r"\d+(?:[.,]\d+)?", statement or "")[:5])
+        lines.append(f"- {LEVEL_NAMES.get(level, level)} | {rtype}{tag} | "
+                     f"{grading.get('family_id') or 'sans famille'} | {' '.join((statement or '').split()[:6])}… | {values}")
     return lines
 
 
 def prepare(db, programme: str, cycle: str, target: str, *, model: str, problems: bool = False,
             subject: str = SUBJECT_DEFAULT, pilot: bool = False,
-            complement: dict[int, int] | None = None) -> list[Path]:
+            complement: dict[int, int] | None = None, traces: int | None = None) -> list[Path]:
     """Prépare un run par compétence (un chapitre en donne plusieurs), ou un run
-    de problèmes pour le chapitre."""
+    de problèmes pour le chapitre. `traces` : seulement N géométries à tracer."""
     resolved = resolve_target(db, programme, cycle, target, subject)
     chapter_comps = resolved["chapter"]
     competency = resolved["competency"]
     if problems and competency is not None:
         raise SystemExit("--problemes s'applique à un chapitre, pas à une compétence.")
+    if traces and (problems or complement):
+        raise SystemExit("--traces ne se combine ni avec --problemes ni avec --complement.")
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     targets = [None] if problems else ([competency] if competency else chapter_comps)
     runs = []
     for comp in targets:
+        profile = None
         suffix = comp_code(comp) if comp else f"{chapter_comps[0].chapter_code}-problemes"
         run = _new_run_dir(f"{programme}-{cycle}-{suffix}-{stamp}")
         context = build_context(run, programme=programme, cycle=cycle, subject=subject,
                                 chapter_comps=chapter_comps, competency=comp, problems=problems)
-        if complement:
+        if complement or traces:
             codes = [comp_code(c) for c in chapter_comps]
-            grid = complement_grid(comp_code(comp) if comp else "", complement,
-                                   problem_codes=codes if problems else None)
+            grid = (traces_grid(comp_code(comp), traces) if traces else
+                    complement_grid(comp_code(comp) if comp else "", complement,
+                                    problem_codes=codes if problems else None))
             signatures = existing_signatures(
                 db, [c.id for c in chapter_comps] if problems else [comp.id], problems)
             memory = run / "existants.md"
@@ -427,13 +525,15 @@ def prepare(db, programme: str, cycle: str, target: str, *, model: str, problems
             grid = problem_grid([comp_code(c) for c in chapter_comps])
         else:
             share = figure_share(cycle, comp_code(comp))
-            grid = exercise_grid(comp_code(comp), round(20 * share))
+            profile = trace_profile(Path(context["fiche"]), comp_code(comp), comp.label)
+            grid = exercise_grid(comp_code(comp), round(20 * share), profile[0])
         dump_json(run / "grid.json", grid)
         dump_json(run / "payload.json", {
             "run_id": run.name, "programme": programme, "cycle": cycle, "subject": subject,
             "model": model, "version": VERSION, "prompt_version": PROMPT_VERSION,
             "mode": "problems" if problems else "exercises", "pilot": pilot,
-            "complement": bool(complement),
+            "complement": bool(complement or traces), "traces": traces or 0,
+            "trace_profile": ({"profile": profile[0], "source": profile[1]} if profile else None),
             "chapter": {"code": chapter_comps[0].chapter_code, "name": chapter_comps[0].chapter_name},
             "competency": comp_code(comp) if comp else None,
             "competencies": [{"code": comp_code(c), "label": c.label, "id": c.id}
@@ -459,6 +559,28 @@ def resolve_run(run: str | None) -> Path:
     if not runs:
         raise SystemExit("Aucun run : commence par `run.py prepare`.")
     return runs[-1]
+
+
+def refresh_grid(run: Path) -> str | None:
+    """La fiche s'écrit souvent après `prepare` : tant qu'aucun emplacement n'est
+    écrit, la grille suit le profil de tracés qu'elle déclare. Renvoie un message
+    si la grille a changé."""
+    payload = load_json(run / "payload.json")
+    current = payload.get("trace_profile")
+    if not current or payload.get("mode") != "exercises" or payload.get("complement"):
+        return None
+    if any((run / "slots").glob("*.json")):
+        return None
+    code = payload["competency"]
+    label = next((c["label"] for c in payload["competencies"] if c["code"] == code), "")
+    profile, source = trace_profile(Path(payload["context"]["fiche"]), code, label)
+    if (profile, source) == (current["profile"], current["source"]):
+        return None
+    grid = load_json(run / "grid.json")
+    dump_json(run / "grid.json", exercise_grid(code, sum(bool(s.get("figure")) for s in grid), profile))
+    payload["trace_profile"] = {"profile": profile, "source": source}
+    dump_json(run / "payload.json", payload)
+    return f"Grille refaite : profil de tracés « {profile} » ({source})."
 
 
 def remaining_slots(run: Path) -> list[dict]:
@@ -515,6 +637,9 @@ def place_guides(statement: str, guides: list[dict]) -> str:
         return statement
     lines = statement.split("\n")
     field = None
+    if after and lines[-1].count("{{blank}}") > 1:
+        # La ligne de réponses forme un bloc : jamais séparer « = » et sa case.
+        return "\n".join([*lines[:-1], *before, *after, lines[-1]])
     if after and (match := _FINAL_FIELD_RE.match(lines[-1])):
         lines[-1], field = match.group(1), match.group(2)
     head, last = lines[:-1], lines[-1]
@@ -645,6 +770,19 @@ def leaf_to_raw(leaf: dict, level: int) -> tuple[dict, dict]:
         extra["option_ids"] = _ids(expected_errors)
         options = {str(e["id"]): {"text": str(e.get("feedback") or ""), "error": e.get("error")}
                    for e in expected_errors if e.get("id")}
+    elif rtype == "geo_construction":
+        raw["response_type"] = "manual_drawing"
+        raw["answer"] = {"type": "manual"}
+        expected_errors = [e for e in leaf.get("expected_errors") or [] if isinstance(e, dict)]
+        extra["option_ids"] = _ids(expected_errors)
+        options = {str(e["id"]): {"text": str(e.get("feedback") or ""), "error": e.get("error")}
+                   for e in expected_errors if e.get("id")}
+        spec = leaf.get("construction")
+        if isinstance(spec, dict):
+            # les tracés d'erreurs typiques rejoignent la construction : la CV les reconnaît
+            extra["construction"] = {**spec, "errors": [
+                {"id": str(e["id"]), "trace": e["trace"]}
+                for e in expected_errors if e.get("id") and e.get("trace")]}
     wrong = [{"value": w.get("value"), "cell": w.get("cell"), "text": str(w.get("feedback") or ""),
               "error": w.get("error")}
              for w in leaf.get("wrong_answers") or [] if isinstance(w, dict)]
@@ -655,6 +793,7 @@ def leaf_to_raw(leaf: dict, level: int) -> tuple[dict, dict]:
                 "fallback": {"text": str(leaf.get("fallback_feedback") or "")}}
     if level == 1 and not feedback["correct"]["text"]:
         feedback.pop("correct")
+    extra.setdefault("policy", {}).update({k: leaf[k] for k in ("response_layout", "figure_constraints") if k in leaf})
     extra["feedback"] = feedback
     extra["message_ids"] = ([str(c.get("id")) for c in leaf.get("choices") or []
                              if isinstance(c, dict) and not c.get("correct")]
@@ -886,6 +1025,63 @@ def _answer_order_problems(leaf: dict) -> list[str]:
     return problems
 
 
+def _diagonal_axis_problems(spec: dict) -> list[str]:
+    """Sur quadrillage, un axe qui suit une diagonale des carreaux se compte en
+    demi-diagonales : un sommet imprimé à un nombre impair de demi-diagonales
+    tombe au milieu d'un carreau (« 2,5 pas »). Pour l'axe y = x + c, y − x − c doit
+    être pair ; pour y = −x + c, x + y − c."""
+    given = spec.get("given") or {}
+    points = spec.get("points") or {}
+    if not isinstance(given, dict) or not spec.get("grid", True) or not isinstance(points, dict):
+        return []
+    printed = set(given.get("points") or [])
+    for polygon in given.get("polygons") or []:
+        printed |= set(polygon or [])
+    for segment in given.get("segments") or []:
+        printed |= set(segment or [])
+    problems = []
+    for line in given.get("lines") or []:
+        names = line.get("through") if isinstance(line, dict) else line
+        if not isinstance(names, (list, tuple)) or len(names) < 2:
+            continue
+        try:
+            (x1, y1), (x2, y2) = points[names[0]], points[names[1]]
+        except (KeyError, TypeError, ValueError):
+            continue
+        dx, dy = x2 - x1, y2 - y1
+        if not dx or abs(dx) != abs(dy):
+            continue
+        slope = 1 if dx == dy else -1
+        offset = y1 - slope * x1
+        label = (line.get("label") if isinstance(line, dict) else "") or f"({names[0]}{names[1]})"
+        for name in sorted(printed - set(names)):
+            try:
+                x, y = points[name]
+            except (KeyError, TypeError, ValueError):
+                continue
+            gap = y - slope * x - offset
+            if gap and (gap != int(gap) or int(gap) % 2):
+                problems.append(f"construction : {name} est à {str(abs(gap) / 2).rstrip('0').rstrip('.').replace('.', ',')} pas de l'axe {label} en "
+                                "diagonale ; place chaque sommet à un nombre entier de pas")
+    return problems
+
+
+def _construction_problems(leaf: dict, extra: dict) -> list[str]:
+    """Géométrie à tracer : la construction s'imprime, se lit, et ses erreurs typiques
+    se distinguent du tracé juste. Le banc complet tourne au rendu."""
+    from app.services import construction
+    if not isinstance(leaf.get("construction"), dict):
+        return ["construction obligatoire pour geo_construction (voir schema.md)"]
+    problems = construction.problems(extra.get("construction"))
+    problems += _diagonal_axis_problems(leaf["construction"])
+    if leaf.get("figure"):
+        problems.append("figure : la figure de départ d'un tracé va dans construction.given")
+    for err in leaf.get("expected_errors") or []:
+        if not isinstance(err, dict) or not err.get("id") or not err.get("error") or not err.get("feedback"):
+            problems.append("expected_errors : chaque erreur a id, error et feedback")
+    return problems
+
+
 def _leaf_problems(leaf: dict, level: int, subject: str) -> tuple[list[str], dict, dict]:
     from app.services import forge_contract as fc
     from app.services import indigo_check
@@ -911,12 +1107,24 @@ def _leaf_problems(leaf: dict, level: int, subject: str) -> tuple[list[str], dic
         problems += indigo_check.lint_statement(raw["statement"], has_figure=True, min_len=0, part=True)
     if rtype == "matching":
         problems += _matching_problems(leaf)
+    if rtype == "geo_construction":
+        problems += _construction_problems(leaf, extra)
     problems += _guide_leaks(leaf, _guides(leaf))
     if rtype == "multi_blank" and len(_LABELLED_BLANK_RE.findall(raw["statement"])) >= 2:
         problems.append("cases étiquetées (« Abscisse de A : … ») : utilise table_fill, plus lisible")
     problems += _answer_order_problems(leaf)
     if rtype in ("short_text", "multi_blank", "table_fill"):
+        cells = [c for row in leaf.get("cells", []) for c in row] if rtype == "table_fill" else leaf.get("blanks", [])
+        local_policies = any("answer_form" in c or "precision" in c for c in cells)
         problem = fc.form_problem(raw["statement"], extra["answer_form"])
+        if problem and local_policies:
+            # Une consigne d'arrondi locale doit avoir une cellule à précision stricte.
+            demanded = [name for pattern, name in fc._FORM_WORDS if pattern.search(raw["statement"])]
+            covered = {c.get("answer_form") for c in cells}
+            if any(c.get("precision") == "exact_value" for c in cells):
+                covered.add("exact_decimal")
+            if demanded and all(form in covered for form in demanded):
+                problem = None
         if problem:
             problems.append(problem)
     if extra["route"] in (fc.ROUTE_LLM, fc.ROUTE_OCR_LLM) or rtype == "multiline_text":
@@ -929,7 +1137,7 @@ def _leaf_problems(leaf: dict, level: int, subject: str) -> tuple[list[str], dic
 
 def _copy_shingles(text: str) -> list[tuple[str, ...]]:
     words = re.findall(r"[a-z0-9]+", fold(text))
-    return [tuple(words[i:i + SHINGLE]) for i in range(len(words) - SHINGLE + 1)]
+    return [tuple(words[i:i + COPY_RUN_WORDS]) for i in range(len(words) - COPY_RUN_WORDS + 1)]
 
 
 def copy_corpus(payload: dict) -> tuple[set, list[set]]:
@@ -946,11 +1154,8 @@ def copy_corpus(payload: dict) -> tuple[set, list[set]]:
 
 def copy_problem(statement: str, corpus: tuple[set, list[set]]) -> str | None:
     words, numbers = corpus
-    shingles = _copy_shingles(statement)
-    if len(shingles) + SHINGLE - 1 >= COPY_MIN_WORDS and shingles:
-        ratio = sum(s in words for s in shingles) / len(shingles)
-        if ratio > COPY_RATIO_MAX:
-            return f"énoncé trop proche du manuel ({ratio:.0%} de suites de {SHINGLE} mots communes)"
+    if any(s in words for s in _copy_shingles(statement)):
+        return f"énoncé trop proche du manuel ({COPY_RUN_WORDS} mots consécutifs identiques) : reformule"
     values = set(re.findall(r"\d+(?:[,.]\d+)?", statement))
     significant = {v for v in values if len(v) >= 2}
     if len(significant) >= 3 and any(significant <= block for block in numbers):
@@ -978,7 +1183,9 @@ def apply_bareme(contract: dict, level: int, seconds: int, *, problem: bool) -> 
         expected["parts"] = new_parts
         contract["expected"] = expected
     else:
-        grading["bareme_points"] = scoring.forge_bareme(contract["response_type"], level, seconds)
+        # un tracé reste `manual_drawing` dans l'application, mais garde son barème forge
+        rtype = "geo_construction" if grading.get("construction") else contract["response_type"]
+        grading["bareme_points"] = scoring.forge_bareme(rtype, level, seconds)
     contract["grading"] = grading
     return contract
 
@@ -1001,6 +1208,8 @@ def build_contract(db, exercise: dict, slot: dict, comp, subject: str, seen: set
         found, _raw, extra = _leaf_problems(leaf, level, subject)
         problems += [where + p for p in found]
         leaf_extras.append(extra)
+        if composite and leaf.get("response_type") in DRAW_TYPES:
+            problems.append(f"{where}un tracé ne peut pas être une partie : fais-en une carte seule")
         if composite:
             problems += [where + p for p in _figure_problems(leaf.get("figure"))]
             if slot["kind"] == "problem" and leaf.get("competency") not in slot.get("competencies", []):
@@ -1038,10 +1247,34 @@ def build_contract(db, exercise: dict, slot: dict, comp, subject: str, seen: set
                                      option_ids=extra["option_ids"], right_ids=extra["right_ids"],
                                      figure_layout=layout)
         valid["grading"].update(extra.get("policy", {}))
+        if extra.get("construction"):
+            from app.services import construction
+            valid["grading"]["construction"] = construction.normalize(extra["construction"])
         if _guides(exercise):
             valid["grading"]["guides_placed"] = True
+    valid["grading"].update({k: exercise[k] for k in ("response_layout", "figure_constraints") if k in exercise})
     seconds = int(exercise.get("estimated_seconds") or 0)
     return apply_bareme(valid, level, seconds, problem=slot["kind"] == "problem"), []
+
+
+def time_bounds(slot: dict, rtype: str | None = None) -> tuple[int, int]:
+    """Temps réel admis pour un emplacement, en secondes."""
+    if slot["kind"] == "problem":
+        return PROBLEM_TIME_BOUNDS[slot["level"]]
+    if (rtype or slot.get("response_type")) in DRAW_TYPES:
+        return GEO_TIME_BOUNDS[slot["level"]]
+    return TIME_BOUNDS[slot["level"]]
+
+
+def trace_brief(slot: dict) -> str:
+    """Barème et temps d'un tracé, annoncés au rédacteur dès la grille : le barème
+    est fixé par le script (niveau, ±0,5 selon le temps estimé), le temps est à
+    estimer dans ces bornes. La note se partage entre les éléments du tracé."""
+    from app.services import scoring
+    low, high = time_bounds(slot, "geo_construction")
+    points = scoring.forge_bareme("geo_construction", slot["level"])
+    return (f"tracé {TRACE_MODES[slot.get('trace_mode')]}, barème {points:g} pt (± 0,5 selon estimated_seconds), "
+            f"temps réel {low // 60} min {low % 60:02d} à {high // 60} min {high % 60:02d}")
 
 
 def _slot_problems(exercise: dict, slot: dict, payload: dict) -> list[str]:
@@ -1053,10 +1286,16 @@ def _slot_problems(exercise: dict, slot: dict, payload: dict) -> list[str]:
     if exercise.get("response_type") != wanted and not swap.get("reason"):
         problems.append(f"format {exercise.get('response_type')!r} au lieu de {wanted} sans "
                         "slot_swap.reason")
+    mode = slot.get("trace_mode")
+    if mode and exercise.get("response_type") in DRAW_TYPES and not swap.get("reason"):
+        found = construction_mode(exercise)
+        if found and found != mode:
+            problems.append(f"tracé {TRACE_MODES[found]} au lieu de {TRACE_MODES[mode]} sans "
+                            "slot_swap.reason")
     written = [x.get("response_type") in WRITTEN_TYPES for x in _leaves(exercise)]
     if slot["level"] == 1 and slot["kind"] == "exercise" and any(written):
         problems.append("un facile n'a pas de réponse à rédiger")
-    bounds = (PROBLEM_TIME_BOUNDS if slot["kind"] == "problem" else TIME_BOUNDS)[slot["level"]]
+    bounds = time_bounds(slot, exercise.get("response_type"))
     seconds = exercise.get("estimated_seconds")
     if not isinstance(seconds, int) or not bounds[0] <= seconds <= bounds[1]:
         problems.append(f"estimated_seconds {seconds!r} : attendu un entier entre {bounds[0]} et "
@@ -1064,6 +1303,19 @@ def _slot_problems(exercise: dict, slot: dict, payload: dict) -> list[str]:
     if exercise.get("figure_layout") not in (None, "above", "below", "left", "right",
                                              "grid_left", "grid_right"):
         problems.append("figure_layout : above, below, left, right, grid_left ou grid_right")
+    for node in [exercise, *_leaves(exercise)]:
+        layout = node.get("response_layout") or {}
+        if not isinstance(layout, dict) or set(layout) - {"width", "align", "uniform_fields"}:
+            problems.append("response_layout invalide")
+        elif layout.get("width", "content") not in ("content", "full") or layout.get("align", "center") not in ("center", "left"):
+            problems.append("response_layout : width content/full, align center/left")
+    constraints = exercise.get("figure_constraints") or {}
+    if not isinstance(constraints, dict) or set(constraints) - {"min_scale", "min_width_mm", "min_label_pt"}:
+        problems.append("figure_constraints invalide")
+    else:
+        for name, value in constraints.items():
+            if not isinstance(value, (int, float)) or not 0 < value <= (1 if name == "min_scale" else 100):
+                problems.append(f"figure_constraints.{name} invalide")
     if not exercise.get("micro_skill"):
         problems.append("micro_skill obligatoire")
     if not exercise.get("family_id"):
@@ -1076,11 +1328,12 @@ def _slot_problems(exercise: dict, slot: dict, payload: dict) -> list[str]:
         for part in _leaves(exercise):
             problems += _guide_problems(part, part=True)
     count = sum(len(_guides(x)) for x in ([exercise] + _leaves(exercise) if composite else [exercise]))
-    if slot["level"] <= GUIDE_MAX_LEVEL and not count:
+    if slot["level"] <= GUIDE_MAX_LEVEL and not count and not exercise.get("guide_omission_reason"):
         problems.append("guide obligatoire sur un facile ou un moyen : champ guides")
     if slot["level"] > GUIDE_MAX_LEVEL and count:
         problems.append("pas de guide sur un difficile")
     if slot.get("figure") and not exercise.get("figure") and not swap.get("reason") \
+            and exercise.get("response_type") not in DRAW_TYPES \
             and not any(p.get("figure") for p in _leaves(exercise)):
         problems.append("cet emplacement attend une figure (ou slot_swap.reason)")
     return problems
@@ -1118,6 +1371,7 @@ def _lot_problems(exercises: dict, grid: list[dict], contracts: dict) -> tuple[l
     if composite > EXERCISE_COMPOSITE_MAX:
         errors.append(f"{composite} composites, maximum {EXERCISE_COMPOSITE_MAX} sur 20")
     figures_count = sum(1 for k in done if exercises[k].get("figure")
+                        or exercises[k].get("response_type") in DRAW_TYPES
                         or any(p.get("figure") for p in _leaves(exercises[k])))
     needed = sum(1 for s in grid if s.get("figure"))
     if len(done) == len(grid) and figures_count < min(needed, FIGURE_MIN):
@@ -1372,7 +1626,20 @@ def _figure_stays_readable(ex: dict, layout: str | None, scale: float) -> bool:
     limit = (pdfgen.COL_W - 2 * pdfgen.CARD_PAD) * pdfgen._FIG_SIDE_MAX_RATIO
     side = str(layout or "").endswith(("left", "right"))
     final_w = min(natural[1], limit) * scale if side else natural[1] * scale
-    return final_w >= figkit.MIN_WIDTH_MM * pdfgen.mm and final_w / natural[1] >= FIGURE_MIN_RATIO
+    constraints = (ex.get("grading") or {}).get("figure_constraints") or {}
+    minimum = max(FIGURE_MIN_RATIO, constraints.get("min_scale", 0))
+    if final_w < max(figkit.MIN_WIDTH_MM, constraints.get("min_width_mm", 0)) * pdfgen.mm or final_w / natural[1] < minimum - 1e-6:
+        return False
+    if constraints.get("min_label_pt"):
+        figure = ex.get("figure") or {}
+        if figure.get("type") == "svg":
+            from xml.etree import ElementTree as ET
+            root = ET.fromstring(figure["params"]["svg"])
+            view_w = float(root.get("viewBox").split()[2])
+            sizes = [float(n.get("font-size", 12)) for n in root.iter() if n.tag.rsplit("}", 1)[-1] == "text"]
+            if sizes and min(sizes) * final_w / view_w < constraints["min_label_pt"]:
+                return False
+    return True
 
 
 def best_layout(ex: dict) -> tuple[str | None, float, float]:
@@ -1381,6 +1648,8 @@ def best_layout(ex: dict) -> tuple[str | None, float, float]:
     current = (ex.get("grading") or {}).get("figure_layout")
     best = (current, 1.0)
     best_h = card_height_mm(_with_layout(ex, current, 1.0))
+    if ex.get("figure") and not _figure_stays_readable(ex, current, 1.0):
+        best_h = float("inf")
     if not ex.get("figure"):
         return current, 1.0, best_h
     # Une zone d'écriture garde toute la largeur : jamais de grille pour elle.
@@ -1396,6 +1665,8 @@ def best_layout(ex: dict) -> tuple[str | None, float, float]:
             beside = best[0] is None and layout in ("right", "left") and scale == best[1]
             if height < best_h - (0.5 if beside else 3.0):
                 best, best_h = (layout, scale), height
+    if best_h == float("inf"):
+        raise SystemExit("Aucune disposition ne respecte les contraintes de lisibilité de la figure.")
     return best[0], best[1], best_h
 
 
@@ -1462,6 +1733,8 @@ def render(db, run: Path) -> dict:
     cards: dict = {}
     layouts: dict = {}
     writing: dict = {}
+    field_whitespace: dict = {}
+    traces: dict = {}
     leading: list[str] = []
     for key, contract in contracts.items():
         exercise, slot = exercises[key], grid[key]
@@ -1476,6 +1749,17 @@ def render(db, run: Path) -> dict:
         written_png, fields = card_preview.written_preview(ex)
         if fields:
             (written_dir / f"{key}.png").write_bytes(written_png)
+            excessive = [f for f in fields if f and f.get("unused_width_ratio", 0) > 0.65]
+            if excessive:
+                field_whitespace[key] = excessive
+        spec = (ex.get("grading") or {}).get("construction")
+        if spec:
+            # tracé juste dessiné au stylo, puis banc : juste, crayon, blanc, erreurs
+            from app.services import construction
+            (written_dir / f"{key}.png").write_bytes(card_preview.render(ex, show_answers=True))
+            failures = construction.selftest(spec)
+            if failures:
+                traces[key] = failures
         tight = [f["problem"] for f in fields if f and f["problem"]]
         if tight:
             writing[key] = tight
@@ -1487,6 +1771,8 @@ def render(db, run: Path) -> dict:
                       "size_target": slot["size"], "whitespace": metrics, "excess": excess,
                       "figure_layout": chosen, "figure_scale": scale,
                       "points": contract["grading"].get("bareme_points"),
+                      "seconds": int(exercise.get("estimated_seconds") or 0),
+                      "trace": bool(spec),
                       "tier": pdfgen.reading_tier(slot["level"], slot["kind"] == "problem"),
                       "fits_column": height * pdfgen.mm <= pdfgen.column_capacity(1)}
     dump_json(run / "layouts.json", layouts)
@@ -1499,8 +1785,9 @@ def render(db, run: Path) -> dict:
                  if abs(targets.get(name, 0) - actual.get(name, 0)) > SIZE_TOLERANCE}
     simulation = simulate([c["height_mm"] for c in cards.values()],
                           [c["tier"] for c in cards.values()], seed=run.name)
-    summary = {"cards": cards, "size_gaps": size_gaps, "simulation": simulation,
-               "writing": writing, "leading": leading,
+    from app.services.exercise_review import fingerprint
+    summary = {"inputs": {k: fingerprint({"exercise": exercises[k], "contract": v}) for k, v in contracts.items()}, "cards": cards, "size_gaps": size_gaps, "simulation": simulation,
+               "writing": writing, "field_whitespace": field_whitespace, "leading": leading, "traces": traces,
                "too_tall": [k for k, c in cards.items() if not c["fits_column"]],
                "excess": {k: c["excess"] for k, c in cards.items() if c["excess"]},
                "complete": len(contracts) == len(grid)}
@@ -1508,11 +1795,25 @@ def render(db, run: Path) -> dict:
     return summary
 
 
+def trace_lines(summary: dict) -> list[str]:
+    """Barème et temps de chaque tracé rendu, pour le rapport et le bilan."""
+    out = []
+    for key, card in sorted(summary.get("cards", {}).items()):
+        if card.get("trace"):
+            seconds = card.get("seconds") or 0
+            points = f"{card.get('points') or 0:g}".replace(".", ",")
+            out.append(f"Tracé {key} : {points} pt, {seconds // 60} min {seconds % 60:02d}"
+                       + (" — MAL LU" if key in summary.get("traces", {}) else ""))
+    return out
+
+
 def lot_hints(summary: dict, kind: str) -> list[str]:
     """Ce que le rapport demande de corriger, en clair."""
     hints = []
     for key, problems in summary.get("writing", {}).items():
         hints.append(f"ÉCRITURE TROP SERRÉE {key} : " + " ; ".join(problems))
+    for key, problems in summary.get("traces", {}).items():
+        hints.append(f"TRACÉ MAL LU {key} : " + " ; ".join(problems))
     if summary.get("leading"):
         hints.append("INTERLIGNE CASSÉ par une case dans une phrase repliée : "
                      + ", ".join(summary["leading"]) + " (mets la phrase à trous sur sa propre ligne)")
@@ -1550,9 +1851,10 @@ def _apply_layout(grading: dict, layout: dict | None) -> dict:
     return {**kept, **{k: v for k, v in layout.items() if v not in (None, 1.0)}}
 
 
-def disliked(db, filtre: str = "") -> list[dict]:
+def disliked(db, filtre: str = "", *, programme: str | None = None, cycle: str | None = None,
+             domaine: str | None = None, subject: str | None = None) -> list[dict]:
     """Cartes au pouce baissé dans l'onglet Exercices : celles à reprendre en CLI."""
-    from app.models import Competency, IndigoExercise
+    from app.models import Competency, CompetencyFramework, IndigoExercise
 
     out = []
     for row in db.query(IndigoExercise).all():
@@ -1561,13 +1863,22 @@ def disliked(db, filtre: str = "") -> list[dict]:
             continue
         run, _, slot = (row.source_number or "").rpartition("/")
         competency = db.get(Competency, row.competency_id)
+        framework = db.get(CompetencyFramework, competency.framework_id) if competency else None
+        if ((programme and (not framework or framework.program_id != programme))
+                or (cycle and row.grade_level != cycle)
+                or (domaine and (not competency or competency.domain_code != domaine))
+                or (subject and (not framework or framework.subject_id != subject))):
+            continue
         out.append({"run": run, "slot": slot, "forge": raw.get("pipeline") == PIPELINE,
                     "competency": competency.short_id if competency else "", "status": row.status,
+                    "comment": raw.get("review_comment", ""),
+                    "goldfish": (raw.get("quality") or {}).get("goldfish"),
                     "notes": list(raw.get("review_notes") or []), "ref": row.source_number or row.id})
     return sorted(out, key=lambda card: card["ref"])
 
 
-def persist(db, run: Path, *, replace: bool = False, slots: list[str] | None = None) -> dict:
+def persist(db, run: Path, *, replace: bool = False, slots: list[str] | None = None,
+            reprise: Path | None = None) -> dict:
     """Brouillons dans l'onglet Exercices. Rien n'est publié ici. Avec `slots`, seuls ces
     emplacements sont remplacés : le reste du run, relu ou publié, ne bouge pas."""
     from app.models import Competency, IndigoExercise, IndigoExtraction
@@ -1587,9 +1898,13 @@ def persist(db, run: Path, *, replace: bool = False, slots: list[str] | None = N
     rendered = load_json(run / "render.json") if (run / "render.json").exists() else {}
     if "writing" not in rendered:
         raise SystemExit("Lance `render` d'abord : le contrôle d'écriture n'a pas tourné.")
-    if rendered["writing"] or rendered.get("leading"):
+    # Une reprise ciblée ne doit ni remplacer ni être bloquée par une autre carte.
+    # Sans sélection explicite, toutes les cartes restent contrôlées.
+    refused = (set(rendered["writing"]) | set(rendered.get("leading") or [])
+               | set(rendered.get("traces") or [])) & set(slots or contracts)
+    if refused:
         raise SystemExit("Cartes refusées à la mise en page : " + ", ".join(
-            sorted(set(rendered["writing"]) | set(rendered.get("leading") or []))))
+            sorted(refused)))
     exercises = load_slots(run)
     layouts = load_json(run / "layouts.json") if (run / "layouts.json").exists() else {}
     goldfish = load_json(run / "goldfish.json") if (run / "goldfish.json").exists() else {}
@@ -1601,11 +1916,27 @@ def persist(db, run: Path, *, replace: bool = False, slots: list[str] | None = N
         if (r.raw_ocr_json or {}).get("pipeline") == PIPELINE
         and (r.raw_ocr_json or {}).get("run") == run.name
         and r.source_number in targets]
+    import rework
+    from app.services import exercise_review
+    if any(r.status == "validated" for r in existing):
+        raise SystemExit("Ce run contient des exercices déjà validés : non remplacé.")
+    if any((r.raw_ocr_json or {}).get("review_verdict") == "like" for r in existing):
+        raise SystemExit("Une carte acceptée (like) ne peut pas être remplacée.")
+    if existing and not reprise and (slots or any(
+            (r.raw_ocr_json or {}).get("review_verdict") == "dislike" for r in existing)):
+        raise SystemExit("Reprise ciblée : manifeste --reprise obligatoire, exporte les dislikes d’abord.")
+    if reprise:
+        if not slots:
+            raise SystemExit("Une reprise exige une sélection explicite --slots.")
+        rework.verify(existing, load_json(Path(reprise)), targets)
+    for key in (slots or contracts):
+        rework.proof(run, key, exercises[key], contracts[key], rendered,
+                     (goldfish.get("verdicts") or {}).get(key) or {}, required=bool(reprise))
+    previous = {r.source_number: {"snapshot": exercise_review.snapshot(r),
+                "history": list((r.raw_ocr_json or {}).get("review_history") or [])} for r in existing}
     if existing:
         if not replace:
             raise SystemExit("Ce run est déjà en brouillon (relance avec --replace).")
-        if any(r.status == "validated" for r in existing):
-            raise SystemExit("Ce run contient des exercices déjà validés : non remplacé.")
         for row in existing:
             db.delete(row)
         db.flush()
@@ -1678,6 +2009,18 @@ def persist(db, run: Path, *, replace: bool = False, slots: list[str] | None = N
             "review_notes": [*((goldfish.get("verdicts") or {}).get(key, {}).get("notes") or []),
                              *(str(flag) for flag in exercise.get("review_flags") or [])],
             "review_blocking": [], "adapted": True}
+        old = previous.get(row.source_number)
+        if old:
+            verdict = (goldfish.get("verdicts") or {}).get(key) or {}
+            row.raw_ocr_json = {**row.raw_ocr_json, "review_history": old["history"]}
+            exercise_review.append(row, exercise_review.event(
+                "failed" if verdict.get("flag") else "ok",
+                str(exercise.get("rework_summary") or "Exercice repris et contrôlé par l’agent"),
+                model=payload["model"], previous=old["snapshot"], goldfish=verdict,
+                reason=" · ".join(verdict.get("notes") or []) if verdict.get("flag") else None))
+            if verdict.get("flag"):
+                row.raw_ocr_json = {**row.raw_ocr_json, "review_verdict": "dislike",
+                                    "review_comment": old["snapshot"]["comment"]}
         written.append(f"{key} → {row.id}")
     extraction.stats_json = {"pipeline": PIPELINE, "version": VERSION, "exercises": len(written),
                              "run": run.name, "review": review_sample(

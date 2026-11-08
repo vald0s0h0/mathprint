@@ -1,5 +1,6 @@
 import { Accordion, Box, Group, Stack, Table, Text } from '@mantine/core'
 import type { CSSProperties, ReactNode } from 'react'
+import MathText from './MathText'
 
 export type CompetencyHierarchyChapter<T> = {
   key: string
@@ -170,7 +171,7 @@ export default function CompetencyHierarchy<T>({
                                   <Text span size="xs" c="dimmed" fw={650} mr={7}>
                                     {getShortId(row)}
                                   </Text>
-                                  <Text span size="sm" fw={500}>{getLabel(row)}</Text>
+                                  <Text span size="sm" fw={500}><MathText text={getLabel(row)} /></Text>
                                 </Box>
                               </Table.Td>
                               {columns.map((column, index) => (

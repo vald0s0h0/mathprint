@@ -340,6 +340,14 @@ def draw_expected_answer(crop: np.ndarray, *, zone_geo: dict, meta: dict,
             cv2.line(out, p1, p2, bgr, thickness, lineType=cv2.LINE_AA)
             cv2.circle(out, p1, radius, bgr, -1, lineType=cv2.LINE_AA)
             cv2.circle(out, p2, radius, bgr, -1, lineType=cv2.LINE_AA)
+    elif response_type == "manual_drawing" and meta.get("construction"):
+        from . import construction
+        thickness = max(2, int(round(min(sx, sy) * 0.6)))
+        # tracé libre : la figure attendue est posée là où l'élève a tracé
+        placement = (meta.get("construction") or {}).get("placement")
+        for line in construction.expected_polylines_pt(meta, placement):
+            pts = np.array([point(x, y) for x, y in line], np.int32)
+            cv2.polylines(out, [pts], False, bgr, thickness, lineType=cv2.LINE_AA)
     return out
 
 

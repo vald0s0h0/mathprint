@@ -7,7 +7,8 @@ Une carte se juge seule. Une information absente de l'image n'existe pas. Le num
 Pour chaque carte, dans l'ordre, rends un objet :
 
 - `paraphrase` : ce que l'on te demande, en une ou deux phrases, avec tes mots ;
-- `reponse` : ta réponse. Pour des cases à cocher, le texte de la ou des propositions choisies, séparées par « ; ». Pour un relier, les liens sous la forme « élément → élément ». Sinon, la réponse telle que tu l'écrirais ;
+- `reponse` : ta réponse. Pour des cases à cocher, le texte de la ou des propositions choisies, séparées par « ; ». Pour un relier, les liens sous la forme « élément → élément ». Pour une figure à construire (quadrillage saumon ou case vide), décris le tracé que tu ferais : points placés, longueurs, angles. Sinon, la réponse telle que tu l'écrirais ;
+- `reponses_parties` : si la carte contient plusieurs parties a., b., etc., une liste de réponses dans leur ordre ; sinon `null` ;
 - `comprehensible` : `true` si un élève de ce niveau sait quoi faire, sinon `false` ;
 - `donnees_manquantes` : ce qu'il manque pour répondre, sinon `null` ;
 - `seconde_lecture` : une autre lecture de la consigne qu'un élève **qui connaît la notion** pourrait défendre, et qui changerait la réponse, sinon `null`. Une erreur de calcul, une confusion de vocabulaire ou un piège voulu de l'exercice n'est pas une seconde lecture : l'exercice sert justement à les repérer. En cas de doute, réponds `null` ;

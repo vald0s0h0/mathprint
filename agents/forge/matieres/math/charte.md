@@ -5,4 +5,4 @@
 - **Réponses manuscrites.** Dis la forme attendue quand elle compte : fraction irréductible, valeur arrondie au dixième, unité. Une consigne floue sur la forme crée une fausse erreur.
 - **Résultats.** Des nombres plausibles. Sans calculatrice, un calcul reste faisable de tête ou posé en peu de temps.
 - **Vocabulaire.** Celui enseigné à ce niveau, d'après la fiche. Une notion du programme d'une classe supérieure n'apparaît pas, même en piège.
-- **Géométrie.** On ne conclut pas d'après l'apparence. Un angle droit ou une égalité se code ou se dit. Les formats cochés ou reliés ne demandent ni de tracer ni de construire.
+- **Géométrie.** On ne conclut pas d'après l'apparence. Un angle droit ou une égalité se code ou se dit. Les formats cochés ou reliés ne demandent ni de tracer ni de construire : un tracé passe par `geo_construction`.

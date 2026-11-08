@@ -65,6 +65,20 @@ def parse_number(s: str) -> Fraction | None:
         return None
 
 
+def normalize_expression(raw: str) -> str:
+    """Puissances écrites à la main/OCR, réservées à la comparaison symbolique.
+
+    Les unités numériques comme cm² gardent leur normalisation habituelle.
+    On conserve les groupements : x^{12} et x⁻² ne deviennent pas x**1*2 ou x-2.
+    """
+    text = normalize(raw)
+    superscripts = str.maketrans('⁰¹²³⁴⁵⁶⁷⁸⁹⁻⁺', '0123456789-+')
+    text = re.sub(r'[⁰¹²³⁴⁵⁶⁷⁸⁹⁻⁺]+',
+                  lambda m: '**(' + m.group().translate(superscripts) + ')', text)
+    text = re.sub(r'\^\{([^{}]+)\}', r'**(\1)', text)
+    return text.replace('^', '**')
+
+
 # ------------------------------------------------------- tolérance d'écriture
 # L'élève écrit souvent PLUS que la réponse attendue : l'unité (« 12 cm »), le
 # membre de gauche (« x = 12 », « PGCD = 12 »), un point final. Ces réponses
@@ -244,7 +258,7 @@ def _unevaluated(text: str):
     """Arbre de l'expression telle qu'écrite : évaluée, 2(x+3) deviendrait 2x+6."""
     written = text.replace("^", "**").replace("{", "(").replace("}", ")")
     try:
-        return parse_expr(written, transformations=TRANSFORMS, evaluate=False)
+        return parse_expr(normalize_expression(written), transformations=TRANSFORMS, evaluate=False)
     except Exception:  # noqa: BLE001 - écriture illisible par le parseur
         return None
 
@@ -290,8 +304,8 @@ def cell_credit(exp_cell: dict, raw_cell: str, *, exact: bool = False) -> float 
         return float(_text_equal(norm, str(exp_cell["value"])))
     if ctype == "expression":
         try:
-            got_e = parse_expr(norm, transformations=TRANSFORMS)
-            want_e = parse_expr(normalize(str(exp_cell["value"])), transformations=TRANSFORMS)
+            got_e = parse_expr(normalize_expression(raw_cell), transformations=TRANSFORMS)
+            want_e = parse_expr(normalize_expression(str(exp_cell["value"])), transformations=TRANSFORMS)
             return float(sympy.simplify(got_e - want_e) == 0)
         except Exception:
             return None
@@ -396,10 +410,15 @@ def table_credits(grading: dict, cell_texts: list[str] | None) -> list[float | N
     form = grading.get("answer_form")
 
     def credit_of(cell: dict, raw: str) -> float | None:
-        credit = cell_credit(cell, raw, exact=form == EXACT_DECIMAL)
-        if not credit or not form or form == "any":
+        cell_form = cell.get("answer_form", form)
+        if cell.get("input") == "single_choice":
+            if raw in (None, "?"):
+                return None
+            return float(str(raw) == str(cell["value"]))
+        credit = cell_credit(cell, raw, exact=cell_form == EXACT_DECIMAL or bool(cell.get("precision")))
+        if not credit or not cell_form or cell_form == "any":
             return credit
-        matches = form_matches(form, raw)
+        matches = form_matches(cell_form, raw)
         return None if matches is None else (credit if matches else 0.0)
 
     credits = [credit_of(exp, raw) for exp, raw in zip(flat, texts)]
@@ -679,14 +698,14 @@ def grade(expected: dict, grading: dict, ocr_text: str, ocr_confidence: float,
 
         if etype == "expression" or comparator == "symbolic_equiv":
             var = sympy.Symbol(expected.get("variable", "x"))
-            got_e = parse_expr(norm, transformations=TRANSFORMS, local_dict={str(var): var})
+            got_e = parse_expr(normalize_expression(norm), transformations=TRANSFORMS, local_dict={str(var): var})
             # expected["value"] est balisé comme le reste (LaTeX $...$ : \dfrac,
             # \times, {,} décimale française...) — il doit passer par la MÊME
             # normalisation que le texte OCR, sinon parse_expr échoue (exception
             # silencieusement rattrapée plus bas) dès que la réponse de référence
             # contient la moindre notation LaTeX (cf. incident auto-vérification
             # 'expression' toujours refusée).
-            want_e = parse_expr(normalize(str(expected["value"])), transformations=TRANSFORMS,
+            want_e = parse_expr(normalize_expression(str(expected["value"])), transformations=TRANSFORMS,
                                 local_dict={str(var): var})
             ok = sympy.simplify(got_e - want_e) == 0
             result.update(tier="B", score=max_score if ok else 0.0,

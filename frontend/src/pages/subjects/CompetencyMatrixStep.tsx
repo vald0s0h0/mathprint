@@ -13,6 +13,7 @@ import { Search } from 'lucide-react'
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { api } from '../../api'
 import { masteryColor } from '../../utils/mastery'
+import MathText from '../../components/MathText'
 
 type ClassRef = { id: string; name: string }
 type CompRow = {
@@ -149,7 +150,7 @@ export default function CompetencyMatrixStep({
                                       disabled={empty && !sel.has(c.id)}
                                       label={<Text size="sm">
                                         {c.short_id && <Text span c="dimmed" mr={6}>{c.short_id}</Text>}
-                                        {c.label}</Text>}
+                                        <MathText text={c.label} /></Text>}
                                       onChange={(e) => toggle([c.id], e.currentTarget.checked)} />
                                   </Table.Td>
                                   <Table.Td style={{ textAlign: 'center' }}>

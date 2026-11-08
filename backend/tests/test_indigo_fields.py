@@ -379,15 +379,19 @@ def test_table_answer_box_fills_its_cell():
         for j, box in enumerate(row):
             assert abs(box["w_pt"] - (geo["col_ws"][j] - 2 * pad)) < 0.01
             assert abs(box["h_pt"] - (geo["row_hs"][i] - 2 * pad)) < 0.01
-            assert box["w_pt"] > pdfgen.BLANK_W      # nettement plus large qu'avant
+            assert box["w_pt"] >= pdfgen.handwriting.need_w(cells[i][j])
+            assert geo["total_w"] < w - 2 * pdfgen.CARD_PAD  # tableau compact, pas de blanc étiré
 
 
-def test_fraction_table_row_gains_exactly_3mm():
+def test_fraction_table_row_keeps_comfortable_handwriting_height():
     integer = pdfgen._table_geometry(pdfgen.COL_W, None, ["Réponse"], [[_int(2)]], 9)
     fraction = pdfgen._table_geometry(
         pdfgen.COL_W, None, ["Réponse"],
         [[{"type": "rational", "value": [1, 2]}]], 9)
-    assert fraction["row_hs"][0] - integer["row_hs"][0] == pytest.approx(3 * mm)
+    box_h = fraction["row_hs"][0] - 2 * pdfgen._TABLE_CELL_PAD
+    need_h = pdfgen.handwriting.need({"type": "rational", "value": [1, 2]})[1]
+    assert need_h + 2 * mm <= box_h <= need_h + 4 * mm
+    assert fraction["row_hs"][0] > integer["row_hs"][0]
 
 
 def test_fraction_in_multiline_reasoning_gains_exactly_3mm():

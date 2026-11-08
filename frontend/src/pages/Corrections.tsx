@@ -18,7 +18,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api, getToken } from '../api'
 import ActionsMenu from '../components/ActionsMenu'
-import { MathAnswer } from '../components/MathText'
+import MathText, { MathAnswer } from '../components/MathText'
 import PdfPreviewModal from '../components/PdfPreview'
 import LateJobRows, { type LateJob } from '../components/LateJobs'
 import PrintButton from '../components/PrintButton'
@@ -86,6 +86,12 @@ type Item = {
                verdict: string; motif: string; confidence?: number | null
                requires_review?: boolean }[]
   llm_threshold: number; llm_min_confidence: number | null
+  // géométrie à tracer : lecture CV en mode ombre, proposée mais jamais appliquée
+  construction?: {
+    status: string | null; fraction: number | null; confidence: number | null
+    reasons: string[]; error_id: string | null; error_feedback: string | null
+    elements: { name: string; state: string; length_mm?: number | null }[]
+  } | null
 }
 // Unité ATOMIQUE de correction manuelle : UNE case à trous, UN QCM, ou UNE
 // réponse rédigée. La file des réponses est aplatie en unités puis regroupée par
@@ -294,6 +300,52 @@ function buildOcrUnits(items: Item[], threshold: number): OcrUnit[] {
       || ia.student_order - ib.student_order
   })
   return out
+}
+
+// Lecture CV d'un tracé. Sa note s'applique au-dessus du seuil réglé ; en dessous,
+// ou quand la copie est tirée pour le contrôle par échantillon, le professeur
+// tranche — et ses décisions servent au calibrage du seuil.
+const ELEMENT_STATE: Record<string, string> = {
+  present: 'tracé', absent: 'absent', ambiguous: 'incertain', hidden: 'caché',
+  wrong_length: 'longueur fausse',
+}
+const CONSTRUCTION_REASON: Record<string, string> = {
+  construction_cv: 'note appliquée automatiquement',
+  construction_blank: 'copie blanche, note appliquée automatiquement',
+  construction_low_confidence: 'confiance sous le seuil : à corriger',
+  construction_audit: 'contrôle par échantillon : votre note sert au calibrage',
+  construction_unreadable: 'tracé illisible : à corriger',
+}
+function ConstructionReading({ reading, reason }: {
+  reading: NonNullable<Item['construction']>; reason: string
+}) {
+  const summary = reading.status === 'blank' ? 'aucun tracé'
+    : reading.status === 'read' && reading.fraction != null
+      ? `${Math.round(reading.fraction * 100)} % du tracé attendu retrouvé`
+      : 'lecture impossible'
+  return (
+    <Box mt={6}>
+      <Text size="xs" c="dimmed">
+        Lecture automatique : {summary}
+        {reading.confidence != null ? ` · confiance ${Math.round(reading.confidence * 100)} %` : ''}
+        {reading.reasons.length > 0 ? ` (${reading.reasons.join(', ')})` : ''}
+      </Text>
+      {CONSTRUCTION_REASON[reason] && (
+        <Text size="xs" c="dimmed" fw={600}>{CONSTRUCTION_REASON[reason]}</Text>
+      )}
+      {reading.elements.length > 0 && (
+        <Text size="xs" c="dimmed">
+          {reading.elements.map((e) => `${e.name} ${ELEMENT_STATE[e.state] ?? e.state}`
+            + (e.length_mm != null ? ` (${String(e.length_mm).replace('.', ',')} mm)` : '')).join(' · ')}
+        </Text>
+      )}
+      {reading.error_feedback && (
+        <Text size="xs" c="var(--mp-text-orange-strong)">
+          Erreur reconnue : {reading.error_feedback}
+        </Text>
+      )}
+    </Box>
+  )
 }
 
 // image du crop scanné de la zone de réponse : chargée via fetch + token puis
@@ -882,7 +934,8 @@ export default function Corrections() {
       ? n.cell_index === cur?.cellIndex
       : !!curCell && n.champ === curCell.label)
   const compactDeterministic = !!curItem && (
-    curItem.response_type.startsWith('qcm') || curItem.response_type === 'matching')
+    curItem.response_type.startsWith('qcm') || curItem.response_type === 'matching'
+    || !!curItem.construction)
   const cellVal = cur && cur.mode === 'cells' && cur.cellIndex != null
     ? verdicts[cur.respId]?.[cur.cellIndex] ?? null : null
   // Un bouton foncé représente exclusivement la note EFFECTIVEMENT portée par
@@ -1329,7 +1382,7 @@ export default function Corrections() {
               </Group>
               <Card withBorder padding="sm">
                 <Text size="xs" c="dimmed" fw={600} tt="uppercase" mb="xs">
-                  Scan de l'élève{currentOcrCell?.label ? ` — ${currentOcrCell.label}` : ''}
+                  Scan de l'élève{currentOcrCell?.label ? <> — <Text span inherit tt="none"><MathText text={currentOcrCell.label} /></Text></> : null}
                 </Text>
                 <OcrScan item={currentOcrItem} cellIndex={currentOcrUnit.cellIndex}
                   selectedChoices={ocrChoices} selectedPairs={ocrPairs} matchStart={matchStart}
@@ -1444,7 +1497,7 @@ export default function Corrections() {
                     <Text size="xs" c="dimmed" fw={600} tt="uppercase">
                       Réponse de l'élève + correction attendue
                     </Text>
-                    {curItem.ocr_confidence != null && (
+                    {curItem.ocr_confidence != null && !curItem.construction && (
                       <Badge size="xs" variant="light"
                         color={curItem.ocr_confidence >= 0.9 ? 'green' : 'orange'}>
                         confiance {(curItem.ocr_confidence * 100).toFixed(0)} %
@@ -1459,11 +1512,15 @@ export default function Corrections() {
                       <Text size="xs" c="dimmed">
                         {curItem.response_type.startsWith('qcm')
                           ? 'plein = choix attendu · vide = choix non attendu'
+                          : curItem.construction ? 'rouge = tracé attendu'
                           : 'rouge = liaisons attendues'}
                       </Text>
                     </Group>
                     <Text size="xs" c="dimmed">noir / bleu = réponse de l'élève</Text>
                   </Group>
+                  {curItem.construction?.status && (
+                    <ConstructionReading reading={curItem.construction} reason={curItem.reason_code} />
+                  )}
                   {curItem.reason_code && (
                     <Text size="xs" c="dimmed" mt={6}>Motif : {curItem.reason_code}</Text>
                   )}
@@ -1475,7 +1532,7 @@ export default function Corrections() {
               <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
                 <Card withBorder padding="sm">
                   <Text size="xs" c="dimmed" fw={600} tt="uppercase" mb={4}>
-                    Réponse de l'élève{cur.mode === 'cells' && curCell?.label ? ` — ${curCell.label}` : ''}
+                    Réponse de l'élève{cur.mode === 'cells' && curCell?.label ? <> — <Text span inherit tt="none"><MathText text={curCell.label} /></Text></> : null}
                   </Text>
                   <ScanImage responseId={cur.respId}
                     cellIndex={cur.mode === 'cells' ? cur.cellIndex : null} />
@@ -1519,7 +1576,7 @@ export default function Corrections() {
                 </Card>
                 <Card withBorder padding="sm">
                   <Text size="xs" c="dimmed" fw={600} tt="uppercase" mb={4}>
-                    Réponse attendue{curCell?.label ? ` — ${curCell.label}` : ''}
+                    Réponse attendue{curCell?.label ? <> — <Text span inherit tt="none"><MathText text={curCell.label} /></Text></> : null}
                   </Text>
                   <Box fz="1.7rem" fw={700} style={{ lineHeight: 1.3 }}>
                     <MathAnswer text={cur.mode === 'cells' ? curCell?.expected_display

@@ -67,6 +67,23 @@ def test_handwritten_preview_uses_the_solution_instead_of_a_larger_wrong_answer(
     assert written == [exercise['expected']]
 
 
+def test_expression_answer_is_written_as_math_and_still_grades_correctly(monkeypatch):
+    from app.services import grading, handwriting
+    expected = {'type': 'expression', 'value': '3*x**2'}
+    lines = []
+    original = card_preview._pen_line
+    def capture(canvas, text, *args, **kwargs):
+        lines.append(text)
+        return original(canvas, text, *args, **kwargs)
+    monkeypatch.setattr(card_preview, '_pen_line', capture)
+    exercise = {'statement': 'Écris son aire.', 'response_type': 'short_text', 'expected': expected}
+    card_preview.render(exercise, show_answers=True)
+    assert lines == ['3x²']
+    assert grading.cell_credit(expected, lines[0]) == 1
+    assert expected['value'] == '3*x**2'
+    assert handwriting.forms({'type': 'expression', 'value': 'x**12'}) == ('x¹²',)
+
+
 def test_problem_title_is_identical_for_admin_and_published_cards():
     base = {"statement": "Quelle est son aire ?", "response_type": "qcm_single",
             "choices": ["20", "40"], "expected": {"correct": [0]}, "difficulty": 2}

@@ -71,6 +71,10 @@ export default function SettingsPage() {
   const [savingOcrThreshold, setSavingOcrThreshold] = useState(false)
   const [llmThresholdPct, setLlmThresholdPct] = useState<number | string>(90)
   const [savingLlmThreshold, setSavingLlmThreshold] = useState(false)
+  // géométrie à tracer : seuil de la note automatique et part contrôlée
+  const [traceThresholdPct, setTraceThresholdPct] = useState<number | string>(90)
+  const [traceAuditPct, setTraceAuditPct] = useState<number | string>(20)
+  const [savingTrace, setSavingTrace] = useState(false)
   const [status, setStatus] = useState<SystemStatus | null>(null)
   const [printers, setPrinters] = useState<PrintersInfo | null>(null)
   const [backups, setBackups] = useState<{ name: string; size: number }[]>([])
@@ -105,6 +109,8 @@ export default function SettingsPage() {
       setSystem(values)
       setOcrThresholdPct(Math.round(Number(values.ocr_confidence_threshold?.value ?? 0.9) * 100))
       setLlmThresholdPct(Math.round(Number(values.llm_confidence_threshold?.value ?? 0.9) * 100))
+      setTraceThresholdPct(Math.round(Number(values.construction_confidence_threshold?.value ?? 0.9) * 100))
+      setTraceAuditPct(Math.round(Number(values.construction_audit_share?.value ?? 0.2) * 100))
     })
     api.get<SystemStatus>('/api/system/status').then(setStatus)
     }
@@ -298,6 +304,30 @@ export default function SettingsPage() {
       notifications.show({ color: 'red', message: (e as Error).message })
     } finally {
       setSavingLlmThreshold(false)
+    }
+  }
+
+  async function saveTraceSettings() {
+    // 101 % : aucune note automatique (toute confiance est ≤ 100 %)
+    const pct = Math.max(1, Math.min(101, Number(traceThresholdPct) || 90))
+    const audit = Math.max(0, Math.min(100, Number(traceAuditPct) || 0))
+    setSavingTrace(true)
+    try {
+      await api.post('/api/settings/system', {
+        key: 'construction_confidence_threshold', value: { value: pct / 100 },
+      })
+      await api.post('/api/settings/system', {
+        key: 'construction_audit_share', value: { value: audit / 100 },
+      })
+      const values = await api.get<Record<string, any>>('/api/settings/system')
+      setSystem(values)
+      setTraceThresholdPct(Math.round(Number(values.construction_confidence_threshold?.value ?? 0.9) * 100))
+      setTraceAuditPct(Math.round(Number(values.construction_audit_share?.value ?? 0.2) * 100))
+      notifications.show({ color: 'green', message: `Tracés : seuil ${pct} %, contrôle ${audit} %` })
+    } catch (e) {
+      notifications.show({ color: 'red', message: (e as Error).message })
+    } finally {
+      setSavingTrace(false)
     }
   }
 
@@ -519,6 +549,28 @@ export default function SettingsPage() {
                   onKeyDown={(e) => { if (e.key === 'Enter') saveLlmThreshold() }} />
                 <Button leftSection={<Save size={14} />} loading={savingLlmThreshold}
                   onClick={saveLlmThreshold}>Enregistrer</Button>
+              </Group>
+            </Card>
+            <Card withBorder>
+              <Text fw={600} mb={4}>Géométrie à tracer</Text>
+              <Text size="xs" c="dimmed" mb="sm">
+                La lecture automatique note un tracé quand sa confiance atteint ce
+                seuil ; en dessous, il part en correction manuelle (101 % : jamais
+                de note automatique). Une part des tracés notés automatiquement
+                passe quand même chez vous : vos notes servent à calibrer le seuil
+                (script calibrate_construction). Mettez-la à 0 une fois le seuil établi.
+              </Text>
+              <Group align="flex-end">
+                <NumberInput label="Seuil de confiance" suffix=" %" min={1} max={101}
+                  step={1} w={170} value={traceThresholdPct}
+                  onChange={setTraceThresholdPct}
+                  onKeyDown={(e) => { if (e.key === 'Enter') saveTraceSettings() }} />
+                <NumberInput label="Contrôle par échantillon" suffix=" %" min={0} max={100}
+                  step={5} w={190} value={traceAuditPct}
+                  onChange={setTraceAuditPct}
+                  onKeyDown={(e) => { if (e.key === 'Enter') saveTraceSettings() }} />
+                <Button leftSection={<Save size={14} />} loading={savingTrace}
+                  onClick={saveTraceSettings}>Enregistrer</Button>
               </Group>
             </Card>
             <Card withBorder>

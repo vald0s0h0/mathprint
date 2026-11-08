@@ -14,6 +14,8 @@ import ClassEditor, { type ClassRow } from '../components/ClassEditor'
 import CompactClassSelector, { sortClassChoices } from '../components/CompactClassSelector'
 import { CYCLES, useAppState } from '../state/AppState'
 import { masteryColor } from '../utils/mastery'
+import { mathPlain } from '../utils/mathPlain'
+import MathText, { MathAnswer } from '../components/MathText'
 
 type Cls = ClassRow
 type StudentRow = {
@@ -48,10 +50,10 @@ type Year = { id: string; label: string; active: boolean }
 function CompetencyRow({ c }: { c: Detail['competencies'][0] }) {
   const full = c.chapter ? `${c.chapter} · ${c.label}` : c.label
   return (
-    <Group gap={8} wrap="nowrap" py={2} title={full}>
+    <Group gap={8} wrap="nowrap" py={2} title={mathPlain(full)}>
       <Text size="xs" style={{ flex: 1, minWidth: 0 }} lineClamp={1}>
         {c.short_id && <Text span c="dimmed" mr={4}>{c.short_id}</Text>}
-        {full}
+        <MathText text={full} />
       </Text>
       {/* la barre pleine = maîtrise acquise, la portion foncée = ce qu'il en
           reste aujourd'hui (maîtrise x fraîcheur) : c'est l'écart entre les deux
@@ -379,9 +381,9 @@ export default function Students() {
                       const full = d.chapter ? `${d.chapter} · ${d.label}` : d.label
                       return (
                         <Group key={i} justify="space-between" mt="xs" wrap="nowrap">
-                          <Text size="sm" lineClamp={1} title={full}>
+                          <Text size="sm" lineClamp={1} title={mathPlain(full)}>
                             {d.short_id && <Text span c="dimmed" mr={4}>{d.short_id}</Text>}
-                            {full}
+                            <MathText text={full} />
                           </Text>
                           <Group gap={6} wrap="nowrap" style={{ flexShrink: 0 }}>
                             {d.days_since != null && (
@@ -441,11 +443,11 @@ export default function Students() {
                                   </Text>
                                 </Table.Td>
                                 <Table.Td>
-                                  <Text size="xs" lineClamp={1} title={full}>
+                                  <Text size="xs" lineClamp={1} title={mathPlain(full)}>
                                     {h.competency_short_id && (
                                       <Text span c="dimmed" mr={4}>{h.competency_short_id}</Text>
                                     )}
-                                    {h.competency_label}
+                                    <MathText text={h.competency_label} />
                                   </Text>
                                 </Table.Td>
                                 <Table.Td>
@@ -455,8 +457,8 @@ export default function Students() {
                                 </Table.Td>
                                 <Table.Td>
                                   <Text size="xs" c={h.answer_text ? undefined : 'dimmed'}
-                                    lineClamp={1} title={h.answer_text}>
-                                    {h.answer_text || '(sans réponse)'}
+                                    lineClamp={1} title={mathPlain(h.answer_text)}>
+                                    <MathAnswer text={h.answer_text} fallback="(sans réponse)" />
                                   </Text>
                                 </Table.Td>
                                 <Table.Td ta="right">
@@ -485,7 +487,7 @@ export default function Students() {
                           {r.status === 'approved' ? 'approuvé' : r.status === 'draft' ? 'brouillon' : r.status}
                         </Badge>
                       </Group>
-                      <Text size="sm" mt="xs">{r.content}</Text>
+                      <Text size="sm" mt="xs"><MathText text={r.content} /></Text>
                       {r.status === 'draft' && (
                         <Button size="compact-xs" variant="light" mt="xs"
                           onClick={async () => {
