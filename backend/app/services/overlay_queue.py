@@ -147,11 +147,12 @@ def overlay_document(source: Path, sheets: list[Sheet],
 
     def add(index: int | None):
         if index is not None:
-            page = reader.pages[index]
+            # La page doit appartenir au writer avant d'être transformée
+            # (pypdf 7 refuse la transformation d'une page orpheline).
+            page = writer.add_page(reader.pages[index])
             if any(offset_mm):
                 page.add_transformation(
                     Transformation().translate(offset_mm[0] * mm, offset_mm[1] * mm))
-            writer.add_page(page)
         else:
             first = reader.pages[0]
             writer.add_page(PageObject.create_blank_page(
