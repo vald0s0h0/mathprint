@@ -269,14 +269,13 @@ SWATCH_W = 22 * mm
 SWATCH_X = SWATCH_RIGHT - SWATCH_W
 SWATCH_Y = MARGIN + FID_INSET              # même bas et même haut que le noir d'un fiduciel
 SWATCH_H = FID_BLACK
-BOTTOM_NOTE_RIGHT = SWATCH_X - 4 * mm      # l'appréciation s'arrête avant la plage
 
 
 def header_geometry(assessment_type: str, layout: str = LAYOUT_V3) -> dict:
     """Rects (x, y, w, h) de l'en-tête, partagés entre le sujet (_draw_header)
     et l'overlay de correction pour rester alignés physiquement (recalage par
-    fiduciels). v3 : note | identité | libellé de correction | classe, et la
-    zone d'appréciation dans la bande du bas, entre le code et la date."""
+    fiduciels). v3 : note | identité | libellé de correction | classe (plus de zone
+    d'appréciation : seules les copies imprimées en v1 en ont une)."""
     if layout == LAYOUT_V1:
         return _header_geometry_v1(assessment_type)
     top = PAGE_H - MARGIN
@@ -297,8 +296,6 @@ def header_geometry(assessment_type: str, layout: str = LAYOUT_V3) -> dict:
         "raw": {"x": xe - LABEL_W, "baseline": top - 18.6, "w": LABEL_W},
         # pages suivantes : même libellé, à droite de la ligne de rappel
         "label_run": {"x": xe - LABEL_W, "baseline": top - 8.5, "w": LABEL_W},
-        "appreciation": {"x": DM_X + DM_W + 5 * mm, "y": DM_Y, "w": BOTTOM_NOTE_RIGHT - (DM_X + DM_W + 5 * mm),
-                         "h": FID_BLACK},
     }
 
 
@@ -3931,9 +3928,6 @@ def _draw_header_marks_v1(c: canvas.Canvas, page: dict, geo: dict, col) -> bool:
     return False
 
 
-PROGRESS_LABEL_FS = 5.3
-
-
 def _lighter(col, k: float = 0.45) -> Color:
     """Teinte éclaircie de l'encre de correction (barème « /20 » à côté de la note)."""
     return Color(col.red + (1 - col.red) * k, col.green + (1 - col.green) * k,
@@ -3998,66 +3992,10 @@ def _draw_raw_to_note(c: canvas.Canvas, geo: dict, note_raw: str, note: str, col
     c.drawString(ax1 + 1.5 * mm, y, right)
 
 
-def _ellipsize(text: str, font: str, size: float, width: float) -> str:
-    if stringWidth(text, font, size) <= width:
-        return text
-    while text and stringWidth(text + "…", font, size) > width:
-        text = text[:-1]
-    return text.rstrip() + "…"
-
-
-def _draw_appreciation_bottom(c: canvas.Canvas, geo: dict, progress: list[dict],
-                              synthesis: str) -> None:
-    """Appréciation (v3) : plus de case en tête, elle occupe la bande du bas entre le
-    code et la date. Barres de progrès (vert uniquement, jamais de rouge) et, s'il y
-    en a une, la synthèse sur une ligne ; sans progrès, la synthèse sur deux lignes."""
-    A = geo["appreciation"]
-    x, y, w, h = A["x"], A["y"], A["w"], A["h"]
-    visible = progress[:3]
-    if visible:
-        gap = 3 * mm
-        col_w = (w - gap * (len(visible) - 1)) / len(visible)
-        label_y = y + h - 6.0
-        bar_h = 4.0
-        bar_y = label_y - 2.4 - bar_h
-        for i, p in enumerate(visible):
-            cx = x + i * (col_w + gap)
-            pct = round(p["pct_acquired"] * 100)
-            name = _pdf_safe(handwriting.plain(p["competency_name"]))
-            suffix = f"  {pct}%"
-            while name and stringWidth(name + suffix, "Helvetica", PROGRESS_LABEL_FS) > col_w:
-                name = name[:-1]
-            full = _pdf_safe(handwriting.plain(p["competency_name"]))
-            label = name.rstrip(" ·-") + ("…" if name != full else "") + suffix
-            c.setFont("Helvetica", PROGRESS_LABEL_FS)
-            c.setFillColor(black)
-            c.drawString(cx, label_y, label)
-            c.setFillColor(PROGRESS_TRACK)
-            c.roundRect(cx, bar_y, col_w, bar_h, bar_h / 2, stroke=0, fill=1)
-            c.setFillColor(PROGRESS_GREEN)
-            c.roundRect(cx, bar_y, max(bar_h, col_w * min(1.0, p["pct_acquired"])), bar_h,
-                        bar_h / 2, stroke=0, fill=1)
-        if synthesis:
-            c.setFont("Helvetica-Oblique", 5.4)
-            c.setFillColor(HexColor("#37474F"))
-            c.drawString(x, y + 1.2, _ellipsize(_pdf_safe(synthesis), "Helvetica-Oblique", 5.4, w))
-    elif synthesis:
-        c.setFont("Helvetica-Oblique", 6.2)
-        c.setFillColor(HexColor("#37474F"))
-        lines = _wrap(_pdf_safe(synthesis), w, 6.2)[:2]
-        if len(lines) == 2 and len(_wrap(_pdf_safe(synthesis), w, 6.2)) > 2:
-            lines[1] = _ellipsize(lines[1] + " …", "Helvetica-Oblique", 6.2, w)
-        yy = y + h - 7.0
-        for line in lines:
-            c.drawString(x, yy, line)
-            yy -= 8.0
-    c.setFillColor(black)
-
-
 def _draw_header_marks_v3(c: canvas.Canvas, page: dict, geo: dict, col) -> bool:
     """En-tête de correction des copies actuelles : « Correction — Nom » près du
     nom (ou de la ligne de rappel), note en gros dans la case, total brut → note
-    juste dessous, appréciation dans la bande du bas. Retourne True si la page
+    juste dessous. Plus d'appréciation imprimée sur ces pages. Retourne True si la page
     n'est pas identifiée."""
     head = _is_head_page(page)
     pos = geo["label"] if head else geo["label_run"]
@@ -4074,8 +4012,6 @@ def _draw_header_marks_v3(c: canvas.Canvas, page: dict, geo: dict, col) -> bool:
         _draw_note_box(c, geo, page["note"], col)
         if page.get("note_raw") and page["note_raw"] != page["note"]:
             _draw_raw_to_note(c, geo, page["note_raw"], page["note"], col)
-    if page.get("progress") or page.get("synthesis"):
-        _draw_appreciation_bottom(c, geo, page.get("progress") or [], page.get("synthesis") or "")
     return False
 
 

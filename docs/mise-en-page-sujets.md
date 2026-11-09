@@ -36,7 +36,8 @@ identifiant à 12 chiffres = v3, sinon v1) :
 
 - note en gros et en gras dans la case, barème (`/20`, `/10`, `/5`) deux fois plus petit, centré ;
 - `Correction — Nom` sur la ligne du nom, et dessous `total brut → note` (`15 / 30 ⟶ 10 / 20`) ;
-- appréciation (barres de progrès, synthèse) dans la bande du bas, entre le code et la date ;
+- **plus d'appréciation imprimée** (ni case en tête, ni barres de progrès) : seules les copies déjà
+  imprimées en v1 gardent la leur ;
 - les formules LaTeX des micro-corrections sont recolorées comme le texte (`_tinted`).
 
 ## Pipette de la couleur de masquage
