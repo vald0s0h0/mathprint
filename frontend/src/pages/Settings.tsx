@@ -650,8 +650,8 @@ export default function SettingsPage() {
                   onChangeEnd={(v) => saveColor('correction_color', v)} />
               </Group>
               <Text size="xs" c="dimmed" mt="sm">
-                Figé pour le repérage scanner : QR 24 mm signé HMAC (haut droit),
-                3 fiduciels AprilTag 11 mm (coins), marges 9 mm.
+                Figé pour le repérage scanner : code DataMatrix de 20 chiffres signé (bas gauche),
+                4 fiduciels AprilTag 11 mm (coins), marges 9 mm.
               </Text>
             </Card>
           </Stack>

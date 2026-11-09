@@ -718,7 +718,7 @@ def harvest(db: Session, competency, level: int, need: int,
 def ensure_bank(db: Session, competency, level: int) -> list[GeneratedExercise]:
     """Équivalent de exercise_gen.ensure_bank pour la source Sésamaths : pool
     strictement séparé (source in SOURCE_POOL), jamais mélangé à la banque
-    MathALÉA/DeepSeek par défaut.
+    DeepSeek par défaut.
 
     Aucune cible de variantes : la Série du manuel contient ce qu'elle contient,
     on stocke TOUT ce qu'on a su en extraire au niveau demandé. Le plafond

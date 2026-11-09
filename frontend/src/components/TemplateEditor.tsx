@@ -154,7 +154,7 @@ export default function TemplateEditor() {
       <Group justify="space-between" align="flex-start">
         <Text size="sm" c="dimmed" maw={520}>
           Cliquez un élément de l'aperçu pour le sélectionner, tirez la poignée bleue
-          pour redimensionner le texte. La géométrie des QR et marqueurs de coin est
+          pour redimensionner le texte. La géométrie du code de page et des marqueurs de coin est
           figée (repérage scanner) et n'est pas modifiable.
         </Text>
         <Group gap="xs">
@@ -229,7 +229,7 @@ export default function TemplateEditor() {
                 width: 52, height: 52, background:
                   'repeating-conic-gradient(#111 0% 25%, #fff 0% 50%) 0 0 / 10px 10px',
                 borderRadius: 2, flexShrink: 0,
-              }} title="QR d'identité (figé)" />
+              }} title="Code de page (figé)" />
             </div>
 
             {/* carte exercice */}

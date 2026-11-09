@@ -82,6 +82,56 @@ def _b32_decode(value: str) -> bytes:
     padding = "=" * ((8 - len(value) % 8) % 8)
     return base64.b32decode(value + padding, casefold=False)
 
+# --- Code de page à 20 chiffres (DataMatrix) -------------------------------
+#
+# Le code imprimé sur chaque page est un DataMatrix de 8 rangées : 20 chiffres
+# au plus. L'identifiant de page lui-même est un numéro aléatoire de 12 chiffres
+# (`new_page_id`) suivi d'une clé de contrôle de 8 chiffres (HMAC tronqué) :
+# la vérification reste donc SANS ÉTAT (pas de table de correspondance), comme
+# les anciens QR. 10^12 identifiants × 10^8 clés : une page inventée n'est
+# reconnue qu'avec une probabilité de 10^-8, et la clé détecte aussi une lecture
+# optique erronée.
+
+PAGE_ID_DIGITS = 12
+PAGE_CHECK_DIGITS = 8
+PAGE_CODE_LEN = PAGE_ID_DIGITS + PAGE_CHECK_DIGITS
+
+
+def new_page_id() -> str:
+    """Identifiant d'une nouvelle page : 12 chiffres aléatoires."""
+    return f"{secrets.randbelow(10 ** PAGE_ID_DIGITS):0{PAGE_ID_DIGITS}d}"
+
+
+def is_code_page_id(page_id: str | None) -> bool:
+    """Vrai pour un identifiant de page à 12 chiffres (mise en page à code DataMatrix)."""
+    return bool(page_id) and len(page_id) == PAGE_ID_DIGITS and page_id.isascii() and page_id.isdigit()
+
+
+def is_code_payload(payload: str | None) -> bool:
+    return bool(payload) and len(payload) == PAGE_CODE_LEN and payload.isascii() and payload.isdigit()
+
+
+def _page_check(page_id: str) -> str:
+    digest = hmac.new(settings.hmac_key.encode(), f"P3:{page_id}".encode(), hashlib.sha256).digest()
+    return f"{int.from_bytes(digest[:8], 'big') % 10 ** PAGE_CHECK_DIGITS:0{PAGE_CHECK_DIGITS}d}"
+
+
+def code_payload_for(page_id: str) -> str:
+    """Les 20 chiffres imprimés pour un identifiant de page à 12 chiffres."""
+    return page_id + _page_check(page_id)
+
+
+def printable_code(payload: str) -> str:
+    """Les 20 chiffres à imprimer pour `payload`. Un payload déjà au format code
+    est repris tel quel ; un ancien payload (M2/MP1, page de calibration, jeu de
+    test) est ramené à un identifiant fictif stable : la page reste imprimable
+    et vérifiable, mais ne correspond à aucune page de la base."""
+    if is_code_payload(payload):
+        return payload
+    fake = f"{int(hashlib.sha256((payload or '').encode()).hexdigest(), 16) % 10 ** PAGE_ID_DIGITS:0{PAGE_ID_DIGITS}d}"
+    return code_payload_for(fake)
+
+
 def sign_page(page_id: str) -> str:
     """Produit le format compact MP2.
 
@@ -89,7 +139,12 @@ def sign_page(page_id: str) -> str:
     textuels. La signature reste un HMAC-SHA256 tronqué à 64 bits, exactement
     la même entropie que les 16 caractères hexadécimaux du format MP1. Les
     identifiants non UUID restent pris en charge (calibration et tests).
+
+    Un identifiant de page à 12 chiffres (pages créées depuis la mise en page à
+    DataMatrix) produit le code à 20 chiffres de `code_payload_for`.
     """
+    if is_code_page_id(page_id):
+        return code_payload_for(page_id)
     try:
         canonical = str(uuid.UUID(page_id))
         page_token = _b32_encode(uuid.UUID(canonical).bytes)
@@ -103,9 +158,16 @@ def sign_page(page_id: str) -> str:
 def verify_page_payload(payload: str) -> str | None:
     """Retourne le page_id si la signature est valide, sinon None.
 
+    Trois formats : code à 20 chiffres (DataMatrix, identifiant à 12 chiffres +
+    clé de contrôle), M2 compact et MP1 historiques (QR, copies déjà imprimées).
+
     MP1 reste accepté sans limite de durée : une copie déjà imprimée doit
     toujours pouvoir être scannée après le déploiement de MP2.
     """
+    if is_code_payload(payload):
+        page_id, check = payload[:PAGE_ID_DIGITS], payload[PAGE_ID_DIGITS:]
+        return page_id if hmac.compare_digest(check, _page_check(page_id)) else None
+
     if payload.startswith("M2:"):
         try:
             prefix, page_token, sig = payload.split(":")

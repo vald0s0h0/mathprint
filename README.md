@@ -105,8 +105,9 @@ Note, appréciation, bande « correction » sous chaque exercice).
 médiane / plus difficile), lot complet et overlay.
 
 **Correction** — deux chemins dans la même machine d'états (§6.1) :
-- *scan réel* (PDF déposé) : raster pypdfium2 → lecture des 4 QR
-  (relecture par ROI suréchantillonnée, repli fiduciel géométrique) →
+- *scan réel* (PDF déposé) : raster pypdfium2 → lecture du code de page
+  (DataMatrix en bas à gauche, ou QR sur les copies imprimées avant la v3 ;
+  relecture par ROI suréchantillonnée) + 4 fiduciels de coin →
   vérification HMAC (page douteuse bloquée, RM-001) → homographie vers l'A4
   canonique (seuil 1,5 mm) → crops par zone → **filtre dropout HSV** (supprime
   le rouge saumon, conserve l'encre noire/bleue) → détection QCM par densité
@@ -152,7 +153,7 @@ audit des impressions.
 backend/app/
   data/competencies_fr.json   # grilles officielles extraites
   services/
-    worker_cv.py        # raster, QR, homographie, dropout, QCM, vide
+    worker_cv.py        # raster, code de page (DataMatrix/QR), homographie, dropout, QCM, vide
     grading.py          # comparateurs déterministes (tiers A-E)
     forgetting.py       # courbe d'oubli sans LLM
     pdfgen.py           # gabarits A4, marqueurs, overlay

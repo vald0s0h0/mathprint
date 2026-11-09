@@ -1,7 +1,8 @@
 """Worker vision par ordinateur (§6.1-§6.2, phase 1).
 
-Raster PDF -> détection du QR principal (identité, HMAC) + des 3 fiduciels
-AprilTag de coin (placement) -> homographie vers le référentiel A4 canonique
+Raster PDF -> détection du code de page (DataMatrix à 20 chiffres, ou QR signé sur
+les copies déjà imprimées) + des 4 fiduciels AprilTag de coin (placement ; 3 sur
+les anciennes copies) -> homographie vers le référentiel A4 canonique
 -> crops des zones -> filtre dropout (suppression du rouge saumon) ->
 détection QCM et vide.
 
@@ -21,6 +22,11 @@ from .pdfgen import (FIDUCIAL_DICT, FIDUCIAL_IDS, MARGIN, PAGE_H, PAGE_W,
                      QCM_BOX, QCM_DETECT_MARGIN, QCM_DETECT_MARGIN_R, QR_MAIN, QR_MINI)
 from .security import verify_page_payload
 
+try:                       # lecteur DataMatrix : sans lui, seuls les anciens QR sont lus
+    import zxingcpp
+except ImportError:        # pragma: no cover
+    zxingcpp = None
+
 _FIDUCIAL_ROLE_BY_ID = {v: k for k, v in FIDUCIAL_IDS.items()}
 _ARUCO_DETECTOR = cv2.aruco.ArucoDetector(FIDUCIAL_DICT, cv2.aruco.DetectorParameters())
 
@@ -33,6 +39,7 @@ CANONICAL_CENTERS_PT = {
     "TL": (MARGIN + QR_MINI / 2, PAGE_H - MARGIN - QR_MINI / 2),
     "BL": (MARGIN + QR_MINI / 2, MARGIN + QR_MINI / 2),
     "BR": (PAGE_W - MARGIN - QR_MINI / 2, MARGIN + QR_MINI / 2),
+    "TR": (PAGE_W - MARGIN - QR_MINI / 2, PAGE_H - MARGIN - QR_MINI / 2),
 }
 
 
@@ -129,16 +136,81 @@ def raster_any(path: str) -> list[np.ndarray]:
     return [cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)]
 
 
-def _detect_qrcodes(img: np.ndarray) -> list[tuple[str, np.ndarray]]:
-    """Retourne [(payload, quad 4x2 px)] pour tous les QR décodés."""
-    detector = cv2.QRCodeDetector()
+def _decode_qrcodes(detector, img: np.ndarray) -> list[tuple[str, np.ndarray]]:
+    try:
+        ok, texts, quads, _ = detector.detectAndDecodeMulti(img)
+    except cv2.error:
+        return []
     out: list[tuple[str, np.ndarray]] = []
-    ok, texts, quads, _ = detector.detectAndDecodeMulti(img)
     if ok and quads is not None:
         for text, quad in zip(texts, quads):
             if text:
                 out.append((text, quad.reshape(4, 2)))
     return out
+
+
+def _detect_qrcodes(img: np.ndarray) -> list[tuple[str, np.ndarray]]:
+    """Retourne [(payload, quad 4x2 px)] pour tous les QR décodés.
+
+    Le détecteur par défaut d'OpenCV rate au hasard certains motifs de QR, même
+    sur une image parfaite (~2 % des identifiants de page ; 7 pages sur 32 d'un
+    vrai scan à pleine page). Le détecteur Aruco, lui, lit tout cela. Il n'est
+    appelé qu'en repli, quand le premier ne donne aucun QR VALIDE (signature
+    HMAC correcte) : le résultat est donc toujours un sur-ensemble de l'ancien."""
+    out = _decode_qrcodes(cv2.QRCodeDetector(), img)
+    if any(verify_page_payload(text) for text, _ in out):
+        return out
+    aruco = getattr(cv2, "QRCodeDetectorAruco", None)
+    if aruco is None:
+        return out
+    seen = {text for text, _ in out}
+    out += [(t, q) for t, q in _decode_qrcodes(aruco(), img) if t not in seen]
+    return out
+
+
+def _decode_datamatrix(gray: np.ndarray) -> list[tuple[str, np.ndarray]]:
+    if zxingcpp is None:
+        return []
+    try:
+        found = zxingcpp.read_barcodes(gray, formats=zxingcpp.BarcodeFormat.DataMatrix,
+                                       try_invert=False)
+    except Exception:      # image dégénérée : jamais bloquante, la page restera « non identifiée »
+        return []
+    out = []
+    for b in found:
+        p = b.position
+        quad = np.array([[q.x, q.y] for q in (p.top_left, p.top_right, p.bottom_right, p.bottom_left)],
+                        dtype=np.float32)
+        if b.text:
+            out.append((b.text, quad))
+    return out
+
+
+def _detect_datamatrix(img: np.ndarray) -> list[tuple[str, np.ndarray]]:
+    """Retourne [(texte, quad 4x2 px)] des DataMatrix lus. Le code est en bas à
+    gauche : on cherche d'abord dans ce coin (rapide, et à taille native puis
+    doublée pour un scan peu résolu), puis sur toute la page — une feuille passée
+    à l'envers dans le chargeur a son code en haut à droite."""
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
+    h, w = gray.shape[:2]
+    x1, y0 = int(w * 0.50), int(h * 0.84)
+    roi = gray[y0:h, 0:x1]
+    for scale in (1, 2):
+        cand = roi if scale == 1 else cv2.resize(roi, None, fx=scale, fy=scale,
+                                                 interpolation=cv2.INTER_CUBIC)
+        found = _decode_datamatrix(cand)
+        if found:
+            return [(t, q / scale + np.array([0, y0], dtype=np.float32)) for t, q in found]
+    return _decode_datamatrix(gray)
+
+
+def _detect_page_codes(img: np.ndarray) -> list[tuple[str, np.ndarray]]:
+    """Tous les codes de page lisibles, DataMatrix puis QR (anciennes copies) —
+    pour qui n'a besoin que du texte (identification du sujet, calibration)."""
+    found = _detect_datamatrix(img)
+    if any(verify_page_payload(text) for text, _ in found):
+        return found
+    return found + _detect_qrcodes(img)
 
 
 def _detect_fiducials_in(img: np.ndarray) -> dict[str, np.ndarray]:
@@ -154,13 +226,13 @@ def _detect_fiducials_in(img: np.ndarray) -> dict[str, np.ndarray]:
 
 
 def detect_fiducials(img: np.ndarray) -> dict[str, np.ndarray]:
-    """Détecte les 3 fiduciels AprilTag de coin (placement : translation,
-    rotation, échelle — §5.4). Pleine image d'abord, puis repli par ROI de
+    """Détecte les fiduciels AprilTag de coin (4 sur les copies actuelles, 3 sur
+    les anciennes ; placement : translation, rotation, échelle, perspective — §5.4). Pleine image d'abord, puis repli par ROI de
     coin sur-échantillonnée si un tag manque (petite taille apparente)."""
     found = _detect_fiducials_in(img)
     h, w = img.shape[:2]
     rw, rh = int(w * 0.22), int(h * 0.16)
-    rois = {"TL": (0, 0), "BL": (0, h - rh), "BR": (w - rw, h - rh)}
+    rois = {"TL": (0, 0), "TR": (w - rw, 0), "BL": (0, h - rh), "BR": (w - rw, h - rh)}
     for role, (x0, y0) in rois.items():
         if role in found:
             continue
@@ -190,7 +262,16 @@ def analyze_page(img: np.ndarray, forced_page_id: str | None = None) -> PageAnal
     if forced_page_id:
         res.page_id = forced_page_id
     else:
-        detections = _detect_qrcodes(img)
+        # Copies actuelles : DataMatrix en bas à gauche. Il ne sert qu'à
+        # l'identité ; le recalage vient des 4 fiduciels de coin.
+        for text, _quad in _detect_datamatrix(img):
+            page_id = verify_page_payload(text)
+            if page_id is not None:
+                res.page_id = page_id
+                break
+        # Anciennes copies : QR signé en haut à droite, qui compte aussi comme
+        # point de recalage (« MAIN »).
+        detections = _detect_qrcodes(img) if res.page_id is None else []
         for text, quad in detections:
             # Le vérificateur HMAC est l'unique autorité de format (MP1
             # historique, M2 compact et futures versions). Un filtre de
@@ -477,21 +558,24 @@ def adapt_qcm_threshold(pooled: list[float],
     # scinderait les cochées à tort ; on ne considère donc que les coupures qui
     # laissent en bas un groupe proche du papier (mean <= EMPTY_CEIL). Absence de
     # tel groupe = pas de cases vides sur la page (« tout coché ») -> pas d'adaptation.
+    # On jauge chaque écart contre la dispersion du groupe BAS (censé serré près
+    # du blanc) ; le groupe HAUT peut légitimement s'étaler sans casser la
+    # séparation. Parmi les coupures VALABLES, la plus large : le plus grand écart
+    # tout court tombe parfois ENTRE deux coches (croix fine à 0,04, case pochée
+    # à 0,12), où il échoue au critère alors qu'une coupure nette sépare les
+    # vides (~0) des cochées (cas réel : 6e « Angles », 9 grilles en revue).
     candidates = []
     for i in range(len(ds) - 1):
         lower = ds[:i + 1]
-        if sum(lower) / len(lower) <= _QCM_ADAPT_EMPTY_CEIL:
-            candidates.append((ds[i + 1] - ds[i], i))
+        gap, spread_low = ds[i + 1] - ds[i], ds[i] - ds[0]
+        if (sum(lower) / len(lower) <= _QCM_ADAPT_EMPTY_CEIL and gap >= _QCM_ADAPT_GAP_MIN
+                and gap >= _QCM_ADAPT_SEP * max(spread_low, 1e-6)):
+            candidates.append((gap, i))
     if candidates:
         gap, gi = max(candidates)
-        lo, hi = ds[gi], ds[gi + 1]
-        # On jauge l'écart contre la dispersion du groupe BAS (censé serré près du
-        # blanc) ; le groupe HAUT peut légitimement s'étaler sans casser la séparation.
-        spread_low = ds[gi] - ds[0]
-        if gap >= _QCM_ADAPT_GAP_MIN and gap >= _QCM_ADAPT_SEP * max(spread_low, 1e-6):
-            t = (lo + hi) / 2.0
-            # bande étroite au cœur de l'écart : aucune case n'y tombe -> pleine confiance
-            return QcmThreshold(t, (t - 0.25 * gap, t + 0.25 * gap), True)
+        t = (ds[gi] + ds[gi + 1]) / 2.0
+        # bande étroite au cœur de l'écart : aucune case n'y tombe -> pleine confiance
+        return QcmThreshold(t, (t - 0.25 * gap, t + 0.25 * gap), True)
     # non séparable : nuage serré (tout vide / tout coché) -> le défaut tranche seul ;
     # nuage étalé enjambant le seuil -> bande large -> revue des cases limites
     if ds[0] < default <= ds[-1] and (ds[-1] - ds[0]) >= _QCM_ADAPT_GAP_MIN:
@@ -693,6 +777,123 @@ def second_pass_selection(boxes: list[dict], grid: bool,
     return a if (sorted(a) if not grid else a) == (sorted(b) if not grid else b) else None
 
 
+# Une case VIDE ne porte (presque) aucune encre hors de son contour imprimé :
+# 0,000-0,006 relevés sur 6e « Angles » (nov. 2026), contre 0,038 pour la plus
+# légère croix. Au-delà, la case n'est jamais lue vide d'office.
+QCM2_EMPTY_RING_MAX = 0.01
+# Contour exclu SEUL (crayon : le filtre bleu ne voit rien, il ne peut pas
+# confirmer) : accepté seulement si la page sépare très nettement vides et
+# cochées sur cette mesure, et qu'aucune case lue vide n'a d'encre (sombre ou
+# colorée) dans sa fenêtre.
+QCM2_RING_ALONE_GAP = 0.05
+
+
+def _chosen_indices(boxes: list[dict], selected: list[int], grid: bool) -> set[int]:
+    if not grid:
+        return set(selected)
+    return {b["index"] for b in boxes
+            if int(b.get("row", 0)) < len(selected)
+            and selected[int(b.get("row", 0))] == int(b.get("col", 0))}
+
+
+def _ring_alone_selection(boxes: list[dict], m: "BoxMeasures", thrs: "BoxThresholds",
+                          grid: bool) -> list[int] | None:
+    # seuil de la page, sinon celui de la zone seule : une trace pâle ailleurs
+    # sur la page (croix à côté d'une case) ne doit pas bloquer une grille nette
+    for thr in (thrs.ring, adapt_qcm_threshold(m.ring)):
+        gap = 2.0 * (thr.band[1] - thr.band[0])     # bande adaptative = ±gap/4
+        if not thr.adapted or gap < QCM2_RING_ALONE_GAP:
+            continue
+        sel = _qcm_selection(boxes, m.ring, thr, grid)
+        if sel is None:
+            continue
+        chosen = _chosen_indices(boxes, sel, grid)
+        if all(b["index"] in chosen or max(dk, co, r) <= QCM2_EMPTY_RING_MAX
+               for b, dk, co, r in zip(boxes, m.dark, m.color, m.ring)):
+            return sel
+    return None
+
+
+@dataclass
+class BoxMeasures:
+    """Les trois mesures d'encre des cases d'une zone (1re passe, filtre bleu,
+    contour exclu)."""
+    dark: list[float]
+    color: list[float]
+    ring: list[float]
+
+
+@dataclass
+class BoxThresholds:
+    """Seuils adaptatifs d'une page, un par mesure."""
+    dark: QcmThreshold
+    color: QcmThreshold
+    ring: QcmThreshold
+
+
+def box_measures(warped: np.ndarray, boxes: list[dict]) -> BoxMeasures:
+    return BoxMeasures(qcm_densities(warped, boxes), qcm_densities_color(warped, boxes),
+                       qcm_densities_ring(warped, boxes))
+
+
+def page_box_thresholds(zones: list[BoxMeasures],
+                        extra_dark: list[float] | None = None) -> BoxThresholds:
+    """Seuils de page : chaque mesure met en commun TOUTES les cases de la page
+    (QCM et grilles ; `extra_dark` = cases « choix » des tableaux, 1re passe)."""
+    return BoxThresholds(
+        adapt_qcm_threshold([d for m in zones for d in m.dark] + list(extra_dark or [])),
+        adapt_qcm_threshold([d for m in zones for d in m.color]),
+        adapt_qcm_threshold([d for m in zones for d in m.ring]))
+
+
+def decide_boxes(boxes: list[dict], m: BoxMeasures, thrs: BoxThresholds, *,
+                 grid: bool, exclusive: bool) -> tuple[list[int] | None, float, dict]:
+    """Décision d'une zone à cases (QCM ou grille). Retourne (sélection,
+    confiance, motif). Confiance < 0,9 -> OCRiser, la sélection sert alors de
+    pré-remplissage. Grille : sélection par ligne (-1 = rien coché)."""
+    info: dict = {"second_pass": False}
+    thr = thrs.dark
+    if grid:
+        selected = grid_selection(boxes, m.dark, thr)
+        conf = qcm_decision_confidence(m.dark, thr) if selected is not None else 0.0
+        # une LIGNE sans coche suffit à déclencher la 2e passe : une croix au
+        # crayon très clair y passe inaperçue en 1re passe
+        blank = selected is not None and any(c == -1 for c in selected)
+    else:
+        selected, _d, info["default_selected"] = select_qcm(boxes, m.dark, thr)
+        conf = qcm_decision_confidence(m.dark, thr)
+        # AUCUNE coche : rare chez un élève, une coche bleu clair / crayon peut
+        # avoir échappé à l'encre sombre
+        blank = selected is not None and len(selected) == 0
+    if conf < 0.9 or blank:
+        sel2 = second_pass_selection(boxes, grid, m.color, thrs.color, m.ring, thrs.ring)
+        if sel2 is None:
+            sel2 = _ring_alone_selection(boxes, m, thrs, grid)
+            info["ring_alone"] = sel2 is not None
+        if sel2 is not None:
+            selected, conf, info["second_pass"] = sel2, 0.95, True
+        elif blank:
+            conf = 0.5          # vide non confirmé -> OCRiser
+    if conf >= 0.9 and selected is not None:
+        # Une case lue VIDE doit l'être vraiment : une vraie case vide ne porte
+        # aucune encre hors de son contour (≤ 0,006 relevé), une croix tracée à
+        # côté de la case ou une coche très pâle, si (0,013-0,016 relevés : un
+        # élève lu « sans réponse » à tort, sans revue). Doute -> OCRiser.
+        chosen = _chosen_indices(boxes, selected, grid)
+        faint = [i for i, (b, r) in enumerate(zip(boxes, m.ring))
+                 if b["index"] not in chosen and r > QCM2_EMPTY_RING_MAX]
+        if faint:
+            info["faint_empty"] = faint
+            conf = 0.5
+    if not grid:
+        # Plusieurs cases cochées sur un choix UNIQUE : l'élève a souvent coché,
+        # raturé puis coché ailleurs -> OCRiser, jamais une note automatique.
+        info["double_check"] = bool(selected) and len(selected) > 1 and exclusive
+        if info["double_check"]:
+            conf = 0.0
+    return selected, conf, info
+
+
 # --- Points à relier : courbe ajustée par paire + lecture globale ----------
 # Un trait d'élève n'est pas une droite : à main levée il est bancal, ondulé,
 # part ou arrive à côté du point, peut être repassé deux fois, et un trait
@@ -738,6 +939,12 @@ MATCH_BAND_PX = 24          # écart latéral maxi d'un trait bancal (~3 mm à 2
 MATCH_SMOOTH = 0.15         # coût d'un pas latéral de 1 px (préférence pour le droit)
 MATCH_CENTER = 0.3          # coût d'un écart à la corde (départage, au carré)
 MATCH_COVER = 0.85          # couverture mini d'une liaison retenue
+MATCH_COVER_INK = 0.1      # encre mini d'un point « encré » pour la couverture d'une liaison
+                            # et le trait résiduel (gris < ~214). Les mesures de rature
+                            # (hachures, surcharge, tache) gardent 0,5. À 0,5 un trait pâle
+                            # ou fin (crayon, bleu clair, ondulé) était « absent » : 6 copies
+                            # en revue et 1 liaison oubliée en lecture certaine (6e Angles,
+                            # nov. 2026) ; banc synthétique inchangé (0 erreur nouvelle).
 MATCH_GAP_PX = 10           # plus long trou toléré (~1,3 mm : stylo qui saute)
 MATCH_TURN_SKIP_PX = 12     # test de continuation : on ignore la tache du croisement...
 MATCH_TURN_ARM_PX = 20      # ... et on compare les bras de part et d'autre
@@ -942,7 +1149,7 @@ def _fit_links(ink: np.ndarray, segments: list[tuple[np.ndarray, np.ndarray]]
         tol[:, 1:] = np.maximum(tol[:, 1:], m[:, :-1])
         tol[:, :-1] = np.maximum(tol[:, :-1], m[:, 1:])
         gains.append(m - MATCH_CENTER * (ds / MATCH_BAND_PX) ** 2)
-        covers.append(tol >= 0.5)
+        covers.append(tol >= MATCH_COVER_INK)
         geos.append((a, u, nv, ts))
         inks.append(m)
     live = [k for k, g in enumerate(gains) if g is not None]
@@ -1169,7 +1376,7 @@ def _unexplained(ink: np.ndarray, lane: np.ndarray, L: list, R: list,
         hatches = max(hatches, _hatches(rest, links[p].path, crossers))
     # trait le long d'une AUTRE paire : on juge sa courbe sur ses seules
     # portions libres (hors couloirs) — un trait croisé trois fois n'y perd rien
-    loose = cv2.dilate(residual, np.ones((3, 3), np.uint8)) >= 0.5
+    loose = cv2.dilate(residual, np.ones((3, 3), np.uint8)) >= MATCH_COVER_INK
     hgt, wid = ink.shape
     line_cover = 0.0
     for k, lk in links.items():

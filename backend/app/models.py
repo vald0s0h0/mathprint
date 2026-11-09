@@ -391,15 +391,22 @@ class CopyItem(Base):
     correction: Mapped[str] = mapped_column(Text)       # instantané correction
     expected_json: Mapped[dict] = mapped_column(JSON, default=dict)   # réponse(s) attendue(s)
     grading_json: Mapped[dict] = mapped_column(JSON, default=dict)    # barème, tolérances
+def new_page_id() -> str:
+    """Identifiant d'une page imprimée : 12 chiffres aléatoires (cf. services.security),
+    repris tel quel dans le code DataMatrix de la page."""
+    from .services.security import new_page_id as _new
+    return _new()
+
+
 class DocumentPage(Base):
     __tablename__ = "document_pages"
-    id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=new_page_id)
     copy_id: Mapped[str] = mapped_column(ForeignKey("copies.id"))
     page_no: Mapped[int] = mapped_column(Integer)
     side: Mapped[str] = mapped_column(String, default="recto")  # recto | verso
     template_version: Mapped[str] = mapped_column(String, default="1")
-    qr_payload: Mapped[str] = mapped_column(String, default="")   # payload signé HMAC
-    hmac_version: Mapped[str] = mapped_column(String, default="1")
+    qr_payload: Mapped[str] = mapped_column(String, default="")   # code imprimé (20 chiffres) ou ancien payload QR signé
+    hmac_version: Mapped[str] = mapped_column(String, default="1")  # 1 = MP1, 2 = M2 (QR), 3 = code DataMatrix à 20 chiffres
 
 
 class ResponseZone(Base):

@@ -5,7 +5,7 @@ pipelines qui produisent des exercices :
   - services.gemini_gen : création d'exercices par Gemini, en s'appuyant sur
     ces mêmes blocs OCR comme référence de programme/niveau (`source="gemini"`).
 Toute autre source lève une erreur claire — pas de repli silencieux sur du
-contenu inventé hors pipeline assumée (la génération DeepSeek/MathALÉA et
+contenu inventé hors pipeline assumée (la génération DeepSeek et
 celle des anciens contenus de cours a été retirée le 16/07).
 
 Ce qui vit ici, et que les deux pipelines partagent SANS jamais le réécrire :

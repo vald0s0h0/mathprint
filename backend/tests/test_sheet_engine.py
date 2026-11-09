@@ -70,16 +70,15 @@ def test_pack_best_never_overfills_a_column_and_respects_the_pages():
             assert sum(heights[i] for i in col) <= _cap(b) + 1e-6
 
 
-def test_recto_and_verso_have_their_own_column_height():
-    # deux de ces cartes tiennent dans une colonne du recto, pas dans celle du verso
-    assert _cap(0) > _cap(2)
+def test_recto_and_verso_have_the_same_column_height():
+    # la bande haute fait un fiduciel sur toutes les pages : recto et verso ont la
+    # même hauteur de colonne (la 1re page ne perd plus la hauteur de l'en-tête)
+    assert _cap(0) == _cap(1) == _cap(2) == _cap(3)
     half = _cap(0) / 2 - 0.1
-    assert 2 * half > _cap(2)
     assert sheet_engine.pack_best([half] * 4, [1] * 4, 1) is not None
     assert sheet_engine.pack_best([half] * 5, [1] * 5, 1) is None
-    # 2 + 2 au recto, puis 1 + 1 au verso
-    assert sheet_engine.pack_best([half] * 6, [1] * 6, 2) is not None
-    assert sheet_engine.pack_best([half] * 7, [1] * 7, 2) is None
+    assert sheet_engine.pack_best([half] * 8, [1] * 8, 2) is not None
+    assert sheet_engine.pack_best([half] * 9, [1] * 9, 2) is None
 
 
 def test_a_card_taller_than_a_full_column_never_fits():
@@ -99,7 +98,7 @@ def test_tolerance_lets_one_harder_card_fill_a_hole():
     # le dernier « facile » est trop haut pour le reste de la colonne : une carte
     # moyenne comble le trou, et se lit donc une carte plus tôt que son niveau
     cap = _cap(0)
-    heights = [cap * 0.8, cap * 0.8, cap * 0.2, _cap(2) * 0.9, _cap(2) * 0.9]
+    heights = [cap * 0.8, cap * 0.8, cap * 0.15, _cap(2) * 0.9, _cap(2) * 0.9]
     tiers = [1, 1, 2, 2, 2]
     columns = sheet_engine._pack_by_slack(heights, tiers, 4)
     assert columns is not None

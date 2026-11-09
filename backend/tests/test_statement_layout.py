@@ -323,7 +323,7 @@ def test_an_old_bank_exercise_is_laid_out_at_render_time():
 
 
 def test_legacy_single_line_statements_are_untouched_by_the_line_rules():
-    """Les générateurs builtin (MathALÉA) écrivent d'un seul tenant : leur
+    """Les générateurs builtin écrivent d'un seul tenant : leur
     rendu ne doit pas changer d'un pouce."""
     assert pdfgen._legacy_to_tagged("Calculer : 3/4 + 5/6 = ?") \
         == "Calculer : $\\dfrac{3}{4} + \\dfrac{5}{6}$"

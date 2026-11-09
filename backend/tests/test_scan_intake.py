@@ -20,7 +20,7 @@ from app.config import settings
 from app.models import (Assessment, Copy, DocumentPage, FileObject, ScanBatch,
                         ScannedPage, SchoolClass, Student)
 from app.services import pdfgen, sandbox, scan_intake, worker_cv
-from app.services.security import sign_page
+from app.services.security import is_code_payload, sign_page
 
 
 @pytest.fixture
@@ -75,34 +75,39 @@ def _patch_classify(monkeypatch, db, pages):
 
 def _marked_pdf(payload: str) -> bytes:
     """Une vraie page Kiro & Nina, telle qu'elle arrive dans « Déposer en vrac ».
-    Le test passe ensuite par raster_pdf + OpenCV, sans simuler le QR."""
+    Le test passe ensuite par raster_pdf + vision, sans simuler le code."""
     from reportlab.pdfgen import canvas
 
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=(pdfgen.PAGE_W, pdfgen.PAGE_H))
-    pdfgen._draw_markers(c, payload)
-    pdfgen._draw_header(c, "MARTIN Alex", "5A", "Contrôle 1", "control", "10/08/2026")
+    # un code à 20 chiffres -> mise en page actuelle (DataMatrix) ; un ancien payload
+    # (MP1 / M2) -> marqueurs des copies déjà imprimées (QR de 24 mm)
+    if is_code_payload(payload):
+        pdfgen._draw_markers(c, payload)
+        pdfgen._draw_header(c, "MARTIN Alex", "5A", "Contrôle 1", "control", "10/08/2026")
+    else:                      # le nouvel en-tête déborderait sur l'ancien QR : marqueurs seuls
+        pdfgen._draw_markers_v1(c, payload)
     c.showPage()
     c.save()
     return buf.getvalue()
 
 
-@pytest.mark.parametrize("qr_version", ["compact_m2", "legacy_mp1"])
+@pytest.mark.parametrize("qr_version", ["code_dm", "legacy_mp1"])
 def test_bulk_upload_recognizes_signed_pages_end_to_end(
         mock_db, tmp_path, monkeypatch, qr_version):
     """Génération -> PDF -> raster -> QR OpenCV -> HMAC -> DocumentPage ->
-    regroupement du dépôt en vrac. Couvre M2 et les copies MP1 déjà imprimées."""
+    regroupement du dépôt en vrac. Couvre le DataMatrix actuel et les copies MP1 déjà imprimées (QR)."""
     db = mock_db
     assessment, pages = _seed(db)
     page_id = pages[1]
-    if qr_version == "compact_m2":
+    if qr_version == "code_dm":
         payload = sign_page(page_id)
     else:
         sig = hmac.new(settings.hmac_key.encode(), page_id.encode(), hashlib.sha256).hexdigest()[:16]
         payload = f"MP1|{page_id}|{sig}"
     page = db.get(DocumentPage, page_id)
     page.qr_payload = payload
-    page.hmac_version = "2" if qr_version == "compact_m2" else "1"
+    page.hmac_version = "3" if qr_version == "code_dm" else "1"
     db.commit()
 
     monkeypatch.setattr(scan_intake.settings, "data_dir", tmp_path)

@@ -30,8 +30,8 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..models import (
-    Assessment, Competency, Copy, CopyItem, DocumentPage, FileObject, Job,
-    ResponseZone, SchoolClass, StudentLevel,
+    Assessment, ClassTeaching, Competency, Copy, CopyItem, DocumentPage, FileObject, Job,
+    ResponseZone, School, SchoolClass, StudentLevel, Subject, TeacherProfile,
 )
 from . import blocks, distribution, draw_rules, error_journal, exercise_gen, scoring, student_history
 from . import statement as statement_mod
@@ -40,6 +40,28 @@ from .runtime_settings import doc_templates
 from .security import sign_page
 
 logger = logging.getLogger(__name__)
+
+
+def header_info(db: Session, assessment: Assessment, school_class: SchoolClass) -> dict | None:
+    """Professeur · matière · établissement imprimés dans l'en-tête d'un professeur
+    ACCOMPAGNÉ (jamais d'un autonome : il n'a ni établissement ni affectation). Le
+    nom de l'établissement est imprimé sans sa ville, qui n'est de toute façon
+    pas dans son nom. None si rien à afficher."""
+    teacher = (db.get(TeacherProfile, assessment.teacher_profile_id)
+               if assessment.teacher_profile_id else None)
+    if teacher is None:
+        teaching = (db.query(ClassTeaching)
+                    .filter_by(class_id=school_class.id, subject_id=assessment.subject_id or "math")
+                    .first())
+        teacher = db.get(TeacherProfile, teaching.teacher_id) if teaching else None
+    if teacher is None or teacher.service_mode != "accompanied":
+        return None
+    school = db.get(School, school_class.school_id) if school_class.school_id else None
+    subject = db.get(Subject, assessment.subject_id or "math")
+    info = {"prof": (teacher.name or "").strip(),
+            "matiere": (subject.name if subject else "").strip(),
+            "ecole": (school.name if school else "").strip()}
+    return info if any(info.values()) else None
 
 
 def assessment_dir(assessment_id: str) -> Path:
@@ -274,7 +296,7 @@ def generate_assessment_job(db: Session, assessment: Assessment,
     # problèmes à part (option). Sans ce mode : sujets historiques, inchangés.
     auto_mode = blueprint.get("mode") == "auto"
     # source des exercices choisie dans l'assistant (§ Sésamaths) : "auto"
-    # préserve le comportement historique (MathALÉA + DeepSeek), inchangé
+    # préserve le comportement historique (DeepSeek), inchangé
     # par défaut pour tout sujet existant sans ce champ
     exercise_source = blueprint.get("exercise_source", "auto")
     # guides (encadrés « {{aide}} ») inclus ou retirés pour tout le sujet —
@@ -850,7 +872,7 @@ def generate_assessment_job(db: Session, assessment: Assessment,
             db.add(page)
             db.flush()
             page.qr_payload = sign_page(page.id)
-            page.hmac_version = "2"
+            page.hmac_version = "3"
             pages_meta.append({"page_id": page.id, "payload": page.qr_payload})
             page_rows.append(page)
 
@@ -859,7 +881,8 @@ def generate_assessment_job(db: Session, assessment: Assessment,
             class_name=school_class.name, title=assessment.title,
             assessment_type=assessment.type, items=render_items,
             pages_meta=pages_meta, font_size=font_size, tpl=tpl,
-            placement=placement, dyslexic=student.dyslexic)
+            placement=placement, dyslexic=student.dyslexic,
+            header_info=header_info(db, assessment, school_class))
 
         used_pages = max((z["page_index"] for z in zones), default=0) + 1
         if used_pages > max_pages + PAGE_RESERVE:

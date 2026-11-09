@@ -82,9 +82,9 @@ def page_assessment(db: Session, page_id: str) -> str | None:
 
 def detect_assessment(db: Session, images: "Iterable[np.ndarray]") -> str | None:
     """Identifie le sujet depuis le QR signé de la première page reconnue : le
-    QR suffit, aucun choix manuel d'évaluation n'est nécessaire au dépôt (§5.3)."""
+    code de page (DataMatrix, ou QR sur les anciennes copies) suffit, aucun choix manuel d'évaluation n'est nécessaire au dépôt (§5.3)."""
     for img in images:
-        for text, _quad in worker_cv._detect_qrcodes(img):
+        for text, _quad in worker_cv._detect_page_codes(img):
             page_id = verify_page_payload(text)
             if not page_id:
                 continue

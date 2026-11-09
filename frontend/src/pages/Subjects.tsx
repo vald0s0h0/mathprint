@@ -324,7 +324,7 @@ export default function Subjects() {
           </Text>
           <Text size="xs" c="dimmed">
             Le sujet, ses copies et ses PDF disparaissent. Des copies déjà imprimées ne
-            pourront plus être corrigées : leur QR ne renverra plus vers aucun sujet.
+            pourront plus être corrigées : leur code de page ne renverra plus vers aucun sujet.
           </Text>
           <Group justify="flex-end">
             <Button variant="subtle" onClick={() => setDeleteTarget(null)}>Annuler</Button>

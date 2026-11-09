@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 # Filet de sécurité au-dessus de settings.llm_call_timeout_s : ce dernier ne
 # protège qu'un appel LLM individuel, pas un blocage ailleurs (verrou DB,
-# appel réseau sans garde-fou type MathALéA/PDF). On exécute la génération
+# appel réseau sans garde-fou type génération PDF). On exécute la génération
 # dans ce pool avec un délai TOTAL ; au-delà, le job est marqué en échec et
 # le thread abandonné termine seul (même logique que providers._HTTP_POOL).
 _GENERATION_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="job-generation")

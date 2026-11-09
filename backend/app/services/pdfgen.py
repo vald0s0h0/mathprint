@@ -43,9 +43,10 @@ from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfbase.ttfonts import TTFont
 
 from ..config import settings
-from . import blocks, construction, exercise_gen, handwriting, scoring
+from . import blocks, construction, datamatrix, exercise_gen, handwriting, scoring
 from . import statement as statement_mod
 from .runtime_settings import DEFAULT_TEMPLATES
+from .security import is_code_page_id, printable_code
 
 _FONT_DIR = Path(__file__).resolve().parent.parent / "assets" / "fonts"
 _DYSLEXIC_FONTS = {
@@ -85,9 +86,11 @@ QR_MINI = 11 * mm
 COL_GAP = 5 * mm
 
 # fiduciels de placement (§5.4) : un type de tag AprilTag par coin, jamais
-# réinterprété comme identité — seul le QR principal porte le page_id signé.
+# réinterprété comme identité — seul le code de page (DataMatrix, ou QR sur les
+# anciennes copies) porte le page_id signé. Les copies imprimées avant l'ajout
+# du coin haut-droit n'ont que TL/BL/BR : la vision s'en accommode.
 FIDUCIAL_DICT = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_APRILTAG_16h5)
-FIDUCIAL_IDS = {"TL": 0, "BL": 1, "BR": 2}
+FIDUCIAL_IDS = {"TL": 0, "BL": 1, "BR": 2, "TR": 3}
 
 DROPOUT = HexColor(settings.dropout_color)      # rouge saumon clair — élève
 CARD_BORDER = HexColor("#C7CDD4")
@@ -141,18 +144,24 @@ def _exercise_badge_color(level3: int, probleme: bool) -> Color:
     exercice ordinaire, graduée par difficulté (3 niveaux) pour un problème."""
     return _probleme_color(level3) if probleme else EXERCISE_BADGE
 
-CARD_PAD = 2.6 * mm
+CARD_PAD = 2.6 * mm     # marge HORIZONTALE : fixe la largeur du texte, donc les coupes de lignes
+# Marges VERTICALES de la carte. Elles ne touchent ni la largeur du texte ni le
+# corps de police : les coupes de lignes de chaque carte restent identiques, seul
+# le blanc autour du contenu se resserre (cf. docs/mise-en-page-sujets.md).
+CARD_PAD_T = 1.8 * mm   # haut de la carte
+CARD_PAD_M = 1.4 * mm   # entre l'énoncé et la zone de réponse (blanc sous un composite)
+CARD_PAD_B = 1.6 * mm   # bas de la carte
 # Bande de correction (réservée à l'overlay) : sa hauteur n'est plus figée, elle
 # est ANTICIPÉE sur le TEXTE du corrigé de la banque (_correction_strip_layout)
 # pour que l'overlay puisse l'imprimer en entier, jamais coupé. STRIP_MIN_H est
 # le plancher (exercice sans corrigé, ou corrigé tenant sur une ligne courte).
-STRIP_MIN_H = 6.5 * mm
-STRIP_GAP = 0.4 * mm    # espace blanc visible entre la carte et sa bande de correction (rapproché)
+STRIP_MIN_H = 5.5 * mm
+STRIP_GAP = 0.3 * mm    # espace blanc visible entre la carte et sa bande de correction (rapproché)
 # marge HAUTE fine (le corrigé colle à SA carte) et marge BASSE plus large (nette
 # séparation d'avec la carte suivante) : le corrigé ne peut plus se confondre avec
 # l'exercice du dessous. La marge basse effective = STRIP_PAD_BOT + GAP inter-carte.
 STRIP_PAD_TOP = 0.8 * mm
-STRIP_PAD_BOT = 2.2 * mm
+STRIP_PAD_BOT = 1.6 * mm
 STRIP_NOTE_W = 17 * mm  # réserve droite pour la note de barème (imprimée en gros/gras)
 CORR_FS_DELTA = 1.0     # le corrigé s'imprime un cran plus petit que l'énoncé
 FEEDBACK_MAX_LINES = 4  # une carte ne réserve jamais plus de 4 lignes de micro-correction
@@ -175,9 +184,26 @@ MATH_OVERHANG = 0.15
 GUIDES_INCLUDE = "include"
 GUIDES_NONE = "none"
 RADIUS = 2.2 * mm
-GAP = 3.5 * mm          # espace vertical entre deux cartes
+GAP = 1.8 * mm          # espace vertical entre deux cartes
 COL_W = (PAGE_W - 2 * MARGIN - COL_GAP) / 2
 
+# Deux mises en page cohabitent :
+#   v1 — copies déjà imprimées : QR de 24 mm en haut à droite, bande d'en-tête de
+#        24 mm (Note | Appréciation | Identité | QR), 3 fiduciels TL/BL/BR ;
+#   v3 — copies actuelles (identifiant de page à 12 chiffres) : 4 fiduciels de
+#        coin, DataMatrix de 8 rangées en bas à gauche, bande d'en-tête de 11 mm.
+# L'overlay de correction rejoue la géométrie de la mise en page de CHAQUE page
+# (cf. layout_of_page) : une copie imprimée en v1 se corrige toujours en v1.
+LAYOUT_V1 = "v1"
+LAYOUT_V3 = "v3"
+
+
+def layout_of_page(page_id: str | None) -> str:
+    """Mise en page d'une page imprimée, déduite de son identifiant."""
+    return LAYOUT_V3 if is_code_page_id(page_id) else LAYOUT_V1
+
+
+# --- v1 : bande de 24 mm réglée sur le QR --------------------------------
 # En-tête en 4 zones horizontales, pleine hauteur, séparées par une gouttière
 # (jamais contiguës : c'est le chevauchement identité/appréciation qu'on
 # corrige) : Note (contrôle seul) | Appréciation (élastique) | Identité+méta
@@ -197,10 +223,7 @@ QR_ZONE_W = QR_MAIN
 HEADER_LEFT = MARGIN + QR_MINI + 4 * mm
 
 
-def header_geometry(assessment_type: str) -> dict:
-    """Rects (x, y, w, h) des 4 zones de l'en-tête, partagés entre le sujet
-    (_draw_header) et l'overlay de correction (render_overlay) pour rester
-    alignés physiquement (recalage par fiduciels)."""
+def _header_geometry_v1(assessment_type: str) -> dict:
     top = PAGE_H - MARGIN
     bottom = top - HEADER_H
     h = HEADER_H
@@ -216,6 +239,57 @@ def header_geometry(assessment_type: str) -> dict:
         "appreciation": {"x": appreciation_x, "y": bottom, "w": appreciation_w, "h": h},
         "meta": {"x": meta_x, "y": bottom, "w": META_W, "h": h},
         "qr": {"x": qr_x, "y": bottom, "w": QR_ZONE_W, "h": h},
+    }
+
+
+# --- v3 : bande de 11 mm, code en bas à gauche ----------------------------
+BAND_H = QR_MINI                       # bande d'identité : la hauteur d'un fiduciel
+# L'image d'un fiduciel porte une marge blanche (cf. _fiducial_image : 40 px sur 320) ;
+# seul son carré NOIR compte à l'œil. Le DataMatrix s'aligne sur ce noir.
+FID_INSET = QR_MINI * (40 / 320)       # 1,375 mm de blanc de chaque côté
+FID_BLACK = QR_MINI - 2 * FID_INSET    # 8,25 mm : hauteur du carré noir
+DM_ROWS = 8                            # 8 carrés sur la hauteur : lisibilité maximale
+DM_COLS = 32                           # 20 chiffres (DataMatrix 8×32)
+DM_MOD = FID_BLACK / DM_ROWS           # 1,03 mm par module
+DM_W = DM_COLS * DM_MOD                # 33 mm
+# en bas à GAUCHE, contre le fiduciel BL : loin de la manche d'un élève droitier
+DM_X = MARGIN + QR_MINI - FID_INSET + 3 * mm
+DM_Y = MARGIN + FID_INSET
+TR_X = PAGE_W - MARGIN - QR_MINI       # fiduciel haut-droit
+NOTE_W_V3 = 24 * mm
+CLASS_W = 22 * mm                      # zone classe : largeur FIXE (l'overlay ne connaît pas le nom)
+LABEL_W = 56 * mm                      # « Correction — Nom » et « total brut → note »
+DATE_RIGHT = TR_X - 3 * mm             # la date : bas de page, à droite, contre le fiduciel BR
+BOTTOM_NOTE_RIGHT = DATE_RIGHT - 23 * mm   # l'appréciation s'arrête avant la date
+
+
+def header_geometry(assessment_type: str, layout: str = LAYOUT_V3) -> dict:
+    """Rects (x, y, w, h) de l'en-tête, partagés entre le sujet (_draw_header)
+    et l'overlay de correction pour rester alignés physiquement (recalage par
+    fiduciels). v3 : note | identité | libellé de correction | classe, et la
+    zone d'appréciation dans la bande du bas, entre le code et la date."""
+    if layout == LAYOUT_V1:
+        return _header_geometry_v1(assessment_type)
+    top = PAGE_H - MARGIN
+    show_note = assessment_type == "control"
+    note_x = HEADER_LEFT
+    note_w = NOTE_W_V3 if show_note else 0.0
+    id_x = note_x + (note_w + HEADER_GAP if show_note else 0.0)
+    id_end = TR_X - 4 * mm
+    cls_x = id_end - CLASS_W
+    xe = cls_x - HEADER_GAP
+    return {
+        "note": {"x": note_x, "y": top - BAND_H, "w": note_w, "h": BAND_H, "visible": show_note},
+        "meta": {"x": id_x, "y": top - BAND_H, "w": xe - id_x, "h": BAND_H},
+        "klass": {"x": cls_x, "y": top - BAND_H, "w": CLASS_W, "h": BAND_H},
+        # « Correction — Nom » : sur la ligne du nom, aligné à droite
+        "label": {"x": xe - LABEL_W, "baseline": top - 9.4, "w": LABEL_W},
+        # « 15 / 30 → 10 / 20 » : juste dessous, sur la ligne du titre
+        "raw": {"x": xe - LABEL_W, "baseline": top - 18.6, "w": LABEL_W},
+        # pages suivantes : même libellé, à droite de la ligne de rappel
+        "label_run": {"x": xe - LABEL_W, "baseline": top - 8.5, "w": LABEL_W},
+        "appreciation": {"x": DM_X + DM_W + 5 * mm, "y": DM_Y, "w": BOTTOM_NOTE_RIGHT - (DM_X + DM_W + 5 * mm),
+                         "h": FID_BLACK},
     }
 
 
@@ -236,9 +310,30 @@ def _fiducial_image(tag_id: int, side_px: int = 240, quiet_px: int = 40) -> Imag
     return ImageReader(io.BytesIO(buf.tobytes()))
 
 
-def _draw_markers(c: canvas.Canvas, page_payload: str):
-    """QR principal unique (identité + HMAC, haut droit) + 3 fiduciels AprilTag
-    de placement TL/BL/BR, un type par coin (§5.4). FIGÉ."""
+def _draw_datamatrix(c: canvas.Canvas, x: float, y: float, digits: str) -> None:
+    """DataMatrix vectoriel (modules noirs fusionnés par rangée), coin bas-gauche en (x, y)."""
+    matrix = datamatrix.encode_digits(digits)
+    rows = len(matrix)
+    c.setFillColor(black)
+    for r, row in enumerate(matrix):
+        y0 = y + (rows - 1 - r) * DM_MOD
+        k = 0
+        while k < len(row):
+            if row[k]:
+                j = k
+                while j < len(row) and row[j]:
+                    j += 1
+                # léger recouvrement : aucun filet blanc entre modules voisins à l'écran
+                c.rect(x + k * DM_MOD, y0 - 0.03, (j - k) * DM_MOD + 0.03, DM_MOD + 0.06, stroke=0, fill=1)
+                k = j
+            else:
+                k += 1
+
+
+def _draw_markers_v1(c: canvas.Canvas, page_payload: str):
+    """Marqueurs des copies imprimées en v1 : QR principal signé de 24 mm (haut droit)
+    + 3 fiduciels TL/BL/BR. Plus utilisé à l'impression ; conservé pour relire
+    et tester les copies déjà imprimées."""
     c.drawImage(_qr_image(page_payload), PAGE_W - MARGIN - QR_MAIN, PAGE_H - MARGIN - QR_MAIN,
                 QR_MAIN, QR_MAIN)
     for role, (x, y) in {
@@ -247,6 +342,19 @@ def _draw_markers(c: canvas.Canvas, page_payload: str):
         "BR": (PAGE_W - MARGIN - QR_MINI, MARGIN),
     }.items():
         c.drawImage(_fiducial_image(FIDUCIAL_IDS[role]), x, y, QR_MINI, QR_MINI)
+
+
+def _draw_markers(c: canvas.Canvas, page_payload: str):
+    """4 fiduciels AprilTag de coin (placement, un type par coin, §5.4) + code de
+    page DataMatrix (identité + clé de contrôle, bas gauche). FIGÉ."""
+    for role, (x, y) in {
+        "TL": (MARGIN, PAGE_H - MARGIN - QR_MINI),
+        "TR": (TR_X, PAGE_H - MARGIN - QR_MINI),
+        "BL": (MARGIN, MARGIN),
+        "BR": (PAGE_W - MARGIN - QR_MINI, MARGIN),
+    }.items():
+        c.drawImage(_fiducial_image(FIDUCIAL_IDS[role]), x, y, QR_MINI, QR_MINI)
+    _draw_datamatrix(c, DM_X, DM_Y, printable_code(page_payload))
 
 
 BADGE_GAP = 1.8 * mm    # blanc entre le badge et le début de l'énoncé
@@ -309,87 +417,86 @@ def _fit_size(text: str, font: str, max_w: float, start: float,
     return size
 
 
+def header_info_line(info: dict | None) -> str:
+    """« prof · matière · établissement » (professeur accompagné), sans ville."""
+    if not info:
+        return ""
+    return " · ".join(v for v in (info.get("prof"), info.get("matiere"), info.get("ecole")) if v)
+
+
 def _draw_header(c: canvas.Canvas, student_name: str, class_name: str, title: str,
-                 assessment_type: str, the_date: str, tpl: dict | None = None):
-    """Bande compacte, réglée par le carré QR : Note | Appréciation |
-    identité | QR. La classe est un filigrane pleine hauteur dans la zone
-    d'identité ; les informations utiles restent au premier plan."""
+                 assessment_type: str, the_date: str, tpl: dict | None = None,
+                 info: dict | None = None):
+    """Bande de 11 mm (la hauteur d'un fiduciel) : case Note vide en pointillés
+    (contrôle) | élève, titre, professeur · matière · établissement | classe en
+    grand. La date est au bas de la page (cf. _draw_page_date). Le libellé
+    « Correction — Nom » et la note ne sont imprimés que par l'overlay, dans les
+    zones réservées de header_geometry()."""
     tpl = tpl or DEFAULT_TEMPLATES["header"]
     accent = HexColor(tpl.get("accent", "#37474F"))
-    y_top = PAGE_H - MARGIN
-    header_bottom = y_top - HEADER_H
-    label = "Contrôle" if assessment_type == "control" else "Entraînement"
     geo = header_geometry(assessment_type)
-    band_bottom = header_bottom + HEADER_PAD_V
-    band_h = HEADER_H - 2 * HEADER_PAD_V
-
-    # --- zone Note (contrôle uniquement) ---
+    top = PAGE_H - MARGIN
     if geo["note"]["visible"]:
-        nx, nw = geo["note"]["x"], geo["note"]["w"]
+        g = geo["note"]
         _dotted(c)
-        c.roundRect(nx, band_bottom, nw, band_h, 2 * mm)
+        c.roundRect(g["x"], g["y"], g["w"], g["h"], 2 * mm)
         _solid(c)
-        c.setFillColor(DOTTED_GRAY)
-        c.setFont(_font(), _subject_font_size(6.5))
-        c.drawCentredString(nx + nw / 2, band_bottom + band_h - HEADER_LABEL_DY, "NOTE")
-        c.setFillColor(black)
 
-    # --- zone Appréciation (absorbe la largeur de la Note en entraînement) ---
-    ax, aw = geo["appreciation"]["x"], geo["appreciation"]["w"]
-    _dotted(c)
-    c.roundRect(ax, band_bottom, aw, band_h, 2 * mm)
-    _solid(c)
-    c.setFillColor(DOTTED_GRAY)
-    c.setFont(_font(), _subject_font_size(6.5))
-    c.drawString(ax + 2.5 * mm, band_bottom + band_h - HEADER_LABEL_DY,
-                 "APPRÉCIATION — remplie à la correction")
-    c.setFillColor(black)
+    k = geo["klass"]
+    cls = _pdf_safe(class_name)
+    cfs = _fit_size(cls, _font("bold"), k["w"], _subject_font_size(22), _subject_font_size(11))
+    c.setFillColor(HexColor("#37474F"))
+    c.setFont(_font("bold"), cfs)
+    c.drawRightString(k["x"] + k["w"], k["y"] + (k["h"] - cfs * 0.718) / 2, cls)
 
-    # --- zone Identité + méta : classe en filigrane, contenu au premier plan ---
-    mx, my, mw, mh = (geo["meta"][k] for k in ("x", "y", "w", "h"))
-    c.saveState()
-    clip = c.beginPath()
-    clip.rect(mx, my, mw, mh)
-    c.clipPath(clip, stroke=0, fill=0)
-
-    class_text = _pdf_safe(class_name)
-    class_fs = _fit_size(class_text, _font("bold"), mw - 1.5 * mm,
-                         _subject_font_size(90), _subject_font_size(34))
-    # Helvetica-Bold a une hauteur de capitale proche de 0,72 em : cette base
-    # centre visuellement le filigrane et lui donne presque les 24 mm du QR.
-    class_base = my + (mh - class_fs * 0.718) / 2
-    c.setFillColor(HexColor("#BEBEBE"))
-    c.setFont(_font("bold"), class_fs)
-    c.drawCentredString(mx + mw / 2, class_base, class_text)
-
+    m = geo["meta"]
+    x0, x1 = m["x"] + 0.5 * mm, m["x"] + m["w"]
     name = _pdf_safe(student_name)
-    name_fs = _fit_size(name, _font("bold"), mw - 4 * mm,
-                        _subject_font_size(float(tpl.get("name_size", 14))),
-                        _subject_font_size(8.0))
+    nfs = _fit_size(name, _font("bold"), (x1 - x0) - LABEL_W - HEADER_GAP,
+                    _subject_font_size(min(13.0, float(tpl.get("name_size", 13)))),
+                    _subject_font_size(8.0))
     c.setFillColor(black)
-    c.setFont(_font("bold"), name_fs)
-    c.drawCentredString(mx + mw / 2, my + mh - 6.0 * mm, name)
-
+    c.setFont(_font("bold"), nfs)
+    c.drawString(x0, top - 9.4, name)
     if title:
-        title_text = _pdf_safe(title)
-        title_fs = _fit_size(title_text, _font("bold"), mw - 4 * mm,
-                             _subject_font_size(float(tpl.get("title_size", 8))),
-                             _subject_font_size(5.5))
+        t = _pdf_safe(title)
+        tfs = _fit_size(t, _font("bold"), x1 - x0,
+                        _subject_font_size(min(7.8, float(tpl.get("title_size", 8)))),
+                        _subject_font_size(5.5))
         c.setFillColor(accent)
-        c.setFont(_font("bold"), title_fs)
-        c.drawCentredString(mx + mw / 2, my + 7.0 * mm, title_text)
-    if tpl.get("show_date", True):
-        meta_fs = _subject_font_size(max(5.5, float(tpl.get("title_size", 8)) - 1.5))
-        meta_text = _pdf_safe(f"{label}  ·  {the_date}")
-        meta_fs = _fit_size(meta_text, _font(), mw - 4 * mm, meta_fs,
-                            _subject_font_size(5.0))
-        c.setFillColor(HexColor("#6A737C"))
-        c.setFont(_font(), meta_fs)
-        c.drawCentredString(mx + mw / 2, my + 2.0 * mm, meta_text)
-    c.restoreState()
+        c.setFont(_font("bold"), tfs)
+        c.drawString(x0, top - 18.6, t)
+    line = header_info_line(info)
+    if line:
+        t = _pdf_safe(line)
+        ifs = _fit_size(t, _font(), x1 - x0, _subject_font_size(7.2), _subject_font_size(5.0))
+        c.setFillColor(HexColor("#263238"))
+        c.setFont(_font(), ifs)
+        c.drawString(x0, top - 27.4, t)
+    c.setFillColor(black)
 
-    # Aucun filet inférieur : la bande compacte et ses gouttières suffisent à
-    # séparer l'identité des cartes d'exercices.
+
+def _draw_page_date(c: canvas.Canvas, the_date: str, tpl: dict | None = None) -> None:
+    """Date du sujet, bas de page à droite (entre le code et le fiduciel BR)."""
+    if not (tpl or DEFAULT_TEMPLATES["header"]).get("show_date", True):
+        return
+    c.setFont(_font(), _subject_font_size(9))
+    c.setFillColor(HexColor("#4E5860"))
+    c.drawRightString(DATE_RIGHT, DM_Y + (FID_BLACK - 9 * 0.72) / 2, _pdf_safe(the_date))
+    c.setFillColor(black)
+
+
+def _draw_running_line(c: canvas.Canvas, student_name: str, class_name: str, title: str,
+                       page_no: int) -> None:
+    """Pages suivantes : une ligne de rappel (élève · classe · titre — page n) dans
+    la bande haute, pour qu'une feuille égarée se rattache à sa copie."""
+    x = MARGIN + QR_MINI + 4 * mm
+    end = header_geometry("control")["label_run"]["x"] - 3 * mm
+    text = _pdf_safe(f"{student_name} · {class_name} · {title}  —  page {page_no}")
+    fs = _fit_size(text, _font(), end - x, _subject_font_size(7.0), _subject_font_size(5.0))
+    c.setFont(_font(), fs)
+    c.setFillColor(HexColor("#6A737C"))
+    c.drawString(x, PAGE_H - MARGIN - 6.0 * mm, text)
     c.setFillColor(black)
 
 
@@ -806,8 +913,8 @@ GUIDE_BOX_RULE = Color(0.894, 0.706, 0.176)      # ambre
 GUIDE_BOX_TEXT = Color(0.30, 0.23, 0.02)
 GUIDE_ICON_W = 5.2 * mm
 _GUIDE_PAD_X = 1.6 * mm
-_GUIDE_PAD_Y = 1.1 * mm
-_GUIDE_GAP = 1.0 * mm                            # au-dessus ET en dessous de l'encadré
+_GUIDE_PAD_Y = 0.8 * mm
+_GUIDE_GAP = 0.5 * mm                            # au-dessus ET en dessous de l'encadré
 
 
 def _guide_entry(block: "blocks.Block", avail: float, fs: float,
@@ -1115,10 +1222,37 @@ def _centered_top(lay: dict, cy: float) -> float:
     return cy + lay["height"] / 2
 
 
+def _tinted(img: ImageReader, color) -> ImageReader:
+    """Copie de l'image d'une formule recolorée à `color`.
+
+    Les formules sont des PNG noirs sur fond transparent : `drawImage` ignore la
+    couleur de remplissage, si bien qu'une correction rouge portait des formules
+    noires. On garde la forme (canal alpha, ou luminance inversée si le fond est
+    opaque) et on remplace seulement la teinte. Aucune mesure ne change."""
+    from PIL import Image, ImageOps
+    pil = getattr(img, "_image", None)
+    if pil is None:
+        return img
+    try:
+        rgba = pil.convert("RGBA")
+        alpha = rgba.getchannel("A")
+        if alpha.getextrema()[0] == 255:          # fond opaque : l'encre est ce qui est sombre
+            alpha = ImageOps.invert(pil.convert("L"))
+        tinted = Image.new("RGBA", rgba.size, (round(color.red * 255), round(color.green * 255),
+                                              round(color.blue * 255), 0))
+        tinted.putalpha(alpha)
+        buf = io.BytesIO()
+        tinted.save(buf, format="PNG")
+        buf.seek(0)
+        return ImageReader(buf)
+    except Exception:
+        return img
+
+
 def _draw_rich(c: canvas.Canvas, x: float, y_top: float, layout: dict,
                color=black, centered: bool = False, width: float | None = None,
                font: str | None = None, blanks: list | None = None,
-               right_aligned: bool = False) -> float:
+               right_aligned: bool = False, tint: bool = False) -> float:
     """Dessine un layout _rich_layout. Retourne le y sous la dernière ligne.
     `blanks`, si fourni, reçoit la géométrie PDF absolue (x_pt/y_pt/w_pt/h_pt)
     de chaque case de réponse courte insérée en ligne (BLANK_TOKEN), dans
@@ -1129,8 +1263,12 @@ def _draw_rich(c: canvas.Canvas, x: float, y_top: float, layout: dict,
     (line["fs"]), posé par _rich_layout au moment de la mesure. Redonner ici une
     taille, c'était offrir de dessiner à un corps différent de celui qui a servi
     à mesurer — l'écart classique entre « ce qu'on croit faire tenir » et « ce
-    qui tient » (cf. pages_needed)."""
+    qui tient » (cf. pages_needed).
+
+    `tint` : recolore aussi les formules (images) à `color` — pour les retours de
+    correction imprimés en rouge ; le sujet, lui, garde ses formules noires."""
     font_forced = font is not None
+    tint = tint and (color.red, color.green, color.blue) != (0, 0, 0)
     font = font or _font()
     y = y_top
     for line in layout["lines"]:
@@ -1181,8 +1319,8 @@ def _draw_rich(c: canvas.Canvas, x: float, y_top: float, layout: dict,
                 cx += w
             else:
                 _, img, w, h, d, _glue = seg
-                c.drawImage(img, cx, y_base - d, width=w, height=h,
-                            mask="auto", preserveAspectRatio=True)
+                c.drawImage(_tinted(img, color) if tint else img, cx, y_base - d,
+                            width=w, height=h, mask="auto", preserveAspectRatio=True)
                 cx += w
         y -= line["h"]
     return y
@@ -2743,7 +2881,7 @@ def _exercise_card_h(layout: dict, zone_h: float, strip_h: float,
     l'énoncé (layout["intro"], dimensionnée par _badge_min_asc), et la hauteur
     d'en-tête qu'elle coûtait est rendue au contenu. `strip_h` est la hauteur de
     la bande corrigé, anticipée sur son texte (_correction_strip_layout)."""
-    return layout["height"] + zone_h + strip_h + STRIP_GAP + 3 * CARD_PAD
+    return layout["height"] + zone_h + strip_h + STRIP_GAP + (CARD_PAD_T + CARD_PAD_M + CARD_PAD_B)
 
 
 
@@ -2836,7 +2974,7 @@ def _draw_exercise_card(c: canvas.Canvas, x: float, y_top: float, w: float,
     # figure paramétrée éventuelle ; `blanks` récupère la géométrie d'une
     # éventuelle case de réponse courte insérée en ligne (short_text inline).
     # Le badge numéroté occupe le retrait réservé en tête de 1re ligne.
-    ty = card_bottom + card_h_body - CARD_PAD
+    ty = card_bottom + card_h_body - CARD_PAD_T
     inline_blanks: list = []
     badge_color = _exercise_badge_color(level3, probleme)
     first = layout["intro"]["lines"][0] if layout["intro"]["lines"] else None
@@ -2850,10 +2988,10 @@ def _draw_exercise_card(c: canvas.Canvas, x: float, y_top: float, w: float,
     # dédiée sous le texte
     guide_lay = layout.get("guides") or {"height": 0, "lines": []}
     if layout.get("guides_before_answer"):
-        zone_y = card_bottom + CARD_PAD
+        zone_y = card_bottom + CARD_PAD_B
         _draw_rich(c, x + CARD_PAD, zone_y + zone_h + guide_lay["height"], guide_lay)
     else:
-        zone_y = card_bottom + CARD_PAD + guide_lay["height"]
+        zone_y = card_bottom + CARD_PAD_B + guide_lay["height"]
         _draw_rich(c, x + CARD_PAD, zone_y, guide_lay)
     if response_type == "short_text" and inline_blanks:
         b = inline_blanks[0]
@@ -2913,10 +3051,10 @@ _BOTTOM_LIMIT = MARGIN + QR_MINI + 3 * mm
 
 
 def _top_of_page(page_idx: int) -> float:
-    """Ordonnée de départ d'une colonne : la 1re page porte l'en-tête élève,
-    les suivantes le QR principal."""
-    return (PAGE_H - MARGIN - HEADER_H - 4 * mm) if page_idx == 0 \
-        else (PAGE_H - MARGIN - QR_MAIN - 6 * mm)
+    """Ordonnée de départ des DEUX colonnes (même niveau, toutes les pages) : la
+    bande haute fait la hauteur d'un fiduciel — identité sur la 1re page, ligne de
+    rappel sur les suivantes — puis 2,5 mm de blanc."""
+    return PAGE_H - MARGIN - BAND_H - 2.5 * mm
 
 
 def pages_needed(heights: list[float]) -> int:
@@ -3278,7 +3416,7 @@ def _composite_layout(item: dict, font_size: int, math_fs: int) -> dict:
 
 
 def _composite_card_h(cl: dict) -> float:
-    return cl["body_h"] + cl["strip"]["height"] + STRIP_GAP + 3 * CARD_PAD
+    return cl["body_h"] + cl["strip"]["height"] + STRIP_GAP + (CARD_PAD_T + CARD_PAD_M + CARD_PAD_B)
 
 
 def _draw_composite_card(c: canvas.Canvas, x: float, y_top: float, w: float, seq: int,
@@ -3302,7 +3440,7 @@ def _draw_composite_card(c: canvas.Canvas, x: float, y_top: float, w: float, seq
 
     stmt = cl["stmt"]
     badge_color = cl["badge_color"]
-    ty = card_bottom + card_h_body - CARD_PAD
+    ty = card_bottom + card_h_body - CARD_PAD_T
     first = stmt["intro"]["lines"][0] if stmt["intro"]["lines"] else None
     numbered = cl.get("numbered", True)
     if numbered:
@@ -3407,16 +3545,20 @@ def render_copy(pdf_canvas: canvas.Canvas, *, student_name: str, class_name: str
                 pages_meta: list[dict], font_size: int = 9,
                 tpl: dict | None = None,
                 placement: list[tuple[int, int]] | None = None,
-                min_pages: int = 0, dyslexic: bool = False) -> list[dict]:
+                min_pages: int = 0, dyslexic: bool = False,
+                header_info: dict | None = None) -> list[dict]:
     """Point d'entrée isolant la police par rendu, y compris si plusieurs
-    requêtes PDF sont traitées simultanément."""
+    requêtes PDF sont traitées simultanément.
+
+    `header_info` : {"prof", "matiere", "ecole"} d'un professeur accompagné,
+    imprimé dans la bande d'identité (l'établissement sans sa ville)."""
     token = _USE_DYSLEXIC.set(dyslexic)
     try:
         return _render_copy(
             pdf_canvas, student_name=student_name, class_name=class_name,
             title=title, assessment_type=assessment_type, items=items,
             pages_meta=pages_meta, font_size=font_size, tpl=tpl,
-            placement=placement, min_pages=min_pages)
+            placement=placement, min_pages=min_pages, header_info=header_info)
     finally:
         _USE_DYSLEXIC.reset(token)
 
@@ -3426,7 +3568,7 @@ def _render_copy(pdf_canvas: canvas.Canvas, *, student_name: str, class_name: st
                  pages_meta: list[dict], font_size: int = 9,
                  tpl: dict | None = None,
                  placement: list[tuple[int, int]] | None = None,
-                 min_pages: int = 0) -> list[dict]:
+                 min_pages: int = 0, header_info: dict | None = None) -> list[dict]:
     """Dessine une copie complète. `items` contient les exercices à imprimer.
     `tpl` porte les templates éditables (runtime_settings).
     Retourne les zones pour le manifeste.
@@ -3467,6 +3609,8 @@ def _render_copy(pdf_canvas: canvas.Canvas, *, student_name: str, class_name: st
         if page_idx >= len(pages_meta):
             pages_meta.append({"page_id": f"overflow-{page_idx}", "payload": "MP1|overflow|0"})
         _draw_markers(pdf_canvas, pages_meta[page_idx]["payload"])
+        _draw_page_date(pdf_canvas, today, tpl["header"])
+        _draw_running_line(pdf_canvas, student_name, class_name, title, page_idx + 1)
         col = 0
         y_cursor = top_of_page()
 
@@ -3498,8 +3642,9 @@ def _render_copy(pdf_canvas: canvas.Canvas, *, student_name: str, class_name: st
         place(height)
 
     _draw_markers(pdf_canvas, pages_meta[0]["payload"])
+    _draw_page_date(pdf_canvas, today, tpl["header"])
     _draw_header(pdf_canvas, student_name, class_name, title, assessment_type, today,
-                 tpl["header"])
+                 tpl["header"], header_info)
 
     seq = 0
     for idx, item in enumerate(items):
@@ -3627,7 +3772,7 @@ def _draw_strip_text(c: canvas.Canvas, text: str, strip: dict, col, dyslexic: bo
         lay = _rich_layout(text, strip["w_pt"] - STRIP_NOTE_W, fs)
         if lay["height"] > strip["h_pt"] + FEEDBACK_FIT_SLACK:
             raise ValueError("Retour personnalisé trop haut pour la bande de correction")
-        _draw_rich(c, strip["x_pt"], strip["y_pt"] + strip["h_pt"], lay, color=col)
+        _draw_rich(c, strip["x_pt"], strip["y_pt"] + strip["h_pt"], lay, color=col, tint=True)
     finally:
         _USE_DYSLEXIC.reset(token)
 
@@ -3732,15 +3877,9 @@ def _draw_appreciation_content(c: canvas.Canvas, geo: dict, progress: list[dict]
     c.setFillColor(black)
 
 
-def _draw_correction_marks(c: canvas.Canvas, page: dict, col):
-    """Dessine les marques de correction d'une page (nom, note, appréciation,
-    scores par exercice) dans la couleur d'encre `col`. Partagé par l'overlay
-    (fond blanc) et l'aperçu « copie + overlay » (fond = scan recalé)."""
-    if page.get("blank"):
-        return   # feuille qui traverse l'imprimante sans recevoir de correction
-    geo = header_geometry(page.get("assessment_type", "control"))
-    c.setFillColor(col)
-    c.setStrokeColor(col)
+def _draw_header_marks_v1(c: canvas.Canvas, page: dict, geo: dict, col) -> bool:
+    """En-tête de correction des copies imprimées en v1 (QR, bande de 24 mm).
+    Retourne True si la page n'est pas identifiée (rien d'autre à dessiner)."""
     # nom de l'élève sous le QR : l'élève vérifie que la correction est la sienne.
     # Une feuille restée dans le flux mais inexploitable porte une mention courte
     # au MÊME endroit : jamais de suppression de page, donc jamais de décalage.
@@ -3748,7 +3887,7 @@ def _draw_correction_marks(c: canvas.Canvas, page: dict, col):
         c.setFont("Helvetica-Bold", 7)
         c.drawRightString(PAGE_W - MARGIN, PAGE_H - MARGIN - QR_MAIN - 4 * mm,
                           page.get("student") or "Non identifié")
-        return
+        return True
     c.setFont("Helvetica-Bold", 8.5)
     c.drawRightString(PAGE_W - MARGIN, PAGE_H - MARGIN - QR_MAIN - 4 * mm,
                       f"Correction — {page.get('student', '')}")
@@ -3776,6 +3915,172 @@ def _draw_correction_marks(c: canvas.Canvas, page: dict, col):
         c.setFont("Helvetica", 8)
         for i, line in enumerate(_wrap(page["comment"], aw - 7 * mm, 8)[:2]):
             c.drawString(ax + 3.5 * mm, ay + ah - (i + 1) * 5 * mm - 3 * mm, line)
+    return False
+
+
+PROGRESS_LABEL_FS = 5.3
+
+
+def _lighter(col, k: float = 0.45) -> Color:
+    """Teinte éclaircie de l'encre de correction (barème « /20 » à côté de la note)."""
+    return Color(col.red + (1 - col.red) * k, col.green + (1 - col.green) * k,
+                 col.blue + (1 - col.blue) * k)
+
+
+def _is_head_page(page: dict) -> bool:
+    """Page qui porte la bande d'identité (la 1re de la copie)."""
+    n = page.get("_page_no")
+    return (n == 1) if n else ("note" in page)
+
+
+def _draw_note_box(c: canvas.Canvas, geo: dict, note: str, col) -> None:
+    """Note finale : points obtenus en gros gras, barème (« /20 », « /5 », « /10 »)
+    deux fois plus petit, le groupe centré dans la case — horizontalement et sur la
+    hauteur des chiffres."""
+    n = geo["note"]
+    got, _, total = str(note).partition("/")
+    big = 20.0
+    small = big * 0.5
+    w1 = stringWidth(got, "Helvetica-Bold", big)
+    w2 = stringWidth("/" + total, "Helvetica-Bold", small)
+    avail = n["w"] - 3 * mm
+    if w1 + w2 > avail:                      # note exceptionnellement longue : on réduit les deux
+        k = avail / (w1 + w2)
+        big, small = big * k, small * k
+        w1, w2 = w1 * k, w2 * k
+    x = n["x"] + (n["w"] - (w1 + w2)) / 2
+    base = n["y"] + (n["h"] - big * 0.72) / 2
+    c.setFillColor(col)
+    c.setFont("Helvetica-Bold", big)
+    c.drawString(x, base, got)
+    c.setFillColor(_lighter(col))
+    c.setFont("Helvetica-Bold", small)
+    c.drawString(x + w1, base, "/" + total)
+    c.setFillColor(col)
+
+
+def _draw_raw_to_note(c: canvas.Canvas, geo: dict, note_raw: str, note: str, col) -> None:
+    """« 15 / 30  ⟶  10 / 20 » : total brut de la copie, puis la note ramenée au
+    barème (règle de trois), juste sous « Correction — Nom »."""
+    R = geo["raw"]
+    fs = 8.5
+    left = str(note_raw).replace("/", " / ")
+    right = str(note).replace("/", " / ")
+    wl = stringWidth(left, "Helvetica-Bold", fs)
+    wr = stringWidth(right, "Helvetica-Bold", fs)
+    wa = 7.5 * mm
+    x = R["x"] + R["w"] - (wl + wa + wr + 3 * mm)
+    y = R["baseline"]
+    c.setFillColor(col)
+    c.setStrokeColor(col)
+    c.setFont("Helvetica-Bold", fs)
+    c.drawString(x, y, left)
+    ax0 = x + wl + 1.5 * mm
+    ax1 = ax0 + wa
+    ay = y + fs * 0.34
+    c.setLineWidth(0.8)
+    c.line(ax0, ay, ax1, ay)
+    c.line(ax1 - 1.3 * mm, ay + 0.9 * mm, ax1, ay)
+    c.line(ax1 - 1.3 * mm, ay - 0.9 * mm, ax1, ay)
+    c.drawString(ax1 + 1.5 * mm, y, right)
+
+
+def _ellipsize(text: str, font: str, size: float, width: float) -> str:
+    if stringWidth(text, font, size) <= width:
+        return text
+    while text and stringWidth(text + "…", font, size) > width:
+        text = text[:-1]
+    return text.rstrip() + "…"
+
+
+def _draw_appreciation_bottom(c: canvas.Canvas, geo: dict, progress: list[dict],
+                              synthesis: str) -> None:
+    """Appréciation (v3) : plus de case en tête, elle occupe la bande du bas entre le
+    code et la date. Barres de progrès (vert uniquement, jamais de rouge) et, s'il y
+    en a une, la synthèse sur une ligne ; sans progrès, la synthèse sur deux lignes."""
+    A = geo["appreciation"]
+    x, y, w, h = A["x"], A["y"], A["w"], A["h"]
+    visible = progress[:3]
+    if visible:
+        gap = 3 * mm
+        col_w = (w - gap * (len(visible) - 1)) / len(visible)
+        label_y = y + h - 6.0
+        bar_h = 4.0
+        bar_y = label_y - 2.4 - bar_h
+        for i, p in enumerate(visible):
+            cx = x + i * (col_w + gap)
+            pct = round(p["pct_acquired"] * 100)
+            name = _pdf_safe(handwriting.plain(p["competency_name"]))
+            suffix = f"  {pct}%"
+            while name and stringWidth(name + suffix, "Helvetica", PROGRESS_LABEL_FS) > col_w:
+                name = name[:-1]
+            full = _pdf_safe(handwriting.plain(p["competency_name"]))
+            label = name.rstrip(" ·-") + ("…" if name != full else "") + suffix
+            c.setFont("Helvetica", PROGRESS_LABEL_FS)
+            c.setFillColor(black)
+            c.drawString(cx, label_y, label)
+            c.setFillColor(PROGRESS_TRACK)
+            c.roundRect(cx, bar_y, col_w, bar_h, bar_h / 2, stroke=0, fill=1)
+            c.setFillColor(PROGRESS_GREEN)
+            c.roundRect(cx, bar_y, max(bar_h, col_w * min(1.0, p["pct_acquired"])), bar_h,
+                        bar_h / 2, stroke=0, fill=1)
+        if synthesis:
+            c.setFont("Helvetica-Oblique", 5.4)
+            c.setFillColor(HexColor("#37474F"))
+            c.drawString(x, y + 1.2, _ellipsize(_pdf_safe(synthesis), "Helvetica-Oblique", 5.4, w))
+    elif synthesis:
+        c.setFont("Helvetica-Oblique", 6.2)
+        c.setFillColor(HexColor("#37474F"))
+        lines = _wrap(_pdf_safe(synthesis), w, 6.2)[:2]
+        if len(lines) == 2 and len(_wrap(_pdf_safe(synthesis), w, 6.2)) > 2:
+            lines[1] = _ellipsize(lines[1] + " …", "Helvetica-Oblique", 6.2, w)
+        yy = y + h - 7.0
+        for line in lines:
+            c.drawString(x, yy, line)
+            yy -= 8.0
+    c.setFillColor(black)
+
+
+def _draw_header_marks_v3(c: canvas.Canvas, page: dict, geo: dict, col) -> bool:
+    """En-tête de correction des copies actuelles : « Correction — Nom » près du
+    nom (ou de la ligne de rappel), note en gros dans la case, total brut → note
+    juste dessous, appréciation dans la bande du bas. Retourne True si la page
+    n'est pas identifiée."""
+    head = _is_head_page(page)
+    pos = geo["label"] if head else geo["label_run"]
+    c.setFillColor(col)
+    if page.get("unidentified"):
+        c.setFont("Helvetica-Bold", 7)
+        c.drawRightString(pos["x"] + pos["w"], pos["baseline"], page.get("student") or "Non identifié")
+        return True
+    c.setFont("Helvetica-Bold", 8.5)
+    c.drawRightString(pos["x"] + pos["w"], pos["baseline"], f"Correction — {page.get('student', '')}")
+    if not head:
+        return False
+    if page.get("note") is not None and geo["note"]["visible"]:
+        _draw_note_box(c, geo, page["note"], col)
+        if page.get("note_raw") and page["note_raw"] != page["note"]:
+            _draw_raw_to_note(c, geo, page["note_raw"], page["note"], col)
+    if page.get("progress") or page.get("synthesis"):
+        _draw_appreciation_bottom(c, geo, page.get("progress") or [], page.get("synthesis") or "")
+    return False
+
+
+def _draw_correction_marks(c: canvas.Canvas, page: dict, col):
+    """Dessine les marques de correction d'une page (nom, note, appréciation,
+    scores par exercice) dans la couleur d'encre `col`. Partagé par l'overlay
+    (fond blanc) et l'aperçu « copie + overlay » (fond = scan recalé). L'en-tête suit
+    la mise en page imprimée de la page (v1 ou v3, cf. layout_of_page) ; les bandes
+    de correction viennent, elles, de la géométrie mémorisée par zone."""
+    if page.get("blank"):
+        return   # feuille qui traverse l'imprimante sans recevoir de correction
+    layout = layout_of_page(page.get("page_id"))
+    geo = header_geometry(page.get("assessment_type", "control"), layout)
+    c.setFillColor(col)
+    c.setStrokeColor(col)
+    done = (_draw_header_marks_v1 if layout == LAYOUT_V1 else _draw_header_marks_v3)(c, page, geo, col)
+    if done:
+        return   # une feuille inexploitable porte une mention courte, jamais de suppression de page
     # points de BARÈME (cf. services.pipeline.build_overlays), en demis :
     # « 1,5/2 » à la française, jamais « 1.5/2.0 » — lu par un élève de 5e sur
     # sa copie. Marques par champ d'abord (coches/croix, cases correction,

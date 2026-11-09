@@ -72,18 +72,27 @@ def test_pages_needed_empty_copy_is_one_page():
     assert pdfgen.pages_needed([]) == 1
 
 
-def test_first_page_header_is_governed_by_the_unchanged_qr_height():
+def test_header_band_is_one_fiducial_high_on_every_page():
     """L'assistant manuel consomme column_metrics : cette géométrie partagée
     garantit que le gain de place de l'en-tête est réellement disponible à
-    l'écran et dans le PDF, sans réduire le QR physique de 24 mm."""
-    assert pdfgen.HEADER_H == pdfgen.QR_MAIN == 24 * pdfgen.mm
+    l'écran et dans le PDF. La bande haute fait la hauteur d'un fiduciel (11 mm),
+    sur TOUTES les pages : les deux colonnes partent du même niveau."""
+    assert pdfgen.BAND_H == pdfgen.QR_MINI == 11 * pdfgen.mm
     geo = pdfgen.header_geometry("control")
-    for zone in ("note", "appreciation", "meta", "qr"):
-        assert geo[zone]["y"] == geo["qr"]["y"]
-        assert geo[zone]["h"] == geo["qr"]["h"]
-    metrics = pdfgen.column_metrics(1)
+    for zone in ("note", "meta", "klass"):
+        assert geo[zone]["y"] == geo["meta"]["y"]
+        assert geo[zone]["h"] == pdfgen.BAND_H
+    assert pdfgen._top_of_page(0) == pdfgen._top_of_page(1) == pdfgen._top_of_page(5)
+    metrics = pdfgen.column_metrics(2)
     assert metrics["column_h"][0] == pytest.approx(
         pdfgen._top_of_page(0) - pdfgen._BOTTOM_LIMIT)
+    assert metrics["column_h"][0] == metrics["column_h"][1] == metrics["column_h_rest"]
+
+
+def test_datamatrix_is_as_high_as_the_black_of_a_fiducial_and_clear_of_the_columns():
+    assert pdfgen.DM_ROWS * pdfgen.DM_MOD == pytest.approx(pdfgen.FID_BLACK)
+    assert pdfgen.DM_Y + pdfgen.FID_BLACK <= pdfgen._BOTTOM_LIMIT
+    assert pdfgen.DM_X > pdfgen.MARGIN + pdfgen.QR_MINI - pdfgen.FID_INSET   # contre le fiduciel BL, pas dessus
 
 
 def test_pages_needed_counts_the_lost_bottom_of_column():

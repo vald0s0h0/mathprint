@@ -1,6 +1,6 @@
 """Rendu fiable des formules mathématiques en LaTeX (pipeline exgen-3).
 
-Le contrat de balisage est le même partout (génération LLM, MathALÉA, web,
+Le contrat de balisage est le même partout (génération LLM, web,
 PDF) : le texte contient des spans `$...$` dont le contenu est un sous-ensemble
 de LaTeX accepté À LA FOIS par KaTeX (web) et matplotlib mathtext (PDF).
 

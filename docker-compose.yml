@@ -21,6 +21,7 @@
 services:
   db:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_DB: mathprint
       POSTGRES_USER: mathprint
@@ -34,6 +35,7 @@ services:
 
   queue:
     image: redis:7-alpine
+    restart: unless-stopped
     # file rapide et verrous temporaires ; aucune donnée métier unique (§11.1)
     volumes:
       - ./volumes/redis:/data

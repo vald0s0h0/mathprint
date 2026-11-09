@@ -120,7 +120,7 @@ def list_backups():
 
 @router.post("/calibration/page")
 def calibration_page():
-    """Génère une page test A4 avec les 4 marqueurs standard : à imprimer à
+    """Génère une page test A4 avec les 4 fiduciels de coin et un code de page : à imprimer à
     100 % puis scanner pour mesurer offsets/échelle (assistant §11.5)."""
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.units import mm
@@ -179,9 +179,9 @@ async def calibration_measure(file: UploadFile, printer_name: str = "",
     # estimation simple : comparer distances entre marqueurs détectés et canoniques
     from ..services.security import verify_page_payload
     detections = {}
-    for text, quad in worker_cv._detect_qrcodes(img):
-        if verify_page_payload(text):
-            detections["MAIN"] = quad.mean(axis=0)
+    for text, quad in worker_cv._detect_page_codes(img):
+        if verify_page_payload(text) and not text.isdigit():
+            detections["MAIN"] = quad.mean(axis=0)   # ancien QR seulement : le DataMatrix n'est pas un point de repère
     for role, center in worker_cv.detect_fiducials(img).items():
         detections.setdefault(role, center)
     if not {"TL", "BL", "BR"} <= set(detections):

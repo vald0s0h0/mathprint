@@ -532,3 +532,94 @@ def test_grid_row_states_keep_a_double_check_line_by_line():
     threshold = W.QcmThreshold(value=0.3, band=(0.2, 0.25), adapted=False)
     assert W.grid_selection(boxes, [0.9, 0.9, 0.9, 0.0], threshold) is None
     assert W.grid_row_states(boxes, [0.9, 0.9, 0.9, 0.0], threshold) == [[0, 1], [0]]
+
+
+# --- Recalibrage sur copies réelles (6e « Angles », nov. 2026) --------------
+# Valeurs mesurées sur les vraies copies : croix bleu clair, croix au crayon,
+# case pochée au crayon, croix tracée à côté d'une case.
+
+def _boxes_grid(rows: int, cols: int) -> list[dict]:
+    return [{"row": r, "col": c, "index": r * cols + c,
+             "x_pt": 100 + 30 * c, "y_pt": 500 - 20 * r, "w_pt": 9.07, "h_pt": 9.07}
+            for r in range(rows) for c in range(cols)]
+
+
+def test_adapt_threshold_takes_the_valid_cut_not_the_widest_gap():
+    """Le plus grand écart tombait ENTRE deux croix (0,038 -> 0,116) et, refusé,
+    renvoyait au seuil fixe avec une large bande ambiguë : 9 grilles nettes en
+    revue. La coupure vides (~0) / cochées (>= 0,038) est la bonne."""
+    from app.services import worker_cv as W
+
+    ring = [0.0] * 17 + [0.038, 0.116, 0.143, 0.147, 0.147, 0.158, 0.159, 0.159, 0.161,
+                         0.182, 0.193]
+    thr = W.adapt_qcm_threshold(ring)
+    assert thr.adapted and 0.0 < thr.value < 0.038
+    assert not any(thr.band[0] <= d < thr.band[1] for d in ring)
+
+
+def test_light_blue_crosses_are_read_automatically():
+    """Youcef : croix bleu clair, 1re passe sous le seuil, 2e passe désormais nette."""
+    from app.services import worker_cv as W
+
+    boxes = _boxes_grid(5, 2)
+    m = W.BoxMeasures(dark=[0.0, 0.024, 0.028, 0.0, 0.0, 0.021, 0.01, 0.0, 0.0, 0.018],
+                      color=[0.0, 0.043, 0.05, 0.0, 0.0, 0.04, 0.024, 0.0, 0.0, 0.05],
+                      ring=[0.0, 0.159, 0.182, 0.0, 0.0, 0.159, 0.116, 0.0, 0.0, 0.161])
+    other = W.BoxMeasures(dark=[0.0, 0.061, 0.0, 0.0, 0.0, 0.044, 0.0],
+                          color=[0.002, 0.304, 0.0, 0.0, 0.0, 0.095, 0.0],
+                          ring=[0.0, 0.193, 0.0, 0.0, 0.0, 0.038, 0.0])
+    thrs = W.page_box_thresholds([m, other])
+    sel, conf, _ = W.decide_boxes(boxes, m, thrs, grid=True, exclusive=False)
+    assert sel == [1, 0, 1, 0, 1] and conf >= 0.9
+
+
+def test_pencil_crosses_are_read_by_the_ring_measure_alone():
+    """Maïssa : croix au crayon, que le filtre bleu ne voit pas (il ne peut
+    donc pas confirmer) ; le contour exclu les sépare nettement des vides. Une
+    croix pâle AILLEURS sur la page (0,016) ne bloque pas la grille."""
+    from app.services import worker_cv as W
+
+    boxes = _boxes_grid(5, 2)
+    dark = [0.0, 0.033, 0.0, 0.005, 0.0, 0.002, 0.0, 0.002, 0.0, 0.015]
+    m = W.BoxMeasures(dark=dark, color=list(dark),
+                      ring=[0.0, 0.084, 0.0, 0.076, 0.0, 0.074, 0.0, 0.082, 0.0, 0.087])
+    faint = W.BoxMeasures(dark=[0.013, 0.0, 0.0], color=[0.013, 0.0, 0.0],
+                          ring=[0.016, 0.0, 0.0])
+    thrs = W.page_box_thresholds([m, faint])
+    sel, conf, why = W.decide_boxes(boxes, m, thrs, grid=True, exclusive=False)
+    assert sel == [1, 1, 1, 1, 1] and conf >= 0.9 and why.get("ring_alone")
+
+
+def test_cross_next_to_a_box_is_never_read_as_blank():
+    """Maïssa : croix tracée à côté de la 1re case, lue « sans réponse » en
+    lecture certaine (aucune revue). Une case vide n'a pas d'encre : revue."""
+    from app.services import worker_cv as W
+
+    boxes = [{"index": i, "x_pt": 100 + 60 * i, "y_pt": 500, "w_pt": 9.07, "h_pt": 9.07}
+             for i in range(3)]
+    m = W.BoxMeasures(dark=[0.013, 0.0, 0.0], color=[0.013, 0.0, 0.0],
+                      ring=[0.016, 0.0, 0.0])
+    grid = W.BoxMeasures(dark=[0.0, 0.089, 0.0, 0.0], color=[0.0, 0.089, 0.0, 0.0],
+                         ring=[0.0, 0.117, 0.0, 0.0])
+    thrs = W.page_box_thresholds([m, grid])
+    sel, conf, why = W.decide_boxes(boxes, m, thrs, grid=False, exclusive=True)
+    assert conf < 0.9 and why.get("faint_empty") == [0]
+
+
+def test_detect_matching_pale_thin_link_is_never_silently_dropped():
+    """Youcef : trois liaisons franches et une 4e au trait fin et pâle (gris
+    ~200). Elle était ignorée en lecture CERTAINE (3 liaisons) ; elle doit être
+    lue, ou au pire partir en revue."""
+    import cv2
+
+    from app.services import worker_cv as W
+
+    img, left, right = _matching_page([
+        ((0, 1), (0, 0), (0, 0)), ((1, 3), (0, 0), (0, 0)), ((2, 0), (0, 0), (0, 0))])
+
+    def c(p):
+        return W.pt_to_px(p["x_pt"] + p["w_pt"] / 2, p["y_pt"] + p["h_pt"] / 2)
+    (lx, ly), (rx, ry) = c(left[3]), c(right[2])
+    cv2.line(img, (int(lx), int(ly)), (int(rx), int(ry)), (205, 200, 195), 1, cv2.LINE_AA)
+    pairs, conf = W.detect_matching(img, left, right)
+    assert conf < 0.9 or sorted(pairs) == [[0, 1], [1, 3], [2, 0], [3, 2]]

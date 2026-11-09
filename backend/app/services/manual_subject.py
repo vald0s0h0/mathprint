@@ -493,7 +493,7 @@ def generate_manual_job(db: Session, assessment: Assessment, job: Job | None = N
             db.add(page)
             db.flush()
             page.qr_payload = sign_page(page.id)
-            page.hmac_version = "2"
+            page.hmac_version = "3"
             pages_meta.append({"page_id": page.id, "payload": page.qr_payload})
             page_rows.append(page)
 
@@ -503,7 +503,8 @@ def generate_manual_job(db: Session, assessment: Assessment, job: Job | None = N
             assessment_type=assessment.type, items=render_items,
             pages_meta=pages_meta, font_size=font_size, tpl=tpl,
             placement=placement, min_pages=max_pages,
-            dyslexic=student.dyslexic)
+            dyslexic=student.dyslexic,
+            header_info=generation.header_info(db, assessment, school_class))
 
         used_pages = max(max_pages, max((z["page_index"] for z in zones), default=0) + 1)
         if used_pages > max_pages + PAGE_RESERVE:

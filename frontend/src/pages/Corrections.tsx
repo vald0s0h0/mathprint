@@ -3,7 +3,7 @@
 // logique qui indique clairement au professeur la prochaine chose à faire
 // (déposer / corriger / valider / imprimer), plus un bouton de déblocage
 // (relancer) quand la correction est bloquée. Le dépôt d'un scan ne demande pas
-// de choisir l'évaluation : le QR signé de chaque page identifie le sujet.
+// de choisir l'évaluation : le code signé de chaque page identifie le sujet.
 import {
   ActionIcon, Alert, Badge, Box, Button, Card, Checkbox, Divider, FileButton, Group, Kbd,
   Loader, Menu, Modal, NumberInput, SegmentedControl, SimpleGrid, Stack, Table, Text,
@@ -969,7 +969,7 @@ export default function Corrections() {
         <div>
           <Group><Title order={2}>Corrections</Title>{assessmentFilter && <Button variant="light" size="xs" onClick={() => setSearchParams({})}>Voir toutes les corrections</Button>}</Group>
           <Text size="sm" c="dimmed">
-            Déposez le PDF scanné — le QR de chaque page l'associe au bon sujet, puis
+            Déposez le PDF scanné — le code de chaque page l'associe au bon sujet, puis
             corrigez et validez pour imprimer les copies corrigées.
           </Text>
         </div>
@@ -1086,7 +1086,7 @@ export default function Corrections() {
             <Text fw={600}>Aucun lot de scans {cycle !== 'all' && `en ${cycle}`}</Text>
             <Text size="sm" c="dimmed" ta="center">
               Après l'évaluation, scannez les copies et déposez-les dans le bac à
-              sable ci-dessus — chaque page est associée au bon sujet par son QR.
+              sable ci-dessus — chaque page est associée au bon sujet par son code.
             </Text>
           </Stack>
         </Card>

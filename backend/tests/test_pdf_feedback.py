@@ -73,7 +73,7 @@ def test_guides_before_answers_keep_composite_geometry():
 def test_large_appreciation_is_complete_and_within_header():
     text='Tu réussis les durées et les mètres entiers. À reprendre : fractions, décimaux et périmètre. Un repère à la fois !'
     buf=io.BytesIO();c=canvas.Canvas(buf)
-    geo=pg.header_geometry('control')
+    geo=pg.header_geometry('control', pg.LAYOUT_V1)   # copies imprimées en v1
     pg._draw_appreciation_content(c,geo,[],text,font_size=8.5)
     c.save()
     with fitz.open(stream=buf.getvalue(),filetype='pdf') as doc:

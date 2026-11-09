@@ -1,4 +1,4 @@
-// Modale globale des scans non identifiés (QR/fiduciels illisibles) : affichée
+// Modale globale des scans non identifiés (code de page/fiduciels illisibles) : affichée
 // au démarrage de l'app et dès qu'un nouveau problème apparaît, quelle que soit
 // la page courante. La page garde sa PLACE dans le lot (overlay « Non
 // identifié », cf. services.pipeline.build_overlays) pour ne jamais décaler les
@@ -25,8 +25,8 @@ type AssessmentRow = { id: string; title: string; class_id: string }
 type StudentRow = { id: string; name: string }
 
 const WARNING_LABELS: Record<string, string> = {
-  main_qr_missing_or_invalid: 'QR introuvable',
-  qr_hmac_invalid: 'QR corrompu',
+  main_qr_missing_or_invalid: 'code de page introuvable',
+  qr_hmac_invalid: 'code de page corrompu',
   page_from_other_assessment: 'signée pour un autre sujet',
   not_enough_markers: 'repères de coin manquants',
   reprojection_error_high: 'page déformée',
@@ -138,7 +138,7 @@ export default function ScanProblemsModal() {
       <Stack gap="sm">
         <Group justify="space-between" wrap="nowrap">
           <Text size="sm" c="dimmed">
-            Le QR ou les repères de coin sont illisibles sur cette page. Elle
+            Le code de page ou les repères de coin sont illisibles sur cette page. Elle
             garde sa place dans le lot pour ne jamais décaler les copies
             suivantes à l'impression des corrections.
           </Text>

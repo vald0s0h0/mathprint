@@ -270,9 +270,9 @@ def test_old_cards_keep_their_geometry():
     four = pdfgen.estimate_item_height(longer, 9, 9, tpl)
     assert pdfgen.reserved_feedback_lines(item) == 0
     assert before < two < four
-    # Mesures du plan : environ 10,3 mm et 17,6 mm de bande.
-    assert round((two - before) / pdfgen.mm, 1) == pytest.approx(3.8, abs=0.3)
-    assert round((four - before) / pdfgen.mm, 1) == pytest.approx(11.1, abs=0.3)
+    # Bande resserrée (minimum 5,5 mm, marge basse 1,6 mm) : environ 9,7 mm et 17,0 mm.
+    assert round((two - before) / pdfgen.mm, 1) == pytest.approx(4.2, abs=0.3)
+    assert round((four - before) / pdfgen.mm, 1) == pytest.approx(11.5, abs=0.4)
 
 
 def test_composite_reservation_is_capped():

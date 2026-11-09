@@ -359,7 +359,7 @@ export default function PrinterSettings({ printers, refresh }: {
         </Stack>
         <Alert mt="md" color="blue" variant="light" icon={<Info size={16} />}>
           Les fichiers PDF/JPEG de l’ADF sont traités par compteur ou horodatage naturel
-          (scan-2 avant scan-10), jamais selon la liste des élèves. Les QR identifient les copies,
+          (scan-2 avant scan-10), jamais selon la liste des élèves. Les codes de page identifient les copies,
           mais ne changent pas leur ordre. Les corrections suivent donc exactement la séquence scannée.
         </Alert>
       </Card>

@@ -195,6 +195,15 @@ def _set_status(db: Session, batch: ScanBatch, status: str, **progress):
     db.commit()
 
 
+def _box_diag(meas, thr) -> dict:
+    """Mesures des 2es passes et seuils de page, journalisés avec la lecture
+    (recalibrages sur copies réelles : scripts/calibrate_checkboxes.py)."""
+    return {"densities_color": [round(float(d), 4) for d in meas.color],
+            "densities_ring": [round(float(d), 4) for d in meas.ring],
+            "threshold_color": round(thr.color.value, 4),
+            "threshold_ring": round(thr.ring.value, 4)}
+
+
 def _qcm_exclusive(item: CopyItem) -> bool:
     """QCM à choix UNIQUE ? Même règle que le moteur (services.grading) :
     `exclusive` du contrat, sinon une seule bonne réponse attendue."""
@@ -374,6 +383,7 @@ def copy_is_blank(db: Session, copy: Copy) -> bool:
     """Absence uniquement si TOUTES les réponses ont été lues et confirmées vides.
     Un scan incomplet ou une lecture incertaine ne constitue pas une absence.
     """
+    from . import worker_cv  # import tardif (OpenCV), comme read_choice_cell
     items = db.query(CopyItem).filter_by(copy_id=copy.id).all()
     if not items: return False
     for item in items:
@@ -604,42 +614,23 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
         # Seuil QCM ADAPTATIF par page : on met en commun les densités de TOUTES
         # les cases QCM de la page pour caler un seuil unique sur le style de coche
         # de l'élève (trait fin / aplat), quand deux groupes se détachent nettement.
-        qcm_meta: dict[str, tuple[list, list[float]]] = {}
-        qcm_meta2: dict[str, tuple[list[float], list[float]]] = {}
-        pooled: list[float] = []
-        pooled_color: list[float] = []
-        pooled_ring: list[float] = []
+        box_meas: dict[str, worker_cv.BoxMeasures] = {}
         for zone in zones:
             zitem = db.get(CopyItem, zone.item_id)
-            # QCM et grille cochée partagent la même détection de cases : on met en
-            # commun leurs densités pour caler le seuil adaptatif de la page.
+            # QCM et grille cochée partagent la même détection de cases : leurs
+            # mesures sont mises en commun pour caler les seuils adaptatifs de la
+            # page (cf. worker_cv.decide_boxes).
             if zitem.response_type.startswith("qcm") or zitem.response_type == "checkbox_grid":
-                zboxes = (zone.meta_json or {}).get("boxes", [])
-                zdens = worker_cv.qcm_densities(res.warped, zboxes)
-                qcm_meta[zone.id] = (zboxes, zdens)
-                pooled.extend(zdens)
-                # mesures de 2e passe (cf. worker_cv.second_pass_selection),
-                # chacune avec son propre seuil adaptatif de page
-                d_color = worker_cv.qcm_densities_color(res.warped, zboxes)
-                d_ring = worker_cv.qcm_densities_ring(res.warped, zboxes)
-                qcm_meta2[zone.id] = (d_color, d_ring)
-                pooled_color.extend(d_color)
-                pooled_ring.extend(d_ring)
+                box_meas[zone.id] = worker_cv.box_measures(
+                    res.warped, (zone.meta_json or {}).get("boxes", []))
+        choice_dark: list[float] = []
         for zone in zones:
             for row in (zone.meta_json or {}).get("cells", []):
                 for cell in row:
                     if cell and cell.get("input") == "single_choice":
-                        pooled.extend(worker_cv.qcm_densities(res.warped, cell["boxes"]))
-        qcm_thr = worker_cv.adapt_qcm_threshold(pooled)
-        thr_color = worker_cv.adapt_qcm_threshold(pooled_color)
-        thr_ring = worker_cv.adapt_qcm_threshold(pooled_ring)
-
-        def second_pass(zone_id: str, zboxes: list, grid: bool) -> list[int] | None:
-            if zone_id not in qcm_meta2:
-                return None
-            d_color, d_ring = qcm_meta2[zone_id]
-            return worker_cv.second_pass_selection(zboxes, grid, d_color, thr_color,
-                                                   d_ring, thr_ring)
+                        choice_dark.extend(worker_cv.qcm_densities(res.warped, cell["boxes"]))
+        box_thr = worker_cv.page_box_thresholds(list(box_meas.values()), choice_dark)
+        qcm_thr = box_thr.dark
         for zone in zones:
             item = db.get(CopyItem, zone.item_id)
             if db.query(StudentResponse).filter_by(copy_item_id=item.id).first():
@@ -653,38 +644,16 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
             crop_path.write_bytes(worker_cv.encode_png(filtered))
 
             if item.response_type.startswith("qcm"):
-                boxes, densities = qcm_meta.get(
-                    zone.id, ((zone.meta_json or {}).get("boxes", []), None))
-                if densities is None:
-                    densities = worker_cv.qcm_densities(res.warped, boxes)
-                selected, densities, default_sel = worker_cv.select_qcm(
-                    boxes, densities, qcm_thr)
-                cv_conf = worker_cv.qcm_decision_confidence(densities, qcm_thr)
-                second = False
-                # 1re passe hésitante, ou AUCUNE coche (rare chez un élève : une
-                # coche bleu clair / crayon peut avoir échappé à l'encre sombre) :
-                # filtre bleu + contour exclu, acceptés s'ils concordent.
-                blank = selected is not None and len(selected) == 0
-                if cv_conf < 0.9 or blank:
-                    sel2 = second_pass(zone.id, boxes, grid=False)
-                    if sel2 is not None:
-                        selected, cv_conf, second = sel2, 0.95, True
-                    elif blank:
-                        cv_conf = 0.5   # vide non confirmé -> OCRiser
-                double_check = bool(selected) and len(selected) > 1 and _qcm_exclusive(item)
-                if double_check:
-                    # Plusieurs cases cochées sur un choix UNIQUE : l'élève a
-                    # souvent coché, raturé puis coché ailleurs. La lecture CV ne
-                    # sait pas laquelle compte -> OCRiser (le professeur désigne
-                    # la case retenue), jamais une note automatique.
-                    cv_conf = 0.0
+                boxes = (zone.meta_json or {}).get("boxes", [])
+                meas = box_meas.get(zone.id) or worker_cv.box_measures(res.warped, boxes)
+                densities = meas.dark
+                selected, cv_conf, why = worker_cv.decide_boxes(
+                    boxes, meas, box_thr, grid=False, exclusive=_qcm_exclusive(item))
                 db.add(OcrAttempt(zone_id=zone.id, provider="cv_local",
                                   raw_json={"densities": densities, "selected": selected,
                                             "threshold": round(qcm_thr.value, 4),
                                             "adapted": qcm_thr.adapted,
-                                            "default_selected": default_sel,
-                                            "double_check": double_check,
-                                            "second_pass": second},
+                                            **_box_diag(meas, box_thr), **why},
                                   confidence=cv_conf))
                 n_review += _decide_and_store(
                     db, item=item, zone=zone, student=student,
@@ -692,22 +661,11 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
                     queue=queue, defer_grading=True)
             elif item.response_type == "checkbox_grid":
                 boxes = (zone.meta_json or {}).get("boxes", [])
-                selected, _dens = worker_cv.detect_grid(res.warped, boxes, qcm_thr)
-                cv_conf = worker_cv.qcm_decision_confidence(_dens, qcm_thr)
+                meas = box_meas.get(zone.id) or worker_cv.box_measures(res.warped, boxes)
+                _dens = meas.dark
                 row_states = worker_cv.grid_row_states(boxes, _dens, qcm_thr)
-                if selected is None:
-                    cv_conf = 0.0   # double coche sur une ligne -> OCRiser
-                second = False
-                # une LIGNE sans coche suffit à déclencher la 2e passe : une croix
-                # au crayon très clair y passe inaperçue en 1re passe (cas réel :
-                # élève noté 3/5 au lieu de 5/5, sans aucune revue)
-                blank = selected is not None and any(c == -1 for c in selected)
-                if cv_conf < 0.9 or blank:
-                    sel2 = second_pass(zone.id, boxes, grid=True)
-                    if sel2 is not None:
-                        selected, cv_conf, second = sel2, 0.95, True
-                    elif blank:
-                        cv_conf = 0.5   # ligne vide non confirmée -> OCRiser
+                selected, cv_conf, why = worker_cv.decide_boxes(
+                    boxes, meas, box_thr, grid=True, exclusive=False)
                 db.add(OcrAttempt(zone_id=zone.id, provider="cv_local",
                                   raw_json={"grid_selected": selected,
                                             # conservé même sur une double coche : la revue
@@ -716,7 +674,8 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
                                             "row_states": row_states,
                                             "threshold": round(qcm_thr.value, 4),
                                             "adapted": qcm_thr.adapted,
-                                            "second_pass": second}, confidence=cv_conf))
+                                            **_box_diag(meas, box_thr), **why},
+                                  confidence=cv_conf))
                 n_review += _decide_and_store(
                     db, item=item, zone=zone, student=student,
                     ocr_text="", conf=cv_conf, selected=selected, corr_id=corr_id,
@@ -1614,6 +1573,10 @@ def copy_overlay_pages(db: Session, assessment: Assessment, copy: Copy,
         scan_page_positions.get(p, page_no.get(p, 0)),
         page_no.get(p, 0),
     ))
+    # l'en-tête de correction (note, appréciation…) se pose sur la 1re page de la copie
+    # (celle qui porte la bande d'identité), sinon sur la première page rendue
+    head_id = next((p for p in ordered_page_ids if page_no.get(p) == 1),
+                   ordered_page_ids[0] if ordered_page_ids else None)
     pages = []
     for k, page_id in enumerate(ordered_page_ids):
         bg = derived_dir / f"page-{page_id}.png"
@@ -1622,7 +1585,7 @@ def copy_overlay_pages(db: Session, assessment: Assessment, copy: Copy,
             "assessment_type": assessment.type,
             "page_zones": zones_by_page[page_id],
             "background": str(bg) if bg.exists() else None,
-            **(header if k == 0 else {}),
+            **(header if page_id == head_id else {}),
             "_scan_index": scan_page_positions.get(page_id),
             "_page_no": page_no.get(page_id, 0),
         })
