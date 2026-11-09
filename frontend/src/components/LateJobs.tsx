@@ -1,16 +1,12 @@
 // Copies tardives : chaque nouvel enchaînement scanné sur un sujet déjà corrigé est
 // un job à part (backend services.late_copies), avec sa ligne et son overlay.
-import {
-  Alert, Badge, Box, Button, Checkbox, Group, Menu, Modal, Paper, Stack, Text,
-} from '@mantine/core'
+import { Alert, Box, Button, Group, Modal, Stack, Text } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
-import { Eye, RefreshCw, ScanLine, Scale } from 'lucide-react'
+import { Scale } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../api'
-import ActionsMenu from './ActionsMenu'
 import AuthImg from './AuthImg'
-import PrintButton from './PrintButton'
-import SegmentBar, { type Segment } from './SegmentBar'
+import { type Segment } from './SegmentBar'
 
 export type LateJob = {
   wave: number; created_at: string | null
@@ -152,103 +148,5 @@ export function LateConflictButton({ batchId, count, onResolved, size = 'xs' }: 
         )}
       </Modal>
     </>
-  )
-}
-
-/** Un lot par enchaînement tardif, sous la carte du sujet : pleine largeur, avec son
- *  propre pipeline visuel, son aperçu et son menu — il se corrige indépendamment du
- *  lot principal. */
-export default function LateJobRows({
-  batchId, assessmentId, jobs, onChanged, onPreview, onCorrect, onOcr, onRetry,
-}: {
-  batchId: string; assessmentId: string; jobs: LateJob[]; onChanged: () => void
-  onPreview: (job: LateJob) => void
-  onCorrect: (job: LateJob, scope: 'flagged' | 'all') => void
-  onOcr: (job: LateJob) => void
-  onRetry: () => void
-}) {
-  async function setDistributed(job: LateJob, value: boolean) {
-    await api.patch(`/api/scans/batches/${batchId}`, { overlay_distributed: value, wave: job.wave })
-    onChanged()
-  }
-
-  return (
-    <Stack gap="xs" mt="sm">
-      {jobs.map((job) => (
-        <Paper key={job.wave} withBorder radius="sm" p="sm" data-testid={`late-job-${job.wave}`}
-          style={{ opacity: job.stage === 'done' ? 0.6 : 1 }}>
-          <Group justify="space-between" gap="xs" wrap="nowrap" align="flex-start">
-            <Stack gap={6} style={{ minWidth: 0, flex: 1 }}>
-              <Group gap={6}>
-                <Text size="sm" fw={600}>Copies tardives</Text>
-                <Badge size="sm" variant="light" color={STAGE[job.stage].color}>
-                  {STAGE[job.stage].label}
-                </Badge>
-                <Text size="xs" c="dimmed" truncate>
-                  {lateJobDate(job)}{job.students.length ? ` · ${lateJobNames(job)}` : ''}
-                </Text>
-              </Group>
-              <Group gap="md">
-                <SegmentBar segments={job.segments} />
-                <Text size="xs" c="dimmed">{job.page_count} page(s)</Text>
-                {job.stage === 'distribute' && (
-                  <Checkbox size="xs" label="Distribué aux élèves" checked={job.overlay_distributed}
-                    onChange={(e) => setDistributed(job, e.target.checked)} />
-                )}
-              </Group>
-            </Stack>
-            <Group gap="xs" wrap="nowrap" style={{ flexShrink: 0 }}>
-              <Button size="xs" variant="subtle" leftSection={<Eye size={14} />}
-                disabled={!['print', 'distribute', 'done'].includes(job.stage)}
-                onClick={() => onPreview(job)}>
-                Aperçu
-              </Button>
-              {job.stage === 'conflict' && (
-                <LateConflictButton batchId={batchId} count={job.conflicts} onResolved={onChanged} />
-              )}
-              {job.stage === 'ocr_review' && (
-                <Button size="xs" color="blue" leftSection={<ScanLine size={14} />}
-                  onClick={() => onOcr(job)}>
-                  OCRiser ({job.pending_ocr})
-                </Button>
-              )}
-              {job.stage === 'review' && (
-                <Button size="xs" color="orange" leftSection={<ScanLine size={14} />}
-                  onClick={() => onCorrect(job, 'flagged')}>
-                  Corriger les copies ({job.pending_reviews})
-                </Button>
-              )}
-              {job.stage === 'processing' && (
-                <Button size="xs" variant="light" loading disabled>Correction en cours…</Button>
-              )}
-              {job.stage === 'error' && (
-                <Button size="xs" color="orange" leftSection={<RefreshCw size={14} />}
-                  onClick={onRetry}>
-                  Relancer
-                </Button>
-              )}
-              {job.stage === 'print' && (
-                <PrintButton assessmentId={assessmentId} file="correction_overlay.pdf" wave={job.wave}
-                  label="Imprimer les overlays tardifs" />
-              )}
-              {job.stage === 'distribute' && (
-                <PrintButton assessmentId={assessmentId} file="correction_overlay.pdf" wave={job.wave}
-                  label="Réimprimer" />
-              )}
-              <ActionsMenu>
-                <Menu.Item leftSection={<ScanLine size={14} />}
-                  disabled={job.stage === 'conflict' || job.stage === 'processing'}
-                  onClick={() => onCorrect(job, 'all')}>
-                  Corriger
-                </Menu.Item>
-                <Menu.Item leftSection={<RefreshCw size={14} />} onClick={onRetry}>
-                  Relancer
-                </Menu.Item>
-              </ActionsMenu>
-            </Group>
-          </Group>
-        </Paper>
-      ))}
-    </Stack>
   )
 }

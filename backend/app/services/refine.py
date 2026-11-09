@@ -174,13 +174,19 @@ def copy_view(db: Session, assessment: Assessment, copy: Copy,
             "note": note, "points": points, "pages": out_pages}
 
 
-def batch_overview(db: Session, batch: ScanBatch) -> dict:
+def batch_overview(db: Session, batch: ScanBatch, wave: int | None = None) -> dict:
     """Liste LÉGÈRE des copies scannées du lot (élève, note), dans l'ordre de la
     pile — celui de l'overlay imprimé. Les pages d'une copie (marques, versions
     d'aperçu) se chargent à la demande (`copy_view`) : calculer les marques
     de toute une classe retarderait l'ouverture de plusieurs secondes."""
     assessment = db.get(Assessment, batch.assessment_id)
     copies = _copies_in_scan_order(db, batch, assessment.id)
+    if wave is not None:
+        # un lot de scan précis (0 = lot principal, N = lot déposé après)
+        from .late_copies import scope_copy_ids
+        scope = scope_copy_ids(db, batch, wave)
+        if scope:
+            copies = [c for c in copies if (c.id in scope[0]) == scope[1]]
     ids = [c.id for c in copies]
     scanned = {copy_id for (copy_id,) in
                db.query(CopyItem.copy_id)

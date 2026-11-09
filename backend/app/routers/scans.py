@@ -574,6 +574,8 @@ def _batch_view(db: Session, b: ScanBatch) -> dict:
             "overlay_stale": stale, "overlay_rebuilding": rebuilding,
             "first_wave_status": first_wave_status, "overlay_wave": b.overlay_wave or 0,
             "late_jobs": late_jobs,
+            "students": late_copies.main_student_names(db, b),
+            "duplex": bool(assessment and assessment.duplex),
             "conflict_count": sum(job["conflicts"] for job in late_jobs),
             "created_at": str(b.created_at)}
 
@@ -1572,10 +1574,10 @@ def _refine_response(db: Session, response_id: str):
 
 
 @router.get("/batches/{batch_id}/refine")
-def refine_overview(batch_id: str, db: Session = Depends(get_db)):
+def refine_overview(batch_id: str, db: Session = Depends(get_db), wave: int | None = None):
     """Copies scannées du lot (ordre de la pile), pages et réponses cliquables."""
     b = _refinable_batch(db, batch_id)
-    return {**refine.batch_overview(db, b), **_refine_status(db, b)}
+    return {**refine.batch_overview(db, b, wave), **_refine_status(db, b)}
 
 
 @router.get("/batches/{batch_id}/refine/status")

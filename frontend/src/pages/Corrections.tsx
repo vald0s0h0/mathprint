@@ -14,14 +14,15 @@ import {
   AlertTriangle, ChevronLeft, ChevronRight, Eye, Inbox, PencilLine, RefreshCw, ScanLine,
   Trash2, Upload,
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api, getToken } from '../api'
 import ActionsMenu from '../components/ActionsMenu'
 import MathText, { MathAnswer } from '../components/MathText'
 import PdfPreviewModal from '../components/PdfPreview'
-import SegmentBar, { type Segment } from '../components/SegmentBar'
-import LateJobRows, { type LateJob } from '../components/LateJobs'
+import { type Segment } from '../components/SegmentBar'
+import { type LateJob, lateJobNames } from '../components/LateJobs'
+import ScanLotRow, { type Lot, type LotHandlers, type LotStage } from '../components/ScanLotRow'
 import PrintButton from '../components/PrintButton'
 import RefineCorrectionModal from '../components/RefineCorrectionModal'
 import { useAppState } from '../state/AppState'
@@ -46,6 +47,10 @@ type Batch = {
   late_jobs?: LateJob[]; first_wave_status?: string
   // file de correction restreinte à un lot tardif (posé à l'ouverture des modales)
   scopeWave?: number
+  // élèves du lot de scan principal
+  students?: string[]
+  // sujet imprimé recto-verso
+  duplex?: boolean
 }
 // une case à corriger d'un tableau / de cases à trous (table_fill, multi_blank) :
 // sa réponse attendue lisible, ce que l'OCR a lu, le crédit calculé par le moteur
@@ -474,7 +479,7 @@ export default function Corrections() {
   const [llmOk, setLlmOk] = useState(true)
   const [previewId, setPreviewId] = useState<string | null>(null)
   const [previewMode, setPreviewMode] = useState<'copy' | 'review'>('review')
-  const [refineBatchId, setRefineBatchId] = useState<string | null>(null)
+  const [refine, setRefine] = useState<{ id: string; wave?: number } | null>(null)
   const [idx, setIdx] = useState(0)
   // file APLATIE en unités (une case / un QCM / une réponse rédigée), regroupées
   // par réponse attendue ; + verdicts Juste(true)/Faux(false)/à trancher(null)
@@ -889,6 +894,65 @@ export default function Corrections() {
     refresh()
   }
 
+  // Lots de scan d'une correction : le principal puis ceux déposés après, tous
+  // représentés pareil (pages, pipeline, prochaine action).
+  function lotsOf(b: Batch): Lot[] {
+    const fmt = (d: string | null) => d
+      ? new Date(d).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' }) : ''
+    const stage = stageOf(b)
+    const main: Lot = {
+      wave: 0, stage: stage === 'done' ? 'ready' : stage, segments: b.segments,
+      pages: b.page_count, duplex: !!b.duplex, pendingOcr: b.pending_ocr, pendingReviews: b.pending_reviews,
+      conflicts: 0, overlayReady: b.status === 'overlay_ready',
+      printed: b.overlay_printed, distributed: b.overlay_distributed,
+      stale: b.overlay_stale, rebuilding: b.overlay_rebuilding,
+      students: b.students ?? [],
+      info: [`${b.page_count} p.`, fmt(b.created_at)].filter(Boolean).join(' · '),
+    }
+    const late: Lot[] = (b.late_jobs ?? []).map((job) => ({
+      wave: job.wave,
+      stage: (['print', 'distribute', 'done'].includes(job.stage) ? 'ready' : job.stage) as LotStage,
+      segments: job.segments, pages: job.page_count, duplex: !!b.duplex, pendingOcr: job.pending_ocr,
+      pendingReviews: job.pending_reviews, conflicts: job.conflicts,
+      overlayReady: ['print', 'distribute', 'done'].includes(job.stage),
+      printed: job.overlay_printed, distributed: job.overlay_distributed,
+      stale: b.overlay_stale, rebuilding: b.overlay_rebuilding,
+      students: job.students,
+      info: [`${job.page_count} p.`, fmt(job.created_at), lateJobNames(job)].filter(Boolean).join(' · '),
+    }))
+    return [main, ...late]
+  }
+
+  function lotHandlers(b: Batch, lot: Lot): LotHandlers {
+    const isMain = lot.wave === 0
+    const scoped = isMain ? b : { ...b, scopeWave: lot.wave }
+    return {
+      batchId: b.id, assessmentId: b.assessment_id,
+      pendingLlm: isMain ? b.pending_llm : 0,
+      onPreview: () => {
+        // « Copie + Overlay » n'existe qu'une fois l'overlay généré
+        setPreviewMode(lot.overlayReady ? 'review' : 'copy')
+        setPreviewWave(lot.wave)
+        setPreviewId(b.assessment_id)
+      },
+      onOcr: () => openOcr(scoped),
+      onCorrect: (s) => openCorrection(scoped, s),
+      onRetry: () => retry(b),
+      onRetryLlm: isMain ? () => retry(b) : undefined,
+      onRefine: () => setRefine({ id: b.id, wave: (b.late_jobs ?? []).length ? lot.wave : undefined }),
+      onRegenerate: () => regenerateOverlay(b),
+      onRecalc: isMain ? () => finalize(b) : undefined,
+      onReset: isMain ? () => setResetTarget(b) : undefined,
+      onDistributed: (v) => (isMain ? setDistributed(b, v) : setLateDistributed(b, lot.wave, v)),
+      onChanged: refresh,
+    }
+  }
+
+  async function setLateDistributed(b: Batch, wave: number, value: boolean) {
+    await api.patch(`/api/scans/batches/${b.id}`, { overlay_distributed: value, wave })
+    refresh()
+  }
+
   const groups = useMemo(() => {
     const filtered = batches.filter((b) => assessmentFilter ? b.assessment_id === assessmentFilter : matches(b.grade_level))
     const by = new Map<string, { cls: string; grade: string; rows: Batch[] }>()
@@ -1076,222 +1140,59 @@ export default function Corrections() {
           <Group gap={8} mb="xs">
             <Text fw={700}>{g.cls}</Text>
             <Badge size="sm" variant="light">{g.grade}</Badge>
-            <Text size="xs" c="dimmed">{g.rows.length} lot(s)</Text>
+            <Text size="xs" c="dimmed">{g.rows.length} correction(s)</Text>
           </Group>
           <Stack gap="xs">
             {g.rows.map((b) => {
-              const stage = stageOf(b)
-              const overlayReady = b.status === 'overlay_ready'
-              const lateOpen = (b.late_jobs ?? []).some((job) => job.stage !== 'done')
-              // Pendant une correction tardive, l'overlay de la première pile reste imprimable.
-              const firstWaveBusy = stage !== 'done' && b.first_wave_status === 'overlay_ready'
-                && Boolean(b.late_jobs?.length)
-              const done = stage === 'done' && b.overlay_distributed && !lateOpen
-              const stale = stage === 'done' && b.overlay_stale
-              const badge = done ? { label: 'terminé', color: 'gray' }
-                : stale ? { label: 'overlay à régénérer', color: 'orange' } : STAGE_BADGE[stage]
+              const lots = lotsOf(b)
+              const allDone = lots.every((l) => l.stage === 'ready' && l.distributed)
+              const hasLate = (b.late_jobs ?? []).length > 0
               return (
-                <Card key={b.id} withBorder padding="md" style={done ? {
+                <Card key={b.id} withBorder padding="md" style={allDone ? {
                   opacity: 0.55, background: 'var(--mp-surface-muted)',
                 } : undefined}>
-                  <Group justify="space-between" wrap="nowrap" align="flex-start">
-                    <Stack gap={6} style={{ minWidth: 0, flex: 1 }}>
-                      <Group gap="xs" wrap="nowrap">
-                        <Badge variant="light" size="sm"
-                          color={b.assessment_type === 'control' ? 'red' : 'blue'}>
-                          {b.assessment_type === 'control' ? 'Contrôle' : 'Entraînement'}
+                  {/* En-tête : ce qui est propre à la correction entière */}
+                  <Group gap="xs" wrap="nowrap" mb="sm">
+                    <Badge variant="light" size="sm"
+                      color={b.assessment_type === 'control' ? 'red' : 'blue'}>
+                      {b.assessment_type === 'control' ? 'Contrôle' : 'Entraînement'}
+                    </Badge>
+                    {b.note_base && (
+                      <Tooltip label={`${b.assessment_type === 'control' ? 'Noté' : 'Scoré'} sur ${b.note_base} points`}>
+                        <Badge size="sm" variant="outline"
+                          color={b.assessment_type === 'control' ? 'red' : 'gray'}>
+                          /{b.note_base}
                         </Badge>
-                        {b.note_base && (
-                          <Tooltip label={`${b.assessment_type === 'control' ? 'Noté' : 'Scoré'} sur ${b.note_base} points`}>
-                            <Badge size="sm" variant="outline"
-                              color={b.assessment_type === 'control' ? 'red' : 'gray'}>
-                              /{b.note_base}
-                            </Badge>
-                          </Tooltip>
-                        )}
-                        <Text fw={600} lineClamp={1}>{b.assessment_title}</Text>
-                        <Badge size="sm" variant="dot" color={badge.color}>
-                          {badge.label}{stage === 'review' && b.pending_reviews ? ` (${b.pending_reviews})` : ''}
-                          {stage === 'ocr_review' && b.pending_ocr ? ` (${b.pending_ocr})` : ''}
+                      </Tooltip>
+                    )}
+                    <Text fw={600} lineClamp={1}>{b.assessment_title}</Text>
+                    {b.absent_count > 0 && (
+                      <Tooltip label="Élève(s) sans copie, tous lots de scan confondus — jamais pénalisé(s)">
+                        <Badge size="sm" variant="light" color="gray">
+                          {b.absent_count} absent{b.absent_count > 1 ? 's' : ''}
                         </Badge>
-                        {b.absent_count > 0 && (
-                          <Tooltip label="Élève(s) sans copie à la finalisation, tous lots confondus — jamais pénalisé(s)">
-                            <Badge size="sm" variant="light" color="gray">
-                              {b.absent_count} absent{b.absent_count > 1 ? 's' : ''}
-                            </Badge>
-                          </Tooltip>
-                        )}
-                      </Group>
-                      {stage !== 'awaiting' && (
-                        <Group gap="md">
-                          <SegmentBar segments={b.segments} />
-                          <Text size="xs" c="dimmed">{b.page_count} page(s)</Text>
-                          {stage === 'done' && (
-                            <Checkbox size="xs" label="Distribué aux élèves"
-                              disabled={!overlayReady || !b.overlay_printed}
-                              checked={b.overlay_distributed}
-                              onChange={(e) => setDistributed(b, e.target.checked)} />
-                          )}
-                        </Group>
-                      )}
-                      {b.error && (
-                        <Text size="xs" c="red">
-                          Correction bloquée : {b.error} — relancez, ou re-déposez le scan.
-                        </Text>
-                      )}
-                      {firstWaveBusy && !b.overlay_printed && (
-                        <Group gap="xs" mt={2}>
-                          <Text size="xs" c="dimmed">Première pile :</Text>
-                          <PrintButton assessmentId={b.assessment_id}
-                            file="correction_overlay.pdf" label="Imprimer l'overlay" />
-                        </Group>
-                      )}
-                    </Stack>
-
-                    {/* Aperçu, puis UN bouton principal par étape (la prochaine
-                        action attendue) ; toute autre commande est dans le menu ⋮.
-                        « Corriger les copies » (ouvre la modale scan + réponse
-                        attendue) est TOUJOURS distinct de « Valider » (verrouille),
-                        et un déblocage/effacement est offert quand c'est utile. */}
-                    <Group gap="xs" wrap="nowrap" style={{ flexShrink: 0 }}>
-                      <Button size="xs" variant="subtle" leftSection={<Eye size={14} />}
-                        onClick={() => {
-                          // « Copie + Overlay » n'existe qu'une fois l'overlay généré
-                          setPreviewMode(overlayReady ? 'review' : 'copy')
-                          setPreviewId(b.assessment_id)
-                        }}>
-                        Aperçu
-                      </Button>
-
-                      {stage === 'awaiting' && (
-                        <Text size="xs" c="dimmed" ta="right" style={{ maxWidth: 190 }}>
-                          Déposez le scan dans le <b>bac à sable</b> en haut de page.
-                        </Text>
-                      )}
-
-                      {stage === 'processing' && (
-                        <>
-                          <Button size="xs" variant="light" loading disabled>Correction en cours…</Button>
-                          <ActionsMenu>
-                            <Tooltip position="left" label="Si la correction semble bloquée, relancez-la">
-                              <Menu.Item leftSection={<RefreshCw size={14} />} onClick={() => retry(b)}>
-                                Relancer
-                              </Menu.Item>
-                            </Tooltip>
-                          </ActionsMenu>
-                        </>
-                      )}
-
-                      {stage === 'ocr_review' && (
-                        <>
-                          <Tooltip label={`Reprendre seulement les lectures sous ${(b.ocr_threshold * 100).toFixed(0)} %, avant toute correction`}>
-                            <Button size="xs" color="blue" leftSection={<ScanLine size={14} />}
-                              onClick={() => openOcr(b)}>
-                              OCRiser ({b.pending_ocr})
-                            </Button>
-                          </Tooltip>
-                          <ActionsMenu>
-                            <Tooltip position="left" label="Effacer cette lecture et re-scanner depuis zéro">
-                              <Menu.Item color="red" leftSection={<Trash2 size={14} />}
-                                onClick={() => setResetTarget(b)}>
-                                Effacer
-                              </Menu.Item>
-                            </Tooltip>
-                          </ActionsMenu>
-                        </>
-                      )}
-
-                      {stage === 'error' && (
-                        <>
-                          <Button size="xs" color="orange" leftSection={<RefreshCw size={14} />}
-                            onClick={() => retry(b)}>
-                            Relancer
-                          </Button>
-                          <ActionsMenu>
-                            <Menu.Item leftSection={<ScanLine size={14} />}
-                              onClick={() => openCorrection(b, 'all')}>
-                              Corriger les copies
-                            </Menu.Item>
-                            <Tooltip position="left" label="Effacer, puis re-déposez un scan propre dans le bac à sable">
-                              <Menu.Item color="red" leftSection={<Trash2 size={14} />}
-                                onClick={() => setResetTarget(b)}>
-                                Effacer
-                              </Menu.Item>
-                            </Tooltip>
-                          </ActionsMenu>
-                        </>
-                      )}
-
-                      {stage === 'review' && (
-                        <>
-                          <Button size="xs" color="orange" leftSection={<ScanLine size={14} />}
-                            onClick={() => openCorrection(b, 'flagged')}>
-                            Corriger les copies ({b.pending_reviews})
-                          </Button>
-                          <ActionsMenu>
-                            {b.pending_llm > 0 && (
-                              <Tooltip position="left" label="Retenter uniquement les verdicts DeepSeek indisponibles, sans refaire l’OCR">
-                                <Menu.Item leftSection={<RefreshCw size={14} />} onClick={() => retry(b)}>
-                                  Relancer l’IA ({b.pending_llm})
-                                </Menu.Item>
-                              </Tooltip>
-                            )}
-                            <Tooltip position="left" label="Effacer cette correction et re-scanner depuis zéro">
-                              <Menu.Item color="red" leftSection={<Trash2 size={14} />}
-                                onClick={() => setResetTarget(b)}>
-                                Effacer
-                              </Menu.Item>
-                            </Tooltip>
-                          </ActionsMenu>
-                        </>
-                      )}
-
-                      {stage === 'done' && (
-                        <>
-                          {overlayReady && stale && (
-                            <Tooltip label="Des corrections affinées ne sont pas encore sur l'overlay : régénérez-le avant d'imprimer">
-                              <Button size="xs" color="orange" leftSection={<RefreshCw size={14} />}
-                                loading={b.overlay_rebuilding} onClick={() => regenerateOverlay(b)}>
-                                Régénérer l'overlay
-                              </Button>
-                            </Tooltip>
-                          )}
-                          {overlayReady && !stale && (
-                            <PrintButton assessmentId={b.assessment_id} file="correction_overlay.pdf"
-                              label={b.late_jobs?.length && b.overlay_printed
-                                ? 'Réimprimer la première pile' : "Imprimer l'overlay"} />
-                          )}
-                          <ActionsMenu>
-                            {overlayReady && !b.overlay_distributed && (
-                              <Tooltip position="left" label="Relire chaque copie avec son overlay et corriger une note en modifiant la réponse de l'élève">
-                                <Menu.Item leftSection={<PencilLine size={14} />}
-                                  onClick={() => setRefineBatchId(b.id)}>
-                                  Affiner
-                                </Menu.Item>
-                              </Tooltip>
-                            )}
-                            <Menu.Item leftSection={<ScanLine size={14} />}
-                              onClick={() => openCorrection(b, 'all')}>
-                              Corriger
-                            </Menu.Item>
-                            <Tooltip position="left" label="Recalculer les notes et régénérer les copies corrigées après un ajustement">
-                              <Menu.Item leftSection={<RefreshCw size={14} />} onClick={() => finalize(b)}>
-                                Recalculer les notes
-                              </Menu.Item>
-                            </Tooltip>
-                          </ActionsMenu>
-                        </>
-                      )}
-                    </Group>
+                      </Tooltip>
+                    )}
                   </Group>
-                  {Boolean(b.late_jobs?.length) && (
-                    <LateJobRows batchId={b.id} assessmentId={b.assessment_id}
-                      jobs={b.late_jobs ?? []} onChanged={refresh}
-                      onPreview={(job) => { setPreviewMode('review'); setPreviewWave(job.wave); setPreviewId(b.assessment_id) }}
-                      onCorrect={(job, s) => openCorrection({ ...b, scopeWave: job.wave }, s)}
-                      onOcr={(job) => openOcr({ ...b, scopeWave: job.wave })}
-                      onRetry={() => retry(b)} />
+                  {b.error && !hasLate && (
+                    <Text size="xs" c="red" mb="xs">
+                      Correction bloquée : {b.error} — relancez, ou re-déposez le scan.
+                    </Text>
                   )}
+                  {/* Un lot de scan par ligne : principal et suivants sont identiques */}
+                  {/* Grille commune à tous les lots de la carte : colonnes alignées */}
+                  <div style={{
+                    display: 'grid', alignItems: 'center', columnGap: 16, rowGap: 12,
+                    gridTemplateColumns: 'max-content max-content max-content minmax(60px, 1fr) max-content',
+                    overflowX: 'auto',
+                  }}>
+                    {lots.map((lot, i) => (
+                      <Fragment key={lot.wave}>
+                        {i > 0 && <Divider style={{ gridColumn: '1 / -1' }} />}
+                        <ScanLotRow lot={lot} h={lotHandlers(b, lot)} />
+                      </Fragment>
+                    ))}
+                  </div>
                 </Card>
               )
             })}
@@ -1302,8 +1203,8 @@ export default function Corrections() {
       <PdfPreviewModal assessmentId={previewId} opened={!!previewId} initialMode={previewMode}
         wave={previewWave} onClose={() => { setPreviewId(null); setPreviewWave(0) }} />
 
-      <RefineCorrectionModal batchId={refineBatchId} opened={!!refineBatchId}
-        onClose={() => { setRefineBatchId(null); refresh() }} />
+      <RefineCorrectionModal batchId={refine?.id ?? null} wave={refine?.wave} opened={!!refine}
+        onClose={() => { setRefine(null); refresh() }} />
 
       <Modal opened={!!resetTarget} onClose={() => setResetTarget(null)}
         title={<Text fw={650}>Effacer la correction</Text>}>

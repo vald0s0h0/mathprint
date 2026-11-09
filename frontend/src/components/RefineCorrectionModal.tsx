@@ -625,8 +625,10 @@ function ResponsePanel({ responseId, label, onBack, onApplied }: {
 
 // --------------------------------------------------------------- modale
 
-export default function RefineCorrectionModal({ batchId, opened, onClose }: {
+export default function RefineCorrectionModal({ batchId, opened, onClose, wave }: {
   batchId: string | null; opened: boolean; onClose: () => void
+  // lot de scan à relire (0 = lot principal, N = lot déposé après) ; absent = tout le sujet
+  wave?: number
 }) {
   const [overview, setOverview] = useState<Overview | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -662,14 +664,14 @@ export default function RefineCorrectionModal({ batchId, opened, onClose }: {
     lastShown.current = new Map()
     setOverview(null); setLoadError(null); setIdx(0); setPageIdx(0); setSelected(null)
     setChanged(new Set()); setViewErrors({}); setConfirmClose(false)
-    api.get<Overview>(`/api/scans/batches/${batchId}/refine`)
+    api.get<Overview>(`/api/scans/batches/${batchId}/refine${wave === undefined ? '' : `?wave=${wave}`}`)
       .then((o) => {
         setOverview(o)
         setStatus({ stale: o.stale, rebuilding: o.rebuilding, error: o.error, overlay_printed: o.overlay_printed })
       })
       .catch((e) => setLoadError((e as Error).message))
     return () => { l.dispose(); if (loader.current === l) loader.current = null }
-  }, [opened, batchId])
+  }, [opened, batchId, wave])
 
   const ensureView = useCallback((copyId: string): Promise<CopyView> => {
     const have = views.current.get(copyId)

@@ -372,6 +372,22 @@ def scope_copy_ids(db: Session, batch: ScanBatch, wave: int | None) -> tuple[set
     return by_wave.get(wave, set()), True
 
 
+def main_student_names(db: Session, batch: ScanBatch) -> list[str]:
+    """Élèves du lot de scan principal (vague 0), dans l'ordre de la pile."""
+    rows = (db.query(ScannedPage)
+            .filter(ScannedPage.batch_id == batch.id, ScannedPage.wave == 0,
+                    ScannedPage.dismissed.is_(False), ScannedPage.page_id.is_not(None))
+            .order_by(ScannedPage.source_index).all())
+    names: list[str] = []
+    for row in rows:
+        page = db.get(DocumentPage, row.page_id)
+        copy = db.get(Copy, page.copy_id) if page else None
+        student = db.get(Student, copy.student_id) if copy else None
+        if student and student.name not in names:
+            names.append(student.name)
+    return names
+
+
 def job_segments(stage: str, *, printed: bool) -> list[dict]:
     """Pipeline visuel d'un enchaînement tardif (mêmes étapes que le lot principal)."""
     order = ["scan", "read", "ocrize", "correct", "validate", "done", "overlay_print"]
