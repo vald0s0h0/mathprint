@@ -529,14 +529,25 @@ def _batch_view(db: Session, b: ScanBatch) -> dict:
     stale = refine.overlay_stale(b)
     rebuilding = stale and _is_running(b.id)
     late_jobs = late_copies.jobs_view(db, b)
-    segments = _business_steps(b.status, b.progress_json, pending, pending_ocr,
-                               b.error, b.overlay_printed, stale, rebuilding,
-                               any(job["stage"] not in ("done", "distribute") for job in late_jobs))
+    if late_jobs:
+        # Les copies tardives ont leur propre job (pipeline, erreurs, files de
+        # correction) : le lot principal garde l'état de sa première pile.
+        pending = max(0, pending - sum(j["pending_reviews"] for j in late_jobs))
+        pending_ocr = max(0, pending_ocr - sum(j["pending_ocr"] for j in late_jobs))
+        pending_llm = 0
+        main_progress = {k: True for k in ("uploaded", "split", "ocr_complete", "ocr_confirmed",
+                                           "graded", "finalized", "overlay_ready")}
+        segments = _business_steps("overlay_ready", main_progress, 0, 0, None,
+                                   b.overlay_printed, stale, rebuilding, False)
+    else:
+        segments = _business_steps(b.status, b.progress_json, pending, pending_ocr,
+                                   b.error, b.overlay_printed, stale, rebuilding, False)
     assessment = db.get(Assessment, b.assessment_id)
     # Les étapes techniques du lot suivent l'enchaînement en cours de correction ;
     # la première vague, elle, reste imprimable sous son état final.
     first_wave_status = ("overlay_ready" if late_jobs and assessment
                          and assessment.status == "finalized" else b.status)
+    main_status = first_wave_status if late_jobs else b.status
     cls = db.get(SchoolClass, assessment.class_id) if assessment else None
     # Absents = copies jamais revenues à la finalisation (services.pipeline
     # .finalize_batch les bascule en "absent", jamais pénalisées) + celles
@@ -545,7 +556,7 @@ def _batch_view(db: Session, b: ScanBatch) -> dict:
     absent_count = (db.query(Copy).filter_by(assessment_id=b.assessment_id,
                                              status="absent").count()
                     if assessment else 0)
-    return {"id": b.id, "assessment_id": b.assessment_id, "status": b.status,
+    return {"id": b.id, "assessment_id": b.assessment_id, "status": main_status,
             "assessment_title": assessment.title if assessment else "?",
             "assessment_type": assessment.type if assessment else "training",
             # base de scoring du sujet (contrôle ou entraînement)
@@ -554,7 +565,8 @@ def _batch_view(db: Session, b: ScanBatch) -> dict:
             "class_name": cls.name if cls else "?",
             "class_id": cls.id if cls else None,
             "grade_level": cls.grade_level if cls else "",
-            "page_count": b.page_count, "error": b.error,
+            "page_count": b.page_count - sum(j["page_count"] for j in late_jobs),
+            "error": None if late_jobs else b.error,
             "pending_reviews": pending, "pending_ocr": pending_ocr,
             "pending_llm": pending_llm, "absent_count": absent_count,
             "ocr_threshold": ocr_confidence_threshold(db), "segments": segments,
@@ -876,7 +888,8 @@ def _review_unit(db: Session, resp: StudentResponse, item: CopyItem, copy: Copy,
 
 
 @router.get("/batches/{batch_id}/reviews")
-def list_reviews(batch_id: str, category: str | None = None, db: Session = Depends(get_db)):
+def list_reviews(batch_id: str, category: str | None = None, db: Session = Depends(get_db),
+                 wave: int | None = None):
     """Réponses SIGNALÉES (revue automatique ouverte) — le sous-ensemble que le
     moteur n'a pas su trancher. Voir `list_items` pour toutes les réponses."""
     b = db.get(ScanBatch, batch_id)
@@ -885,11 +898,14 @@ def list_reviews(batch_id: str, category: str | None = None, db: Session = Depen
     q = _pending_reviews_query(db, b.assessment_id)
     if category:
         q = q.filter(ManualReview.category == category)
+    scope = late_copies.scope_copy_ids(db, b, wave)
     out = []
     for r in q.all():
         decision = db.get(GradingDecision, r.decision_id)
         resp = db.get(StudentResponse, decision.response_id)
         item = db.get(CopyItem, resp.copy_item_id)
+        if scope and (item.copy_id in scope[0]) != scope[1]:
+            continue
         copy = db.get(Copy, item.copy_id)
         student = db.get(Student, copy.student_id)
         out.append(_review_unit(db, resp, item, copy, student, review=r, decision=decision))
@@ -899,8 +915,19 @@ def list_reviews(batch_id: str, category: str | None = None, db: Session = Depen
     return out
 
 
+def _wave_copies(db: Session, batch: ScanBatch, wave: int | None) -> list[Copy]:
+    """Copies d'un sujet pour une file de correction : `wave=None` toutes, `0` le
+    lot principal (sans les copies tardives), `N` seulement l'enchaînement tardif N."""
+    copies = db.query(Copy).filter_by(assessment_id=batch.assessment_id).all()
+    scope = late_copies.scope_copy_ids(db, batch, wave)
+    if scope:
+        copies = [c for c in copies if (c.id in scope[0]) == scope[1]]
+    return copies
+
+
 @router.get("/batches/{batch_id}/items")
-def list_items(batch_id: str, scope: str = "flagged", db: Session = Depends(get_db)):
+def list_items(batch_id: str, scope: str = "flagged", db: Session = Depends(get_db),
+               wave: int | None = None):
     """File de correction du professeur.
 
     - `scope=flagged` (défaut) : uniquement les réponses signalées par le moteur
@@ -914,7 +941,7 @@ def list_items(batch_id: str, scope: str = "flagged", db: Session = Depends(get_
     if not b:
         raise HTTPException(404)
     if scope != "all":
-        return list_reviews(batch_id, None, db)
+        return list_reviews(batch_id, None, db, wave)
 
     open_by_resp: dict[str, ManualReview] = {}
     for r in _pending_reviews_query(db, b.assessment_id).all():
@@ -923,7 +950,7 @@ def list_items(batch_id: str, scope: str = "flagged", db: Session = Depends(get_
             open_by_resp[d.response_id] = r
 
     out = []
-    copies = db.query(Copy).filter_by(assessment_id=b.assessment_id).all()
+    copies = _wave_copies(db, b, wave)
     for copy in copies:
         student = db.get(Student, copy.student_id)
         items = (db.query(CopyItem).filter_by(copy_id=copy.id)
@@ -984,14 +1011,14 @@ def _normalized_ocr_controls(zone: ResponseZone, item: CopyItem) -> dict:
 
 
 @router.get("/batches/{batch_id}/ocr-items")
-def list_ocr_items(batch_id: str, db: Session = Depends(get_db)):
+def list_ocr_items(batch_id: str, db: Session = Depends(get_db), wave: int | None = None):
     """File OCR/CV faible confiance, avant toute partie correction."""
     batch = db.get(ScanBatch, batch_id)
     if not batch:
         raise HTTPException(404)
     pending = {r.id for r in pending_ocr_responses(db, batch.assessment_id)}
     out = []
-    copies = db.query(Copy).filter_by(assessment_id=batch.assessment_id).all()
+    copies = _wave_copies(db, batch, wave)
     for copy in copies:
         student = db.get(Student, copy.student_id)
         for item in db.query(CopyItem).filter_by(copy_id=copy.id).all():

@@ -346,6 +346,48 @@ def wave_overlay_ready(db: Session, batch: ScanBatch, wave: int) -> bool:
     return overlay_file(batch.assessment_id, wave).exists()
 
 
+def wave_copy_ids(db: Session, batch: ScanBatch) -> dict[int, set[str]]:
+    """Copies de chaque enchaînement tardif (vague 1, 2…) : ces copies ont leur
+    propre job et ne comptent plus dans le lot principal."""
+    out: dict[int, set[str]] = {}
+    for wave in range(1, (batch.overlay_wave or 0) + 1):
+        ids: set[str] = set()
+        for row in sheets_to_correct(db, batch, wave):
+            page_id = row.page_id or row.replaces_page_id
+            page = db.get(DocumentPage, page_id) if page_id else None
+            if page:
+                ids.add(page.copy_id)
+        out[wave] = ids
+    return out
+
+
+def scope_copy_ids(db: Session, batch: ScanBatch, wave: int | None) -> tuple[set[str], bool] | None:
+    """Filtre de copies pour la file de correction : None = tout le sujet ;
+    wave=N → (copies de la vague N, inclusion) ; wave=0 → (copies tardives, exclusion)."""
+    if wave is None:
+        return None
+    by_wave = wave_copy_ids(db, batch)
+    if wave == 0:
+        return set().union(*by_wave.values()) if by_wave else set(), False
+    return by_wave.get(wave, set()), True
+
+
+def job_segments(stage: str, *, printed: bool) -> list[dict]:
+    """Pipeline visuel d'un enchaînement tardif (mêmes étapes que le lot principal)."""
+    order = ["scan", "read", "ocrize", "correct", "validate", "done", "overlay_print"]
+    labels = {"scan": "Scan déposé", "read": "Lecture des copies", "ocrize": "OCRisation",
+              "correct": "Correction", "validate": "Validation", "done": "Copies corrigées",
+              "overlay_print": "Overlay imprimé" if printed else "Overlay à imprimer"}
+    # étape en cours (index) et sa couleur, selon l'état du job
+    current, color = {
+        "conflict": (3, "orange"), "error": (3, "red"), "ocr_review": (2, "orange"),
+        "review": (3, "orange"), "processing": (3, "blue"), "print": (6, "blue"),
+    }.get(stage, (len(order), "green"))
+    return [{"phase": phase, "label": labels[phase],
+             "state": "green" if i < current else (color if i == current else "gray")}
+            for i, phase in enumerate(order)]
+
+
 def jobs_view(db: Session, batch: ScanBatch) -> list[dict]:
     """Une entrée par enchaînement tardif : c'est elle qui fait une ligne à part."""
     from .pipeline import pending_ocr_responses
@@ -377,6 +419,7 @@ def jobs_view(db: Session, batch: ScanBatch) -> list[dict]:
             if page:
                 item_ids |= {z.item_id for z in db.query(ResponseZone).filter_by(page_id=page.id)}
         conflicts = sum(row.status == "conflict" for row in rows)
+        pages = len({row.page_id or row.replaces_page_id for row in rows})
         ocr = len(item_ids & pending_ocr)
         reviews = len(item_ids & open_items)
         ready = wave_overlay_ready(db, batch, wave)
@@ -401,6 +444,7 @@ def jobs_view(db: Session, batch: ScanBatch) -> list[dict]:
         jobs.append({
             "wave": wave, "created_at": state.get("created_at"), "stage": stage,
             "students": names, "sheets": len(rows), "conflicts": conflicts,
+            "page_count": pages, "segments": job_segments(stage, printed=bool(state.get("printed"))),
             "pending_ocr": ocr, "pending_reviews": reviews,
             "overlay_printed": bool(state.get("printed")),
             "overlay_distributed": bool(state.get("distributed")),
