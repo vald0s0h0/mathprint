@@ -642,7 +642,7 @@ export default function SettingsPage() {
               <Text fw={600} mb="xs">Couleurs techniques</Text>
               <Group grow>
                 <ColorInput size="xs" label="Zones de réponse élève (dropout)"
-                  description="Supprimée avant OCR — garder un ton clair"
+                  description="Supprimée avant OCR — garder un ton clair. Une plage de cette couleur est imprimée en bas de chaque page : le scan en mesure la teinte réelle pour mieux la supprimer."
                   value={system.dropout_color?.value ?? '#F5B7A8'}
                   onChangeEnd={(v) => saveColor('dropout_color', v)} />
                 <ColorInput size="xs" label="Encre de correction (overlay)"

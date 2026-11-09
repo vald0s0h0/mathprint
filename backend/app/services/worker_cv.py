@@ -19,8 +19,9 @@ import numpy as np
 import pypdfium2 as pdfium
 
 from .pdfgen import (FIDUCIAL_DICT, FIDUCIAL_IDS, MARGIN, PAGE_H, PAGE_W,
-                     QCM_BOX, QCM_DETECT_MARGIN, QCM_DETECT_MARGIN_R, QR_MAIN, QR_MINI)
-from .security import verify_page_payload
+                     QCM_BOX, QCM_DETECT_MARGIN, QCM_DETECT_MARGIN_R, QR_MAIN, QR_MINI,
+                     SWATCH_H, SWATCH_W, SWATCH_X, SWATCH_Y)
+from .security import is_code_page_id, verify_page_payload
 
 try:                       # lecteur DataMatrix : sans lui, seuls les anciens QR sont lus
     import zxingcpp
@@ -57,6 +58,9 @@ class PageAnalysis:
     blur: float = 0.0
     warped: np.ndarray | None = None
     warnings: list[str] = field(default_factory=list)
+    # teinte de masquage mesurée sur la plage pipette de la page (H, S en échelle
+    # OpenCV 0-179 / 0-255), None sur les anciennes copies ou si la plage est illisible
+    dropout_target: tuple[float, float] | None = None
 
 
 def iter_raster_pdf(path: str, dpi: int = DPI):
@@ -343,7 +347,14 @@ def analyze_page(img: np.ndarray, forced_page_id: str | None = None) -> PageAnal
     # (détection QCM à seuils absolus, crops Mathpix, aperçu) retrouve le fond
     # blanc qu'il suppose. L'original n'est jamais modifié (RM-002) ; `warped` est
     # déjà un dérivé.
-    res.warped = flatten_background(warped)
+    # Pipette : sur les copies à code DataMatrix, la plage de masquage imprimée en bas
+    # donne la vraie teinte à supprimer (mesurée AVANT le blanchiment, qui la ferait
+    # disparaître). Les anciennes copies n'en ont pas : filtre nominal.
+    if is_code_page_id(res.page_id):
+        res.dropout_target = sample_dropout_target(warped)
+        if res.dropout_target is None:
+            res.warnings.append("dropout_swatch_unreadable")
+    res.warped = flatten_background(warped, res.dropout_target)
     res.status = "registered"
     return res
 
@@ -432,13 +443,53 @@ def draw_expected_answer(crop: np.ndarray, *, zone_geo: dict, meta: dict,
     return out
 
 
-def dropout_filter(crop: np.ndarray) -> np.ndarray:
+# Pipette : la teinte réellement imprimée par CETTE imprimante sur CE papier, lue
+# par ce scanner, peut sortir de la plage « rouge » nominale (saumon plus orangé ou
+# plus rosé). Une plage de la couleur de masquage est imprimée en bas de chaque page :
+# on y mesure la teinte et la saturation, et on masque ce qui y ressemble.
+SWATCH_INSET_MM = 1.5          # on mesure au cœur de la plage, loin de ses bords flous
+SWATCH_MIN_SAT = 25            # en dessous : papier blanc ou plage absente, pas du saumon
+SWATCH_MIN_VAL = 120           # au dessous : tache ou ombre, pas la plage
+DROPOUT_HUE_TOL = 10           # écart de teinte toléré autour de la teinte mesurée
+_SALMON_HUES = (range(0, 31), range(150, 180))   # plage plausible pour accepter la mesure
+
+
+def sample_dropout_target(warped: np.ndarray) -> tuple[float, float] | None:
+    """Teinte (H) et saturation (S) de la plage pipette d'une page recalée, ou None
+    si elle est illisible (papier blanc, tache, scan coupé) : le filtre nominal
+    s'applique alors. Mesure par médiane, donc insensible à une poussière."""
+    inset = SWATCH_INSET_MM / 25.4 * 72
+    x0, y1 = pt_to_px(SWATCH_X + inset, SWATCH_Y + inset)
+    x1, y0 = pt_to_px(SWATCH_X + SWATCH_W - inset, SWATCH_Y + SWATCH_H - inset)
+    h, w = warped.shape[:2]
+    x0, x1, y0, y1 = max(0, int(x0)), min(w, int(x1)), max(0, int(y0)), min(h, int(y1))
+    if x1 - x0 < 8 or y1 - y0 < 4:
+        return None
+    patch = warped[y0:y1, x0:x1]
+    # médiane de chaque canal BGR, puis conversion : la moyenne de teintes serait fausse
+    # près de la coupure 179/0 du rouge
+    med = np.median(patch.reshape(-1, 3), axis=0).astype(np.uint8).reshape(1, 1, 3)
+    hue, sat, val = (int(x) for x in cv2.cvtColor(med, cv2.COLOR_BGR2HSV)[0, 0])
+    if sat < SWATCH_MIN_SAT or val < SWATCH_MIN_VAL or not any(hue in r for r in _SALMON_HUES):
+        return None
+    return float(hue), float(sat)
+
+
+def dropout_filter(crop: np.ndarray, target: tuple[float, float] | None = None) -> np.ndarray:
     """Supprime les teintes rouge/orangé claires (cadres, lignes guides) ;
-    conserve l'encre noire et bleue de l'élève (§5.3)."""
+    conserve l'encre noire et bleue de l'élève (§5.3). `target` (teinte, saturation
+    mesurées sur la plage pipette, cf. sample_dropout_target) élargit le masque à la
+    teinte réellement imprimée ; sans elle, plage nominale seule."""
     hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
     h, s, v = hsv[..., 0], hsv[..., 1], hsv[..., 2]
     red_hue = (h <= 18) | (h >= 165)
     mask = red_hue & (s > 30) & (v > 90)
+    if target is not None:
+        h0, s0 = target
+        hi = h.astype(np.int16)
+        dist = np.minimum(np.abs(hi - int(h0)), 180 - np.abs(hi - int(h0)))
+        s_min = int(min(30, max(15, 0.4 * s0)))       # plage pâle : on descend un peu plus bas en saturation
+        mask |= (dist <= DROPOUT_HUE_TOL) & (s > s_min) & (v > 90)
     out = crop.copy()
     out[mask] = (255, 255, 255)
     return out
@@ -463,11 +514,11 @@ _FLATTEN_DOWN = 8            # sous-échantillonnage pour estimer le fond (vites
 _FLATTEN_KERNEL_MM = 12.0    # noyau de fermeture, > plus gros aplat d'encre à garder
 
 
-def flatten_background(bgr: np.ndarray) -> np.ndarray:
+def flatten_background(bgr: np.ndarray, target: tuple[float, float] | None = None) -> np.ndarray:
     """Retire le saumon (dropout) puis blanchit le fond par division par la carte
     d'illumination. Idempotent sur une page déjà blanche (le fond y vaut ~255).
     Une seule passe par page — sert la détection QCM ET l'OCR Mathpix."""
-    no_salmon = dropout_filter(bgr)
+    no_salmon = dropout_filter(bgr, target)
     h, w = no_salmon.shape[:2]
     down = _FLATTEN_DOWN
     sw, sh = max(1, w // down), max(1, h // down)

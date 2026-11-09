@@ -260,7 +260,16 @@ NOTE_W_V3 = 24 * mm
 CLASS_W = 22 * mm                      # zone classe : largeur FIXE (l'overlay ne connaît pas le nom)
 LABEL_W = 56 * mm                      # « Correction — Nom » et « total brut → note »
 DATE_RIGHT = TR_X - 3 * mm             # la date : bas de page, à droite, contre le fiduciel BR
-BOTTOM_NOTE_RIGHT = DATE_RIGHT - 23 * mm   # l'appréciation s'arrête avant la date
+# Plage « pipette » : un aplat de la couleur de masquage (rouge saumon des cadres de
+# réponse), imprimé en bas de CHAQUE page, avec le même toner que les cadres. À la
+# lecture du scan, la vision mesure sa vraie couleur (imprimante, papier, scanner)
+# et masque exactement cette teinte (cf. worker_cv.sample_dropout_target).
+SWATCH_RIGHT = DATE_RIGHT - 23 * mm        # laisse la place de la date
+SWATCH_W = 22 * mm
+SWATCH_X = SWATCH_RIGHT - SWATCH_W
+SWATCH_Y = MARGIN + FID_INSET              # même bas et même haut que le noir d'un fiduciel
+SWATCH_H = FID_BLACK
+BOTTOM_NOTE_RIGHT = SWATCH_X - 4 * mm      # l'appréciation s'arrête avant la plage
 
 
 def header_geometry(assessment_type: str, layout: str = LAYOUT_V3) -> dict:
@@ -346,7 +355,8 @@ def _draw_markers_v1(c: canvas.Canvas, page_payload: str):
 
 def _draw_markers(c: canvas.Canvas, page_payload: str):
     """4 fiduciels AprilTag de coin (placement, un type par coin, §5.4) + code de
-    page DataMatrix (identité + clé de contrôle, bas gauche). FIGÉ."""
+    page DataMatrix (identité + clé de contrôle, bas gauche) + plage pipette de la
+    couleur de masquage (bas, à droite du code). FIGÉ."""
     for role, (x, y) in {
         "TL": (MARGIN, PAGE_H - MARGIN - QR_MINI),
         "TR": (TR_X, PAGE_H - MARGIN - QR_MINI),
@@ -355,6 +365,9 @@ def _draw_markers(c: canvas.Canvas, page_payload: str):
     }.items():
         c.drawImage(_fiducial_image(FIDUCIAL_IDS[role]), x, y, QR_MINI, QR_MINI)
     _draw_datamatrix(c, DM_X, DM_Y, printable_code(page_payload))
+    c.setFillColor(DROPOUT)
+    c.rect(SWATCH_X, SWATCH_Y, SWATCH_W, SWATCH_H, stroke=0, fill=1)
+    c.setFillColor(black)
 
 
 BADGE_GAP = 1.8 * mm    # blanc entre le badge et le début de l'énoncé

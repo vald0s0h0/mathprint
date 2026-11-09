@@ -17,6 +17,8 @@ les blancs verticaux se resserrent.
 - **Code de page** : DataMatrix 8×32 (8 modules sur 8,25 mm, la hauteur du carré noir d'un
   fiduciel), en bas à **gauche** contre le fiduciel BL — loin de la manche d'un élève droitier.
 - **Date** : en bas à droite, contre le fiduciel BR.
+- **Plage pipette** : un aplat (22 × 8,25 mm) de la couleur de masquage, imprimé en bas de chaque page
+  avec le même toner que les cadres de réponse (cf. ci-dessous).
 - **Espacements verticaux** (`CARD_PAD_T/M/B`, `GAP`, bande de correction, encadrés d'aide) resserrés.
 
 ## Code de page
@@ -36,6 +38,15 @@ identifiant à 12 chiffres = v3, sinon v1) :
 - `Correction — Nom` sur la ligne du nom, et dessous `total brut → note` (`15 / 30 ⟶ 10 / 20`) ;
 - appréciation (barres de progrès, synthèse) dans la bande du bas, entre le code et la date ;
 - les formules LaTeX des micro-corrections sont recolorées comme le texte (`_tinted`).
+
+## Pipette de la couleur de masquage
+
+À chaque page lue (`worker_cv.analyze_page`, copies à code DataMatrix), la vision mesure la teinte et la
+saturation (médiane) de la plage pipette, **avant** le blanchiment du fond. Cette mesure sert uniquement à
+**améliorer** la suppression du saumon : `dropout_filter` applique la plage nominale (rouge/orangé clair)
+**et** la teinte mesurée (±10), jamais l'une à la place de l'autre. Mesure illisible (plage absente, tache,
+papier blanc) : filtre nominal seul, avertissement `dropout_swatch_unreadable`. Coût : ~0,05 ms par page,
+donc refaite pour chaque page.
 
 ## Points à valider sur papier
 
