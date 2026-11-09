@@ -63,6 +63,8 @@ def startup():
     job_worker.start_worker()
     indigo.start_worker()
     mail_intake.start_worker()
+    from .services import card_warm
+    card_warm.start_worker()   # aperçus de cartes pré-rendus, en pause pendant une correction
 
 
 @app.get("/api/health")

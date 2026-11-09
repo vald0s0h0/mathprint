@@ -278,43 +278,12 @@ class CardPreviewIn(BaseModel):
 @router.post("/card-preview.png")
 def card_preview(body: CardPreviewIn, db: Session = Depends(get_db)):
     """Même carte et mêmes mesures que le sujet, avec corrections facultatives."""
-    import json
-    import re
-    from pathlib import Path
-    from ..config import settings
-    from ..models import IndigoExercise
-    from ..services import card_preview as preview, indigo
-    ex = dict(body.exercise)
-    if len(json.dumps(ex)) > 80000 or ex.get("response_type") not in exercise_gen.VALID_RESPONSE_TYPES:
-        raise HTTPException(422, "Carte invalide")
-    url = ex.get("figure_url") or ""
-    if url:
-        match = re.fullmatch(r"/api/(indigo|content)/exercises/([\w-]+)/figure\.png(?:\?v=\d+)?", url)
-        if not match:
-            raise HTTPException(422, "Référence de figure invalide")
-        if match[1] == "indigo":
-            row = db.get(IndigoExercise, match[2])
-            ex["figure"] = ({"type": "image", "params": {"path": str(indigo.crop_abs_path(row.figure_path))}}
-                            if row and row.figure_path else None)
-        else:
-            row = db.get(GeneratedExercise, match[2])
-            ex["figure"] = row.figure_json if row else None
-
-    def check_figures(value):
-        if isinstance(value, dict):
-            if value.get("type") == "image":
-                p = Path((value.get("params") or {}).get("path", "")).resolve()
-                roots = (Path(settings.data_dir).resolve(), Path(__file__).resolve().parents[1] / "data")
-                if not any(p.is_relative_to(root) for root in roots):
-                    raise HTTPException(422, "Figure hors du dossier de données")
-            for child in value.values():
-                check_figures(child)
-        elif isinstance(value, list):
-            for child in value:
-                check_figures(child)
-    check_figures(ex)
+    from ..services import card_preview as preview
     try:
+        ex = preview.resolve_card(dict(body.exercise), db)
         png = preview.render(ex, body.guides, body.show_answers)
+    except preview.InvalidCard as exc:
+        raise HTTPException(422, str(exc)) from exc
     except (ValueError, TypeError, KeyError, IndexError) as exc:
         raise HTTPException(422, "Impossible de rendre cette carte") from exc
     return Response(png, media_type="image/png")

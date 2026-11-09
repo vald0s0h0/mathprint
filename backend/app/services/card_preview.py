@@ -1,8 +1,12 @@
 """Aperçu écran issu du moteur PDF : aucune seconde mise en page HTML."""
 from __future__ import annotations
 
+import hashlib
 import io
 import json
+import os
+import shutil
+import threading
 from pathlib import Path
 from functools import lru_cache
 from threading import RLock
@@ -11,6 +15,7 @@ import fitz
 from reportlab.pdfgen import canvas
 from reportlab.lib.colors import HexColor
 
+from ..config import settings
 from . import blocks, construction, generation, handwriting, pdfgen
 
 _LOCK = RLock()
@@ -97,10 +102,150 @@ def _answers(c, meta: dict, expected: dict, rtype: str, zone: dict,
     c.restoreState()
 
 
+class InvalidCard(ValueError):
+    """Carte refusée (entrée invalide) : l'API répond 422 avec ce message."""
+
+
+def resolve_card(ex: dict, db) -> dict:
+    """Valide la carte reçue et résout sa figure depuis la base. Partagé par
+    l'API et le préchauffage : les deux produisent ainsi la MÊME clé de cache."""
+    import re
+    from ..models import GeneratedExercise, IndigoExercise
+    from . import exercise_gen, indigo
+    if len(json.dumps(ex)) > 80000 or ex.get("response_type") not in exercise_gen.VALID_RESPONSE_TYPES:
+        raise InvalidCard("Carte invalide")
+    url = ex.get("figure_url") or ""
+    if url:
+        match = re.fullmatch(r"/api/(indigo|content)/exercises/([\w-]+)/figure\.png(?:\?v=\d+)?", url)
+        if not match:
+            raise InvalidCard("Référence de figure invalide")
+        if match[1] == "indigo":
+            row = db.get(IndigoExercise, match[2])
+            ex["figure"] = ({"type": "image", "params": {"path": str(indigo.crop_abs_path(row.figure_path))}}
+                            if row and row.figure_path else None)
+        else:
+            row = db.get(GeneratedExercise, match[2])
+            ex["figure"] = row.figure_json if row else None
+
+    def check_figures(value):
+        if isinstance(value, dict):
+            if value.get("type") == "image":
+                p = Path((value.get("params") or {}).get("path", "")).resolve()
+                roots = (Path(settings.data_dir).resolve(), Path(__file__).resolve().parents[1] / "data")
+                if not any(p.is_relative_to(root) for root in roots):
+                    raise InvalidCard("Figure hors du dossier de données")
+            for child in value.values():
+                check_figures(child)
+        elif isinstance(value, list):
+            for child in value:
+                check_figures(child)
+    check_figures(ex)
+    return ex
+
+
+def _norm(value):
+    """1.0 -> 1 : le navigateur renvoie les nombres entiers sans « .0 », la clé
+    de cache doit donc être la même pour l'API, le navigateur et le préchauffage."""
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, dict):
+        return {k: _norm(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_norm(v) for v in value]
+    return value
+
+
+def canonical_key(ex: dict) -> str:
+    return json.dumps(_norm(ex), sort_keys=True, ensure_ascii=False)
+
+
+def _renderer_version() -> str:
+    """Les PNG et hauteurs en cache sont périmés dès que la mise en page change :
+    version = empreinte des fichiers de mise en page (cf. layout_version)."""
+    from .layout_version import layout_version
+    return layout_version()
+
+
+_CACHE_ROOT = "cardcache"
+DISK_CACHE = True      # les tests le coupent (ils espionnent le rendu)
+
+
+def _disk_file(key: str, guides: bool, show_answers: bool) -> Path:
+    h = hashlib.sha256(f"{key}|{int(guides)}|{int(show_answers)}".encode()).hexdigest()
+    return Path(settings.data_dir) / _CACHE_ROOT / _renderer_version() / f"{h}.png"
+
+
+def cached_file(ex: dict, guides: bool = True, show_answers: bool = False) -> Path:
+    return _disk_file(canonical_key(ex), guides, show_answers)
+
+
+def _height_file(shape: dict, font_size: int, math_fs: int, ex_tpl: dict) -> Path:
+    key = json.dumps([_norm(shape), font_size, math_fs, _norm(ex_tpl)],
+                     sort_keys=True, ensure_ascii=False, default=str)
+    h = hashlib.sha256(key.encode()).hexdigest()
+    return Path(settings.data_dir) / _CACHE_ROOT / _renderer_version() / f"h-{h}.txt"
+
+
+def has_cached_height(shape: dict, font_size: int, math_fs: int, ex_tpl: dict) -> bool:
+    return _height_file(shape, font_size, math_fs, ex_tpl).exists()
+
+
+def cached_height(shape: dict, font_size: int, math_fs: int, ex_tpl: dict) -> float:
+    """Hauteur (pt) d'une carte, lue du cache disque si déjà mesurée. Clé = la
+    forme exacte passée au moteur + les réglages de police : aucune hypothèse sur
+    les champs de l'exercice."""
+    path = _height_file(shape, font_size, math_fs, ex_tpl)
+    if DISK_CACHE:
+        try:
+            return float(path.read_text())
+        except (OSError, ValueError):
+            pass
+    with _LOCK:      # mesure = mêmes outils que le rendu (formules matplotlib)
+        value = float(pdfgen.estimate_item_height(shape, font_size, math_fs, ex_tpl))
+    if DISK_CACHE:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(f".{os.getpid()}.{threading.get_ident()}.tmp")
+            tmp.write_text(repr(value))
+            os.replace(tmp, path)
+        except OSError:
+            pass
+    return value
+
+
+def prune_old_versions() -> None:
+    """Supprime les caches des versions précédentes (sinon le disque grossit à
+    chaque déploiement)."""
+    root = Path(settings.data_dir) / _CACHE_ROOT
+    if not root.is_dir():
+        return
+    keep = _renderer_version()
+    for d in root.iterdir():
+        if d.is_dir() and d.name != keep:
+            shutil.rmtree(d, ignore_errors=True)
+
+
 def render(ex: dict, guides: bool = True, show_answers: bool = False) -> bytes:
-    # Matplotlib n'est pas thread-safe. Le cache évite le travail à chaque scroll.
+    key = canonical_key(ex)
+    path = _disk_file(key, guides, show_answers)
+    if DISK_CACHE:
+        try:                   # cache disque : survit aux redémarrages, sans verrou
+            return path.read_bytes()
+        except OSError:
+            pass
+    # Matplotlib n'est pas thread-safe : un rendu à la fois.
     with _LOCK:
-        return _render(json.dumps(ex, sort_keys=True, ensure_ascii=False), guides, show_answers)
+        png = _render(key, guides, show_answers)
+    if not DISK_CACHE:
+        return png
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(f".{os.getpid()}.{threading.get_ident()}.tmp")
+        tmp.write_bytes(png)
+        os.replace(tmp, path)  # atomique : jamais de PNG à moitié écrit
+    except OSError:
+        pass                   # le cache est un confort, jamais une condition
+    return png
 
 
 @lru_cache(maxsize=96)

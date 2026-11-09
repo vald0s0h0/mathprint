@@ -38,7 +38,7 @@ from ..models import (
     Assessment, Competency, Copy, DocumentPage, ExercisePreference, FileObject, GeneratedExercise,
     Job, ResponseZone, SchoolClass, StudentLevel,
 )
-from . import answer_mix, exercise_gen, generation, pdfgen, scoring, sheet_engine, student_history
+from . import answer_mix, card_preview, exercise_gen, generation, pdfgen, scoring, sheet_engine, student_history
 from .runtime_settings import doc_templates
 from .security import sign_page
 
@@ -165,7 +165,9 @@ def _card(db: Session, row: GeneratedExercise, comp: Competency, tpl: dict,
     heights = {}
     for mode in GUIDE_MODES:
         shape = generation.render_shape(row, mode)
-        heights[mode] = pdfgen.estimate_item_height(
+        # mesure mise en cache sur disque (préchauffée en arrière-plan) : l'ouverture
+        # de l'assistant ne refait plus la mise en page de chaque carte
+        heights[mode] = card_preview.cached_height(
             shape, font_size, math_fs, tpl["exercise"])
     grading = row.grading_json or {}
     display_statement, is_problem = generation.indigo_display(row)

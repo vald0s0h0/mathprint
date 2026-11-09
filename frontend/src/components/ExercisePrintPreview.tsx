@@ -194,6 +194,30 @@ export function ExerciseRichBody({ text, color = 'indigo', size }: {
   )
 }
 
+/** Cartes déjà chargées, gardées en mémoire pour la session : revenir sur une
+ * page ou changer d'onglet n'impose plus de redemander (et refaire rendre) la
+ * carte au serveur. LRU borné ; un échec n'est jamais mémorisé. */
+const CARD_CACHE_MAX = 150
+const cardCache = new Map<string, Promise<Blob>>()
+function cardBlob(key: string, signal: AbortSignal): Promise<Blob> {
+  const hit = cardCache.get(key)
+  if (hit) { cardCache.delete(key); cardCache.set(key, hit); return hit }
+  const token = getToken()
+  // sans signal : la requête mémorisée peut servir une autre carte identique
+  // même si ce composant est démonté avant la fin
+  const req = fetch('/api/content/card-preview.png', {
+    method: 'POST', body: key,
+    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+  }).then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.blob() })
+  req.catch(() => { if (cardCache.get(key) === req) cardCache.delete(key) })
+  cardCache.set(key, req)
+  if (cardCache.size > CARD_CACHE_MAX) cardCache.delete(cardCache.keys().next().value as string)
+  return new Promise<Blob>((resolve, reject) => {
+    signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+    req.then(resolve, reject)
+  })
+}
+
 /** Le PDF est l'autorité de mise en page, y compris dans les deux banques.
  * Chargement à l'approche de la carte ; les réponses se superposent aux mêmes
  * coordonnées que les zones de correction, sans modifier la géométrie. */
@@ -221,11 +245,7 @@ function PrintedCard({ exercise, guides, showAnswers }: {
     const controller = new AbortController()
     let url: string | null = null
     setSrc(null); setError(false)
-    const token = getToken()
-    fetch('/api/content/card-preview.png', {
-      method: 'POST', body: key, signal: controller.signal,
-      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-    }).then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.blob() })
+    cardBlob(key, controller.signal)
       .then((blob) => { if (!controller.signal.aborted) { url = URL.createObjectURL(blob); setSrc(url) } })
       .catch(() => { if (!controller.signal.aborted) setError(true) })
     return () => { controller.abort(); if (url) URL.revokeObjectURL(url) }
