@@ -355,6 +355,29 @@ def render_coordinate_plane(points: list[dict] | None = None, grid: bool = True)
                             "points": annotated})
 
 
+def figure_cache_key(figure_json: dict) -> str:
+    """Hash stable d'une figure + version du moteur : clé du cache disque et
+    ETag HTTP (change si la figure ou le moteur change)."""
+    import json as _json
+    from .figkit import ENGINE_VERSION
+    key_src = {**figure_json, "_engine": ENGINE_VERSION}
+    return hashlib.sha256(
+        _json.dumps(key_src, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+
+def figure_etag(figure_json: dict) -> str | None:
+    """ETag HTTP d'une figure, sans la rendre. None si non calculable."""
+    if not figure_json or 'type' not in figure_json:
+        return None
+    if figure_json['type'] == "image":
+        path = (figure_json.get('params') or {}).get("path")
+        if not path or not Path(path).exists():
+            return None
+        st = Path(path).stat()
+        return f'"img-{st.st_mtime_ns:x}-{st.st_size:x}"'
+    return f'"{figure_cache_key(figure_json)}"'
+
+
 def render_figure(figure_json: dict) -> bytes:
     """Rend une figure paramétrée en PNG. Cache disque automatique.
 
@@ -382,11 +405,7 @@ def render_figure(figure_json: dict) -> bytes:
         return Path(path).read_bytes()
 
     # Clé de cache
-    import json as _json
-    from .figkit import ENGINE_VERSION
-    key_src = {**figure_json, "_engine": ENGINE_VERSION}
-    cache_key = hashlib.sha256(
-        _json.dumps(key_src, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    cache_key = figure_cache_key(figure_json)
     cache_dir = Path(settings.data_dir) / "figcache"
     cache_dir.mkdir(parents=True, exist_ok=True)
     cache_file = cache_dir / f"{cache_key}.png"
@@ -443,5 +462,5 @@ def render_figure(figure_json: dict) -> bytes:
     return png
 
 
-__all__ = ['render_figure', 'validate_figure', 'figure_error', 'render_rectangle', 'render_triangle',
+__all__ = ['render_figure', 'figure_cache_key', 'figure_etag', 'validate_figure', 'figure_error', 'render_rectangle', 'render_triangle',
            'render_circle', 'render_angle', 'render_number_line', 'render_coordinate_plane']

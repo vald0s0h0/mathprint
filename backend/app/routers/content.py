@@ -7,7 +7,7 @@ regénération ciblée. Sert aussi le rendu PNG des figures paramétrées.
 """
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy import func
@@ -333,8 +333,19 @@ def render_figure(body: FigureIn):
 
 
 @router.get("/exercises/{exercise_id}/figure.png")
-def exercise_figure(exercise_id: str, db: Session = Depends(get_db)):
+def exercise_figure(exercise_id: str, request: Request,
+                    db: Session = Depends(get_db)):
     ex = db.get(GeneratedExercise, exercise_id)
     if not ex or not ex.figure_json:
         raise HTTPException(404, "Pas de figure")
-    return Response(figures.render_figure(ex.figure_json), media_type="image/png")
+    # ETag dérivé de la figure : le navigateur revalide (304) sans que le
+    # serveur ait à relire ni à re-rendre le PNG.
+    headers = {"Cache-Control": "private, no-cache"}
+    etag = figures.figure_etag(ex.figure_json)
+    if etag:
+        headers["ETag"] = etag
+        if etag in [t.strip() for t in
+                    request.headers.get("if-none-match", "").split(",")]:
+            return Response(status_code=304, headers=headers)
+    return Response(figures.render_figure(ex.figure_json),
+                    media_type="image/png", headers=headers)

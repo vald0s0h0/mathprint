@@ -713,7 +713,10 @@ def exercise_figure(exercise_id: str, db: Session = Depends(get_db)):
     path = indigo.crop_abs_path(ex.figure_path)
     if not path.exists():
         raise HTTPException(404, "Fichier de figure absent")
-    return FileResponse(path, media_type="image/png")
+    # FileResponse pose ETag + Last-Modified ; no-cache force la revalidation
+    # (304) pour qu'un recadrage de la figure soit vu aussitôt.
+    return FileResponse(path, media_type="image/png",
+                        headers={"Cache-Control": "private, no-cache"})
 
 
 @router.get("/exercises/{exercise_id}/figure/source.png")
