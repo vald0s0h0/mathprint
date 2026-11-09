@@ -1,6 +1,7 @@
 """Assistant sujets (§3.1) : création, tableau de compétences, adaptation,
 génération en file de fond, fichiers."""
 import copy as copylib
+import re
 from pathlib import Path
 from typing import Literal
 
@@ -788,6 +789,9 @@ def get_file(assessment_id: str, name: str, db: Session = Depends(get_db)):
     allowed = {"subject_batch.pdf": "generated", "copy_manifest.json": "generated",
                "generation_report.json": "generated", "correction_overlay.pdf": "overlays",
                "correction_review.pdf": "overlays"}
+    # overlay d'un enchaînement tardif : correction_overlay_w<N>.pdf
+    if re.fullmatch(r"correction_overlay_w\d+\.pdf", name):
+        allowed[name] = "overlays"
     if name not in allowed:
         raise HTTPException(404)
     path = settings.data_dir / "assessments" / assessment_id / allowed[name] / name

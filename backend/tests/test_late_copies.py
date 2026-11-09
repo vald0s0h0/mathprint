@@ -291,11 +291,22 @@ def test_view_keeps_the_first_wave_printable_during_a_late_correction(world):
     batch = _first_round(world)
     _, batch = _deposit(world, _scan(world.pages["Chloé"]))
     view = scans_router._batch_view(world.db, batch)
-    assert view["status"] == "review_pending"
+    # le lot principal garde l'état de sa première pile ; la copie tardive a son pipeline
+    assert view["status"] == "overlay_ready"
     assert view["first_wave_status"] == "overlay_ready"
     assert view["overlay_wave"] == 1
+    assert view["pending_reviews"] == 0 and view["error"] is None
+    assert view["segments"][-1]["label"] != "Overlay tardif à imprimer"
+    job = view["late_jobs"][0]
+    assert job["stage"] == "review"
+    assert [s["state"] for s in job["segments"]][:3] == ["green", "green", "green"]
+    main = {i["student"] for i in scans_router.list_items(batch.id, "all", world.db, wave=0)}
+    late = {i["student"] for i in scans_router.list_items(batch.id, "all", world.db, wave=1)}
+    assert late == {"Chloé"} and "Chloé" not in main
     _correct_all(world, batch)
-    assert scans_router._batch_view(world.db, batch)["segments"][-1]["label"] == "Overlay tardif à imprimer"
+    job = scans_router._batch_view(world.db, batch)["late_jobs"][0]
+    assert job["segments"][-1] == {"phase": "overlay_print", "label": "Overlay à imprimer",
+                                   "state": "blue"}
 
 
 def test_stuck_late_correction_resumes_the_pipeline_not_only_the_overlay(world):

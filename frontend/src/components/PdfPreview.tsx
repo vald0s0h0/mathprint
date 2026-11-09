@@ -44,9 +44,11 @@ export function PdfFrame({ src, height = '70vh' }: { src: string; height?: strin
 }
 
 export default function PdfPreviewModal({
-  assessmentId, opened, onClose, initialMode = 'copy',
+  assessmentId, opened, onClose, initialMode = 'copy', wave = 0,
 }: {
   assessmentId: string | null; opened: boolean; onClose: () => void
+  // enchaînement tardif : n'affiche que l'overlay de cette pile
+  wave?: number
   // vue ouverte par défaut : « review » (copie + overlay) pour relire une
   // correction avant impression, « copy » pour prévisualiser un sujet.
   initialMode?: 'copy' | 'batch' | 'overlay' | 'review'
@@ -74,11 +76,12 @@ export default function PdfPreviewModal({
   const cur = entries[idx]
   const src = useMemo(() => {
     if (!assessmentId) return ''
+    if (wave) return `/api/assessments/${assessmentId}/files/correction_overlay_w${wave}.pdf`
     if (mode === 'batch') return `/api/assessments/${assessmentId}/files/subject_batch.pdf`
     if (mode === 'overlay') return `/api/assessments/${assessmentId}/files/correction_overlay.pdf`
     if (mode === 'review') return `/api/assessments/${assessmentId}/files/correction_review.pdf`
     return cur ? `/api/assessments/${assessmentId}/copies/${cur.copy_id}/pdf` : ''
-  }, [assessmentId, mode, cur])
+  }, [assessmentId, mode, cur, wave])
 
   function jumpToRole(role: string) {
     const i = entries.findIndex((e) => e.role === role)
@@ -87,7 +90,10 @@ export default function PdfPreviewModal({
 
   return (
     <Modal opened={opened} onClose={onClose} size="90%" title="Aperçu PDF">
-      <Group justify="space-between" mb="xs" wrap="wrap">
+      {wave > 0 && (
+        <Text size="sm" fw={600} mb="xs">Overlay des copies tardives</Text>
+      )}
+      <Group justify="space-between" mb="xs" wrap="wrap" display={wave ? 'none' : undefined}>
         <Group gap="xs">
           <Button size="xs" variant={mode === 'copy' ? 'filled' : 'light'}
             onClick={() => setMode('copy')}>Par copie</Button>
@@ -114,7 +120,7 @@ export default function PdfPreviewModal({
           </Group>
         )}
       </Group>
-      {mode === 'copy' && cur && (
+      {!wave && mode === 'copy' && cur && (
         <Group gap="xs" mb="xs">
           <Text size="sm" fw={600}>{cur.student}</Text>
           <Badge size="sm" color="grape">niveau {cur.level}/10</Badge>

@@ -1,19 +1,23 @@
 // Copies tardives : chaque nouvel enchaînement scanné sur un sujet déjà corrigé est
 // un job à part (backend services.late_copies), avec sa ligne et son overlay.
 import {
-  Alert, Badge, Box, Button, Checkbox, Group, Modal, Paper, Stack, Text,
+  Alert, Badge, Box, Button, Checkbox, Group, Menu, Modal, Paper, Stack, Text,
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
-import { Scale } from 'lucide-react'
+import { Eye, RefreshCw, ScanLine, Scale } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../api'
+import ActionsMenu from './ActionsMenu'
 import AuthImg from './AuthImg'
 import PrintButton from './PrintButton'
+import SegmentBar, { type Segment } from './SegmentBar'
 
 export type LateJob = {
   wave: number; created_at: string | null
   stage: 'conflict' | 'error' | 'ocr_review' | 'review' | 'processing' | 'print' | 'distribute' | 'done'
   students: string[]; sheets: number; conflicts: number
+  // pipeline visuel propre à ce lot, et nombre de pages scannées
+  segments: Segment[]; page_count: number
   pending_ocr: number; pending_reviews: number
   overlay_printed: boolean; overlay_distributed: boolean
 }
@@ -151,9 +155,17 @@ export function LateConflictButton({ batchId, count, onResolved, size = 'xs' }: 
   )
 }
 
-/** Une ligne par enchaînement tardif, sous la carte du sujet. */
-export default function LateJobRows({ batchId, assessmentId, jobs, onChanged }: {
+/** Un lot par enchaînement tardif, sous la carte du sujet : pleine largeur, avec son
+ *  propre pipeline visuel, son aperçu et son menu — il se corrige indépendamment du
+ *  lot principal. */
+export default function LateJobRows({
+  batchId, assessmentId, jobs, onChanged, onPreview, onCorrect, onOcr, onRetry,
+}: {
   batchId: string; assessmentId: string; jobs: LateJob[]; onChanged: () => void
+  onPreview: (job: LateJob) => void
+  onCorrect: (job: LateJob, scope: 'flagged' | 'all') => void
+  onOcr: (job: LateJob) => void
+  onRetry: () => void
 }) {
   async function setDistributed(job: LateJob, value: boolean) {
     await api.patch(`/api/scans/batches/${batchId}`, { overlay_distributed: value, wave: job.wave })
@@ -161,38 +173,78 @@ export default function LateJobRows({ batchId, assessmentId, jobs, onChanged }: 
   }
 
   return (
-    <Stack gap={6} mt={4}>
+    <Stack gap="xs" mt="sm">
       {jobs.map((job) => (
-        <Paper key={job.wave} withBorder radius="sm" p="xs" data-testid={`late-job-${job.wave}`}
+        <Paper key={job.wave} withBorder radius="sm" p="sm" data-testid={`late-job-${job.wave}`}
           style={{ opacity: job.stage === 'done' ? 0.6 : 1 }}>
-          <Group justify="space-between" gap="xs">
-            <Box style={{ minWidth: 0, flex: 1 }}>
+          <Group justify="space-between" gap="xs" wrap="nowrap" align="flex-start">
+            <Stack gap={6} style={{ minWidth: 0, flex: 1 }}>
               <Group gap={6}>
                 <Text size="sm" fw={600}>Copies tardives</Text>
                 <Badge size="sm" variant="light" color={STAGE[job.stage].color}>
                   {STAGE[job.stage].label}
                 </Badge>
+                <Text size="xs" c="dimmed" truncate>
+                  {lateJobDate(job)}{job.students.length ? ` · ${lateJobNames(job)}` : ''}
+                </Text>
               </Group>
-              <Text size="xs" c="dimmed" truncate>
-                {lateJobDate(job)}{job.students.length ? ` · ${lateJobNames(job)}` : ''}
-              </Text>
-            </Box>
-            <Group gap="xs" wrap="nowrap">
+              <Group gap="md">
+                <SegmentBar segments={job.segments} />
+                <Text size="xs" c="dimmed">{job.page_count} page(s)</Text>
+                {job.stage === 'distribute' && (
+                  <Checkbox size="xs" label="Distribué aux élèves" checked={job.overlay_distributed}
+                    onChange={(e) => setDistributed(job, e.target.checked)} />
+                )}
+              </Group>
+            </Stack>
+            <Group gap="xs" wrap="nowrap" style={{ flexShrink: 0 }}>
+              <Button size="xs" variant="subtle" leftSection={<Eye size={14} />}
+                disabled={!['print', 'distribute', 'done'].includes(job.stage)}
+                onClick={() => onPreview(job)}>
+                Aperçu
+              </Button>
               {job.stage === 'conflict' && (
                 <LateConflictButton batchId={batchId} count={job.conflicts} onResolved={onChanged} />
+              )}
+              {job.stage === 'ocr_review' && (
+                <Button size="xs" color="blue" leftSection={<ScanLine size={14} />}
+                  onClick={() => onOcr(job)}>
+                  OCRiser ({job.pending_ocr})
+                </Button>
+              )}
+              {job.stage === 'review' && (
+                <Button size="xs" color="orange" leftSection={<ScanLine size={14} />}
+                  onClick={() => onCorrect(job, 'flagged')}>
+                  Corriger les copies ({job.pending_reviews})
+                </Button>
+              )}
+              {job.stage === 'processing' && (
+                <Button size="xs" variant="light" loading disabled>Correction en cours…</Button>
+              )}
+              {job.stage === 'error' && (
+                <Button size="xs" color="orange" leftSection={<RefreshCw size={14} />}
+                  onClick={onRetry}>
+                  Relancer
+                </Button>
               )}
               {job.stage === 'print' && (
                 <PrintButton assessmentId={assessmentId} file="correction_overlay.pdf" wave={job.wave}
                   label="Imprimer les overlays tardifs" />
               )}
               {job.stage === 'distribute' && (
-                <>
-                  <PrintButton assessmentId={assessmentId} file="correction_overlay.pdf" wave={job.wave}
-                    label="Réimprimer" />
-                  <Checkbox size="xs" label="Distribué aux élèves" checked={job.overlay_distributed}
-                    onChange={(e) => setDistributed(job, e.target.checked)} />
-                </>
+                <PrintButton assessmentId={assessmentId} file="correction_overlay.pdf" wave={job.wave}
+                  label="Réimprimer" />
               )}
+              <ActionsMenu>
+                <Menu.Item leftSection={<ScanLine size={14} />}
+                  disabled={job.stage === 'conflict' || job.stage === 'processing'}
+                  onClick={() => onCorrect(job, 'all')}>
+                  Corriger
+                </Menu.Item>
+                <Menu.Item leftSection={<RefreshCw size={14} />} onClick={onRetry}>
+                  Relancer
+                </Menu.Item>
+              </ActionsMenu>
             </Group>
           </Group>
         </Paper>

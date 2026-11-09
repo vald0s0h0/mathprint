@@ -20,13 +20,12 @@ import { api, getToken } from '../api'
 import ActionsMenu from '../components/ActionsMenu'
 import MathText, { MathAnswer } from '../components/MathText'
 import PdfPreviewModal from '../components/PdfPreview'
+import SegmentBar, { type Segment } from '../components/SegmentBar'
 import LateJobRows, { type LateJob } from '../components/LateJobs'
 import PrintButton from '../components/PrintButton'
 import RefineCorrectionModal from '../components/RefineCorrectionModal'
 import { useAppState } from '../state/AppState'
 
-type SegState = 'green' | 'orange' | 'blue' | 'gray' | 'red'
-type Segment = { phase: string; label?: string; state: SegState }
 type Batch = {
   id: string; assessment_id: string; status: string; page_count: number
   assessment_title: string; assessment_type: string
@@ -45,6 +44,8 @@ type Batch = {
   segments: Segment[]; created_at: string
   // Enchaînements déposés après la validation : un job par dépôt (services.late_copies)
   late_jobs?: LateJob[]; first_wave_status?: string
+  // file de correction restreinte à un lot tardif (posé à l'ouverture des modales)
+  scopeWave?: number
 }
 // une case à corriger d'un tableau / de cases à trous (table_fill, multi_blank) :
 // sa réponse attendue lisible, ce que l'OCR a lu, le crédit calculé par le moteur
@@ -115,15 +116,17 @@ type SandboxResult = {
 }
 type Scope = 'flagged' | 'all'
 
-const SEG_COLORS: Record<SegState, string> = {
-  green: 'var(--mantine-color-green-6)', orange: 'var(--mantine-color-orange-6)',
-  blue: 'var(--mantine-color-blue-5)', gray: 'var(--mantine-color-gray-4)',
-  red: 'var(--mantine-color-red-6)',
-}
 const CATEGORY_LABELS: Record<string, string> = {
   rature: 'Rature', double_coche: 'Double coche', ocr_ambigu: 'OCR ambigu',
   scan_faible: 'Scan faible', bareme: 'Barème',
   trace_dessin: 'Tracé / dessin', points_a_relier: 'Points à relier',
+}
+
+// Le lot principal ne montre plus les copies tardives (wave=0) dès qu'il y en a ;
+// un lot tardif ne montre que les siennes (wave=N).
+function waveQuery(b: Batch): string {
+  const wave = b.scopeWave ?? (b.late_jobs?.length ? 0 : undefined)
+  return wave === undefined ? '' : `&wave=${wave}`
 }
 
 // Étape « métier » d'un lot, dérivée de son statut technique — c'est elle qui
@@ -152,31 +155,6 @@ const STAGE_BADGE: Record<Stage, { label: string; color: string }> = {
   done: { label: 'prêt à imprimer', color: 'green' },
 }
 
-// Visualiseur des étapes MÉTIER de la correction : chaque étape porte son
-// libellé et sa couleur (vert = fait, bleu = en cours, orange = à corriger,
-// gris = à venir, rouge = bloqué). Une flèche montre que le flux avance.
-function SegmentBar({ segments }: { segments: Segment[] }) {
-  return (
-    <Group gap={6} wrap="wrap">
-      {segments.map((s, i) => (
-        <Group key={s.phase} gap={6} wrap="nowrap">
-          <Group gap={5} wrap="nowrap">
-            <div style={{
-              width: 9, height: 9, borderRadius: '50%', background: SEG_COLORS[s.state],
-              boxShadow: s.state === 'orange' || s.state === 'red'
-                ? `0 0 0 3px ${SEG_COLORS[s.state]}33` : undefined,
-            }} />
-            <Text size="xs" c={s.state === 'gray' ? 'dimmed' : undefined}
-              fw={s.state === 'orange' || s.state === 'red' ? 700 : 500}>
-              {s.label ?? s.phase}
-            </Text>
-          </Group>
-          {i < segments.length - 1 && <Text size="xs" c="dimmed">›</Text>}
-        </Group>
-      ))}
-    </Group>
-  )
-}
 
 // points à la française pour l'affichage (1,5 — et 2 plutôt que 2,0)
 // arrondi au millième pour l'AFFICHAGE seulement : les points d'un exercice ne
@@ -479,6 +457,7 @@ export default function Corrections() {
   const assessmentFilter = searchParams.get('assessment')
   const [batches, setBatches] = useState<Batch[]>([])
   const [items, setItems] = useState<Item[]>([])
+  const [previewWave, setPreviewWave] = useState(0)
   const [reviewBatch, setReviewBatch] = useState<Batch | null>(null)
   const [ocrBatch, setOcrBatch] = useState<Batch | null>(null)
   const [ocrItems, setOcrItems] = useState<Item[]>([])
@@ -590,7 +569,7 @@ export default function Corrections() {
   }
 
   const loadItems = useCallback(async (b: Batch, s: Scope) => {
-    const rs = await api.get<Item[]>(`/api/scans/batches/${b.id}/items?scope=${s}`)
+    const rs = await api.get<Item[]>(`/api/scans/batches/${b.id}/items?scope=${s}${waveQuery(b)}`)
     setItems(rs)
     setUnits(buildUnits(rs, s))
     // Une réponse SIGNALÉE doit être validée explicitement : ses crédits auto
@@ -620,7 +599,7 @@ export default function Corrections() {
   }
 
   const loadOcrItems = useCallback(async (b: Batch, desired = 0) => {
-    const rs = await api.get<Item[]>(`/api/scans/batches/${b.id}/ocr-items`)
+    const rs = await api.get<Item[]>(`/api/scans/batches/${b.id}/ocr-items?${waveQuery(b).slice(1)}`)
     const nextUnits = buildOcrUnits(rs, b.ocr_threshold || 0.9)
     setOcrItems(rs); setOcrUnits(nextUnits)
     setOcrIdx(Math.max(0, Math.min(desired, nextUnits.length - 1)))
@@ -1135,17 +1114,23 @@ export default function Corrections() {
                           {badge.label}{stage === 'review' && b.pending_reviews ? ` (${b.pending_reviews})` : ''}
                           {stage === 'ocr_review' && b.pending_ocr ? ` (${b.pending_ocr})` : ''}
                         </Badge>
+                        {b.absent_count > 0 && (
+                          <Tooltip label="Élève(s) sans copie à la finalisation, tous lots confondus — jamais pénalisé(s)">
+                            <Badge size="sm" variant="light" color="gray">
+                              {b.absent_count} absent{b.absent_count > 1 ? 's' : ''}
+                            </Badge>
+                          </Tooltip>
+                        )}
                       </Group>
                       {stage !== 'awaiting' && (
                         <Group gap="md">
                           <SegmentBar segments={b.segments} />
                           <Text size="xs" c="dimmed">{b.page_count} page(s)</Text>
-                          {b.absent_count > 0 && (
-                            <Tooltip label="Élève(s) sans copie à la finalisation — jamais pénalisé(s)">
-                              <Badge size="sm" variant="light" color="gray">
-                                {b.absent_count} absent{b.absent_count > 1 ? 's' : ''}
-                              </Badge>
-                            </Tooltip>
+                          {stage === 'done' && (
+                            <Checkbox size="xs" label="Distribué aux élèves"
+                              disabled={!overlayReady || !b.overlay_printed}
+                              checked={b.overlay_distributed}
+                              onChange={(e) => setDistributed(b, e.target.checked)} />
                           )}
                         </Group>
                       )}
@@ -1154,24 +1139,12 @@ export default function Corrections() {
                           Correction bloquée : {b.error} — relancez, ou re-déposez le scan.
                         </Text>
                       )}
-                      {stage === 'done' && (
-                        <Group gap="lg" mt={2}>
-                          <Checkbox size="xs" label="Distribué aux élèves"
-                            disabled={!overlayReady || !b.overlay_printed}
-                            checked={b.overlay_distributed}
-                            onChange={(e) => setDistributed(b, e.target.checked)} />
-                        </Group>
-                      )}
                       {firstWaveBusy && !b.overlay_printed && (
                         <Group gap="xs" mt={2}>
                           <Text size="xs" c="dimmed">Première pile :</Text>
                           <PrintButton assessmentId={b.assessment_id}
                             file="correction_overlay.pdf" label="Imprimer l'overlay" />
                         </Group>
-                      )}
-                      {Boolean(b.late_jobs?.length) && (
-                        <LateJobRows batchId={b.id} assessmentId={b.assessment_id}
-                          jobs={b.late_jobs ?? []} onChanged={refresh} />
                       )}
                     </Stack>
 
@@ -1311,6 +1284,14 @@ export default function Corrections() {
                       )}
                     </Group>
                   </Group>
+                  {Boolean(b.late_jobs?.length) && (
+                    <LateJobRows batchId={b.id} assessmentId={b.assessment_id}
+                      jobs={b.late_jobs ?? []} onChanged={refresh}
+                      onPreview={(job) => { setPreviewMode('review'); setPreviewWave(job.wave); setPreviewId(b.assessment_id) }}
+                      onCorrect={(job, s) => openCorrection({ ...b, scopeWave: job.wave }, s)}
+                      onOcr={(job) => openOcr({ ...b, scopeWave: job.wave })}
+                      onRetry={() => retry(b)} />
+                  )}
                 </Card>
               )
             })}
@@ -1319,7 +1300,7 @@ export default function Corrections() {
       ))}
 
       <PdfPreviewModal assessmentId={previewId} opened={!!previewId} initialMode={previewMode}
-        onClose={() => setPreviewId(null)} />
+        wave={previewWave} onClose={() => { setPreviewId(null); setPreviewWave(0) }} />
 
       <RefineCorrectionModal batchId={refineBatchId} opened={!!refineBatchId}
         onClose={() => { setRefineBatchId(null); refresh() }} />
