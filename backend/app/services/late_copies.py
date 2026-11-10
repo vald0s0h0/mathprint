@@ -397,7 +397,7 @@ def job_segments(stage: str, *, printed: bool) -> list[dict]:
     # étape en cours (index) et sa couleur, selon l'état du job
     current, color = {
         "conflict": (3, "orange"), "error": (3, "red"), "ocr_review": (2, "orange"),
-        "review": (3, "orange"), "processing": (3, "blue"), "print": (6, "blue"),
+        "review": (3, "orange"), "processing": (3, "blue"), "print": (6, "orange"),
     }.get(stage, (len(order), "green"))
     return [{"phase": phase, "label": labels[phase],
              "state": "green" if i < current else (color if i == current else "gray")}

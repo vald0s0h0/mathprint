@@ -20,7 +20,7 @@ import { useElementSize } from '@mantine/hooks'
 import { notifications } from '@mantine/notifications'
 import {
   ArrowLeft, Check, ChevronLeft, ChevronRight, Columns2, RectangleVertical,
-  RefreshCw, Search, X,
+  RefreshCw, Search, X, ZoomIn, ZoomOut,
 } from 'lucide-react'
 import {
   useCallback, useEffect, useMemo, useReducer, useRef, useState,
@@ -29,7 +29,11 @@ import {
 import { api, getToken } from '../api'
 import MathText, { MathAnswer } from './MathText'
 
-type CopyEntry = { copy_id: string; student: string; note: string | null; points: string | null }
+type CopyEntry = {
+  copy_id: string; student: string; note: string | null; points: string | null
+  // aperçu du sujet : pages de la copie dans subject_batch.pdf
+  subject?: { pages: number; offset: number }
+}
 type Rect = { x: number; y: number; w: number; h: number }
 type Zone = {
   response_id: string; sequence: number; response_type: string
@@ -38,6 +42,8 @@ type Zone = {
 type CopyPage = {
   page_id: string; index: number; page_no: number; version: string
   has_scan: boolean; zones: Zone[]
+  // aperçu du sujet : image de la page (sinon l'aperçu de correction par défaut)
+  src?: string
 }
 type CopyView = {
   copy_id: string; student: string; note: string | null; points: string | null
@@ -74,7 +80,7 @@ const fmtPts = (v: number) => (Math.round(v * 1000) / 1000).toString().replace('
 const sleep = (ms: number) => new Promise((ok) => setTimeout(ok, ms))
 const previewKey = (p: CopyPage) => `${p.page_id}:${p.version}`
 const previewSrc = (copyId: string, p: CopyPage) =>
-  `/api/scans/refine/copies/${copyId}/pages/${p.page_id}/preview?v=${p.version}`
+  p.src ?? `/api/scans/refine/copies/${copyId}/pages/${p.page_id}/preview?v=${p.version}`
 
 const TYPE_LABELS: Record<string, string> = {
   qcm_single: 'QCM', qcm_multiple: 'QCM', checkbox_grid: 'Grille', matching: 'Liaisons',
@@ -625,11 +631,21 @@ function ResponsePanel({ responseId, label, onBack, onApplied }: {
 
 // --------------------------------------------------------------- modale
 
-export default function RefineCorrectionModal({ batchId, opened, onClose, wave }: {
-  batchId: string | null; opened: boolean; onClose: () => void
+/** Visionneuse de copies, une page entière à la fois (ou recto-verso côte à côte).
+ *  - `refine`  : « Affiner la correction » (copie scannée + overlay, réponses modifiables) ;
+ *  - `overlay` : aperçu avant impression des overlays (copie scannée + overlay), lecture seule ;
+ *  - `subject` : aperçu avant impression du sujet (pages de chaque copie), lecture seule. */
+export default function RefineCorrectionModal({
+  batchId, assessmentId, mode = 'refine', opened, onClose, wave,
+}: {
+  batchId?: string | null; assessmentId?: string | null
+  mode?: 'refine' | 'overlay' | 'subject'
+  opened: boolean; onClose: () => void
   // lot de scan à relire (0 = lot principal, N = lot déposé après) ; absent = tout le sujet
   wave?: number
 }) {
+  const readOnly = mode !== 'refine'
+  const sourceId = mode === 'subject' ? assessmentId : batchId
   const [overview, setOverview] = useState<Overview | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [idx, setIdx] = useState(0)
@@ -638,6 +654,7 @@ export default function RefineCorrectionModal({ batchId, opened, onClose, wave }
     try { return localStorage.getItem(LAYOUT_KEY) === 'single' ? 'single' : 'spread' } catch { return 'spread' }
   })
   const [selected, setSelected] = useState<string | null>(null)
+  const [zoom, setZoom] = useState(1)
   const [status, setStatus] = useState<RefineStatus>({ stale: false, rebuilding: false, error: null, overlay_printed: false })
   const [changed, setChanged] = useState<Set<string>>(new Set())
   const [regenerating, setRegenerating] = useState(false)
@@ -656,30 +673,62 @@ export default function RefineCorrectionModal({ batchId, opened, onClose, wave }
 
   // (ré)ouverture : état neuf, cache d'aperçus neuf
   useEffect(() => {
-    if (!opened || !batchId) return
+    if (!opened || !sourceId) return
     const l = new PreviewLoader(rerender)
     loader.current = l
     views.current = new Map()
     viewRequests.current = new Map()
     lastShown.current = new Map()
     setOverview(null); setLoadError(null); setIdx(0); setPageIdx(0); setSelected(null)
-    setChanged(new Set()); setViewErrors({}); setConfirmClose(false)
-    api.get<Overview>(`/api/scans/batches/${batchId}/refine${wave === undefined ? '' : `?wave=${wave}`}`)
-      .then((o) => {
-        setOverview(o)
-        setStatus({ stale: o.stale, rebuilding: o.rebuilding, error: o.error, overlay_printed: o.overlay_printed })
-      })
-      .catch((e) => setLoadError((e as Error).message))
+    setChanged(new Set()); setViewErrors({}); setConfirmClose(false); setZoom(1)
+    if (mode === 'subject') {
+      api.get<{ copy_id: string; student: string; pages: number; page_offset: number }[]>(
+        `/api/assessments/${sourceId}/preview`)
+        .then((rows) => setOverview({
+          batch_id: '', assessment_id: sourceId, title: '', stale: false, rebuilding: false,
+          error: null, overlay_printed: false,
+          copies: rows.map((r) => ({
+            copy_id: r.copy_id, student: r.student, note: null, points: null,
+            subject: { pages: r.pages, offset: r.page_offset },
+          })),
+        }))
+        .catch((e) => setLoadError((e as Error).message))
+    } else {
+      api.get<Overview>(`/api/scans/batches/${sourceId}/refine${wave === undefined ? '' : `?wave=${wave}`}`)
+        .then((o) => {
+          setOverview(o)
+          setStatus({ stale: o.stale, rebuilding: o.rebuilding, error: o.error, overlay_printed: o.overlay_printed })
+        })
+        .catch((e) => setLoadError((e as Error).message))
+    }
     return () => { l.dispose(); if (loader.current === l) loader.current = null }
-  }, [opened, batchId, wave])
+  }, [opened, sourceId, wave, mode])
 
   const ensureView = useCallback((copyId: string): Promise<CopyView> => {
     const have = views.current.get(copyId)
     if (have) return Promise.resolve(have)
     let req = viewRequests.current.get(copyId)
+    if (!req && mode === 'subject') {
+      // pages du sujet : connues d'avance, rien à charger
+      const e = overview?.copies.find((c) => c.copy_id === copyId)
+      if (!e?.subject) return Promise.reject(new Error('Copie inconnue'))
+      const v: CopyView = {
+        copy_id: copyId, student: e.student, note: null, points: null,
+        pages: Array.from({ length: e.subject.pages }, (_, k) => ({
+          page_id: `${copyId}:${k}`, index: k, page_no: k + 1, version: '1', has_scan: true, zones: [],
+          src: `/api/assessments/${assessmentId}/pages/${e.subject!.offset + k}/preview`,
+        })),
+      }
+      views.current.set(copyId, v)
+      rerender()
+      return Promise.resolve(v)
+    }
     if (!req) {
       req = api.get<CopyView>(`/api/scans/refine/copies/${copyId}`)
-        .then((v) => {
+        .then((raw) => {
+          // lecture seule : pas de zones cliquables sur les pages
+          const v = readOnly ? { ...raw, pages: raw.pages.map((p) => ({ ...p, zones: [] })) } : raw
+
           views.current.set(copyId, v)
           setViewErrors((m) => { const { [copyId]: _, ...rest } = m; return rest })
           rerender()
@@ -693,7 +742,7 @@ export default function RefineCorrectionModal({ batchId, opened, onClose, wave }
       viewRequests.current.set(copyId, req)
     }
     return req
-  }, [])
+  }, [mode, overview, assessmentId, readOnly])
 
   const copies = overview?.copies ?? []
   const entry = copies[idx] ?? null
@@ -822,7 +871,7 @@ export default function RefineCorrectionModal({ batchId, opened, onClose, wave }
 
   function requestClose() {
     if (closing) return
-    if (status.stale) setConfirmClose(true)
+    if (!readOnly && status.stale) setConfirmClose(true)
     else onClose()
   }
 
@@ -845,6 +894,9 @@ export default function RefineCorrectionModal({ batchId, opened, onClose, wave }
       if (e.key === '/' || (e.key.toLowerCase() === 'k' && (e.metaKey || e.ctrlKey))) {
         e.preventDefault(); searchRef.current?.focus(); return
       }
+      if (e.key === '+' || e.key === '=') { e.preventDefault(); changeZoom(0.25); return }
+      if (e.key === '-') { e.preventDefault(); changeZoom(-0.25); return }
+      if (e.key === '0') { e.preventDefault(); setZoom(1); return }
       if (e.key === 'ArrowRight') { e.preventDefault(); goTo(idx + 1) }
       else if (e.key === 'ArrowLeft') { e.preventDefault(); goTo(idx - 1) }
       else if (e.key === 'ArrowDown' || e.key === 'PageDown') {
@@ -859,6 +911,10 @@ export default function RefineCorrectionModal({ batchId, opened, onClose, wave }
     return () => window.removeEventListener('keydown', h)
   })
 
+  function changeZoom(delta: number) {
+    setZoom((z) => Math.max(1, Math.min(3, Math.round((z + delta) * 100) / 100)))
+  }
+
   function changeLayout(v: string) {
     const next = v === 'single' ? 'single' : 'spread'
     setLayout(next)
@@ -869,7 +925,7 @@ export default function RefineCorrectionModal({ batchId, opened, onClose, wave }
   const n = Math.max(1, shownPages.length)
   const availW = Math.max(0, viewerW - 32 - (n - 1) * PAGE_GAP)
   const availH = Math.max(0, viewerH - 32)
-  const pageH = Math.floor(Math.min(availH, (availW / n) / PAGE_RATIO))
+  const pageH = Math.floor(Math.min(availH, (availW / n) / PAGE_RATIO) * zoom)
   const pageW = Math.floor(pageH * PAGE_RATIO)
 
   const searchData = useMemo(() => copies.map((c) => ({
@@ -893,7 +949,10 @@ export default function RefineCorrectionModal({ batchId, opened, onClose, wave }
         <Group justify="space-between" wrap="nowrap" gap="sm" px="md" py={8}
           style={{ borderBottom: '1px solid var(--mp-border-subtle)', flexShrink: 0 }}>
           <Group gap="sm" wrap="nowrap" style={{ minWidth: 0 }}>
-            <Text fw={700} style={{ whiteSpace: 'nowrap' }}>Affiner la correction</Text>
+            <Text fw={700} style={{ whiteSpace: 'nowrap' }}>
+              {mode === 'subject' ? 'Aperçu du sujet'
+                : mode === 'overlay' ? 'Aperçu des copies corrigées' : 'Affiner la correction'}
+            </Text>
             <Text c="dimmed" lineClamp={1} size="sm">{overview?.title}</Text>
           </Group>
           <Group gap="xs" wrap="nowrap">
@@ -933,7 +992,25 @@ export default function RefineCorrectionModal({ batchId, opened, onClose, wave }
               { value: 'single', label: <Tooltip label="Une page"><RectangleVertical size={15} /></Tooltip> },
               { value: 'spread', label: <Tooltip label="Recto-verso côte à côte"><Columns2 size={15} /></Tooltip> },
             ]} />
+            <Group gap={2} wrap="nowrap">
+              <Tooltip label="Dézoomer ( - )">
+                <ActionIcon variant="default" size="lg" disabled={zoom <= 1} onClick={() => changeZoom(-0.25)}
+                  aria-label="Dézoomer"><ZoomOut size={16} /></ActionIcon>
+              </Tooltip>
+              <Tooltip label="Page entière ( 0 )">
+                <Button variant="subtle" color="gray" size="compact-sm" px={6} onClick={() => setZoom(1)}
+                  style={{ minWidth: 48 }}>{Math.round(zoom * 100)} %</Button>
+              </Tooltip>
+              <Tooltip label="Zoomer ( + )">
+                <ActionIcon variant="default" size="lg" disabled={zoom >= 3} onClick={() => changeZoom(0.25)}
+                  aria-label="Zoomer"><ZoomIn size={16} /></ActionIcon>
+              </Tooltip>
+            </Group>
           </Group>
+          {readOnly ? (
+            <ActionIcon variant="subtle" color="gray" size="lg" onClick={requestClose}
+              aria-label="Fermer"><X size={18} /></ActionIcon>
+          ) : (
           <Group gap="xs" wrap="nowrap">
             {status.stale ? (
               <Badge color="orange" variant="light">overlay à régénérer</Badge>
@@ -949,6 +1026,7 @@ export default function RefineCorrectionModal({ batchId, opened, onClose, wave }
             <ActionIcon variant="subtle" color="gray" size="lg" onClick={requestClose}
               aria-label="Fermer" disabled={closing}><X size={18} /></ActionIcon>
           </Group>
+          )}
         </Group>
 
         <Box style={{ flex: 1, minHeight: 0, display: 'flex' }}>
@@ -956,7 +1034,7 @@ export default function RefineCorrectionModal({ batchId, opened, onClose, wave }
           <Box ref={viewerRef} data-autofocus tabIndex={-1} style={{ flex: 1, minWidth: 0,
             position: 'relative', outline: 'none',
             background: 'var(--mp-surface-sunken)', display: 'flex', alignItems: 'center',
-            justifyContent: 'center', gap: PAGE_GAP, padding: 16, overflow: 'hidden' }}>
+            justifyContent: 'center', gap: PAGE_GAP, padding: 16, overflow: zoom > 1 ? 'auto' : 'hidden' }}>
             {loadError ? (
               <Alert color="red" variant="light" maw={480}>{loadError}</Alert>
             ) : !overview ? (
@@ -974,14 +1052,19 @@ export default function RefineCorrectionModal({ batchId, opened, onClose, wave }
               <Loader />
             ) : !pages.length ? (
               <Text c="dimmed">Aucune page corrigée pour cette copie.</Text>
-            ) : pageH > 0 && shownPages.map((p) => {
-              const img = imageFor(p)
-              return (
-                <PageView key={p.page_id} page={p} src={img.src} stale={img.stale}
-                  width={pageW} height={pageH} selectedId={selected} changed={changed}
-                  labels={labels} onPick={pickZone} />
-              )
-            })}
+            ) : pageH > 0 && (
+              // margin:auto centre les pages sans rogner leur début quand le zoom déborde
+              <Box style={{ display: 'flex', gap: PAGE_GAP, margin: 'auto', flexShrink: 0 }}>
+                {shownPages.map((p) => {
+                  const img = imageFor(p)
+                  return (
+                    <PageView key={p.page_id} page={p} src={img.src} stale={img.stale}
+                      width={pageW} height={pageH} selectedId={selected} changed={changed}
+                      labels={labels} onPick={pickZone} />
+                  )
+                })}
+              </Box>
+            )}
             {pages.length > step && (
               <Group gap={4} style={{ position: 'absolute', bottom: 10, left: '50%',
                 transform: 'translateX(-50%)' }}>
@@ -1005,10 +1088,24 @@ export default function RefineCorrectionModal({ batchId, opened, onClose, wave }
                 {entry?.note && <Badge size="lg" variant="filled" color="red">{entry.note}</Badge>}
               </Group>
               {entry?.points && <Text size="xs" c="dimmed">{entry.points} points</Text>}
+              {readOnly && <Text size="xs" c="dimmed">{pages.length} page{pages.length > 1 ? 's' : ''}</Text>}
             </Box>
             <Divider />
             <ScrollArea style={{ flex: 1 }} px="md" py="sm">
-              {selected ? (
+              {readOnly ? (
+                <Stack gap={2}>
+                  {copies.map((c, i) => (
+                    <UnstyledButton key={c.copy_id} onClick={() => goTo(i)} px={8} py={6}
+                      style={{ borderRadius: 6,
+                        background: i === idx ? 'var(--mp-surface-strong)' : undefined }}>
+                      <Group justify="space-between" wrap="nowrap">
+                        <Text size="sm" fw={i === idx ? 700 : 400} lineClamp={1}>{c.student}</Text>
+                        {c.note && <Badge size="sm" variant="light" color="red">{c.note}</Badge>}
+                      </Group>
+                    </UnstyledButton>
+                  ))}
+                </Stack>
+              ) : selected ? (
                 <ResponsePanel key={selected} responseId={selected} label={labels.get(selected)}
                   onBack={() => setSelected(null)} onApplied={onApplied} />
               ) : (
@@ -1041,7 +1138,7 @@ export default function RefineCorrectionModal({ batchId, opened, onClose, wave }
             <Divider />
             <Text size="xs" c="dimmed" px="md" py={8} style={{ flexShrink: 0 }}>
               <Kbd size="xs">←</Kbd> <Kbd size="xs">→</Kbd> élève · <Kbd size="xs">↑</Kbd> <Kbd size="xs">↓</Kbd> page
-              · <Kbd size="xs">/</Kbd> recherche
+              · <Kbd size="xs">/</Kbd> recherche · <Kbd size="xs">+</Kbd> <Kbd size="xs">-</Kbd> zoom
             </Text>
           </Box>
         </Box>

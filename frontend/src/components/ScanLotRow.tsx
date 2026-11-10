@@ -2,12 +2,13 @@
 // après la validation s'affichent à l'identique : seule la taille (pages) les distingue.
 // Chaque lot a son pipeline, son aperçu et sa prochaine action ; ce qui est propre à
 // la correction entière (titre, absents) reste dans l'en-tête de la carte.
-import { Badge, Button, Checkbox, Group, Menu, Text, Tooltip } from '@mantine/core'
-import { Eye, PencilLine, RefreshCw, ScanLine, Trash2 } from 'lucide-react'
+import { useState } from 'react'
+import { Badge, Button, Group, Menu, Text, Tooltip } from '@mantine/core'
+import { Eye, PencilLine, RefreshCw, Printer, ScanLine, Send, Trash2, Undo2 } from 'lucide-react'
 import ActionsMenu from './ActionsMenu'
 import { LateConflictButton } from './LateJobs'
 import PrintButton from './PrintButton'
-import SegmentBar, { type Segment } from './SegmentBar'
+import SegmentBar, { STEP_COUNT, type Segment } from './SegmentBar'
 
 export type LotStage =
   'awaiting' | 'processing' | 'error' | 'ocr_review' | 'review' | 'conflict' | 'ready'
@@ -17,8 +18,6 @@ export type Lot = {
   stage: LotStage
   segments: Segment[]
   pages: number
-  /** Sujet imprimé recto-verso. */
-  duplex: boolean
   pendingOcr: number
   pendingReviews: number
   conflicts: number
@@ -51,60 +50,58 @@ export type LotHandlers = {
   onChanged: () => void
 }
 
-// largeur de « 35 copies » ; l'emplacement R/V est réservé même en recto
+// largeur de « 35 copies »
 const LOT_W = 92
-export const DUPLEX_W = 44
 
 export default function ScanLotRow({ lot, h }: { lot: Lot; h: LotHandlers }) {
   const ready = lot.stage === 'ready'
+  const [reprintOpen, setReprintOpen] = useState(false)
+  // « Affiner » en bouton, à gauche de l'action principale, quand l'impression de l'overlay est
+  // attendue ; l'aperçu est alors dans le menu ⋮ (comme dans les autres états)
+  const printExpected = ready && lot.overlayReady && !lot.stale && !lot.printed
   const n = lot.students.length
-  // Rend 5 cellules de la grille de la carte (voir Corrections) : taille du lot,
-  // pipeline, « Distribué », élèves, actions — alignées d'une ligne à l'autre.
+  // « Distribué » n'est à faire qu'une fois l'overlay à jour et imprimé
+  const distributable = ready && lot.overlayReady && !lot.stale && lot.printed && !lot.distributed
+  // Rend 4 cellules de la grille de la carte (voir Corrections) : taille du lot,
+  // pipeline (avec « Distribué »), élèves, actions — alignées d'une ligne à l'autre.
   return (
     <>
       <Tooltip label={lot.info} disabled={!lot.info} multiline maw={320}>
-        <Group gap={4} wrap="nowrap" data-testid={`scan-lot-${lot.wave}`}>
-          <Badge size="lg" variant="light" color="indigo" radius="sm" w={LOT_W}
-            style={{ fontVariantNumeric: 'tabular-nums' }}>
-            {lot.stage === 'awaiting' ? '—' : `${n} copie${n > 1 ? 's' : ''}`}
-          </Badge>
-          <div style={{ width: DUPLEX_W }}>
-            {lot.duplex && lot.stage !== 'awaiting' && (
-              <Badge size="lg" variant="filled" color="red" radius="sm" px={6}>R/V</Badge>
-            )}
-          </div>
-        </Group>
+        <Badge size="lg" variant="light" color="indigo" radius="sm" w={LOT_W} mr={16}
+          data-testid={`scan-lot-${lot.wave}`} style={{ fontVariantNumeric: 'tabular-nums' }}>
+          {lot.stage === 'awaiting' ? '—' : `${n} copie${n > 1 ? 's' : ''}`}
+        </Badge>
       </Tooltip>
 
       {lot.stage === 'awaiting' ? (
-        <Text size="xs" c="dimmed" style={{ gridColumn: '2 / 5' }}>
+        <Text size="xs" c="dimmed" style={{ gridColumn: `2 / ${STEP_COUNT + 3}` }}>
           En attente de scan — déposez-le dans le <b>bac à sable</b> en haut de page.
         </Text>
       ) : (
         <>
-          <SegmentBar segments={lot.segments} />
-          <div>
-            {ready && (
-              <Checkbox size="xs" label="Distribué"
-                disabled={!lot.overlayReady || !lot.printed}
-                checked={lot.distributed}
-                onChange={(e) => h.onDistributed(e.target.checked)} />
-            )}
-          </div>
+          <SegmentBar segments={lot.segments} extra={{
+            phase: 'distribute', label: 'Distribué',
+            state: lot.distributed ? 'green' : distributable ? 'orange' : 'gray',
+            // cliquable une fois l'overlay imprimé : on coche / décoche la distribution
+            onClick: distributable || lot.distributed
+              ? () => h.onDistributed(!lot.distributed) : undefined,
+            hint: distributable || lot.distributed ? 'Cliquer pour marquer comme distribué aux élèves' : undefined,
+          }} />
           <Text size="xs" c="dimmed" title={lot.students.join(', ')}
-            style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>
+            style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0, marginLeft: 16 }}>
             {n > 0 && n < 4 ? lot.students.join(', ') : ''}
           </Text>
         </>
       )}
 
       {lot.stage !== 'awaiting' ? (
-        <Group gap="xs" wrap="nowrap" justify="flex-end">
-          <Button size="xs" variant="subtle" leftSection={<Eye size={14} />}
-            disabled={lot.wave > 0 && !lot.overlayReady}
-            onClick={h.onPreview}>
-            Aperçu
-          </Button>
+        <Group gap="xs" wrap="nowrap" justify="flex-end" ml={16}>
+          {/* moment d'imprimer l'overlay : « Affiner » (relire / corriger) avant d'imprimer */}
+          {printExpected && (
+            <Button size="xs" variant="subtle" leftSection={<PencilLine size={14} />} onClick={h.onRefine}>
+              Affiner
+            </Button>
+          )}
 
           {lot.stage === 'conflict' && (
             <LateConflictButton batchId={h.batchId} count={lot.conflicts} onResolved={h.onChanged} />
@@ -136,18 +133,46 @@ export default function ScanLotRow({ lot, h }: { lot: Lot; h: LotHandlers }) {
               </Button>
             </Tooltip>
           )}
-          {ready && lot.overlayReady && !lot.stale && (
+          {ready && lot.overlayReady && !lot.stale && !lot.printed && (
             <PrintButton assessmentId={h.assessmentId} file="correction_overlay.pdf"
               wave={lot.wave} label="Imprimer l'overlay" />
           )}
+          {ready && !lot.overlayReady && (
+            <Button size="xs" variant="light" loading disabled>Génération de l'overlay…</Button>
+          )}
+          {/* Étape « Distribué » à faire : son bouton, comme les autres étapes */}
+          {distributable && (
+            <Button size="xs" variant="light" leftSection={<Send size={14} />}
+              onClick={() => h.onDistributed(true)}>
+              Marquer distribué
+            </Button>
+          )}
 
+          {ready && lot.overlayReady && !lot.stale && lot.printed && (
+            <PrintButton assessmentId={h.assessmentId} file="correction_overlay.pdf"
+              wave={lot.wave} label="Imprimer l'overlay" hiddenTrigger
+              open={reprintOpen} onOpenChange={setReprintOpen} />
+          )}
           <ActionsMenu>
-            {ready && lot.overlayReady && !lot.distributed && (
+            {lot.overlayReady && (
+              <Menu.Item leftSection={<Eye size={14} />} onClick={h.onPreview}>Aperçu</Menu.Item>
+            )}
+            {ready && lot.overlayReady && !lot.stale && lot.printed && (
+              <Menu.Item leftSection={<Printer size={14} />} onClick={() => setReprintOpen(true)}>
+                Imprimer l'overlay
+              </Menu.Item>
+            )}
+            {ready && lot.overlayReady && !lot.distributed && !printExpected && (
               <Tooltip position="left" label="Relire chaque copie avec son overlay et corriger une note en modifiant la réponse de l'élève">
                 <Menu.Item leftSection={<PencilLine size={14} />} onClick={h.onRefine}>
                   Affiner
                 </Menu.Item>
               </Tooltip>
+            )}
+            {ready && lot.distributed && (
+              <Menu.Item leftSection={<Undo2 size={14} />} onClick={() => h.onDistributed(false)}>
+                Annuler la distribution
+              </Menu.Item>
             )}
             {(ready || lot.stage === 'error') && (
               <Menu.Item leftSection={<ScanLine size={14} />} onClick={() => h.onCorrect('all')}>

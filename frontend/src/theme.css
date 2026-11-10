@@ -1,0 +1,27 @@
+/* Mode sombre : le contour d'une case non cochée (dark-4) se confond avec le
+   fond des cartes ; on le remonte pour qu'elle reste visible. Cochée, la case
+   garde la couleur d'accent de Mantine. */
+:root[data-mantine-color-scheme='dark'] .mantine-Checkbox-input:not(:checked),
+:root[data-mantine-color-scheme='dark'] .mantine-Radio-radio:not(:checked) {
+  border-color: var(--mantine-color-dark-2);
+  background-color: var(--mantine-color-dark-6);
+}
+
+/* Étape en cours d'une barre de pipeline : un reflet très lent qui avance, pour dire
+   « la machine travaille » sans spinner. */
+.mp-seg-busy {
+  background-image: linear-gradient(105deg, transparent 35%, rgba(255, 255, 255, 0.55) 50%, transparent 65%);
+  background-size: 250% 100%;
+  background-repeat: no-repeat;
+  animation: mp-seg-flow 5s linear infinite;
+}
+:root[data-mantine-color-scheme='dark'] .mp-seg-busy {
+  background-image: linear-gradient(105deg, transparent 35%, rgba(255, 255, 255, 0.16) 50%, transparent 65%);
+}
+@keyframes mp-seg-flow {
+  from { background-position: 150% 0; }
+  to { background-position: -50% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mp-seg-busy { animation: none; }
+}

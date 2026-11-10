@@ -83,7 +83,7 @@ def test_overlay_step_changes_only_after_successful_print():
     pending = _business_steps("overlay_ready", progress, 0, 0, None, False)[-1]
     printed = _business_steps("overlay_ready", progress, 0, 0, None, True)[-1]
     assert pending == {"phase": "overlay_print", "label": "Overlay à imprimer",
-                       "state": "blue"}
+                       "state": "orange"}
     assert printed == {"phase": "overlay_print", "label": "Overlay imprimé",
                        "state": "green"}
 

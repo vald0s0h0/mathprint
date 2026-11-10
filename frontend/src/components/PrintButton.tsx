@@ -80,15 +80,21 @@ function chooseDestination(printers: Printers) {
 
 export default function PrintButton({
   assessmentId, file, label = 'Imprimer', size = 'xs', assessmentDuplex = false, wave = 0,
+  open, onOpenChange, hiddenTrigger = false,
 }: {
   assessmentId: string; file: string; label?: string; size?: string
   assessmentDuplex?: boolean
   // Enchaînement scanné à imprimer (0 = premier dépôt, sinon copies tardives).
   wave?: number
+  // pilotage depuis l'extérieur (ex. « Réimprimer » dans un menu ⋮) : le bouton est alors
+  // masqué et seule la fenêtre d'impression s'ouvre
+  open?: boolean; onOpenChange?: (open: boolean) => void; hiddenTrigger?: boolean
 }) {
   const isOverlay = file === 'correction_overlay.pdf'
   const [printers, setPrinters] = useState<Printers | null>(null)
   const [opened, setOpened] = useState(false)
+  useEffect(() => { if (open !== undefined) setOpened(open) }, [open])
+  useEffect(() => { onOpenChange?.(opened) }, [opened]) // eslint-disable-line react-hooks/exhaustive-deps
   const [hovered, setHovered] = useState(false)
   const [queue, setQueue] = useState<OverlayQueue | null>(null)
   const [queueTick, setQueueTick] = useState(0)
@@ -318,6 +324,8 @@ export default function PrintButton({
       <Popover.Target>
         <Tooltip multiline w={280} withArrow disabled={!isOverlay || opened} label={hoverLabel()}>
           <Button size={size as never} variant="light" leftSection={<Printer size={14} />}
+            style={hiddenTrigger ? { position: 'absolute', width: 0, height: 0, padding: 0, border: 0, opacity: 0, overflow: 'hidden', pointerEvents: 'none' } : undefined}
+            tabIndex={hiddenTrigger ? -1 : undefined} aria-hidden={hiddenTrigger || undefined}
             onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}
             onClick={() => setOpened((o) => !o)}>
             {label}

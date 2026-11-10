@@ -216,7 +216,7 @@ export default function SubjectWizard({ opened, classes, onClose, onCreated }: {
   const [eligibility, setEligibility] = useState<Record<string, Eligibility>>({})
   // 2. sujet
   const [title, setTitle] = useState('')
-  const [type, setType] = useState('training')
+  const [type, setType] = useState('control')
   const [noteBase, setNoteBase] = useState('20')
   const [pages, setPages] = useState(1)
   const [guidesOn, setGuidesOn] = useState(true)
@@ -245,7 +245,7 @@ export default function SubjectWizard({ opened, classes, onClose, onCreated }: {
   const elig = classId ? eligibility[classId] : undefined
 
   const reset = useCallback(() => {
-    setStep(0); setGroupId(null); setClassId(null); setMode('manual'); setTitle(''); setType('training')
+    setStep(0); setGroupId(null); setClassId(null); setMode('manual'); setTitle(''); setType('control')
     setNoteBase('20'); setPages(1); setGuidesOn(true); setGuidesForAll(false); setGuideReach(DEFAULT_GUIDE_REACH)
     setCompetencyIds([]); setProblems(false); setVariantKind('none'); setCurrent(0)
     setPool(null)

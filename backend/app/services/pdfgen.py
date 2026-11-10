@@ -465,9 +465,13 @@ def _draw_header(c: canvas.Canvas, student_name: str, class_name: str, title: st
     nfs = _fit_size(name, _font("bold"), (x1 - x0) - LABEL_W - HEADER_GAP,
                     _subject_font_size(min(13.0, float(tpl.get("name_size", 13)))),
                     _subject_font_size(8.0))
+    line = header_info_line(info)
+    # Professeur autonome : pas de ligne « prof · matière · établissement ». Le bloc
+    # nom + titre descend d'une demi-interligne pour occuper la bande sans blanc en bas.
+    drop = 0.0 if line else (27.4 - 18.6) / 2
     c.setFillColor(black)
     c.setFont(_font("bold"), nfs)
-    c.drawString(x0, top - 9.4, name)
+    c.drawString(x0, top - 9.4 - drop, name)
     if title:
         t = _pdf_safe(title)
         tfs = _fit_size(t, _font("bold"), x1 - x0,
@@ -475,8 +479,7 @@ def _draw_header(c: canvas.Canvas, student_name: str, class_name: str, title: st
                         _subject_font_size(5.5))
         c.setFillColor(accent)
         c.setFont(_font("bold"), tfs)
-        c.drawString(x0, top - 18.6, t)
-    line = header_info_line(info)
+        c.drawString(x0, top - 18.6 - drop, t)
     if line:
         t = _pdf_safe(line)
         ifs = _fit_size(t, _font(), x1 - x0, _subject_font_size(7.2), _subject_font_size(5.0))

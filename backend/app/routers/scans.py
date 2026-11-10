@@ -493,8 +493,10 @@ def _business_steps(status: str, progress: dict | None, pending: int,
         {"phase": "overlay_print",
          "label": ("Overlay tardif à imprimer" if late_overlay
                    else "Overlay imprimé" if overlay_printed else "Overlay à imprimer"),
-         "state": ("blue" if overlay else "gray") if late_overlay
-                  else "green" if overlay_printed else ("blue" if overlay else "gray")},
+         # à imprimer = action du professeur (orange), jamais « en cours » (bleu,
+         # réservé au travail de la machine)
+         "state": ("orange" if overlay else "gray") if late_overlay
+                  else "green" if overlay_printed else ("orange" if overlay else "gray")},
     ]
     if error:
         for s in steps:

@@ -15,12 +15,13 @@ import { notifications } from '@mantine/notifications'
 import {
   AlertTriangle, ArrowDownRight, ArrowRight, ArrowUpRight, CheckCircle2, CircleDollarSign,
   ClipboardList, Eye, FileText, Hourglass, Library, Loader2, Minus, Plus, Printer, RefreshCw,
-  ScanLine, Send, Sparkles, Upload, Wand2, Scale,
+  ScanLine, Send, Sparkles, Upload, Wand2, Scale, PencilLine,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../api'
 import PdfPreviewModal from '../components/PdfPreview'
+import RefineCorrectionModal from '../components/RefineCorrectionModal'
 import { type LateJob, LateConflictButton, lateJobNames } from '../components/LateJobs'
 import PrintButton from '../components/PrintButton'
 import { useAppState } from '../state/AppState'
@@ -408,6 +409,7 @@ export default function Dashboard() {
 
   const [printOpen, setPrintOpen] = useState(false)
   const [previewId, setPreviewId] = useState<string | null>(null)
+  const [refine, setRefine] = useState<{ id: string; wave?: number } | null>(null)
   const [uploading, setUploading] = useState(false)
   const [showAllTodos, setShowAllTodos] = useState(false)
   const [compView, setCompView] = useState<'weak' | 'strong'>('weak')
@@ -601,8 +603,12 @@ export default function Dashboard() {
         } else if (job.stage === 'print') {
           out.push({ key, tone: 'green', weight: 3, icon: <Printer size={18} />,
             title: 'Copies corrigées prêtes à imprimer', detail,
-            action: <PrintButton assessmentId={raw.assessment_id} file="correction_overlay.pdf"
-              wave={job.wave} label="Imprimer l'overlay" /> })
+            action: <>
+              <Button size="xs" variant="subtle" leftSection={<PencilLine size={14} />}
+                onClick={() => setRefine({ id: raw.id, wave: job.wave })}>Affiner</Button>
+              <PrintButton assessmentId={raw.assessment_id} file="correction_overlay.pdf"
+                wave={job.wave} label="Imprimer l'overlay" />
+            </> })
         } else if (job.stage === 'distribute') {
           out.push({ key, tone: 'teal', weight: 6, icon: <Send size={18} />,
             title: 'Copies tardives à rendre', detail,
@@ -629,8 +635,13 @@ export default function Dashboard() {
         out.push({ key: `ovl-${b.id}`, tone: 'green', weight: 3, icon: <Printer size={18} />,
           title: 'Copies corrigées prêtes à imprimer',
           detail: raw.late_jobs?.length ? `Lot principal · ${b.page_count} p. · ${where}` : `${b.page_count} p. · ${where}`,
-          action: <PrintButton assessmentId={b.assessment_id} file="correction_overlay.pdf"
-            label="Imprimer l'overlay" /> })
+          action: <>
+            <Button size="xs" variant="subtle" leftSection={<PencilLine size={14} />}
+              onClick={() => setRefine({ id: b.id, wave: raw.late_jobs?.length ? 0 : undefined })}>
+              Affiner</Button>
+            <PrintButton assessmentId={b.assessment_id} file="correction_overlay.pdf"
+              label="Imprimer l'overlay" />
+          </> })
       } else if (b.status === 'overlay_ready' && !b.overlay_distributed) {
         out.push({ key: `dist-${b.id}`, tone: 'teal', weight: 6, icon: <Send size={18} />,
           title: 'Copies corrigées à rendre', detail: where,
@@ -1149,6 +1160,8 @@ export default function Dashboard() {
         </Stack>
       </Modal>
 
+      <RefineCorrectionModal batchId={refine?.id ?? null} wave={refine?.wave} opened={!!refine}
+        onClose={() => { setRefine(null); loadLive() }} />
       <PdfPreviewModal assessmentId={previewId} opened={!!previewId}
         onClose={() => setPreviewId(null)} />
     </Stack>

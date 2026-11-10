@@ -784,6 +784,33 @@ def copy_pdf(assessment_id: str, copy_id: str, db: Session = Depends(get_db)):
     return FileResponse(out, media_type="application/pdf", filename=f"copie-{copy_id[:8]}.pdf")
 
 
+@router.get("/{assessment_id}/pages/{index}/preview")
+def subject_page_preview(assessment_id: str, index: int, v: str = ""):
+    """Aperçu JPEG d'une page du sujet imprimable (index global dans subject_batch.pdf).
+    Rendu à la demande puis mis en cache sur disque, versionné sur la date du PDF : la
+    visionneuse affiche une page entière sans charger un lecteur PDF."""
+    import fitz
+
+    base = settings.data_dir / "assessments" / assessment_id / "generated"
+    pdf = base / "subject_batch.pdf"
+    if not pdf.exists():
+        raise HTTPException(404, "Sujet non encore généré")
+    cache = base / "page_previews"
+    cache.mkdir(exist_ok=True)
+    out = cache / f"{pdf.stat().st_mtime_ns}-{index}.jpg"
+    if not out.exists():
+        with fitz.open(pdf) as doc:
+            if not 0 <= index < len(doc):
+                raise HTTPException(404, "Page inconnue")
+            pix = doc[index].get_pixmap(dpi=130, alpha=False)
+            data = pix.tobytes("jpeg", jpg_quality=82)
+        for old in cache.glob(f"*-{index}.jpg"):
+            old.unlink(missing_ok=True)
+        out.write_bytes(data)
+    return FileResponse(out, media_type="image/jpeg",
+                        headers={"Cache-Control": "private, max-age=3600"})
+
+
 @router.get("/{assessment_id}/files/{name}")
 def get_file(assessment_id: str, name: str, db: Session = Depends(get_db)):
     allowed = {"subject_batch.pdf": "generated", "copy_manifest.json": "generated",

@@ -306,7 +306,7 @@ def test_view_keeps_the_first_wave_printable_during_a_late_correction(world):
     _correct_all(world, batch)
     job = scans_router._batch_view(world.db, batch)["late_jobs"][0]
     assert job["segments"][-1] == {"phase": "overlay_print", "label": "Overlay à imprimer",
-                                   "state": "blue"}
+                                   "state": "orange"}
 
 
 def test_stuck_late_correction_resumes_the_pipeline_not_only_the_overlay(world):

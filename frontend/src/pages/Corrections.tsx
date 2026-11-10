@@ -19,8 +19,7 @@ import { useSearchParams } from 'react-router-dom'
 import { api, getToken } from '../api'
 import ActionsMenu from '../components/ActionsMenu'
 import MathText, { MathAnswer } from '../components/MathText'
-import PdfPreviewModal from '../components/PdfPreview'
-import { type Segment } from '../components/SegmentBar'
+import { type Segment, stepWidths } from '../components/SegmentBar'
 import { type LateJob, lateJobNames } from '../components/LateJobs'
 import ScanLotRow, { type Lot, type LotHandlers, type LotStage } from '../components/ScanLotRow'
 import PrintButton from '../components/PrintButton'
@@ -462,7 +461,7 @@ export default function Corrections() {
   const assessmentFilter = searchParams.get('assessment')
   const [batches, setBatches] = useState<Batch[]>([])
   const [items, setItems] = useState<Item[]>([])
-  const [previewWave, setPreviewWave] = useState(0)
+  const [preview, setPreview] = useState<{ id: string; wave?: number } | null>(null)
   const [reviewBatch, setReviewBatch] = useState<Batch | null>(null)
   const [ocrBatch, setOcrBatch] = useState<Batch | null>(null)
   const [ocrItems, setOcrItems] = useState<Item[]>([])
@@ -477,8 +476,6 @@ export default function Corrections() {
   const [scope, setScope] = useState<Scope>('flagged')
   const [mathpixOk, setMathpixOk] = useState(true)
   const [llmOk, setLlmOk] = useState(true)
-  const [previewId, setPreviewId] = useState<string | null>(null)
-  const [previewMode, setPreviewMode] = useState<'copy' | 'review'>('review')
   const [refine, setRefine] = useState<{ id: string; wave?: number } | null>(null)
   const [idx, setIdx] = useState(0)
   // file APLATIE en unités (une case / un QCM / une réponse rédigée), regroupées
@@ -902,7 +899,7 @@ export default function Corrections() {
     const stage = stageOf(b)
     const main: Lot = {
       wave: 0, stage: stage === 'done' ? 'ready' : stage, segments: b.segments,
-      pages: b.page_count, duplex: !!b.duplex, pendingOcr: b.pending_ocr, pendingReviews: b.pending_reviews,
+      pages: b.page_count, pendingOcr: b.pending_ocr, pendingReviews: b.pending_reviews,
       conflicts: 0, overlayReady: b.status === 'overlay_ready',
       printed: b.overlay_printed, distributed: b.overlay_distributed,
       stale: b.overlay_stale, rebuilding: b.overlay_rebuilding,
@@ -912,7 +909,7 @@ export default function Corrections() {
     const late: Lot[] = (b.late_jobs ?? []).map((job) => ({
       wave: job.wave,
       stage: (['print', 'distribute', 'done'].includes(job.stage) ? 'ready' : job.stage) as LotStage,
-      segments: job.segments, pages: job.page_count, duplex: !!b.duplex, pendingOcr: job.pending_ocr,
+      segments: job.segments, pages: job.page_count, pendingOcr: job.pending_ocr,
       pendingReviews: job.pending_reviews, conflicts: job.conflicts,
       overlayReady: ['print', 'distribute', 'done'].includes(job.stage),
       printed: job.overlay_printed, distributed: job.overlay_distributed,
@@ -929,12 +926,7 @@ export default function Corrections() {
     return {
       batchId: b.id, assessmentId: b.assessment_id,
       pendingLlm: isMain ? b.pending_llm : 0,
-      onPreview: () => {
-        // « Copie + Overlay » n'existe qu'une fois l'overlay généré
-        setPreviewMode(lot.overlayReady ? 'review' : 'copy')
-        setPreviewWave(lot.wave)
-        setPreviewId(b.assessment_id)
-      },
+      onPreview: () => setPreview({ id: b.id, wave: (b.late_jobs ?? []).length ? lot.wave : undefined }),
       onOcr: () => openOcr(scoped),
       onCorrect: (s) => openCorrection(scoped, s),
       onRetry: () => retry(b),
@@ -1153,6 +1145,7 @@ export default function Corrections() {
                 } : undefined}>
                   {/* En-tête : ce qui est propre à la correction entière */}
                   <Group gap="xs" wrap="nowrap" mb="sm">
+                    <Text fw={600} lineClamp={1}>{b.assessment_title}</Text>
                     <Badge variant="light" size="sm"
                       color={b.assessment_type === 'control' ? 'red' : 'blue'}>
                       {b.assessment_type === 'control' ? 'Contrôle' : 'Entraînement'}
@@ -1165,7 +1158,11 @@ export default function Corrections() {
                         </Badge>
                       </Tooltip>
                     )}
-                    <Text fw={600} lineClamp={1}>{b.assessment_title}</Text>
+                    {b.duplex && (
+                      <Tooltip label="Sujet imprimé en recto-verso">
+                        <Badge size="sm" variant="outline" color="red" tt="none">Recto verso</Badge>
+                      </Tooltip>
+                    )}
                     {b.absent_count > 0 && (
                       <Tooltip label="Élève(s) sans copie, tous lots de scan confondus — jamais pénalisé(s)">
                         <Badge size="sm" variant="light" color="gray">
@@ -1182,9 +1179,10 @@ export default function Corrections() {
                   {/* Un lot de scan par ligne : principal et suivants sont identiques */}
                   {/* Grille commune à tous les lots de la carte : colonnes alignées */}
                   <div style={{
-                    display: 'grid', alignItems: 'center', columnGap: 16, rowGap: 12,
-                    gridTemplateColumns: 'max-content max-content max-content minmax(60px, 1fr) max-content',
-                    overflowX: 'auto',
+                    display: 'grid', alignItems: 'center', columnGap: 0, rowGap: 12,
+                    gridTemplateColumns: `max-content ${stepWidths().map((w) => `${w}px`).join(' ')} minmax(60px, 1fr) max-content`,
+                    // pas d'ascenseur vertical : un bouton enfoncé (translateY) débordait
+                    overflowX: 'auto', overflowY: 'hidden', padding: 3, margin: -3,
                   }}>
                     {lots.map((lot, i) => (
                       <Fragment key={lot.wave}>
@@ -1200,8 +1198,9 @@ export default function Corrections() {
         </div>
       ))}
 
-      <PdfPreviewModal assessmentId={previewId} opened={!!previewId} initialMode={previewMode}
-        wave={previewWave} onClose={() => { setPreviewId(null); setPreviewWave(0) }} />
+      {/* aperçu avant impression de l'overlay : copie scannée + overlay, lecture seule */}
+      <RefineCorrectionModal mode="overlay" batchId={preview?.id ?? null} wave={preview?.wave}
+        opened={!!preview} onClose={() => setPreview(null)} />
 
       <RefineCorrectionModal batchId={refine?.id ?? null} wave={refine?.wave} opened={!!refine}
         onClose={() => { setRefine(null); refresh() }} />
