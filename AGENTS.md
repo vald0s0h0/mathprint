@@ -1,18 +1,13 @@
 # Instructions pour les agents (Codex et Claude Code)
 
-## Dossier `entreprise/` : hors du code
+## Entreprise : hors de ce dépôt
 
-`entreprise/` contient des documents commerciaux (arguments de vente, bilans PDF
-de démonstration et leurs scripts de génération). Ce n'est pas du code de
-l'application. Pour toute tâche de code (backend, frontend, scripts, CI,
-déploiement, pipeline Astra) :
-
-- ne lis pas, ne cherche pas et ne modifie pas `entreprise/` ; exclus-le de tes
-  recherches (ex. `rg --glob '!entreprise/**'`) ;
-- ne t'appuie pas sur son contenu (chiffres, noms, données de démonstration) :
-  il ne décrit pas le comportement réel de l'application.
-
-N'y travaille que si l'utilisateur le demande explicitement.
+Ce dépôt ne contient que le code de l'application. La gestion de l'entreprise
+(commercial, prospects, site, finance, matériel, RH) vit dans `~/KiroNina`, un
+dépôt séparé avec son propre AGENTS.md. Ne t'appuie pas sur son contenu pour
+du code : les chiffres et données de démonstration n'y décrivent pas le
+comportement réel de l'application. N'y travaille que si l'utilisateur le
+demande, de préférence dans une session ouverte dans `~/KiroNina`.
 
 ## Commande « astra »
 
