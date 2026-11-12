@@ -302,7 +302,8 @@ def test_llm_free_text_is_used_only_if_it_fits():
 
 def test_group_text_keeps_order_and_stops_when_full():
     long_text = "Une explication assez longue pour remplir toute la largeur de la bande. " * 2
-    joined = microcorrection.group_text(["Premier.", long_text, long_text, long_text, "Dernier."])
+    joined = microcorrection.group_text(["Premier.", "A. " + long_text, "B. " + long_text,
+                                         "C. " + long_text, "Dernier."])
     assert joined.startswith("Premier.")
     assert "Dernier." not in joined
 

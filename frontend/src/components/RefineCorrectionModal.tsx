@@ -1,8 +1,15 @@
 // Modale « Affiner la correction » (§9.5) : le lot est corrigé, l'overlay
 // attend d'être imprimé. Le professeur parcourt les copies scannées AVEC leur
-// overlay de correction, élève par élève (une page, ou recto-verso côte à
-// côte), et corrige une note en réécrivant simplement la réponse de l'élève :
-// le serveur la renote et reconsolide la copie (backend services.refine).
+// overlay de correction, élève par élève, page par page : à gauche le scan, à
+// droite son SQUELETTE (contours de la page imprimée, en bleu clair) où est
+// posé, remis au propre, tout ce qui est parti en correction — valeurs lues,
+// coches et liaisons vues, tracés retrouvés. Il corrige une note en réécrivant
+// simplement la réponse de l'élève : le serveur la renote et reconsolide la
+// copie (backend services.refine). Toute modification est journalisée
+// (services.review_log) pour améliorer la lecture.
+//
+// Mode `review` : la même fenêtre AVANT la correction (ouverte à la fin
+// d'OCRiser) — on corrige la lecture, sans note, puis « Lancer la correction ».
 // « OK » régénère l'overlay du lot — les autres copies sont rendues à
 // l'identique, à la même place dans la pile — puis ferme.
 //
@@ -12,14 +19,14 @@
 // professeur lit la copie courante.
 import {
   ActionIcon, Alert, Badge, Box, Button, Center, Checkbox, Divider, Group, Kbd, Loader,
-  Modal, NumberInput, ScrollArea, SegmentedControl, Select, Stack, Table, Text,
+  Modal, NumberInput, ScrollArea, Select, Stack, Table, Text,
   TextInput, Tooltip, UnstyledButton,
   type ComboboxItem, type OptionsFilter,
 } from '@mantine/core'
 import { useElementSize } from '@mantine/hooks'
 import { notifications } from '@mantine/notifications'
 import {
-  ArrowLeft, Check, ChevronLeft, ChevronRight, Columns2, RectangleVertical,
+  ArrowLeft, Check, ChevronLeft, ChevronRight,
   RefreshCw, Search, X, ZoomIn, ZoomOut,
 } from 'lucide-react'
 import {
@@ -39,9 +46,20 @@ type Zone = {
   response_id: string; sequence: number; response_type: string
   points: number; bareme: number; full: boolean; rect: Rect
 }
+type SkZone = {
+  response_id: string; sequence: number; response_type: string
+  rect: Rect; text?: string; teacher?: boolean; points?: number; bareme?: number
+  boxes?: (Rect & { on: boolean })[]
+  cells?: (Rect & { index: number; text: string })[]
+  links?: number[][]
+  drawing?: { name: string; state: string; points: number[][] }[]
+}
+type Skeleton = { width: number; height: number; exact: boolean
+  paths: { kind: string; d: string }[]; zones: SkZone[] }
 type CopyPage = {
   page_id: string; index: number; page_no: number; version: string
   has_scan: boolean; zones: Zone[]
+  skeleton?: Skeleton
   // aperçu du sujet : image de la page (sinon l'aperçu de correction par défaut)
   src?: string
 }
@@ -69,18 +87,19 @@ type Detail = {
   cells: { index: number; label: string; expected_display: string
            auto_credit: number | null; teacher_credit: number | null }[]
 }
-type ApplyResult = RefineStatus & { copy: CopyView | null; uncertain: boolean; reason: string }
+type ApplyResult = RefineStatus & { copy: CopyView | null; uncertain: boolean; reason: string
+  remaining_ocr?: number }
 
 // A4 portrait : toutes les pages scannées sont recalées sur ce format.
 const PAGE_RATIO = 210 / 297
 const PAGE_GAP = 16
-const LAYOUT_KEY = 'mathprint:refine-layout'
 
 const fmtPts = (v: number) => (Math.round(v * 1000) / 1000).toString().replace('.', ',')
 const sleep = (ms: number) => new Promise((ok) => setTimeout(ok, ms))
 const previewKey = (p: CopyPage) => `${p.page_id}:${p.version}`
 const previewSrc = (copyId: string, p: CopyPage) =>
-  p.src ?? `/api/scans/refine/copies/${copyId}/pages/${p.page_id}/preview?v=${p.version}`
+  p.src ?? (p.version === 'scan' ? `/api/scans/review/pages/${p.page_id}/scan`
+    : `/api/scans/refine/copies/${copyId}/pages/${p.page_id}/preview?v=${p.version}`)
 
 const TYPE_LABELS: Record<string, string> = {
   qcm_single: 'QCM', qcm_multiple: 'QCM', checkbox_grid: 'Grille', matching: 'Liaisons',
@@ -273,6 +292,87 @@ function PageView({ page, src, stale, width, height, selectedId, changed, labels
           </Tooltip>
         )
       })}
+    </Box>
+  )
+}
+
+// --------------------------------------------------------------- squelette
+
+const SK_LINE = '#9ec5fe'          // contours : bleu clair
+const SK_INK = '#1c3d7a'           // ce qui part en correction : bleu encre
+
+/** Valeur lue posée dans sa case, rendue comme une formule si c'est du LaTeX. */
+function SkText({ r, text, size, align = 'center' }: {
+  r: Rect; text: string; size: number; align?: 'center' | 'left'
+}) {
+  return (
+    <foreignObject x={r.x} y={r.y} width={r.w} height={r.h}>
+      <div style={{ width: '100%', height: '100%', display: 'flex', overflow: 'hidden',
+        alignItems: align === 'center' ? 'center' : 'flex-start',
+        justifyContent: align === 'center' ? 'center' : 'flex-start',
+        padding: align === 'center' ? 0 : '3px 4px', boxSizing: 'border-box',
+        color: SK_INK, fontSize: size, lineHeight: 1.15, whiteSpace: 'pre-wrap' }}>
+        {/[\\^_{}]/.test(text) ? <MathAnswer text={text} fallback="" /> : text}
+      </div>
+    </foreignObject>
+  )
+}
+
+/** Squelette de la page imprimée (contours seuls) + la synthèse de ce qui a été lu. */
+function SkeletonView({ sk, width, height, selectedId, changed, labels, onPick }: {
+  sk: Skeleton; width: number; height: number
+  selectedId: string | null; changed: Set<string>; labels: Map<string, string>
+  onPick: (responseId: string) => void
+}) {
+  return (
+    <Box style={{ position: 'relative', width, height, flexShrink: 0, background: '#fff',
+      boxShadow: '0 1px 4px rgba(0,0,0,.18), 0 8px 24px rgba(0,0,0,.10)', borderRadius: 2 }}>
+      <svg viewBox={`0 0 ${sk.width} ${sk.height}`} width={width} height={height}
+        style={{ display: 'block' }} aria-label="Squelette de la page : ce qui est parti en correction">
+        <rect x={0.5} y={0.5} width={sk.width - 1} height={sk.height - 1} fill="#fff" stroke={SK_LINE} strokeWidth={1} />
+        {sk.paths.map((p, i) => (
+          <path key={i} d={p.d} fill="none" stroke={SK_LINE} strokeWidth={p.kind === 'card' ? 0.9 : 0.7} />
+        ))}
+        {sk.zones.map((z) => (
+          <g key={z.response_id}>
+            {(z.boxes ?? []).filter((b) => b.on).map((b, i) => (
+              <rect key={i} x={b.x} y={b.y} width={b.w} height={b.h} fill={SK_INK} />
+            ))}
+            {(z.links ?? []).map(([x1, y1, x2, y2], i) => (
+              <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke={SK_INK} strokeWidth={1.4} strokeLinecap="round" />
+            ))}
+            {(z.drawing ?? []).map((el, i) => (
+              <polyline key={i} points={el.points.map((p) => p.join(',')).join(' ')} fill="none"
+                stroke={SK_INK} strokeWidth={1} strokeDasharray={el.state === 'present' ? undefined : '3 3'}
+                opacity={el.state === 'present' ? 1 : 0.45} />
+            ))}
+            {(z.cells ?? []).map((c) => c.text ? <SkText key={c.index} r={c} text={c.text} size={10} /> : null)}
+            {!z.cells && z.text ? (
+              <SkText r={z.rect} text={z.text} size={z.response_type === 'short_text' ? 11 : 9}
+                align={z.response_type === 'short_text' ? 'center' : 'left'} />
+            ) : null}
+          </g>
+        ))}
+      </svg>
+      {sk.zones.map((z) => {
+        const label = labels.get(z.response_id) ?? `Ex. ${z.sequence}`
+        return (
+          <Tooltip key={z.response_id} openDelay={350} withArrow label={`${label} · cliquer pour vérifier ou corriger`}>
+            <button type="button" className="mp-refine-zone" aria-label={`${label.replace('Ex.', 'Exercice')}, squelette`}
+              onClick={() => onPick(z.response_id)}
+              data-selected={z.response_id === selectedId || undefined}
+              data-edited={changed.has(z.response_id) || z.teacher || undefined}
+              style={{ position: 'absolute', left: `${(z.rect.x - 3) / sk.width * 100}%`,
+                top: `${(z.rect.y - 3) / sk.height * 100}%`,
+                width: `${(z.rect.w + 6) / sk.width * 100}%`, height: `${(z.rect.h + 6) / sk.height * 100}%` }} />
+          </Tooltip>
+        )
+      })}
+      {!sk.exact && (
+        <Badge size="xs" color="gray" variant="light" style={{ position: 'absolute', bottom: 8, left: 8 }}>
+          contours approximatifs (sujet imprimé introuvable)
+        </Badge>
+      )}
     </Box>
   )
 }
@@ -471,10 +571,13 @@ function AnswerEditor({ detail, answer, onChange, onSubmit }: {
   )
 }
 
-function ResponsePanel({ responseId, label, onBack, onApplied }: {
+function ResponsePanel({ responseId, label, onBack, onApplied, review = false }: {
   responseId: string; label?: string; onBack: () => void
   onApplied: (r: ApplyResult, responseId: string) => void
+  // avant la correction : on corrige la LECTURE, aucune note n'existe encore
+  review?: boolean
 }) {
+  const base = review ? '/api/scans/review/responses' : '/api/scans/refine/responses'
   const [detail, setDetail] = useState<Detail | null>(null)
   const [answer, setAnswer] = useState<Answer>({})
   const [error, setError] = useState<string | null>(null)
@@ -484,12 +587,12 @@ function ResponsePanel({ responseId, label, onBack, onApplied }: {
   const [showPoints, setShowPoints] = useState(false)
 
   const load = useCallback(async () => {
-    const d = await api.get<Detail>(`/api/scans/refine/responses/${responseId}`)
+    const d = await api.get<Detail>(`${base}/${responseId}`)
     setDetail(d)
     setAnswer(d.answer)
     setPoints(d.current_points)
     return d
-  }, [responseId])
+  }, [responseId, base])
 
   useEffect(() => {
     let alive = true
@@ -506,8 +609,8 @@ function ResponsePanel({ responseId, label, onBack, onApplied }: {
     setBusy(true); setError(null)
     try {
       const r = kind === 'answer'
-        ? await api.post<ApplyResult>(`/api/scans/refine/responses/${responseId}/answer`, answer)
-        : await api.post<ApplyResult>(`/api/scans/refine/responses/${responseId}/points`, { points: value })
+        ? await api.post<ApplyResult>(`${base}/${responseId}/answer`, answer)
+        : await api.post<ApplyResult>(`${base}/${responseId}/points`, { points: value })
       onApplied(r, responseId)
       setFeedback({ uncertain: r.uncertain, reason: r.reason })
       if (r.uncertain) setShowPoints(true)
@@ -550,16 +653,26 @@ function ResponsePanel({ responseId, label, onBack, onApplied }: {
           <Badge variant="filled" color="indigo">{label ?? detail.group_label}</Badge>
           <Text size="xs" c="dimmed">{TYPE_LABELS[detail.response_type] ?? detail.response_type}</Text>
         </Group>
-        <Badge size="lg" variant="light" color={detail.cancelled ? 'gray' : color}>
-          {detail.cancelled ? 'annulée' : `${fmtPts(detail.current_points)} / ${fmtPts(bareme)}`}
-        </Badge>
+        {review ? (
+          <Badge size="lg" variant="light" color="gray">pas encore notée</Badge>
+        ) : (
+          <Badge size="lg" variant="light" color={detail.cancelled ? 'gray' : color}>
+            {detail.cancelled ? 'annulée' : `${fmtPts(detail.current_points)} / ${fmtPts(bareme)}`}
+          </Badge>
+        )}
       </Group>
 
       {!pointsOnly && (
         <Text size="xs" c="dimmed">
-          Corrigez la réponse telle que l'élève l'a écrite : la note est recalculée
-          automatiquement.
+          {review
+            ? "Vérifiez ce que la lecture a vu et corrigez-le tel que l'élève l'a écrit : c'est ce qui partira en correction."
+            : "Corrigez la réponse telle que l'élève l'a écrite : la note est recalculée automatiquement."}
         </Text>
+      )}
+      {review && pointsOnly && (
+        <Alert color="gray" variant="light" p="xs">
+          <Text size="xs">Cette réponse se note en points : elle sera notée par la correction, puis ajustable dans Affiner.</Text>
+        </Alert>
       )}
       <AnswerEditor detail={detail} answer={answer} onChange={setAnswer}
         onSubmit={() => submit('answer')} />
@@ -587,14 +700,15 @@ function ResponsePanel({ responseId, label, onBack, onApplied }: {
           </Alert>
         ) : (
           <Text size="xs" c="var(--mp-text-green)" fw={600}>
-            ✓ Note recalculée : {fmtPts(detail.current_points)} / {fmtPts(bareme)}
+            {review ? '✓ Lecture corrigée — enregistrée dans le journal de revue'
+              : `✓ Note recalculée : ${fmtPts(detail.current_points)} / ${fmtPts(bareme)}`}
           </Text>
         )
       )}
       {error && <Alert color="red" variant="light" p="xs"><Text size="xs">{error}</Text></Alert>}
 
-      <Divider />
-      {pointsOnly || showPoints ? (
+      {!review && <Divider />}
+      {review ? null : pointsOnly || showPoints ? (
         <Stack gap={6}>
           <Text size="xs" c="dimmed" fw={600} tt="uppercase">Points attribués</Text>
           <Group gap={6}>
@@ -631,28 +745,32 @@ function ResponsePanel({ responseId, label, onBack, onApplied }: {
 
 // --------------------------------------------------------------- modale
 
-/** Visionneuse de copies, une page entière à la fois (ou recto-verso côte à côte).
+/** Visionneuse de copies, une page à la fois, avec son squelette à droite.
+ *  - `review`  : vérification AVANT la correction (scan seul, lectures modifiables,
+ *                puis « Lancer la correction ») ;
  *  - `refine`  : « Affiner la correction » (copie scannée + overlay, réponses modifiables) ;
  *  - `overlay` : aperçu avant impression des overlays (copie scannée + overlay), lecture seule ;
  *  - `subject` : aperçu avant impression du sujet (pages de chaque copie), lecture seule. */
 export default function RefineCorrectionModal({
-  batchId, assessmentId, mode = 'refine', opened, onClose, wave,
+  batchId, assessmentId, mode = 'refine', opened, onClose, wave, onLaunched,
 }: {
   batchId?: string | null; assessmentId?: string | null
-  mode?: 'refine' | 'overlay' | 'subject'
+  mode?: 'refine' | 'overlay' | 'subject' | 'review'
   opened: boolean; onClose: () => void
+  // mode review : la correction a été lancée depuis la fenêtre
+  onLaunched?: () => void
   // lot de scan à relire (0 = lot principal, N = lot déposé après) ; absent = tout le sujet
   wave?: number
 }) {
-  const readOnly = mode !== 'refine'
+  const readOnly = mode !== 'refine' && mode !== 'review'
+  const review = mode === 'review'
   const sourceId = mode === 'subject' ? assessmentId : batchId
   const [overview, setOverview] = useState<Overview | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [idx, setIdx] = useState(0)
   const [pageIdx, setPageIdx] = useState(0)
-  const [layout, setLayout] = useState<'single' | 'spread'>(() => {
-    try { return localStorage.getItem(LAYOUT_KEY) === 'single' ? 'single' : 'spread' } catch { return 'spread' }
-  })
+  const [remainingOcr, setRemainingOcr] = useState(0)
+  const [launching, setLaunching] = useState(false)
   const [selected, setSelected] = useState<string | null>(null)
   const [zoom, setZoom] = useState(1)
   const [status, setStatus] = useState<RefineStatus>({ stale: false, rebuilding: false, error: null, overlay_printed: false })
@@ -694,9 +812,12 @@ export default function RefineCorrectionModal({
         }))
         .catch((e) => setLoadError((e as Error).message))
     } else {
-      api.get<Overview>(`/api/scans/batches/${sourceId}/refine${wave === undefined ? '' : `?wave=${wave}`}`)
+      api.get<Overview & { remaining_ocr?: number }>(
+        `/api/scans/batches/${sourceId}/${review ? 'review' : 'refine'}${wave === undefined ? '' : `?wave=${wave}`}`)
         .then((o) => {
-          setOverview(o)
+          setOverview({ ...o, stale: o.stale ?? false, rebuilding: o.rebuilding ?? false,
+            error: o.error ?? null, overlay_printed: o.overlay_printed ?? false })
+          setRemainingOcr(o.remaining_ocr ?? 0)
           setStatus({ stale: o.stale, rebuilding: o.rebuilding, error: o.error, overlay_printed: o.overlay_printed })
         })
         .catch((e) => setLoadError((e as Error).message))
@@ -724,7 +845,7 @@ export default function RefineCorrectionModal({
       return Promise.resolve(v)
     }
     if (!req) {
-      req = api.get<CopyView>(`/api/scans/refine/copies/${copyId}`)
+      req = api.get<CopyView>(`/api/scans/${review ? 'review' : 'refine'}/copies/${copyId}`)
         .then((raw) => {
           // lecture seule : pas de zones cliquables sur les pages
           const v = readOnly ? { ...raw, pages: raw.pages.map((p) => ({ ...p, zones: [] })) } : raw
@@ -742,16 +863,17 @@ export default function RefineCorrectionModal({
       viewRequests.current.set(copyId, req)
     }
     return req
-  }, [mode, overview, assessmentId, readOnly])
+  }, [mode, overview, assessmentId, readOnly, review])
 
   const copies = overview?.copies ?? []
   const entry = copies[idx] ?? null
   const view = entry ? views.current.get(entry.copy_id) ?? null : null
   const pages = view?.pages ?? []
-  const spread = layout === 'spread' && pages.length > 1
-  const step = spread ? 2 : 1
-  const firstShown = spread ? pageIdx - (pageIdx % 2) : pageIdx
-  const shownPages = pages.slice(firstShown, firstShown + step)
+  // une page à la fois, son squelette à côté (plus de recto-verso côte à côte)
+  const step = 1
+  const firstShown = Math.min(pageIdx, Math.max(0, pages.length - 1))
+  const shownPages = pages.slice(firstShown, firstShown + 1)
+  const withSkeleton = !!shownPages[0]?.skeleton
 
   // Copie courante d'abord (images en tête de file), puis les voisines dans
   // l'ordre où le professeur va probablement aller : suivante, précédente…
@@ -811,7 +933,8 @@ export default function RefineCorrectionModal({
   }
 
   function onApplied(r: ApplyResult, responseId: string) {
-    setStatus({ stale: r.stale, rebuilding: r.rebuilding, error: r.error, overlay_printed: r.overlay_printed })
+    if (r.remaining_ocr !== undefined) setRemainingOcr(r.remaining_ocr)
+    if (!review) setStatus({ stale: r.stale, rebuilding: r.rebuilding, error: r.error, overlay_printed: r.overlay_printed })
     setChanged((s) => new Set(s).add(responseId))
     if (r.copy) {
       const fresh = r.copy
@@ -857,6 +980,22 @@ export default function RefineCorrectionModal({
       setRegenerating(false)
     }
   }, [batchId])
+
+  // mode review : fin de la vérification, la correction démarre (comme à la fin d'OCRiser)
+  async function launch() {
+    if (!batchId || launching) return
+    setLaunching(true)
+    try {
+      await api.post(`/api/scans/batches/${batchId}/ocr/complete`)
+      notifications.show({ color: 'blue', message: 'Copies vérifiées — correction automatique démarrée' })
+      onLaunched?.()
+      onClose()
+    } catch (e) {
+      notifications.show({ color: 'red', autoClose: 8000, message: (e as Error).message })
+    } finally {
+      setLaunching(false)
+    }
+  }
 
   async function ok() {
     if (closing) return
@@ -915,14 +1054,8 @@ export default function RefineCorrectionModal({
     setZoom((z) => Math.max(1, Math.min(3, Math.round((z + delta) * 100) / 100)))
   }
 
-  function changeLayout(v: string) {
-    const next = v === 'single' ? 'single' : 'spread'
-    setLayout(next)
-    try { localStorage.setItem(LAYOUT_KEY, next) } catch { /* stockage indisponible */ }
-  }
-
-  // pages ajustées à la zone d'affichage (pleine hauteur, ou deux côte à côte)
-  const n = Math.max(1, shownPages.length)
+  // la page et son squelette, ajustés à la zone d'affichage
+  const n = withSkeleton ? 2 : 1
   const availW = Math.max(0, viewerW - 32 - (n - 1) * PAGE_GAP)
   const availH = Math.max(0, viewerH - 32)
   const pageH = Math.floor(Math.min(availH, (availW / n) / PAGE_RATIO) * zoom)
@@ -951,7 +1084,8 @@ export default function RefineCorrectionModal({
           <Group gap="sm" wrap="nowrap" style={{ minWidth: 0 }}>
             <Text fw={700} style={{ whiteSpace: 'nowrap' }}>
               {mode === 'subject' ? 'Aperçu du sujet'
-                : mode === 'overlay' ? 'Aperçu des copies corrigées' : 'Affiner la correction'}
+                : mode === 'overlay' ? 'Aperçu des copies corrigées'
+                  : review ? 'Vérifier les copies avant la correction' : 'Affiner la correction'}
             </Text>
             <Text c="dimmed" lineClamp={1} size="sm">{overview?.title}</Text>
           </Group>
@@ -988,10 +1122,6 @@ export default function RefineCorrectionModal({
             </Text>
             <ActionIcon variant="default" size="lg" disabled={idx >= copies.length - 1}
               onClick={() => goTo(idx + 1)} aria-label="Copie suivante"><ChevronRight size={18} /></ActionIcon>
-            <SegmentedControl size="xs" value={layout} onChange={changeLayout} data={[
-              { value: 'single', label: <Tooltip label="Une page"><RectangleVertical size={15} /></Tooltip> },
-              { value: 'spread', label: <Tooltip label="Recto-verso côte à côte"><Columns2 size={15} /></Tooltip> },
-            ]} />
             <Group gap={2} wrap="nowrap">
               <Tooltip label="Dézoomer ( - )">
                 <ActionIcon variant="default" size="lg" disabled={zoom <= 1} onClick={() => changeZoom(-0.25)}
@@ -1010,6 +1140,19 @@ export default function RefineCorrectionModal({
           {readOnly ? (
             <ActionIcon variant="subtle" color="gray" size="lg" onClick={requestClose}
               aria-label="Fermer"><X size={18} /></ActionIcon>
+          ) : review ? (
+          <Group gap="xs" wrap="nowrap">
+            {remainingOcr > 0 && (
+              <Badge color="orange" variant="light">{remainingOcr} lecture{remainingOcr > 1 ? 's' : ''} à faire dans OCRiser</Badge>
+            )}
+            <Tooltip label={remainingOcr > 0 ? 'Terminez d\'abord les lectures d\'OCRiser' : 'Les lectures vérifiées partent en correction'}>
+              <Button size="sm" loading={launching} disabled={remainingOcr > 0} onClick={launch}>
+                Lancer la correction
+              </Button>
+            </Tooltip>
+            <ActionIcon variant="subtle" color="gray" size="lg" onClick={onClose}
+              aria-label="Fermer"><X size={18} /></ActionIcon>
+          </Group>
           ) : (
           <Group gap="xs" wrap="nowrap">
             {status.stale ? (
@@ -1057,11 +1200,15 @@ export default function RefineCorrectionModal({
               <Box style={{ display: 'flex', gap: PAGE_GAP, margin: 'auto', flexShrink: 0 }}>
                 {shownPages.map((p) => {
                   const img = imageFor(p)
-                  return (
+                  return [
                     <PageView key={p.page_id} page={p} src={img.src} stale={img.stale}
                       width={pageW} height={pageH} selectedId={selected} changed={changed}
-                      labels={labels} onPick={pickZone} />
-                  )
+                      labels={labels} onPick={pickZone} />,
+                    p.skeleton ? (
+                      <SkeletonView key={`${p.page_id}:sk`} sk={p.skeleton} width={pageW} height={pageH}
+                        selectedId={selected} changed={changed} labels={labels} onPick={pickZone} />
+                    ) : null,
+                  ]
                 })}
               </Box>
             )}
@@ -1072,7 +1219,7 @@ export default function RefineCorrectionModal({
                   <Button key={k} size="compact-xs" radius="xl"
                     variant={firstShown === k * step ? 'filled' : 'default'}
                     onClick={() => setPageIdx(k * step)}>
-                    {step === 2 ? `Pages ${k * 2 + 1}-${Math.min(pages.length, k * 2 + 2)}` : `Page ${k + 1}`}
+                    {`Page ${k + 1}`}
                   </Button>
                 ))}
               </Group>
@@ -1107,11 +1254,13 @@ export default function RefineCorrectionModal({
                 </Stack>
               ) : selected ? (
                 <ResponsePanel key={selected} responseId={selected} label={labels.get(selected)}
-                  onBack={() => setSelected(null)} onApplied={onApplied} />
+                  onBack={() => setSelected(null)} onApplied={onApplied} review={review} />
               ) : (
                 <Stack gap={4}>
                   <Text size="xs" c="dimmed" mb={4}>
-                    Cliquez une réponse sur la copie (ou ci-dessous) pour la corriger.
+                    {review
+                      ? 'Comparez le scan (à gauche) et ce qui partira en correction (à droite). Cliquez une réponse pour corriger sa lecture.'
+                      : 'Cliquez une réponse sur la copie, sur le squelette (ou ci-dessous) pour la corriger.'}
                   </Text>
                   {allZones.map((z) => (
                     <UnstyledButton key={z.response_id} onClick={() => pickZone(z.response_id)}
@@ -1126,9 +1275,11 @@ export default function RefineCorrectionModal({
                             <Badge size="xs" variant="dot" color="orange">modifié</Badge>
                           )}
                         </Group>
-                        <Text size="sm" fw={600} c={scoreColor(z.points, z.bareme)}>
-                          {fmtPts(z.points)} / {fmtPts(z.bareme)}
-                        </Text>
+                        {review ? null : (
+                          <Text size="sm" fw={600} c={scoreColor(z.points, z.bareme)}>
+                            {fmtPts(z.points)} / {fmtPts(z.bareme)}
+                          </Text>
+                        )}
                       </Group>
                     </UnstyledButton>
                   ))}

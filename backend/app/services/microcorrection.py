@@ -297,9 +297,15 @@ def group_text(texts: list[str], lines: int = pdfgen.FEEDBACK_MAX_LINES) -> str:
     """Messages des parties d'un composite, dans l'ordre, tant qu'ils tiennent.
     Ceux qui restent ne sont pas imprimés, mais vont au journal."""
     out = ""
+    seen: set[str] = set()
     for text in texts:
         if not text:
             continue
+        # deux parties qui relèvent la même erreur donnent la même phrase : une seule fois
+        key = " ".join(text.split()).casefold()
+        if key in seen:
+            continue
+        seen.add(key)
         trial = f"{out} {text}".strip()
         if not _fits(trial, lines):
             break

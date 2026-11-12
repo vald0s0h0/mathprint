@@ -3829,6 +3829,13 @@ def _draw_correction_strip(c: canvas.Canvas, z: dict, col):
     strip = z.get("strip")
     score_txt = (f"{scoring.format_points(z['score'])}/"
                  f"{scoring.format_points(z['max_score'])}")
+    if not strip and z.get("score_at"):
+        # sous-question d'un composite : sous sa coche, sur le bord droit de la carte
+        at = z["score_at"]
+        c.setFillColor(col)
+        c.setFont("Helvetica-Bold", 9)
+        c.drawCentredString(at["x"], at["baseline"], score_txt)
+        return
     if not strip:
         # copie antérieure à la bande dimensionnée : repli minimal (note seule)
         c.setFillColor(col)
@@ -4048,7 +4055,7 @@ def _draw_correction_marks(c: canvas.Canvas, page: dict, col):
     de correction viennent, elles, de la géométrie mémorisée par zone."""
     if page.get("blank"):
         return   # feuille qui traverse l'imprimante sans recevoir de correction
-    layout = layout_of_page(page.get("page_id"))
+    layout = page.get("layout") or layout_of_page(page.get("page_id"))
     geo = header_geometry(page.get("assessment_type", "control"), layout)
     c.setFillColor(col)
     c.setStrokeColor(col)

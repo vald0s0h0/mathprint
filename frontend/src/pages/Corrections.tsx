@@ -373,6 +373,8 @@ export default function Corrections() {
   const [mathpixOk, setMathpixOk] = useState(true)
   const [llmOk, setLlmOk] = useState(true)
   const [refine, setRefine] = useState<{ id: string; wave?: number } | null>(null)
+  // revue copie par copie AVANT la correction, ouverte depuis la fin d'OCRiser
+  const [preReview, setPreReview] = useState<{ id: string; wave?: number } | null>(null)
   const [idx, setIdx] = useState(0)
   // file APLATIE en unités (une case / un QCM / une réponse rédigée), regroupées
   // par réponse attendue ; + verdicts Juste(true)/Faux(false)/à trancher(null)
@@ -506,6 +508,13 @@ export default function Corrections() {
 
   function closeOcr() {
     setOcrBatch(null); refresh()
+  }
+
+  function reviewAllFromOcr() {
+    if (!ocrBatch) return
+    const w = new URLSearchParams(ocrBatch.query).get('wave')
+    setPreReview({ id: ocrBatch.id, wave: w == null ? undefined : Number(w) })
+    setOcrBatch(null)
   }
 
   async function changeScope(s: Scope) {
@@ -1031,7 +1040,9 @@ export default function Corrections() {
         </Stack>
       </Modal>
 
-      <OcrAssistant batch={ocrBatch} onClose={closeOcr} />
+      <OcrAssistant batch={ocrBatch} onClose={closeOcr} onReviewAll={reviewAllFromOcr} />
+      <RefineCorrectionModal mode="review" batchId={preReview?.id ?? null} wave={preReview?.wave}
+        opened={!!preReview} onClose={() => { setPreReview(null); refresh() }} />
 
       <Modal opened={!!reviewBatch} onClose={closeCorrection} size="xl"
         title={<Text fw={650}>Correction — {reviewBatch?.assessment_title}</Text>}>

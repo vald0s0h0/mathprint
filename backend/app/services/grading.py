@@ -34,6 +34,11 @@ def normalize(raw: str) -> str:
     s = s.replace("\\times", "*").replace("×", "*").replace("÷", "/")
     s = s.replace("−", "-").replace("–", "-")
     s = s.replace("\\approx", "≈").replace("\\simeq", "≃")
+    # degré écrit en LaTeX ou en exposant (lectures OCR, saisie au clavier) : « 62^{\circ} »,
+    # « 6 2 ^ { \circ } », « 62^° », « 62º » -> « 62° », puis l'unité ° est retirée comme
+    # « cm » (strip_answer_noise). Sans cela, 62° juste comptait faux (parse_error).
+    s = re.sub(r"\^\s*\{\s*(?:\\circ|\\degree|°)\s*\}|\^\s*(?:\\circ|\\degree|°)"
+               r"|\\circ(?![A-Za-z])|\\degree(?![A-Za-z])|º", "°", s)
     # virgule décimale française balisée en LaTeX ($3{,}5$, cf. _GEN_FORMAT_RULES)
     # AVANT le dépliage des fractions : sinon les accolades de {,} sont prises
     # pour la fermeture du groupe \frac{...} et tronquent le numérateur.

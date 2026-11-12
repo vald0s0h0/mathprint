@@ -415,3 +415,16 @@ def test_table_cells_accept_units_and_partial_rounding():
     exp = {"type": "table", "rows": 2, "cols": 1, "cells": cells}
     r = grade(exp, pol, "", 0.99, cell_texts=["7 cm", "0,67"])
     assert r["score"] == 1.5 and r["reason_code"] == "table_partial"
+
+
+def test_degree_written_in_latex_or_superscript_is_the_number_of_degrees():
+    """Cas réel (3e7 Trigonométrie, 2026-11-12) : « 62° » lu « 6 2 ^ { \\circ } » par un
+    moteur OCR et retenu tel quel dans OCRiser comptait faux (parse_error)."""
+    from app.services import grading
+    pol = {"max_score": 2, "comparator": "table_cells", "unordered": False,
+           "cells": [[{"type": "integer", "value": 28}], [{"type": "integer", "value": 62}]]}
+    for a, b in (("28°", "6 2 ^ { \\circ }"), ("28^{\\circ}", "62^\\circ"),
+                 ("28º", "62\\degree"), ("28^°", "62^{°}")):
+        assert grading.table_credits(pol, [a, b]) == [1.0, 1.0], (a, b)
+    assert grading.table_credits(pol, ["29°", "6 2 ^ { \\circ }"]) == [0.0, 1.0]
+    assert grading.normalize("2\\circle") == "2\\circle"          # pas une commande \circ

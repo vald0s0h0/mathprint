@@ -1256,3 +1256,33 @@ class MailIntakeConfig(Base):
     delete_after_import: Mapped[bool] = mapped_column(Boolean, default=True)
     last_checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_error: Mapped[str | None] = mapped_column(String, nullable=True)
+
+
+class ReviewEvent(Base):
+    """Modification faite par le professeur pendant la revue manuelle (avant la
+    correction, ou Affiner après) : ce que le système avait lu ou noté, ce que le
+    professeur a mis à la place, et le contexte utile pour améliorer la lecture.
+    Chaque événement a son dossier (captures + event.json) sous data/review_log/.
+    `status` : open -> treated, posé par le traitement en lot (scripts/review_log.py)."""
+    __tablename__ = "review_events"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    user_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    stage: Mapped[str] = mapped_column(String, default="refine")      # pre_correction | refine
+    action: Mapped[str] = mapped_column(String, default="answer")     # answer | points
+    batch_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    assessment_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    copy_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    response_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    zone_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    sequence: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    response_type: Mapped[str | None] = mapped_column(String, nullable=True)
+    category: Mapped[str] = mapped_column(String, default="")         # ocr | cv_boxes | cv_matching | cv_drawing | grading
+    before_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    after_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    context_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    folder: Mapped[str | None] = mapped_column(String, nullable=True)  # relatif à data_dir
+    status: Mapped[str] = mapped_column(String, default="open")       # open | treated
+    treated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    treated_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    __table_args__ = (Index("ix_review_events_status", "status", "created_at"),)

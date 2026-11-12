@@ -574,6 +574,67 @@ def ink_ratio(crop_filtered: np.ndarray) -> float:
     return float(dark) / max(1, gray.size)
 
 
+# Crayon clair : un trait de crayon à papier pâle ne descend jamais sous 128 (gris
+# 140-190 sur un papier à ~240). On le mesure par rapport au PAPIER DE LA CASE :
+# pixel gris (peu saturé, donc ni saumon ni couleur) nettement plus foncé que le
+# papier. Le bord de la découpe est ignoré (reste du cadre, ombre de recalage).
+# Calibré le 2026-11-12 sur le lot Trigonométrie 3e7 : cases vides <= 0,09 %,
+# réponses au crayon clair >= 3,4 %.
+FAINT_INK_DELTA = 45           # écart au papier (niveaux de gris) d'un trait pâle
+FAINT_INK_SAT_MAX = 60         # au-delà : couleur (reste de saumon), pas du crayon
+FAINT_INK_TRIM = 0.10          # part de la plus petite dimension ignorée sur chaque bord
+FAINT_INK_THRESHOLD = 0.003    # au-dessus : une trace, la case n'est pas vide
+
+
+def _trimmed(crop: np.ndarray) -> np.ndarray:
+    h, w = crop.shape[:2]
+    m = max(2, int(min(h, w) * FAINT_INK_TRIM))
+    return crop[m:h - m, m:w - m] if h > 2 * m + 2 and w > 2 * m + 2 else crop
+
+
+def faint_ink_mask(crop_filtered: np.ndarray) -> np.ndarray:
+    """Pixels d'écriture, même pâle (crayon), relativement au papier de la découpe.
+    Même taille que la découpe ; le bord (cadre) est toujours faux."""
+    out = np.zeros(crop_filtered.shape[:2], dtype=bool)
+    if crop_filtered.size == 0:
+        return out
+    h, w = crop_filtered.shape[:2]
+    m = max(2, int(min(h, w) * FAINT_INK_TRIM))
+    if not (h > 2 * m + 2 and w > 2 * m + 2):
+        m = 0
+    inner = crop_filtered[m:h - m, m:w - m]
+    gray = cv2.cvtColor(inner, cv2.COLOR_BGR2GRAY).astype(np.int16)
+    sat = cv2.cvtColor(inner, cv2.COLOR_BGR2HSV)[..., 1]
+    paper = float(np.percentile(gray, 90))
+    out[m:h - m, m:w - m] = (gray < paper - FAINT_INK_DELTA) & (sat < FAINT_INK_SAT_MAX)
+    return out
+
+
+def faint_ink_ratio(crop_filtered: np.ndarray) -> float:
+    """Part d'écriture (même au crayon clair) dans l'intérieur de la découpe."""
+    if crop_filtered.size == 0:
+        return 0.0
+    inner = _trimmed(crop_filtered)
+    return float(faint_ink_mask(crop_filtered).sum()) / max(1, inner.shape[0] * inner.shape[1])
+
+
+def has_ink(crop_filtered: np.ndarray, threshold: float | None = None) -> bool:
+    """Vrai si la découpe porte une écriture : encre franche au-dessus du seuil, OU
+    trace pâle nettement plus foncée que le papier. Une case n'est « vide » que si
+    les deux mesures le disent."""
+    threshold = BLANK_INK_THRESHOLD if threshold is None else threshold
+    return (ink_ratio(crop_filtered) >= threshold
+            or faint_ink_ratio(crop_filtered) >= FAINT_INK_THRESHOLD)
+
+
+def pale_trace(crop_filtered: np.ndarray, threshold: float | None = None) -> bool:
+    """Trace pâle : pas assez d'encre franche, mais un trait de crayon. Jamais déclarée
+    vide automatiquement ; une lecture vide sur elle part en revue."""
+    threshold = BLANK_INK_THRESHOLD if threshold is None else threshold
+    return (ink_ratio(crop_filtered) < threshold
+            and faint_ink_ratio(crop_filtered) >= FAINT_INK_THRESHOLD)
+
+
 # Blanchiment du fond (photos iPhone : papier jauni, éclairage inégal). On DIVISE
 # chaque canal par une carte de fond (illumination) estimée en basse résolution :
 # le papier -> blanc PARTOUT (suit teinte ET dégradé), l'encre reste

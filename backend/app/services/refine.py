@@ -40,10 +40,10 @@ from ..models import (
     ResponseZone, ScanBatch, Student, StudentResponse,
 )
 from . import grading as grader
-from . import error_journal, ocr_truth, scoring
+from . import error_journal, ocr_truth, scoring, skeleton
 from .appreciation import compute_competency_progress
 from .forgetting import replay_states
-from .pdfgen import PAGE_H, PAGE_W, render_page_marks
+from .pdfgen import PAGE_H, PAGE_W, layout_of_page, render_page_marks
 from .pipeline import (
     _copies_in_scan_order, _grading_contract_issue, _recognized_answer_issue,
     _scan_page_positions, copy_overlay_pages, correction_ink, effective_reading,
@@ -115,9 +115,13 @@ def _hotspot(z: dict) -> dict:
 
 
 def _render_payload(page: dict) -> dict:
-    """La page telle que le moteur de rendu la dessine (sans repères internes)."""
-    return {k: v for k, v in page.items()
-            if k not in ("page_id", "background") and not k.startswith("_")}
+    """La page telle que le moteur de rendu la dessine (sans repères internes). La mise
+    en page imprimée (v1/v3) reste connue : l'en-tête de correction en dépend."""
+    out = {k: v for k, v in page.items()
+           if k not in ("page_id", "background") and not k.startswith("_")}
+    if page.get("page_id") and "layout" not in out:
+        out["layout"] = layout_of_page(page["page_id"])
+    return out
 
 
 def _page_version(page: dict, color: str | None) -> str:
@@ -161,6 +165,8 @@ def copy_view(db: Session, assessment: Assessment, copy: Copy,
             "page_id": page["page_id"], "index": k, "page_no": page["_page_no"],
             "version": _page_version(page, color),
             "has_scan": page["background"] is not None,
+            # squelette de la page + ce qui est parti en correction, remis au propre
+            "skeleton": skeleton.page_view(db, copy, page["page_id"]),
             "zones": [{
                 "response_id": z["response_id"], "sequence": z["sequence"],
                 "response_type": z["response_type"],

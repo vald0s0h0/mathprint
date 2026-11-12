@@ -87,7 +87,7 @@ def _answers_changed(new: np.ndarray, old: np.ndarray, zones: list[ResponseZone]
 def _page_is_blank(img: np.ndarray, zones: list[ResponseZone]) -> bool:
     for zone in zones:
         crop = worker_cv.crop_zone(img, zone.x_pt, zone.y_pt, zone.w_pt, zone.h_pt, 0.0)
-        if crop.size and worker_cv.ink_ratio(worker_cv.dropout_filter(crop)) >= worker_cv.BLANK_INK_THRESHOLD:
+        if crop.size and worker_cv.has_ink(worker_cv.dropout_filter(crop)):
             return False
     return True
 

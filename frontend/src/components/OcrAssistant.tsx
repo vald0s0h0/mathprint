@@ -253,7 +253,11 @@ function ScanView({ url, item, choices, pairs, matchStart, onChoice, onMatchPoin
   )
 }
 
-export default function OcrAssistant({ batch, onClose }: { batch: OcrBatchRef | null; onClose: () => void }) {
+export default function OcrAssistant({ batch, onClose, onReviewAll }: {
+  batch: OcrBatchRef | null; onClose: () => void
+  // « Tout vérifier » : ouvre la revue copie par copie (scan + squelette), d'où l'on lance la correction
+  onReviewAll?: () => void
+}) {
   const [items, setItems] = useState<OcrItem[]>([])
   const [units, setUnits] = useState<Unit[]>([])
   const [idx, setIdx] = useState(0)                       // units.length = écran de fin
@@ -383,6 +387,11 @@ export default function OcrAssistant({ batch, onClose }: { batch: OcrBatchRef | 
     return () => window.removeEventListener('keydown', h)
   })
 
+  async function reviewAll() {
+    await queue.current            // les dernières lectures sont enregistrées avant d'ouvrir la revue
+    onReviewAll?.()
+  }
+
   async function finish() {
     if (!batch) return
     setFinishing(true)
@@ -459,7 +468,10 @@ export default function OcrAssistant({ batch, onClose }: { batch: OcrBatchRef | 
           : !units.length ? (
               <Stack align="center" py="xl" gap="md">
                 <Text c="dimmed">Aucune lecture à vérifier.</Text>
-                <Button color="blue" loading={finishing} onClick={finish}>Lancer la correction</Button>
+                <Group>
+                  {onReviewAll && <Button variant="light" onClick={reviewAll}>Tout vérifier copie par copie</Button>}
+                  <Button color="blue" loading={finishing} onClick={finish}>Lancer la correction</Button>
+                </Group>
               </Stack>
             )
             : idx >= units.length ? (
@@ -473,6 +485,11 @@ export default function OcrAssistant({ batch, onClose }: { batch: OcrBatchRef | 
                 </Text>
                 <Group>
                   <Button variant="default" leftSection={<ChevronLeft size={16} />} onClick={() => go(-1)}>Revoir</Button>
+                  {onReviewAll && (
+                    <Tooltip multiline maw={300} label="Chaque copie, page par page : le scan à gauche, ce qui partira en correction à droite. La correction se lance depuis cette fenêtre.">
+                      <Button variant="light" disabled={!canFinish} onClick={reviewAll}>Tout vérifier copie par copie</Button>
+                    </Tooltip>
+                  )}
                   <Button color="blue" loading={finishing} disabled={!canFinish} onClick={finish}>Lancer la correction</Button>
                 </Group>
               </Stack>

@@ -24,7 +24,8 @@ from ..services import grading
 from ..services import providers
 from ..services import refine
 from ..services import sandbox as sandbox_service
-from ..services import late_copies, ocr_cascade, ocr_truth, scan_intake, scan_originals, scoring
+from ..services import late_copies, ocr_cascade, ocr_truth, review_log, scan_intake, scan_originals, scoring
+from ..services import skeleton as skeleton_service
 from ..services.file_sniff import sniff_file as _sniff_file
 from ..services.pipeline import (
     FinalizeInProgress, build_overlays, effective_reading, finalize_batch,
@@ -1749,6 +1750,10 @@ def refine_response_detail(response_id: str, db: Session = Depends(get_db)):
     """Réponse cliquée : énoncé de correction, réponse lue, note, et l'éditeur
     à proposer (`edit_kind`) avec ses libellés (choix, lignes, colonnes...)."""
     resp, item, copy, _ = _refine_response(db, response_id)
+    return _response_detail(db, resp, item, copy)
+
+
+def _response_detail(db: Session, resp: StudentResponse, item: CopyItem, copy: Copy) -> dict:
     student = db.get(Student, copy.student_id)
     detail = _review_unit(db, resp, item, copy, student,
                           review=_open_review_for_response(db, resp.id))
@@ -1794,10 +1799,16 @@ def refine_answer(response_id: str, body: RefineAnswerIn,
     zone = db.get(ResponseZone, resp.zone_id) if resp.zone_id else None
     if zone is None:
         raise HTTPException(409, "Réponse non scannée")
+    before = review_log.snapshot(db, resp, item, zone, copy)
     try:
         out = refine.apply_answer(db, resp, item, zone, body.model_dump())
         refine.refresh_copy(db, copy, item, out["decision"])
         refine.mark_changed(db, batch.id)
+        db.flush()
+        review_log.record(db, stage="refine", action="answer", resp=resp, item=item, zone=zone,
+                          copy=copy, batch=batch, before=before,
+                          after=review_log.snapshot(db, resp, item, zone, copy),
+                          user_id=getattr(user, "id", None))
         db.commit()
     except refine.RefineError as e:
         db.rollback()
@@ -1820,15 +1831,191 @@ def refine_points(response_id: str, body: RefinePointsIn,
     bareme = scoring.item_bareme(item.grading_json, item.response_type)
     if not bareme:
         raise HTTPException(422, "Exercice sans barème")
+    zone = db.get(ResponseZone, resp.zone_id) if resp.zone_id else None
+    before = review_log.snapshot(db, resp, item, zone, copy) if zone else None
     try:
         decision = refine.apply_points(db, resp, item, body.points / bareme)
         refine.refresh_copy(db, copy, item, decision)
         refine.mark_changed(db, batch.id)
+        db.flush()
+        if zone is not None:
+            review_log.record(db, stage="refine", action="points", resp=resp, item=item, zone=zone,
+                              copy=copy, batch=batch, before=before,
+                              after=review_log.snapshot(db, resp, item, zone, copy),
+                              user_id=getattr(user, "id", None))
         db.commit()
     except refine.RefineError as e:
         db.rollback()
         raise HTTPException(422, str(e))
     return _after_refine(db, batch, copy, {"uncertain": False, "reason": "teacher_set_ratio"})
+
+
+# --------------------------------------------------- revue manuelle avant la correction
+#
+# Même fenêtre qu'Affiner, ouverte depuis la fin d'OCRiser : le professeur vérifie
+# chaque copie (scan à gauche, squelette de ce qui part en correction à droite) et
+# corrige une lecture (OCR, coches, liaisons) AVANT toute note. Chaque modification
+# est journalisée (services.review_log). « Lancer la correction » = ocr/complete.
+
+def _review_batch(db: Session, batch_id: str) -> ScanBatch:
+    b = db.get(ScanBatch, batch_id)
+    if not b:
+        raise HTTPException(404)
+    if "ocr_complete" not in (b.progress_json or {}):
+        raise HTTPException(409, "Les copies de ce lot ne sont pas encore lues")
+    return b
+
+
+@router.get("/batches/{batch_id}/review")
+def review_overview(batch_id: str, db: Session = Depends(get_db), wave: int | None = None):
+    """Copies lues du lot, dans l'ordre de la pile."""
+    b = _review_batch(db, batch_id)
+    out = refine.batch_overview(db, b, wave)
+    out["remaining_ocr"] = sum(pending_ocr_units(db, b.assessment_id).values())
+    out["status"] = b.status
+    return out
+
+
+def _review_copy_view(db: Session, copy: Copy, batch: ScanBatch) -> dict:
+    student = db.get(Student, copy.student_id)
+    positions = _scan_page_positions_for(db, batch)
+    pages = sorted((p for p in skeleton_service.copy_pages(db, copy)),
+                   key=lambda p: (positions.get(p.id, 10 ** 6), p.page_no))
+    derived = settings.data_dir / "assessments" / copy.assessment_id / "scans" / "derived"
+    out = []
+    for p in pages:
+        sk = skeleton_service.page_view(db, copy, p.id)
+        if not sk["zones"]:
+            continue
+        out.append({
+            "page_id": p.id, "index": len(out), "page_no": p.page_no, "version": "scan",
+            "has_scan": (derived / f"page-{p.id}.png").exists(),
+            "skeleton": sk,
+            "zones": [{"response_id": z["response_id"], "sequence": z["sequence"],
+                       "response_type": z["response_type"],
+                       "points": z.get("points", 0.0), "bareme": z.get("bareme", 0.0),
+                       "full": False,
+                       "rect": {"x": z["rect"]["x"] / sk["width"], "y": z["rect"]["y"] / sk["height"],
+                                "w": z["rect"]["w"] / sk["width"], "h": z["rect"]["h"] / sk["height"]}}
+                      for z in sk["zones"]],
+        })
+    return {"copy_id": copy.id, "student": student.name if student else "?", "note": None,
+            "points": None, "pages": out}
+
+
+def _scan_page_positions_for(db: Session, batch: ScanBatch) -> dict[str, int]:
+    return {page_id: idx for page_id, idx in
+            db.query(ScannedPage.page_id, ScannedPage.source_index)
+              .filter(ScannedPage.batch_id == batch.id, ScannedPage.status == "registered",
+                      ScannedPage.page_id.is_not(None)).all()}
+
+
+def _review_copy_batch(db: Session, copy: Copy) -> ScanBatch:
+    b = (db.query(ScanBatch).filter_by(assessment_id=copy.assessment_id)
+         .order_by(ScanBatch.created_at.desc()).first())
+    if not b:
+        raise HTTPException(404, "Aucun lot de scans pour cette copie")
+    return b
+
+
+@router.get("/review/copies/{copy_id}")
+def review_copy(copy_id: str, db: Session = Depends(get_db)):
+    copy = db.get(Copy, copy_id)
+    if not copy:
+        raise HTTPException(404)
+    return _review_copy_view(db, copy, _review_copy_batch(db, copy))
+
+
+_SCAN_JPEG: dict[tuple[str, float], bytes] = {}
+
+
+@router.get("/review/pages/{page_id}/scan")
+def review_page_scan(page_id: str, db: Session = Depends(get_db)):
+    """Page scannée recalée, sans aucune marque (JPEG réduit, mis en cache)."""
+    page = db.get(DocumentPage, page_id)
+    copy = db.get(Copy, page.copy_id) if page else None
+    if not copy:
+        raise HTTPException(404)
+    path = (settings.data_dir / "assessments" / copy.assessment_id / "scans" / "derived"
+            / f"page-{page_id}.png")
+    if not path.exists():
+        raise HTTPException(404, "Scan indisponible")
+    key = (str(path), path.stat().st_mtime)
+    jpeg = _SCAN_JPEG.get(key)
+    if jpeg is None:
+        import cv2
+        img = cv2.imread(str(path))
+        scale = min(1.0, 1400 / img.shape[0])
+        if scale < 1:
+            img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        jpeg = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 85])[1].tobytes()
+        if len(_SCAN_JPEG) > 64:
+            _SCAN_JPEG.clear()
+        _SCAN_JPEG[key] = jpeg
+    return Response(content=jpeg, media_type="image/jpeg",
+                    headers={"Cache-Control": "private, max-age=3600"})
+
+
+def _review_response(db: Session, response_id: str):
+    resp = db.get(StudentResponse, response_id)
+    item = db.get(CopyItem, resp.copy_item_id) if resp else None
+    copy = db.get(Copy, item.copy_id) if item else None
+    if not copy or not resp.zone_id:
+        raise HTTPException(404, "Réponse introuvable")
+    return resp, item, copy, _review_copy_batch(db, copy)
+
+
+@router.get("/review/responses/{response_id}")
+def review_response_detail(response_id: str, db: Session = Depends(get_db)):
+    resp, item, copy, _ = _review_response(db, response_id)
+    return _response_detail(db, resp, item, copy)
+
+
+@router.post("/review/responses/{response_id}/answer")
+def review_answer(response_id: str, body: RefineAnswerIn,
+                  db: Session = Depends(get_db),
+                  user: User = Depends(current_user)):
+    """Corrige ce que la lecture a vu (texte, cases d'un tableau, coches, liaisons),
+    AVANT toute note : écrit une lecture `teacher_ocr`, comme OCRiser, et journalise."""
+    resp, item, copy, batch = _review_response(db, response_id)
+    zone = db.get(ResponseZone, resp.zone_id)
+    kind = refine.edit_kind(item)
+    before = review_log.snapshot(db, resp, item, zone, copy)
+    current = refine.current_answer(db, resp, item)
+    if kind == "points":
+        raise HTTPException(422, "Cette réponse se note après la correction (Affiner)")
+    if kind in ("qcm", "grid"):
+        if body.selected_choices is None:
+            raise HTTPException(422, "Cases cochées manquantes")
+        update_ocr_reading(resp.id, OcrReadingIn(selected_choices=body.selected_choices), db, user)
+    elif kind == "matching":
+        if body.selected_pairs is None:
+            raise HTTPException(422, "Liaisons manquantes")
+        update_ocr_reading(resp.id, OcrReadingIn(selected_pairs=body.selected_pairs), db, user)
+    elif kind == "cells":
+        if body.cells is None:
+            raise HTTPException(422, "Cases du tableau manquantes")
+        old = list(current.get("cells") or [])
+        for k, value in enumerate(body.cells):
+            if k >= len(old) or str(old[k] or "") != str(value or ""):
+                update_ocr_reading(resp.id, OcrReadingIn(text=value or "", latex=value or "",
+                                                         cell_index=k), db, user)
+    else:
+        if body.text is None:
+            raise HTTPException(422, "Réponse manquante")
+        update_ocr_reading(resp.id, OcrReadingIn(text=body.text, latex=body.text), db, user)
+    db.expire_all()
+    resp, item, copy, batch = _review_response(db, response_id)
+    zone = db.get(ResponseZone, resp.zone_id)
+    review_log.record(db, stage="pre_correction", action="answer", resp=resp, item=item, zone=zone,
+                      copy=copy, batch=batch, before=before,
+                      after=review_log.snapshot(db, resp, item, zone, copy),
+                      user_id=getattr(user, "id", None))
+    db.commit()
+    return {"uncertain": False, "reason": "teacher_ocr", "stale": False, "rebuilding": False,
+            "error": None, "overlay_printed": False,
+            "copy": _review_copy_view(db, copy, batch),
+            "remaining_ocr": sum(pending_ocr_units(db, copy.assessment_id).values())}
 
 
 # --------------------------------------------------- résolution des scans bloqués

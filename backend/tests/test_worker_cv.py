@@ -682,3 +682,46 @@ def test_calibrate_dropout_keeps_pencil(col):
     before = (cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)[win] < 200).sum()
     after = (cv2.cvtColor(W.dropout_filter(img, prof), cv2.COLOR_BGR2GRAY)[win] < 200).sum()
     assert after >= 0.9 * before
+
+
+# ------------------------------------------------------------ crayon clair (2026-11-12)
+
+def _pencil_box(stroke_gray: int | None) -> "np.ndarray":
+    import cv2
+    img = np.full((150, 175, 3), 240, np.uint8)                       # papier
+    cv2.rectangle(img, (6, 6), (168, 143), (200, 200, 200), 2)        # reste gris du cadre
+    if stroke_gray is not None:                                       # « 7/10 » au crayon
+        g = (stroke_gray,) * 3
+        cv2.line(img, (70, 40), (100, 40), g, 3); cv2.line(img, (100, 40), (80, 70), g, 3)
+        cv2.line(img, (60, 80), (115, 80), g, 2)
+        cv2.circle(img, (95, 105), 12, g, 3); cv2.line(img, (70, 92), (70, 118), g, 3)
+    return img
+
+
+def test_light_pencil_is_ink_even_without_dark_pixels():
+    from app.services import worker_cv
+    pale = _pencil_box(165)
+    assert worker_cv.ink_ratio(pale) == 0.0                           # l'ancienne mesure ne voit rien
+    assert worker_cv.faint_ink_ratio(pale) >= worker_cv.FAINT_INK_THRESHOLD
+    assert worker_cv.has_ink(pale) and worker_cv.pale_trace(pale)
+
+
+def test_an_empty_box_with_its_frame_stays_empty():
+    from app.services import worker_cv
+    empty = _pencil_box(None)
+    assert not worker_cv.has_ink(empty) and not worker_cv.pale_trace(empty)
+    assert worker_cv.faint_ink_ratio(empty) < worker_cv.FAINT_INK_THRESHOLD
+
+
+def test_dark_ink_is_not_a_pale_trace():
+    from app.services import worker_cv
+    dark = _pencil_box(30)
+    assert worker_cv.has_ink(dark) and not worker_cv.pale_trace(dark)
+
+
+def test_salmon_is_never_counted_as_pencil():
+    import cv2
+    from app.services import worker_cv
+    img = np.full((150, 175, 3), 240, np.uint8)
+    cv2.line(img, (40, 75), (135, 75), (150, 160, 235), 4)          # trait saumon (BGR), coloré
+    assert not worker_cv.has_ink(img)

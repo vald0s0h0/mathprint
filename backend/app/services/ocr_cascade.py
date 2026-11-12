@@ -87,8 +87,11 @@ def ink_extent_px(bgr) -> int:
     """Étendue horizontale de l'encre (colonnes avec au moins 2 pixels sombres)."""
     import cv2
     import numpy as np
+    from . import worker_cv
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-    cols = np.where((gray < 128).sum(axis=0) >= 2)[0]
+    # encre franche OU trait de crayon clair (sinon un crayon pâle mesure 0 px de large)
+    ink = (gray < 128) | worker_cv.faint_ink_mask(bgr)
+    cols = np.where(ink.sum(axis=0) >= 2)[0]
     return int(cols[-1] - cols[0] + 1) if len(cols) else 0
 
 
@@ -132,7 +135,7 @@ def line_specs(warped, zone: ResponseZone, item: CopyItem, blank_threshold: floa
         if crop.size == 0:
             continue
         filtered = worker_cv.dropout_filter(crop)
-        if worker_cv.ink_ratio(filtered) < blank_threshold:
+        if not worker_cv.has_ink(filtered, threshold=blank_threshold):
             continue
         out.append(make_spec(filtered, "multiline_line", line_index=k))
     return out

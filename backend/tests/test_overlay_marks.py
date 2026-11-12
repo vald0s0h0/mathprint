@@ -530,3 +530,44 @@ def test_qcm_labels_of_old_copies_are_recovered_from_the_layout():
     for b, lab in zip(old, stored):
         r = rects[b["index"]]
         assert abs((r["x_pt"] + r["w_pt"]) - (lab["x_pt"] + lab["w_pt"])) < 0.5
+
+
+def test_header_follows_the_printed_layout_even_without_page_id():
+    """build_overlays retire l'identifiant de page avant le rendu : l'en-tête doit
+    suivre la clé `layout` (v3 : « Correction — Nom » dans la bande de 11 mm), pas
+    retomber sur la géométrie v1 de 24 mm."""
+    import fitz
+    tops = {}
+    for layout in ("v1", "v3"):
+        with tempfile.TemporaryDirectory() as d:
+            path = f"{d}/o.pdf"
+            pdfgen.render_overlay(path, copies_annotations=[{
+                "student": "Raphael", "assessment_type": "control", "layout": layout,
+                "note": "20/20", "note_raw": "13,5/13,5", "page_zones": [], "_page_no": 1}])
+            page = fitz.open(path)[0]
+            hits = page.search_for("Correction")
+            assert hits
+            tops[layout] = hits[0].y0 / 72 * 25.4          # mm depuis le haut
+    band_bottom = (pdfgen.MARGIN + pdfgen.BAND_H) / mm
+    assert tops["v3"] < band_bottom < tops["v1"]
+
+
+def test_composite_parts_marks_and_score_sit_on_the_card_right_edge():
+    """Sous-questions : coche sur le bord droit de la CARTE (pas contre la case),
+    note de barème juste dessous."""
+    from app.services import pipeline
+    strip = {"x_pt": 100.0, "y_pt": 50.0, "w_pt": 200.0, "h_pt": 20.0}
+    part = {"x_pt": 180.0, "y_pt": 300.0, "w_pt": 40.0, "h_pt": 30.0, "strip": None,
+            "marks": {"edge_x": 220.0, "edge": [{"y": 315.0, "ok": True}]}}
+    pipeline._anchor_parts_on_card_edge([part], strip)
+    edge = 100.0 + 200.0 + pdfgen.CARD_PAD
+    assert part["marks"]["edge_x"] == edge
+    assert part["score_at"]["x"] == edge
+    assert part["score_at"]["baseline"] < 315.0 - pdfgen.EDGE_MARK_SIZE / 2
+
+
+def test_group_microcorrection_never_repeats_the_same_sentence():
+    from app.services import microcorrection
+    msg = "Oui : tan A = 7/10 = 0,7, valeur de la tangente de 35°."
+    assert microcorrection.group_text([msg, msg]) == msg
+    assert microcorrection.group_text([msg, "  " + msg.replace(" ", "  ")]) == msg

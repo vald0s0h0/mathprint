@@ -31,7 +31,7 @@ from . import error_journal, llm_grader, microcorrection, ocr_cascade, ocr_shado
 from .runtime_settings import (construction_audit_share, construction_confidence_threshold,
                                ocr_confidence_threshold, ocr_mode)
 from .appreciation import build_appreciation
-from . import construction, late_copies
+from . import construction, late_copies, pdfgen
 from .forgetting import apply_evidence, replay_states, update_level_after_assessment
 from .overlay_queue import overlay_file
 from .pdfgen import (CARD_PAD, EDGE_MARK_SIZE, qcm_answer_rects, render_copy_review,
@@ -786,7 +786,8 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment,
                             cell_texts.append(value); cell_latex.append(""); confs.append(conf_cv)
                             continue
                         cell_ink = worker_cv.ink_ratio(cfiltered)
-                        if cell_ink < 0.01:
+                        cell_pale = worker_cv.pale_trace(cfiltered, threshold=0.01)
+                        if not worker_cv.has_ink(cfiltered, threshold=0.01):
                             cell_texts.append("")
                             cell_latex.append("")
                             # Une case « vide » est elle aussi une décision CV.
@@ -811,7 +812,9 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment,
                                                       f"{corr_id}-c{ri}-{ci}", expected_hint=hint)
                         cell_texts.append(ocr_c["text"])
                         cell_latex.append(ocr_c.get("latex") or "")
-                        confs.append(ocr_c["confidence"])
+                        # rien lu sur une trace de crayon : jamais une case vide d'office
+                        confs.append(0.0 if cell_pale and not (ocr_c["text"] or ocr_c.get("latex") or "").strip()
+                                     else ocr_c["confidence"])
                 if cascade and ocr_slots:
                     # squelette de la zone : ce que la CV a lu + la place de chaque découpe ;
                     # la lecture `ocr_fusion` sera écrite quand toutes les découpes seront décidées
@@ -850,7 +853,9 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment,
                     cell_texts=cell_texts, queue=queue, defer_grading=True)
             else:
                 ink = worker_cv.ink_ratio(filtered)
-                if ink < worker_cv.BLANK_INK_THRESHOLD:  # zone vide : aucun appel Mathpix (§8.3)
+                # trace pâle (crayon clair) : jamais « vide » d'office, elle part en lecture
+                pale = worker_cv.pale_trace(filtered)
+                if not worker_cv.has_ink(filtered):  # zone vide : aucun appel Mathpix (§8.3)
                     cv_conf = worker_cv.blank_decision_confidence(ink)
                     db.add(OcrAttempt(zone_id=zone.id, provider="cv_local",
                                       raw_json={"empty_score": ink}, confidence=cv_conf))
@@ -876,6 +881,9 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment,
                     ocr = providers.mathpix_ocr(db, crop_path.read_bytes(), corr_id,
                                                 expected_hint=hint)
                     ocr_conf, ocr_raw = ocr["confidence"], ocr["raw"]
+                    if pale and not (ocr["text"] or ocr["latex"] or "").strip():
+                        # rien lu sur une trace de crayon : le professeur tranche
+                        ocr_conf, ocr_raw = 0.0, {**(ocr_raw or {}), "pale_trace": True}
                     if (shadow and ocr_conf >= ocr_confidence_threshold(db)
                             and ocr_cascade.shadow_audit_pick(db, zone, batch)):
                         # mode ombre : lecture sûre tirée pour le contrôle (voir plus haut)
@@ -1532,6 +1540,26 @@ def _zone_marks(db: Session, item: CopyItem, zone: ResponseZone,
     return marks
 
 
+PART_SCORE_FS = 9.0
+
+
+def _anchor_parts_on_card_edge(parts: list[dict], strip: dict) -> None:
+    """Sous-questions d'un composite : la coche ou la croix sur le bord droit de la
+    carte (et non contre la case de réponse), la note de barème juste dessous."""
+    if not strip or not strip.get("w_pt"):
+        return
+    edge_x = float(strip["x_pt"]) + float(strip["w_pt"]) + CARD_PAD
+    for z in parts:
+        marks = z.get("marks")
+        ys = []
+        if marks:
+            marks["edge_x"] = edge_x
+            ys = [e["y"] for e in marks.get("edge", []) if "x" not in e]
+        low = min(ys) if ys else float(z["y_pt"]) + float(z["h_pt"]) / 2
+        z["score_at"] = {"x": edge_x,
+                         "baseline": low - EDGE_MARK_SIZE / 2 - 1.2 * mm - PART_SCORE_FS * 0.72}
+
+
 def _copies_in_scan_order(db: Session, batch: ScanBatch,
                           assessment_id: str) -> list[Copy]:
     """Copies scannées dans l'ordre ADF, avec repli ordre de classe uniquement
@@ -1598,6 +1626,7 @@ def copy_overlay_pages(db: Session, assessment: Assessment, copy: Copy,
     page_no: dict[str, int] = {}
     group_messages: dict[tuple, list[str]] = {}
     group_zones: dict[tuple, tuple] = {}
+    group_members: dict[tuple, list[dict]] = {}
     for item in items:
         resp = db.query(StudentResponse).filter_by(copy_item_id=item.id).first()
         zone = db.query(ResponseZone).filter_by(item_id=item.id).first()
@@ -1638,6 +1667,8 @@ def copy_overlay_pages(db: Session, assessment: Assessment, copy: Copy,
         group_strip = (zone.meta_json or {}).get("group_correction_strip")
         if group_strip:
             group_zones[(zone.page_id, item.sequence)] = (zdict, group_strip)
+        if not zdict["strip"]:
+            group_members.setdefault((zone.page_id, item.sequence), []).append(zdict)
         zones_by_page.setdefault(zone.page_id, []).append(zdict)
         if zone.page_id not in page_no:
             dp = db.get(DocumentPage, zone.page_id)
@@ -1649,6 +1680,10 @@ def copy_overlay_pages(db: Session, assessment: Assessment, copy: Copy,
                               geometry_json={"x_pt": zone.x_pt, "y_pt": zone.y_pt}))
     if not zones_by_page:
         return []  # copie non scannée : pas d'overlay
+    # Parties d'un composite : marques et note sur le bord DROIT de la carte, comme
+    # pour une carte simple (la zone d'une partie n'est que sa case de réponse).
+    for key, (_first, strip) in group_zones.items():
+        _anchor_parts_on_card_edge(group_members.get(key, []), strip)
     # Parties d'un composite : une seule bande, messages dans l'ordre tant qu'ils tiennent.
     for key, messages in group_messages.items():
         if key in group_zones:
@@ -1774,7 +1809,9 @@ def build_overlays(db: Session, batch: ScanBatch) -> str:
     review_pages = []
     for copy in copies:
         for page in copy_overlay_pages(db, assessment, copy, scan_page_positions):
-            page.pop("page_id")
+            # l'identifiant ne sort pas dans le PDF, mais l'en-tête doit savoir si la
+            # feuille a été imprimée en v1 ou en v3 (note, « Correction — Nom »)
+            page["layout"] = pdfgen.layout_of_page(page.pop("page_id"))
             background = page.pop("background")
             page["_copy_index"] = len(pages_annotations)
             pages_annotations.append(page)
@@ -1813,6 +1850,10 @@ def build_overlays(db: Session, batch: ScanBatch) -> str:
             order_meta["blank"] = True
         placeholder = {
             "student": label, "unidentified": True,
+            # mise en page de la feuille si on la connaît, sinon celle du reste du lot
+            "layout": (pdfgen.layout_of_page(known_page) if known_page
+                       else next((pg["layout"] for pg in pages_annotations if pg.get("layout")),
+                                 pdfgen.LAYOUT_V3)),
             "assessment_type": assessment.type, "page_zones": [], **order_meta,
         }
         pages_annotations.append(placeholder)
