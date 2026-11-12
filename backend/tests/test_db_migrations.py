@@ -219,3 +219,39 @@ def test_item_history_is_backfilled_on_an_already_corrected_database(monkeypatch
     # stabilité ramenée sous le plafond de la maîtrise 0,5 (~46 j), pas 10 ans
     assert state < 60
     assert "ix_copy_item_results_student_comp" in indexes
+
+
+def test_ocr_crops_gain_ink_width_on_an_existing_database(monkeypatch):
+    """Une base de dev qui a déjà créé ocr_crops (lot 1) reçoit la colonne du lot 4."""
+    old = create_engine("sqlite:///:memory:")
+    with old.begin() as connection:
+        connection.execute(text("CREATE TABLE ocr_crops (id TEXT PRIMARY KEY, batch_id TEXT)"))
+        connection.execute(text("INSERT INTO ocr_crops VALUES ('c1', 'b1')"))
+    monkeypatch.setattr(db_module, "engine", old)
+    db_module.run_migrations()
+    db_module.run_migrations()
+    with old.connect() as connection:
+        assert connection.execute(text("SELECT ink_width_px FROM ocr_crops")).scalar() == 0
+
+
+def test_ocr_columns_migrate_on_postgres(monkeypatch):
+    """Mêmes colonnes ajoutées sur PostgreSQL (types et défauts), seulement si une base jetable est fournie."""
+    import pytest
+    from tests.pgsupport import pg_url, make_engine
+    if not pg_url():
+        pytest.skip("MATHPRINT_TEST_PG_URL absent")
+    engine = make_engine()
+    with engine.begin() as c:
+        c.execute(text("DROP TABLE ocr_decisions, ocr_crops CASCADE"))
+        c.execute(text("CREATE TABLE ocr_crops (id TEXT PRIMARY KEY, batch_id TEXT)"))
+        c.execute(text("CREATE TABLE ocr_decisions (id TEXT PRIMARY KEY, zone_id TEXT, crop_id TEXT, "
+                       "decision TEXT, mode TEXT)"))         # forme du lot 1 (sans batch_id)
+        c.execute(text("INSERT INTO ocr_crops VALUES ('c1', 'b1')"))
+    monkeypatch.setattr(db_module, "engine", engine)
+    db_module.run_migrations()
+    db_module.run_migrations()
+    with engine.connect() as c:
+        assert c.execute(text("SELECT ink_width_px, mode FROM ocr_crops")).one() == (0, "shadow")
+        assert "batch_id" in {col["name"] for col in inspect(engine).get_columns("ocr_decisions")}
+        names = {i["name"] for i in inspect(engine).get_indexes("ocr_decisions")}
+        assert {"ix_ocr_decisions_batch", "ix_ocr_decisions_decision_mode"} <= names

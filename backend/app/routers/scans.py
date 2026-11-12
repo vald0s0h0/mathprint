@@ -24,7 +24,7 @@ from ..services import grading
 from ..services import providers
 from ..services import refine
 from ..services import sandbox as sandbox_service
-from ..services import late_copies, scan_intake, scan_originals, scoring
+from ..services import late_copies, ocr_cascade, ocr_truth, scan_intake, scan_originals, scoring
 from ..services.file_sniff import sniff_file as _sniff_file
 from ..services.pipeline import (
     FinalizeInProgress, build_overlays, effective_reading, finalize_batch,
@@ -132,6 +132,25 @@ def _read_batch(batch_id: str):
 
 
 _run_pipeline = _single_flight(_read_batch, replay=True)
+
+
+def _read_batch_with_mathpix(batch_id: str):
+    """Relit un lot avec Mathpix en ligne (mode `mathpix` pour CE lot seulement)."""
+    db = SessionLocal()
+    try:
+        batch = db.get(ScanBatch, batch_id)
+        process_batch(db, batch, ocr_mode_override="mathpix")
+    except Exception as e:
+        _log_task_error("pipeline", batch_id, e)
+        db.rollback()
+        batch = db.get(ScanBatch, batch_id)
+        batch.error = str(e)
+        db.commit()
+    finally:
+        db.close()
+
+
+_run_pipeline_mathpix = _single_flight(_read_batch_with_mathpix, replay=False)
 
 
 @_single_flight
@@ -530,7 +549,10 @@ def _batch_view(db: Session, b: ScanBatch) -> dict:
         b.status == "ocr_review_pending") else 0
     stale = refine.overlay_stale(b)
     rebuilding = stale and _is_running(b.id)
-    late_jobs = late_copies.jobs_view(db, b)
+    # Un lot refermé sans aucune feuille à corriger (ex. un doublon de scan) n'a rien à
+    # montrer : pas de ligne « 0 copie ».
+    late_jobs = [j for j in late_copies.jobs_view(db, b)
+                 if not (j["stage"] == "done" and j["sheets"] == 0)]
     if late_jobs:
         # Les copies tardives ont leur propre job (pipeline, erreurs, files de
         # correction) : le lot principal garde l'état de sa première pile.
@@ -570,6 +592,8 @@ def _batch_view(db: Session, b: ScanBatch) -> dict:
             "page_count": b.page_count - sum(j["page_count"] for j in late_jobs),
             "error": None if late_jobs else b.error,
             "pending_reviews": pending, "pending_ocr": pending_ocr,
+            # lecture locale (mode cascade) : avancement sur le Mac et présence du worker
+            "ocr_local": (ocr_cascade.local_progress(db, b) if b.status == "ocr_local_pending" else None),
             "pending_llm": pending_llm, "absent_count": absent_count,
             "ocr_threshold": ocr_confidence_threshold(db), "segments": segments,
             "overlay_printed": b.overlay_printed, "overlay_distributed": b.overlay_distributed,
@@ -1035,6 +1059,13 @@ def list_ocr_items(batch_id: str, db: Session = Depends(get_db), wave: int | Non
             reading = effective_reading(db, resp.zone_id)
             row["cell_confidences"] = ((reading.raw_json or {}).get("cell_confidences")
                                            if reading else None) or []
+            # lecture multicouche : étiquette « Contrôle » et candidats des moteurs (puces
+            # cliquables qui remplissent le champ ; le professeur valide toujours lui-même)
+            sugg = ocr_truth.suggestions(db, resp.zone_id) if resp.zone_id else {"audit": False, "zone": [], "cells": {}}
+            row["ocr_audit"] = bool(sugg["audit"] or (reading and (reading.raw_json or {}).get("audit")))
+            row["ocr_candidates"] = sugg["zone"]
+            for cell in row.get("cells") or []:
+                cell["ocr_candidates"] = sugg["cells"].get(cell.get("index"), [])
             out.append(row)
 
     def rank(row: dict) -> tuple:
@@ -1112,10 +1143,55 @@ def update_ocr_reading(response_id: str, body: OcrReadingIn,
         resp.final_text = text or ""
         confidence = 1.0
 
+    # cases réellement vues par le professeur : seules elles deviennent une vérité terrain
+    if item.response_type in ("table_fill", "multi_blank"):
+        raw["touched"] = sorted(set(raw.get("touched") or []) | {body.cell_index})
+    else:
+        raw["touched"] = ["zone"]
     db.add(OcrAttempt(zone_id=resp.zone_id, provider="teacher_ocr",
                       raw_json=raw, text=text or "", latex=latex or "",
                       confidence=confidence))
+    # vérité terrain de la lecture multicouche : seule la case réécrite a été vue par le professeur
+    if item.response_type in ("table_fill", "multi_blank"):
+        ocr_truth.record_truth(db, resp.zone_id, {body.cell_index: str(raw["cells"][body.cell_index] or "")})
+    elif not item.response_type.startswith("qcm") and item.response_type not in ("checkbox_grid", "matching"):
+        ocr_truth.record_truth(db, resp.zone_id, {None: text or ""})
     db.commit()
+    remaining = len(pending_ocr_responses(db, copy.assessment_id)) if copy else 0
+    return {"ok": True, "remaining": remaining}
+
+
+@router.post("/responses/{response_id}/ocr/confirm")
+def confirm_ocr_reading(response_id: str, db: Session = Depends(get_db),
+                        user: User = Depends(current_user)):
+    """« C'est juste » : le professeur a vu la lecture acceptée automatiquement (élément
+    « Contrôle ») et la confirme telle quelle. Crée `teacher_ocr` avec cette lecture : elle
+    devient la vérité terrain (source `audit`) qui mesure les erreurs passées en automatique."""
+    resp = db.get(StudentResponse, response_id)
+    if not resp or not resp.zone_id:
+        raise HTTPException(404, "Réponse scannée introuvable")
+    item = db.get(CopyItem, resp.copy_item_id)
+    copy = db.get(Copy, item.copy_id) if item else None
+    reading = effective_reading(db, resp.zone_id)
+    if reading is None:
+        raise HTTPException(409, "Aucune lecture à confirmer")
+    if reading.provider != "teacher_ocr":
+        raw = dict(reading.raw_json or {})
+        if item.response_type in ("table_fill", "multi_blank"):
+            cells = list(raw.get("cells") or [])
+            raw.update(cells=cells, cell_latex=list(raw.get("cell_latex") or cells),
+                       cell_confidences=[1.0] * len(cells))
+            texts = {i: str(c or "") for i, c in enumerate(cells)}
+            text = latex = ""
+        else:
+            text, latex = reading.text or "", reading.latex or reading.text or ""
+            texts = {None: text}
+        raw["confirmed_as_correct"] = True
+        raw["touched"] = sorted(texts) if item.response_type in ("table_fill", "multi_blank") else ["zone"]
+        db.add(OcrAttempt(zone_id=resp.zone_id, provider="teacher_ocr", raw_json=raw,
+                          text=text, latex=latex, confidence=1.0))
+        ocr_truth.record_truth(db, resp.zone_id, texts)
+        db.commit()
     remaining = len(pending_ocr_responses(db, copy.assessment_id)) if copy else 0
     return {"ok": True, "remaining": remaining}
 
@@ -1416,6 +1492,24 @@ def retry_batch(batch_id: str, tasks: BackgroundTasks, db: Session = Depends(get
     else:
         tasks.add_task(_run_pipeline, b.id)
     return {"ok": True, "status": b.status}
+
+
+@router.post("/batches/{batch_id}/ocr/fallback-mathpix")
+def fallback_mathpix(batch_id: str, tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    """Lot en attente du Mac depuis trop longtemps : abandonne la lecture locale et relit le lot avec
+    Mathpix en ligne (comportement d'avant la lecture multicouche). Seulement avant toute réponse écrite."""
+    b = db.get(ScanBatch, batch_id)
+    if not b:
+        raise HTTPException(404)
+    if b.status != "ocr_local_pending":
+        raise HTTPException(409, "Ce lot n'attend pas la lecture locale")
+    if _is_running(b.id):
+        return {"ok": True, "already_running": True}
+    cancelled = ocr_cascade.cancel_local(db, b)
+    b.error = None
+    db.commit()
+    tasks.add_task(_run_pipeline_mathpix, b.id)
+    return {"ok": True, "cancelled_crops": cancelled}
 
 
 @router.delete("/batches/{batch_id}")

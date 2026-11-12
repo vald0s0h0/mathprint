@@ -162,7 +162,8 @@ def _queue(world, wave=1):
 
 
 def _job(world, batch, wave=1):
-    return next(j for j in scans_router._batch_view(world.db, batch)["late_jobs"] if j["wave"] == wave)
+    # état interne du job (la vue masque les lots refermés et vides)
+    return next(j for j in late_copies.jobs_view(world.db, batch) if j["wave"] == wave)
 
 
 def _overlay_texts(world, wave):
@@ -636,3 +637,14 @@ def test_late_pile_of_a_sheet_corrected_elsewhere_closes_itself(world):
     _correct_all(world, batch)
     assert _job(world, batch, 1)["stage"] == "print"
     assert _job(world, batch, 2)["stage"] == "done"
+
+
+def test_a_closed_job_without_sheets_is_not_listed(world):
+    batch = _first_round(world)
+    _, batch = _deposit(world, _scan(world.pages["Chloé"]))
+    # vague refermée dont toutes les feuilles sont passées en doublon : plus rien à corriger
+    for row in world.db.query(ScannedPage).filter_by(batch_id=batch.id, wave=1):
+        row.status = "late_duplicate"
+    late_copies.set_wave_state(batch, 1, closed=True)
+    world.db.commit()
+    assert scans_router._batch_view(world.db, batch)["late_jobs"] == []

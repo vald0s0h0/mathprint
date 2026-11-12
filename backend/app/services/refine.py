@@ -40,7 +40,7 @@ from ..models import (
     ResponseZone, ScanBatch, Student, StudentResponse,
 )
 from . import grading as grader
-from . import error_journal, scoring
+from . import error_journal, ocr_truth, scoring
 from .appreciation import compute_competency_progress
 from .forgetting import replay_states
 from .pdfgen import PAGE_H, PAGE_W, render_page_marks
@@ -410,8 +410,13 @@ def apply_answer(db: Session, resp: StudentResponse, item: CopyItem,
         resp.selected_pairs = pairs
     elif kind == "text":
         resp.final_text = text
+    raw["touched"] = list(range(len(cells))) if kind == "cells" else ["zone"]   # vu en entier par le professeur
     db.add(OcrAttempt(zone_id=resp.zone_id, provider="teacher_ocr", raw_json=raw,
                       text=text, latex=text, confidence=1.0))
+    if kind == "cells":            # vérité terrain de la lecture multicouche (réponse entière réécrite)
+        ocr_truth.record_truth(db, resp.zone_id, {i: str(c or "") for i, c in enumerate(cells)})
+    elif kind == "text":
+        ocr_truth.record_truth(db, resp.zone_id, {None: text})
 
     verdict = grader.grade(item.expected_json or {}, policy, text, 1.0, selected,
                            cell_texts=cells, selected_pairs=pairs)

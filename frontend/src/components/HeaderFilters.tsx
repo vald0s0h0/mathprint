@@ -77,8 +77,10 @@ function CatalogFilter() {
 
 export default function HeaderFilters() {
   const { pathname } = useLocation()
-  if (pathname === '/parametres') return null
-  if (pathname === '/etablissements') return <SchoolFilter />
+  if (pathname === '/parametres' || pathname.startsWith('/admin/parametres')
+    || pathname === '/admin/utilisateurs' || pathname === '/atelier/imprimantes'
+    || pathname === '/atelier/calibration') return null
+  if (pathname === '/atelier' || pathname === '/admin/etablissements') return <SchoolFilter />
   if (pathname === '/exercices') return <CatalogFilter />
   return <TeachingFilter />
 }

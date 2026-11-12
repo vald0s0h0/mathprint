@@ -38,6 +38,9 @@ def get_db():
 # notion de base de notation étaient tous notés sur 20).
 _ADDED_COLUMNS: dict[str, list[tuple[str, ...]]] = {
     "users": [("subscription_plan", "TEXT")],
+    # largeur d'encre de la découpe : garde-fou encre/longueur de la fusion OCR
+    "ocr_crops": [("ink_width_px", "INTEGER", "0"), ("mode", "TEXT", "'shadow'")],
+    "ocr_decisions": [("batch_id", "TEXT")],
     "scan_batches": [("overlay_printed", "BOOLEAN"), ("overlay_distributed", "BOOLEAN"),
                      ("refine_rev", "INTEGER", "0"), ("overlay_rev", "INTEGER", "0"),
                      ("overlay_print_json", "JSON"), ("overlay_wave", "INTEGER", "0"),
@@ -184,6 +187,9 @@ _DROPPED_TABLES = {"lesson_snippets"}
 # de sujet. `IF NOT EXISTS` est compris par SQLite comme par Postgres.
 _ADDED_INDEXES: dict[str, tuple[str, str]] = {
     "ix_copy_item_results_student_comp": ("copy_item_results", "student_id, competency_id"),
+    # diagnostic de la lecture OCR : requêtes agrégées sur de gros volumes de décisions
+    "ix_ocr_decisions_batch": ("ocr_decisions", "batch_id"),
+    "ix_ocr_decisions_decision_mode": ("ocr_decisions", "decision, mode"),
 }
 
 

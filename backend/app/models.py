@@ -44,6 +44,16 @@ class User(Base):
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
+class UserPreference(Base):
+    """Préférence personnelle (roue crantée) : une valeur JSON par clé et par
+    utilisateur. Une clé absente retombe sur le réglage global du même nom."""
+    __tablename__ = "user_preferences"
+    user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id", ondelete="CASCADE"),
+                                         primary_key=True)
+    key: Mapped[str] = mapped_column(String, primary_key=True)
+    value_json: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
 class Country(Base):
     __tablename__ = "countries"
     id: Mapped[str] = mapped_column(String, primary_key=True)
@@ -667,6 +677,127 @@ class OcrAttempt(Base):
     text: Mapped[str] = mapped_column(Text, default="")
     confidence: Mapped[float] = mapped_column(Float, default=0.0)
     cost: Mapped[float] = mapped_column(Float, default=0.0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
+# ------------------------------------------------- lecture OCR multicouche
+# Moteurs locaux -> consensus déterministe -> Mathpix groupé -> OCRiser.
+# Rien ici ne stocke la valeur attendue : seules les lectures et les décisions.
+
+class OcrCrop(Base):
+    """Une découpe à lire : zone entière, case de tableau ou ligne d'une zone
+    multiligne. L'image vit sur le volume (`image_path`), jamais en base."""
+    __tablename__ = "ocr_crops"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
+    batch_id: Mapped[str] = mapped_column(ForeignKey("scan_batches.id"))
+    zone_id: Mapped[str] = mapped_column(ForeignKey("response_zones.id"))
+    cell_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    line_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    image_path: Mapped[str] = mapped_column(String, default="")
+    image_sha256: Mapped[str] = mapped_column(String, default="")
+    zone_class: Mapped[str] = mapped_column(String, default="num_line")
+    # num_line | math_line | text_line | multiline_line
+    charset: Mapped[str] = mapped_column(String, default="")
+    width_px: Mapped[int] = mapped_column(Integer, default=0)
+    height_px: Mapped[int] = mapped_column(Integer, default=0)
+    ink_ratio: Mapped[float] = mapped_column(Float, default=0.0)
+    ink_width_px: Mapped[int] = mapped_column(Integer, default=0)   # étendue horizontale de l'encre
+    mode: Mapped[str] = mapped_column(String, default="shadow")     # shadow | cascade, au dépôt
+    status: Mapped[str] = mapped_column(String, default="pending")
+    # pending | local_done | mathpix_pending | decided
+    full_sample: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    __table_args__ = (Index("ix_ocr_crops_batch_status", "batch_id", "status"),
+                      Index("ix_ocr_crops_zone", "zone_id"))
+
+
+class OcrJob(Base):
+    """Une tâche moteur sur une découpe. Le serveur est la seule source de
+    vérité : le worker réserve (`claimed`, bail `lease_until`) puis poste."""
+    __tablename__ = "ocr_jobs"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
+    crop_id: Mapped[str] = mapped_column(ForeignKey("ocr_crops.id"))
+    engine: Mapped[str] = mapped_column(String)
+    kind: Mapped[str] = mapped_column(String, default="read")      # read | score
+    candidates_json: Mapped[list] = mapped_column(JSON, default=list)  # pour un score
+    status: Mapped[str] = mapped_column(String, default="pending")
+    # pending | claimed | done | error
+    claimed_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    __table_args__ = (Index("ix_ocr_jobs_engine_status", "engine", "status"),
+                      Index("ix_ocr_jobs_crop", "crop_id"))
+
+
+class OcrEngineRead(Base):
+    """Un résultat de moteur (ou un score forcé). Texte brut conservé intact."""
+    __tablename__ = "ocr_engine_reads"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
+    crop_id: Mapped[str] = mapped_column(ForeignKey("ocr_crops.id"))
+    job_id: Mapped[str | None] = mapped_column(String, nullable=True, unique=True)  # idempotence
+    engine: Mapped[str] = mapped_column(String)
+    engine_version: Mapped[str] = mapped_column(String, default="")
+    weights: Mapped[str] = mapped_column(String, default="")       # identifiant@révision
+    backend: Mapped[str] = mapped_column(String, default="")       # mlx | mps | cuda | vision | fake
+    device: Mapped[str] = mapped_column(String, default="")
+    family: Mapped[str] = mapped_column(String, default="")
+    kind: Mapped[str] = mapped_column(String, default="read")
+    raw_text: Mapped[str] = mapped_column(Text, default="")
+    surface: Mapped[str] = mapped_column(Text, default="")
+    illegible: Mapped[bool] = mapped_column(Boolean, default=False)
+    confidence_raw: Mapped[float | None] = mapped_column(Float, nullable=True)
+    logprob_mean: Mapped[float | None] = mapped_column(Float, nullable=True)
+    logprob_min: Mapped[float | None] = mapped_column(Float, nullable=True)
+    alternatives_json: Mapped[list] = mapped_column(JSON, default=list)
+    scores_json: Mapped[dict] = mapped_column(JSON, default=dict)  # score : candidat -> log-prob
+    latency_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    __table_args__ = (Index("ix_ocr_engine_reads_crop", "crop_id"),
+                      Index("ix_ocr_engine_reads_engine", "engine"))
+
+
+class OcrDecision(Base):
+    """Décision par découpe, puis par zone agrégée (`crop_id` nul)."""
+    __tablename__ = "ocr_decisions"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
+    crop_id: Mapped[str | None] = mapped_column(ForeignKey("ocr_crops.id"), nullable=True)
+    zone_id: Mapped[str] = mapped_column(ForeignKey("response_zones.id"))
+    batch_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    stage_reached: Mapped[str] = mapped_column(String, default="local")  # local | mathpix | manual
+    decision: Mapped[str] = mapped_column(String, default="manual")
+    # local_consensus | mathpix_confirmed | manual | blank_cv
+    reason: Mapped[str] = mapped_column(String, default="")
+    candidates_json: Mapped[list] = mapped_column(JSON, default=list)
+    accepted_surface: Mapped[str | None] = mapped_column(Text, nullable=True)
+    accepted_raw: Mapped[str | None] = mapped_column(Text, nullable=True)
+    accepted_latex: Mapped[str | None] = mapped_column(Text, nullable=True)
+    mathpix_used: Mapped[bool] = mapped_column(Boolean, default=False)
+    montage_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    cost_eur: Mapped[float] = mapped_column(Float, default=0.0)
+    audit: Mapped[bool] = mapped_column(Boolean, default=False)
+    full_decision: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    truth_surface: Mapped[str | None] = mapped_column(Text, nullable=True)
+    truth_source: Mapped[str | None] = mapped_column(String, nullable=True)  # teacher_ocr | audit
+    truth_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    auto_error: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    mode: Mapped[str] = mapped_column(String, default="shadow")  # shadow | cascade
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    __table_args__ = (Index("ix_ocr_decisions_zone", "zone_id"),
+                      Index("ix_ocr_decisions_crop", "crop_id"),
+                      Index("ix_ocr_decisions_batch", "batch_id"),
+                      Index("ix_ocr_decisions_decision_mode", "decision", "mode"))
+
+
+class OcrMontage(Base):
+    """Planche Mathpix : plusieurs découpes sur une seule image, un seul appel."""
+    __tablename__ = "ocr_montages"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
+    image_path: Mapped[str] = mapped_column(String, default="")
+    crops_json: Mapped[list] = mapped_column(JSON, default=list)  # [{crop_id, box:[x0,y0,x1,y1]}]
+    response_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    cost_eur: Mapped[float] = mapped_column(Float, default=0.0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
 

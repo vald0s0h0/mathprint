@@ -65,6 +65,37 @@ sur <https://macbook-air-de-etienne.tail428d1a.ts.net> (`tailscale serve status`
 Tailscale soit lancé et connecté sur le Mac, et que le Mac soit allumé et
 éveillé.
 
+## Centre local et rôles
+
+Ce Mac fait tourner le **centre de service** (édition `centre`, la valeur par
+défaut de `MATHPRINT_EDITION`) : établissements accompagnés, Atelier,
+administration. Le NAS (`app.kironina.com`) tourne en édition `autonome` : profs
+autonomes seulement. Les deux bases sont indépendantes ; le code est le même.
+
+- **Rôles** : `admin` (tout), `corrector` affiché « Atelier » (logistique : lots,
+  reprise OCR, impression, distribution, calibration, suivi des sujets ; lecture
+  seule sur établissements, profs, classes), `teacher`.
+- **Barre latérale** : onglets utilisateur en haut ; en bas, **Atelier**, puis,
+  sous un séparateur, **Admin** (Établissements, Utilisateurs, Exercices,
+  Paramètres admin). La roue crantée en haut à droite ouvre les paramètres
+  personnels.
+- **Zone utilisateur de l'admin** : le frontend envoie l'en-tête `X-KN-Zone`
+  (`user` | `atelier` | `admin`, déduit de l'URL). En zone `user`, l'admin ne voit
+  que ses propres classes de prof ; dans l'Atelier et l'admin, tout.
+
+### Sauvegarde automatique vers le NAS
+
+`scripts/backup-nas.sh` envoie toutes les heures sur le NAS
+(`~/sauvegardes/kironina-centre/` du compte Etienne) un instantané vérifié de
+`backend/mathprint.db` (48 horaires, 90 quotidiens) et les fichiers nouveaux de
+`data/` (sans les caches), dont `runtime_secrets.env`. Service launchd
+`com.kironina.backup-nas` (modèle `scripts/launchd/`), journal
+`~/Library/Logs/kironina-backup-nas.log`. NAS injoignable (Tailscale coupé) :
+la sauvegarde échoue proprement et repart l'heure suivante.
+
+Restaurer : arrêter l'app, `gunzip -c <instantané>.db.gz > backend/mathprint.db`,
+recopier `data/` depuis le NAS (`ssh … tar` : voir le script), relancer.
+
 ## Débogage Python (breakpoints)
 
 `.vscode/launch.json` fournit le débogueur (debugpy, livré avec l'extension
@@ -116,3 +147,19 @@ cd backend && bash e2e_test.sh                      # E2E mock
 - Ports occupés ? Change-les de façon cohérente : API `--port`, `MATHPRINT_API`
   pour le proxy Vite (`MATHPRINT_API=http://localhost:8899 npm run dev`).
 ```
+
+
+## Worker OCR (lecture locale)
+
+Le worker (`ocr_worker/`, son propre venv) lit les découpes des copies avec des moteurs locaux ;
+il parle à l'API en HTTP, y compris celle du Mac (`http://127.0.0.1:8787`).
+
+1. Générer un jeton dans Paramètres admin → Pédagogie → Lecture OCR multicouche (« Générer »).
+2. Le lancer à la main : `MATHPRINT_OCR_WORKER_TOKEN=<jeton> HF_HUB_OFFLINE=1 ocr_worker/.venv/bin/python -m ocr_worker --once`
+3. En service : renseigner le jeton dans `scripts/launchd/com.kironina.ocr-worker.plist`,
+   puis `cp` vers `~/Library/LaunchAgents/` et `launchctl load` (journal : `~/Library/Logs/kironina-ocr-worker.log`).
+
+Tests : `backend/.venv/bin/python -m pytest backend/tests/test_ocr_*.py` ;
+`ocr_worker/.venv/bin/python -m pytest ocr_worker/tests` ; moteurs réels (5 découpes chacun) :
+`OCR_REAL=1 HF_HUB_OFFLINE=1 ocr_worker/.venv/bin/python -m pytest ocr_worker/tests/test_engines_real.py -s`.
+Sur PostgreSQL jetable : `MATHPRINT_TEST_PG_URL=postgresql+psycopg2://…/mathprint_test` (voir `backend/tests/pgsupport.py`).

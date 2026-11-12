@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Worker OCR : lit les découpes de MathPrint avec des moteurs locaux (ocr_worker/).
+     `caffeinate -i` empêche le Mac de s'endormir pendant un travail.
+     Installation (NE PAS charger sans avoir posé le jeton ci-dessous) :
+       1. remplacer REMPLACER_PAR_LE_JETON par la valeur de MATHPRINT_OCR_WORKER_TOKEN
+          du serveur local (même valeur dans l'environnement du service com.kironina.dev) ;
+       2. cp scripts/launchd/com.kironina.ocr-worker.plist ~/Library/LaunchAgents/
+       3. launchctl load ~/Library/LaunchAgents/com.kironina.ocr-worker.plist
+     Journal : ~/Library/Logs/kironina-ocr-worker.log -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.kironina.ocr-worker</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/caffeinate</string>
+    <string>-i</string>
+    <string>/Users/etiennefabre/MathPrint/ocr_worker/.venv/bin/python</string>
+    <string>-m</string>
+    <string>ocr_worker</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/etiennefabre/MathPrint</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>HF_HUB_OFFLINE</key>
+    <string>1</string>
+    <key>PYTORCH_ENABLE_MPS_FALLBACK</key>
+    <string>1</string>
+    <key>MATHPRINT_OCR_WORKER_TOKEN</key>
+    <string>REMPLACER_PAR_LE_JETON</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+  <key>Nice</key>
+  <integer>10</integer>
+  <key>StandardOutPath</key>
+  <string>/Users/etiennefabre/Library/Logs/kironina-ocr-worker.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/etiennefabre/Library/Logs/kironina-ocr-worker.log</string>
+</dict>
+</plist>

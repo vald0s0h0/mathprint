@@ -9,7 +9,7 @@ from .services.security import (
 
 
 def current_user(request: Request, response: Response, authorization: str = Header(default=""),
-                 db: Session = Depends(get_db)) -> User:
+                 x_kn_zone: str = Header(default=""), db: Session = Depends(get_db)) -> User:
     if not authorization.startswith("Bearer "):
         raise HTTPException(401, "Non authentifié")
     try:
@@ -23,10 +23,12 @@ def current_user(request: Request, response: Response, authorization: str = Head
         raise HTTPException(401, "Session expirée")
     if token_needs_renewal(payload):
         response.headers[SESSION_TOKEN_HEADER] = make_token(user)
-    from .services.access import check_route, scope_session, check_path_resources
+    from .services.access import ZONES, check_route, scope_session, check_path_resources
     check_route(user, request)
     db.info["actor_id"] = user.id
-    scope_session(db, user)
+    zone = x_kn_zone if x_kn_zone in ZONES else None
+    db.info["zone"] = zone
+    scope_session(db, user, zone)
     check_path_resources(db, request)
     return user
 

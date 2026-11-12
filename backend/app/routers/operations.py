@@ -18,7 +18,9 @@ from ..services.security import new_pseudonym
 
 router = APIRouter(prefix="/api/operations", tags=["établissements"],
                    dependencies=[Depends(current_user)])
-operator = require_role("admin", "corrector")
+# Atelier (rôle corrector) : logistique et lecture. Gestion : administrateur seul.
+atelier = require_role("admin", "corrector")
+admin = require_role("admin")
 
 
 def record(db, user, action, kind, entity_id, values):
@@ -45,7 +47,7 @@ class PathIn(BaseModel):
     source_url: str = ""
 
 
-@router.post("/paths", dependencies=[Depends(require_role("admin"))])
+@router.post("/paths", dependencies=[Depends(admin)])
 def add_path(body: PathIn, db: Session = Depends(get_db)):
     if not db.get(Program, body.program_id) or body.kind not in ("series", "option") or not body.grades or set(body.grades) - set(GRADES[4:]):
         raise HTTPException(422, "Programme, type ou cycles invalides")
@@ -63,7 +65,7 @@ class SubjectIn(BaseModel):
     name: str = Field(min_length=1, max_length=120)
 
 
-@router.post("/subjects", dependencies=[Depends(require_role("admin"))])
+@router.post("/subjects", dependencies=[Depends(admin)])
 def add_subject(body: SubjectIn, db: Session = Depends(get_db)):
     if db.get(Subject, body.id):
         raise HTTPException(409, "Cette matière existe déjà")
@@ -115,14 +117,14 @@ def schools(db: Session = Depends(get_db)):
 
 
 @router.post("/schools")
-def create_school(body: SchoolIn, db: Session = Depends(get_db), user=Depends(operator)):
+def create_school(body: SchoolIn, db: Session = Depends(get_db), user=Depends(admin)):
     s = School(); save_school(db, body, s)
     record(db, user, "school.create", "school", s.id, {"name": s.name})
     db.commit(); return {"id": s.id}
 
 
 @router.put("/schools/{school_id}")
-def update_school(school_id: str, body: SchoolIn, db: Session = Depends(get_db), user=Depends(operator)):
+def update_school(school_id: str, body: SchoolIn, db: Session = Depends(get_db), user=Depends(admin)):
     s = db.get(School, school_id)
     if not s: raise HTTPException(404)
     save_school(db, body, s)
@@ -161,7 +163,7 @@ def accompanied_teacher(db, teacher_id) -> TeacherProfile:
     return t
 
 
-@router.get("/teachers", dependencies=[Depends(operator)])
+@router.get("/teachers", dependencies=[Depends(atelier)])
 def teachers(db: Session = Depends(get_db)):
     return [{"id": t.id, "name": t.name, "service_mode": t.service_mode, "email": t.email,
         "phone": t.phone, "active": t.active, "has_account": bool(t.user_id),
@@ -170,14 +172,14 @@ def teachers(db: Session = Depends(get_db)):
 
 
 @router.post("/teachers")
-def create_teacher(body: TeacherIn, db: Session = Depends(get_db), user=Depends(operator)):
+def create_teacher(body: TeacherIn, db: Session = Depends(get_db), user=Depends(admin)):
     t = TeacherProfile(service_mode="accompanied"); save_teacher(db, body, t)
     record(db, user, "teacher.create", "teacher", t.id, {"name": t.name})
     db.commit(); return {"id": t.id}
 
 
 @router.put("/teachers/{teacher_id}")
-def update_teacher(teacher_id: str, body: TeacherIn, db: Session = Depends(get_db), user=Depends(operator)):
+def update_teacher(teacher_id: str, body: TeacherIn, db: Session = Depends(get_db), user=Depends(admin)):
     t = accompanied_teacher(db, teacher_id)
     save_teacher(db, body, t)
     record(db, user, "teacher.update", "teacher", t.id, {"active": t.active})
@@ -185,7 +187,7 @@ def update_teacher(teacher_id: str, body: TeacherIn, db: Session = Depends(get_d
 
 
 @router.post("/teachers/{teacher_id}/invitation")
-def invite(teacher_id: str, db: Session = Depends(get_db), user=Depends(operator)):
+def invite(teacher_id: str, db: Session = Depends(get_db), user=Depends(admin)):
     return issue_invitation(db, accompanied_teacher(db, teacher_id), user)
 
 
@@ -209,7 +211,7 @@ class TeachingIn(BaseModel):
 
 
 @router.put("/classes/{class_id}/teaching")
-def teaching(class_id: str, body: TeachingIn, db: Session = Depends(get_db), user=Depends(operator)):
+def teaching(class_id: str, body: TeachingIn, db: Session = Depends(get_db), user=Depends(admin)):
     cls = db.get(SchoolClass, class_id)
     if not cls: raise HTTPException(404)
     if not db.get(Subject, body.subject_id) or not db.query(TeacherSchool).filter_by(
@@ -246,7 +248,7 @@ class GroupIn(BaseModel):
     student_ids: list[str]
 
 
-@router.post("/groups")
+@router.post("/groups")  # admin, ou prof sur ses classes ; pas l'Atelier (access.check_route)
 def create_group(body: GroupIn, db: Session = Depends(get_db)):
     t = db.get(ClassTeaching, body.teaching_id)
     if not t: raise HTTPException(404)
@@ -266,7 +268,7 @@ class YearIn(BaseModel):
     label: str = Field(min_length=1, max_length=30)
 
 
-@router.post("/years", dependencies=[Depends(operator)])
+@router.post("/years", dependencies=[Depends(admin)])
 def create_year(body: YearIn, db: Session = Depends(get_db)):
     if db.query(SchoolYear).filter_by(label=body.label.strip()).first(): raise HTTPException(409, "Année existante")
     year = SchoolYear(label=body.label.strip(), active=True); db.add(year); db.commit()
@@ -274,7 +276,7 @@ def create_year(body: YearIn, db: Session = Depends(get_db)):
 
 
 @router.post("/years/{year_id}/archive")
-def archive_year(year_id: str, db: Session = Depends(get_db), user=Depends(operator)):
+def archive_year(year_id: str, db: Session = Depends(get_db), user=Depends(admin)):
     year = db.get(SchoolYear, year_id)
     if not year: raise HTTPException(404)
     year.active = False
@@ -291,7 +293,7 @@ class RolloverIn(BaseModel):
 
 
 @router.post("/classes/{class_id}/rollover")
-def rollover(class_id: str, body: RolloverIn, db: Session = Depends(get_db), user=Depends(operator)):
+def rollover(class_id: str, body: RolloverIn, db: Session = Depends(get_db), user=Depends(admin)):
     from .org import ClassIn, create_class
     source = db.get(SchoolClass, class_id)
     if not source: raise HTTPException(404)
@@ -316,7 +318,7 @@ class TrackingIn(BaseModel):
 
 
 @router.patch("/assessments/{assessment_id}")
-def track(assessment_id: str, body: TrackingIn, db: Session = Depends(get_db), user=Depends(operator)):
+def track(assessment_id: str, body: TrackingIn, db: Session = Depends(get_db), user=Depends(atelier)):
     a = db.get(Assessment, assessment_id)
     if not a: raise HTTPException(404)
     if body.subjects_delivered is True and a.status not in ("printed", "scanning", "finalized"):
@@ -335,7 +337,7 @@ def track(assessment_id: str, body: TrackingIn, db: Session = Depends(get_db), u
     db.commit(); return {"ok": True}
 
 
-@router.get("/dashboard", dependencies=[Depends(operator)])
+@router.get("/dashboard", dependencies=[Depends(atelier)])
 def dashboard(school_id: str | None = None, year_id: str | None = None, db: Session = Depends(get_db)):
     rows = []; counts = {}
     current_time = now()

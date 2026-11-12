@@ -3,12 +3,12 @@ import {
   Text, Title, Tooltip, useComputedColorScheme, useMantineColorScheme,
 } from '@mantine/core'
 import {
-  BookOpenCheck, ClipboardList, GraduationCap, LayoutDashboard, Library, LogOut,
-  Building2, Moon, ScanLine, Settings as SettingsIcon, ShieldUser, Sun, Target, Users, FileText,
+  BookOpenCheck, ClipboardList, Factory, GraduationCap, LayoutDashboard, Library, LogOut,
+  Building2, Moon, ScanLine, ScanText, Settings as SettingsIcon, SlidersHorizontal, Sun, Target, Users, UserCog, FileText,
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
-import { api, getToken, setToken } from './api'
+import { api, getToken, setToken, zoneOf } from './api'
 import { APP_VERSION } from './version'
 import Competencies from './pages/Competencies'
 import Corrections from './pages/Corrections'
@@ -22,14 +22,20 @@ import Exercices from './pages/Exercices'
 import Subjects from './pages/Subjects'
 import Grades from './pages/Grades'
 import Establishments from './pages/Establishments'
+import Atelier from './pages/Atelier'
+import OcrReport from './pages/OcrReport'
+import AtelierPrinters from './pages/AtelierPrinters'
+import CalibrationPanel from './components/CalibrationPanel'
+import UsersAdmin from './pages/UsersAdmin'
 import Register from './pages/Register'
 import HeaderFilters from './components/HeaderFilters'
 import ScanProblemsModal from './components/ScanProblemsModal'
 import { useAppState, type Teaching } from './state/AppState'
 
-type NavItem = { to: string; label: string; icon: typeof LayoutDashboard; admin?: boolean; operator?: boolean }
+type NavItem = { to: string; label: string; icon: typeof LayoutDashboard; centre?: boolean }
 
-// Navigation du quotidien, en haut de la barre latérale.
+// Onglets utilisateur, en haut de la barre latérale (prof, et admin qui teste
+// la plateforme en prof : l'API filtre alors sur SON profil, zone « user »).
 const NAV: NavItem[] = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/sujets', label: 'Sujets', icon: FileText },
@@ -40,14 +46,21 @@ const NAV: NavItem[] = [
   { to: '/competences', label: 'Compétences', icon: Target },
 ]
 
-// Zone « Admin », en bas de la barre latérale. `admin: true` => réservé au
-// rôle admin (absent des builds utilisateur/correcteur). Les utilisateurs se
-// gèrent désormais dans Paramètres > Utilisateurs.
-const NAV_BOTTOM: NavItem[] = [
-  { to: '/etablissements', label: 'Établissements', icon: Building2, operator: true },
-  { to: '/exercices', label: 'Exercices', icon: BookOpenCheck, admin: true },
-  { to: '/parametres', label: 'Paramètres', icon: SettingsIcon },
+// En bas de la barre latérale : l'Atelier (admin et rôle Atelier, édition
+// centre), puis, sous un séparateur, l'administration (admin seul).
+const NAV_ATELIER: NavItem = { to: '/atelier', label: 'Atelier', icon: Factory, centre: true }
+const NAV_ADMIN: NavItem[] = [
+  { to: '/admin/etablissements', label: 'Établissements', icon: Building2, centre: true },
+  { to: '/admin/utilisateurs', label: 'Utilisateurs', icon: UserCog },
+  { to: '/exercices', label: 'Exercices', icon: BookOpenCheck },
+  { to: '/admin/lecture-ocr', label: 'Lecture OCR', icon: ScanText },
+  { to: '/admin/parametres', label: 'Paramètres admin', icon: SlidersHorizontal },
 ]
+
+const ZONE_BADGE = {
+  atelier: { label: 'Atelier', color: 'orange' },
+  admin: { label: 'Admin', color: 'red' },
+} as const
 
 function ThemeToggle() {
   const { setColorScheme } = useMantineColorScheme()
@@ -68,10 +81,17 @@ export default function App() {
   const authed = !!getToken()
   const [needsSetup, setNeedsSetup] = useState<boolean | null>(null)
   const [role, setRole] = useState<string>('')
+  const [edition, setEdition] = useState<string>('centre')
   const { activeJobs, setTeaching } = useAppState()
+  const centre = edition !== 'autonome'
   const isAdmin = role === 'admin'
-  const isOperator = isAdmin || role === 'corrector'
-  const navBottom = NAV_BOTTOM.filter((n) => (!n.admin || isAdmin) && (!n.operator || isOperator))
+  const isAtelierRole = role === 'corrector'
+  // L'Atelier n'existe que dans l'édition centre (Mac) ; sur l'instance des
+  // profs autonomes (NAS), un compte Atelier n'a rien à faire.
+  const hasAtelier = centre && (isAdmin || isAtelierRole)
+  const hasUserTabs = !isAtelierRole
+  const navAdmin = isAdmin ? NAV_ADMIN.filter((n) => !n.centre || centre) : []
+  const zone = zoneOf(location.pathname)
 
   useEffect(() => {
     api.get<{ needs_setup: boolean }>('/api/setup/status')
@@ -83,9 +103,9 @@ export default function App() {
     let active = true
     if (!authed) { setRole(''); return }
     // Relu à chaque onglet : une classe créée peut ajouter un cycle au filtre.
-    api.get<{ role: string; teaching: Teaching; service_mode: string | null; program_id: string | null }>('/api/auth/me').then((m) => {
+    api.get<{ role: string; teaching: Teaching; service_mode: string | null; program_id: string | null; edition?: string }>('/api/auth/me').then((m) => {
       if (!active) return
-      setRole(m.role); setTeaching(m.teaching)
+      setRole(m.role); setTeaching(m.teaching); setEdition(m.edition || 'centre')
       // Professeur autonome qui arrive : son premier geste est de dire ce qu'il enseigne.
       if (m.service_mode === 'autonomous' && !m.program_id && location.pathname === '/') navigate('/parametres', { replace: true })
     }).catch(() => {})
@@ -93,19 +113,23 @@ export default function App() {
   }, [authed, location.pathname, navigate, setTeaching])
 
   function renderNavLink(n: NavItem) {
+    const active = n.to === '/atelier' ? zone === 'atelier' : location.pathname === n.to
     return (
-      <NavLink key={n.to} label={n.label} active={location.pathname === n.to}
+      <NavLink key={n.to} label={n.label} active={active}
         leftSection={<n.icon size={17} strokeWidth={1.9} />}
-        rightSection={n.admin ? (
-          <Tooltip label="Réservé aux administrateurs" position="right">
-            <ShieldUser size={14} color="var(--mantine-color-gray-6)"
-              aria-label="Réservé aux administrateurs" />
-          </Tooltip>
-        ) : undefined}
         style={{ borderRadius: 8 }} fw={500} mb={2}
         onClick={() => navigate(n.to)} />
     )
   }
+
+  function sectionLabel(label: string) {
+    return (
+      <Text size="10px" fw={700} c="dimmed" tt="uppercase" px="sm" mb={4}
+        style={{ letterSpacing: 0.6 }}>{label}</Text>
+    )
+  }
+
+  const atelier = (page: React.ReactNode) => <Atelier>{page}</Atelier>
 
   if (needsSetup === null) return null
   if (needsSetup) return <Setup onDone={() => setNeedsSetup(false)} />
@@ -123,6 +147,9 @@ export default function App() {
           <Group gap={8} wrap="nowrap" style={{ cursor: 'pointer' }} onClick={() => navigate('/')}>
             <GraduationCap size={24} strokeWidth={2.2} />
             <Title order={3} fw={700}>Kiro & Nina</Title>
+            {zone !== 'user' && (
+              <Badge variant="light" color={ZONE_BADGE[zone].color}>{ZONE_BADGE[zone].label}</Badge>
+            )}
           </Group>
 
           <HeaderFilters />
@@ -149,6 +176,12 @@ export default function App() {
               </Menu>
             )}
             <ThemeToggle />
+            <Tooltip label="Mes paramètres">
+              <ActionIcon variant={location.pathname === '/parametres' ? 'light' : 'subtle'} color="gray"
+                size="lg" aria-label="Mes paramètres" onClick={() => navigate('/parametres')}>
+                <SettingsIcon size={18} />
+              </ActionIcon>
+            </Tooltip>
             <Tooltip label="Déconnexion">
               <ActionIcon variant="subtle" color="gray" size="lg" aria-label="Déconnexion"
                 onClick={() => { setToken(null); navigate('/login') }}>
@@ -160,32 +193,58 @@ export default function App() {
       </AppShell.Header>
 
       <AppShell.Navbar p="xs">
-        {NAV.map(renderNavLink)}
+        {hasUserTabs && NAV.map(renderNavLink)}
         <Box mt="auto">
-          <Divider mb={6} />
-          {isOperator && (
-            <Text size="10px" fw={700} c="dimmed" tt="uppercase" px="sm" mb={4}
-              style={{ letterSpacing: 0.6 }}>{isAdmin ? 'Admin' : 'Opérations'}</Text>
-          )}
-          {navBottom.map(renderNavLink)}
+          {hasAtelier && <>
+            <Divider mb={6} />
+            {renderNavLink(NAV_ATELIER)}
+          </>}
+          {navAdmin.length > 0 && <>
+            <Divider my={6} />
+            {sectionLabel('Admin')}
+            {navAdmin.map(renderNavLink)}
+          </>}
           <Text size="xs" c="dimmed" px="sm" pt={4} pb={4}>Kiro & Nina v{APP_VERSION}</Text>
         </Box>
       </AppShell.Navbar>
 
       <AppShell.Main>
         <Routes>
-          <Route path="/" element={role === 'corrector' ? <Navigate to="/etablissements" replace /> : <Dashboard />} />
-          {isOperator && <Route path="/etablissements" element={<Establishments />} />}
-          <Route path="/sujets" element={<Subjects />} />
-          <Route path="/banque" element={<Bank />} />
-          {isAdmin && <Route path="/exercices" element={<Exercices />} />}
-          {/* ancien onglet, conservé pour les liens existants */}
-          <Route path="/utilisateurs" element={<Navigate to="/parametres?onglet=utilisateurs" replace />} />
-          <Route path="/corrections" element={<Corrections />} />
-          <Route path="/eleves" element={<Students />} />
-          <Route path="/notes" element={<Grades />} />
-          <Route path="/competences" element={<Competencies />} />
-          <Route path="/parametres" element={<SettingsPage />} />
+          {/* onglets utilisateur */}
+          {hasUserTabs && <>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/sujets" element={<Subjects />} />
+            <Route path="/banque" element={<Bank />} />
+            <Route path="/corrections" element={<Corrections />} />
+            <Route path="/eleves" element={<Students />} />
+            <Route path="/notes" element={<Grades />} />
+            <Route path="/competences" element={<Competencies />} />
+          </>}
+          <Route path="/parametres" element={<SettingsPage scope="personal" />} />
+
+          {/* Atelier */}
+          {hasAtelier && <>
+            <Route path="/atelier" element={atelier(<Establishments mode="atelier" />)} />
+            <Route path="/atelier/corrections" element={atelier(<Corrections />)} />
+            <Route path="/atelier/sujets" element={atelier(<Subjects />)} />
+            <Route path="/atelier/imprimantes" element={atelier(<AtelierPrinters />)} />
+            <Route path="/atelier/calibration" element={atelier(<CalibrationPanel />)} />
+          </>}
+
+          {/* administration */}
+          {isAdmin && <>
+            {centre && <Route path="/admin/etablissements" element={<Establishments mode="admin" />} />}
+            {centre && <Route path="/admin/eleves" element={<Students />} />}
+            <Route path="/admin/utilisateurs" element={<UsersAdmin centre={centre} />} />
+            <Route path="/exercices" element={<Exercices />} />
+            <Route path="/admin/lecture-ocr" element={<OcrReport />} />
+            <Route path="/admin/parametres" element={<SettingsPage scope="admin" />} />
+          </>}
+
+          {/* anciens liens */}
+          <Route path="/etablissements" element={<Navigate to={hasAtelier ? '/atelier' : '/'} replace />} />
+          <Route path="/utilisateurs" element={<Navigate to="/admin/utilisateurs" replace />} />
+          <Route path="*" element={<Navigate to={hasUserTabs ? '/' : '/atelier'} replace />} />
         </Routes>
       </AppShell.Main>
     </AppShell>

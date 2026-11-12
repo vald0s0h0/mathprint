@@ -1,0 +1,13 @@
+# Profil CUDA : même contenu que requirements.txt, avec torch compilé pour CUDA.
+# Installer torch AVANT, depuis l'index CUDA de votre version (voir https://pytorch.org/get-started/locally/) :
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+# Puis : pip install -r ocr_worker/requirements-cuda.txt
+# Facultatif et recommandé sous CUDA (Qwen3.5 retombe sinon sur une implémentation PyTorch lente) :
+#   flash-linear-attention, causal-conv1d
+transformers>=5.0
+huggingface_hub
+accelerate
+pillow
+numpy
+psutil
+pytest

@@ -353,6 +353,8 @@ def test_expression_variable_is_not_mistaken_for_a_unit():
     dépouillement d'unité ne s'applique QU'AUX types numériques."""
     from app.services.grading import strip_answer_noise
     assert strip_answer_noise("12cm") == "12"
+    assert strip_answer_noise("12cm^2") == "12"      # forme de la lecture OCR multicouche
+    assert strip_answer_noise("3.5m^3") == "3.5"
     r = grade({"type": "expression", "value": "2*m", "variable": "m"},
               {"max_score": 2, "comparator": "symbolic_equiv"}, "2m", 0.95)
     assert r["score"] == 2

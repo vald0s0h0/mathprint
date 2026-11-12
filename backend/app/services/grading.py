@@ -92,6 +92,8 @@ def normalize_expression(raw: str) -> str:
 _UNITS = ("km/h", "m/s", "cm/s", "m/min",
           "cm²", "cm³", "m²", "m³", "km²", "mm²", "dm³",
           "cm2", "cm3", "m2", "m3", "km2", "mm2", "dm3",
+          # forme produite par la lecture OCR multicouche (ocr_surface : ² -> ^2)
+          "cm^2", "cm^3", "m^2", "m^3", "km^2", "mm^2", "dm^2", "dm^3", "mm^3",
           "mm", "cm", "dm", "km", "kg", "mg", "hg", "dag", "mL", "cL", "dL",
           "min", "ms", "m", "g", "t", "L", "l", "h", "s",
           "unités", "unite", "unités.", "unité", "unites",

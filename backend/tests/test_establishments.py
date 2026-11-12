@@ -41,7 +41,7 @@ def env():
 
 def create_teacher_class(env, name='Camille', program='fr'):
     client, factory, tokens, year = env
-    h = tokens['corrector']
+    h = tokens['admin']
     school = client.post('/api/operations/schools', headers=h, json={
         'name': 'École '+name, 'country_id': 'CI', 'program_ids': ['fr', 'ci']})
     assert school.status_code == 200, school.text
@@ -104,7 +104,9 @@ def test_corrector_bank_immutable_and_program_separation(env):
     # Suspension stoppe la production, sans supprimer les résultats.
     school = next(s for s in client.get('/api/operations/schools', headers=tokens['corrector']).json() if s['id'] == sid)
     school['service_active'] = False
-    assert client.put(f'/api/operations/schools/{sid}', headers=tokens['corrector'], json=school).status_code == 200
+    # L'Atelier lit les établissements mais ne les modifie pas : c'est l'admin.
+    assert client.put(f'/api/operations/schools/{sid}', headers=tokens['corrector'], json=school).status_code == 403
+    assert client.put(f'/api/operations/schools/{sid}', headers=tokens['admin'], json=school).status_code == 200
     assert client.post('/api/assessments', headers=th, json={'class_id':cid, 'title':'Suspendu'}).status_code == 409
     assert client.post('/api/printers/print', headers=th, json={'assessment_id':aid,'file':'subject_batch.pdf','printer':'X'}).status_code == 409
 
@@ -119,12 +121,15 @@ def test_school_year_rollover_and_subject_levels(env):
         db.add(Subject(id='physics', name='Physique'))
         db.add(ClassTeaching(class_id=cid, subject_id='physics', teacher_id=tid)); db.commit()
     assert client.get(f'/api/students/{student["id"]}?subject_id=physics', headers=th).json()['level'] is None
-    year2 = client.post('/api/operations/years', headers=tokens['corrector'], json={'label':'2027-2028'}).json()['id']
-    result = client.post(f'/api/operations/classes/{cid}/rollover', headers=tokens['corrector'], json={'year_id':year2,'name':'2A','grade_level':'2nde'})
+    assert client.post('/api/operations/years', headers=tokens['corrector'], json={'label':'2027-2028'}).status_code == 403
+    year2 = client.post('/api/operations/years', headers=tokens['admin'], json={'label':'2027-2028'}).json()['id']
+    assert client.post(f'/api/operations/classes/{cid}/rollover', headers=tokens['corrector'], json={'year_id':year2,'name':'2A','grade_level':'2nde'}).status_code == 403
+    result = client.post(f'/api/operations/classes/{cid}/rollover', headers=tokens['admin'], json={'year_id':year2,'name':'2A','grade_level':'2nde'})
     assert result.status_code == 200, result.text
     new_students = client.get(f'/api/classes/{result.json()["id"]}/students', headers=th).json()
     assert len(new_students) == 2 and all(s['level'] is None for s in new_students)
-    assert client.post(f'/api/operations/years/{year}/archive', headers=tokens['corrector']).status_code == 200
+    assert client.post(f'/api/operations/years/{year}/archive', headers=tokens['corrector']).status_code == 403
+    assert client.post(f'/api/operations/years/{year}/archive', headers=tokens['admin']).status_code == 200
     assert cid not in {c['id'] for c in client.get('/api/classes', headers=th).json()}
     assert client.get(f'/api/students/{student["id"]}', headers=th).status_code == 200
 

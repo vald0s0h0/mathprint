@@ -1,0 +1,41 @@
+# Configuration du worker OCR. Aucun secret ici : les jetons sont lus dans
+# l'environnement (voir scripts/launchd/com.kironina.ocr-worker.plist).
+name = "mac-m3"
+device = "mps"            # mps | cuda | cpu (le profil cuda de la RTX 3070 n'est pas testé)
+poll_seconds = 30
+claim_batch = 32
+
+# Un serveur par instance de MathPrint. Le Mac local passe lui aussi par HTTP.
+[[servers]]
+name = "local"
+url = "http://127.0.0.1:8787"
+token_env = "MATHPRINT_OCR_WORKER_TOKEN"
+
+# NAS (autonome) : à activer quand le jeton du NAS est posé, voir DEPLOIEMENT_NAS.md.
+# [[servers]]
+# name = "nas"
+# url = "http://fabre.tail428d1a.ts.net:7070"
+# token_env = "MATHPRINT_OCR_WORKER_TOKEN_NAS"
+
+# Un moteur absent de cette liste n'est jamais chargé, même si le plan le cite.
+[engines.apple_vision]
+impl = "apple_vision"     # désactivé automatiquement hors macOS
+
+[engines.trocr]
+impl = "trocr"
+model = "agomberto/trocr-large-handwritten-fr"
+processor = "microsoft/trocr-large-handwritten"
+dtype = "fp16"
+backend = "mps"
+
+[engines.unimumer]
+impl = "unimumer"
+model = "phxember/Uni-MuMER-Qwen3.5-2B"
+dtype = "bf16"
+backend = "mps"
+
+[engines.lighton]
+impl = "lighton"
+model = "lightonai/LightOnOCR-2-1B"
+dtype = "bf16"
+backend = "mps"

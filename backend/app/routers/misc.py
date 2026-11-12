@@ -108,7 +108,7 @@ def get_providers(db: Session = Depends(get_db)):
     return out
 
 
-@router.post("/settings/providers", dependencies=[Depends(require_role("admin", "teacher"))])
+@router.post("/settings/providers", dependencies=[Depends(require_role("admin"))])
 def set_provider(body: ProviderIn, db: Session = Depends(get_db)):
     p = db.query(ProviderConfig).filter_by(provider=body.provider).first()
     if not p:
@@ -210,7 +210,28 @@ def get_system_settings(db: Session = Depends(get_db)):
     from ..services.runtime_settings import CONSTRUCTION_AUDIT_DEFAULT, CONSTRUCTION_THRESHOLD_DEFAULT
     rows.setdefault("construction_confidence_threshold", {"value": CONSTRUCTION_THRESHOLD_DEFAULT})
     rows.setdefault("construction_audit_share", {"value": CONSTRUCTION_AUDIT_DEFAULT})
+    from ..services import runtime_settings as rs
+    for key in rs.OCR_SECRET_KEYS:
+        rows.pop(key, None)                      # jamais renvoyé
+    # on dit seulement s'il existe, et d'où il vient (l'environnement prime sur le réglage)
+    rows["ocr_worker_token_set"] = {"value": bool(rs.ocr_worker_token(db)),
+                                    "source": "env" if settings.ocr_worker_token else "setting"}
+    for key, default in rs.OCR_DEFAULTS.items():
+        rows.setdefault(key, {"value": default})
+    rows.setdefault("ocr_engine_plan", {"value": rs.DEFAULT_ENGINE_PLAN})
+    rows.setdefault("ocr_engine_thresholds", {"value": rs.DEFAULT_ENGINE_THRESHOLDS})
     return rows
+
+
+@router.get("/ocr/report")
+def ocr_report(since_days: int | None = None, mode: str | None = None, zone_class: str | None = None,
+               db: Session = Depends(get_db), user: User = Depends(require_role("admin"))):
+    """Diagnostic de la lecture OCR multicouche (admin, lecture seule). Même JSON que
+    `scripts/ocr_report.py --json`."""
+    from datetime import datetime, timedelta
+    from ..services import ocr_analysis
+    since = datetime.utcnow() - timedelta(days=since_days) if since_days else None
+    return ocr_analysis.build_report(db, since=since, mode=mode or None, zone_class=zone_class or None)
 
 
 class SettingIn(BaseModel):
@@ -220,7 +241,13 @@ class SettingIn(BaseModel):
 
 @router.post("/settings/system")
 def set_system_setting(body: SettingIn, db: Session = Depends(get_db),
-                       user: User = Depends(current_user)):
+                       user: User = Depends(require_role("admin"))):
+    from ..services import runtime_settings as rs
+    if body.key in rs.OCR_SETTING_KEYS:
+        try:
+            rs.validate_ocr_setting(body.key, body.value)
+        except ValueError as e:
+            raise HTTPException(422, str(e))
     row = db.get(SystemSetting, body.key)
     if not row:
         row = SystemSetting(key=body.key)

@@ -9,6 +9,22 @@ export function setToken(t: string | null) {
   else localStorage.removeItem('mathprint_token')
 }
 
+// Zone de l'interface d'où part la requête (onglets du haut, Atelier, admin).
+// Côté API, l'administrateur est filtré sur SON profil de prof en zone « user »
+// (il y voit ce que voit un prof) ; les droits, eux, suivent toujours le rôle.
+export type Zone = 'user' | 'atelier' | 'admin'
+export const ZONE_HEADER = 'X-KN-Zone'
+
+export function zoneOf(pathname: string): Zone {
+  if (pathname === '/atelier' || pathname.startsWith('/atelier/')) return 'atelier'
+  if (pathname.startsWith('/admin/') || pathname === '/exercices') return 'admin'
+  return 'user'
+}
+
+export function currentZone(): Zone {
+  return zoneOf(window.location.pathname)
+}
+
 export class ApiError extends Error {
   status: number
   constructor(status: number, message: string) {
@@ -21,6 +37,7 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
   const headers: Record<string, string> = {}
   const token = getToken()
   if (token) headers['Authorization'] = `Bearer ${token}`
+  headers[ZONE_HEADER] = currentZone()
   let payload: BodyInit | undefined
   if (body instanceof FormData) payload = body
   else if (body !== undefined) {

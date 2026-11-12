@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Sauvegarde du centre local vers le NAS, toutes les heures (scripts/backup-nas.sh).
+     Installation :
+       cp scripts/launchd/com.kironina.backup-nas.plist ~/Library/LaunchAgents/
+       launchctl load ~/Library/LaunchAgents/com.kironina.backup-nas.plist
+     Mac en veille : launchd relance la sauvegarde au réveil. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.kironina.backup-nas</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/etiennefabre/MathPrint/scripts/backup-nas.sh</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/etiennefabre/MathPrint</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>StartInterval</key>
+  <integer>3600</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>LowPriorityIO</key>
+  <true/>
+  <key>Nice</key>
+  <integer>10</integer>
+  <key>StandardOutPath</key>
+  <string>/Users/etiennefabre/Library/Logs/kironina-backup-nas.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/etiennefabre/Library/Logs/kironina-backup-nas.log</string>
+</dict>
+</plist>

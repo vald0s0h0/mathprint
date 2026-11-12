@@ -12,6 +12,13 @@ jour DSM au préalable.
 
 ---
 
+> **Édition** : le NAS sert `app.kironina.com`, pour les **profs autonomes
+> seulement** (`MATHPRINT_EDITION=autonome`, valeur par défaut du
+> `docker-compose.yml`). Les établissements accompagnés et l'Atelier tournent sur
+> le centre local (Mac, édition `centre`). Si votre `compose.yaml` du NAS a été
+> créé avant cette option, ajoutez `MATHPRINT_EDITION: autonome` à
+> l'environnement du service `api`.
+
 ## 1. Créer le dossier du projet (File Station)
 
 1. Ouvrir **File Station**.
@@ -365,3 +372,84 @@ file CUPS locale.
 | Les mises à jour ne semblent jamais s'appliquer | ⓪ **D'abord attendre** : entre le push et le NAS il y a la CI puis le prochain passage de la tâche planifiée — une demi-heure sans changement est normale (§7). Ensuite, dans l'ordre : ① Paramètres → Système : noter le build affiché. ② GitHub → onglet Actions : le workflow « Deploy latest images » du dernier push est-il vert ? (sinon rien n'a été publié). ③ File Station → `update.log` : la tâche tourne-t-elle, et dit-elle « déjà à jour » ou liste-t-elle des conteneurs ? `update.log` absent = la tâche ne s'exécute pas, ou le `PROJECT_DIR` du script ne pointe pas sur le bon volume (le journal vit dans ce dossier : chemin faux = zéro trace) — le détail est alors dans Planificateur de tâches → clic droit → **Afficher le résultat**. ④ `.env` : `MATHPRINT_VERSION` est-il bien `latest` (un tag figé bloque tout — et un tag avec un `v` n'existe pas, voir la ligne `manifest unknown`) ? ⑤ Navigateur : forcer le rechargement (Ctrl+Maj+R) — les anciennes versions pouvaient rester en cache, corrigé depuis (nginx no-cache). |
 | Après une mise à jour, comportement inattendu | Revenir en arrière en fixant `MATHPRINT_VERSION` sur un tag précédent (`X.Y.Z` — sans le `v` — ou `sha-abc1234`) dans `.env` (§7) |
 
+
+---
+
+## 11. Lecture OCR locale (worker sur le Mac)
+
+Le NAS (édition `autonome`) **ne fait tourner aucun modèle** et n'a aucune dépendance
+d'apprentissage automatique : son image Docker reste légère (1,75 Go de RAM seulement).
+Les moteurs OCR (TrOCR, Uni-MuMER, LightOnOCR, Apple Vision) tournent sur le Mac, dans le
+service `ocr_worker/`, qui vient chercher les découpes du NAS par HTTP, les lit, puis envoie ses
+résultats. La fusion (consensus), Mathpix et la reprise de la correction restent sur le NAS.
+
+### 11.1 Rien ne change tant que vous ne basculez pas
+
+Le NAS reste en `ocr_mode = mathpix` (valeur par défaut) : la lecture est exactement celle d'avant.
+Le mode se règle dans **Paramètres admin → Pédagogie → Lecture OCR multicouche** :
+
+| Mode | Effet |
+|---|---|
+| `mathpix` | L'existant. Aucune découpe n'est inscrite pour le worker. |
+| `shadow` | Mathpix décide encore. Les découpes sont aussi inscrites, les décisions locales enregistrées et comparées à Mathpix et au professeur. Le lot n'attend pas le Mac. |
+| `cascade` | La fusion locale décide, Mathpix en dernier recours, OCRiser pour le reste. Le lot attend le Mac. |
+
+**Ne passez le NAS en `shadow` ou `cascade` qu'une fois le jeton posé et le worker du Mac testé.**
+La bascule est un réglage : elle ne demande aucun déploiement.
+
+### 11.2 Le jeton du worker
+
+L'API du worker (`/api/ocr-worker/*`) est protégée par un jeton **distinct** de la connexion des
+utilisateurs, comparé en temps constant, jamais écrit dans les journaux. **Sans jeton, elle est fermée**
+(réponse 503) : c'est l'état par défaut du NAS.
+
+1. Générer le jeton : `openssl rand -hex 32` (ou le bouton « Générer » de la section Lecture OCR).
+2. NAS : ajouter dans le `.env` du projet, à côté de `DB_PASSWORD` :
+   `MATHPRINT_OCR_WORKER_TOKEN=<jeton>`
+   puis dans l'environnement du service `api` de votre `compose.yaml` :
+   `MATHPRINT_OCR_WORKER_TOKEN: ${MATHPRINT_OCR_WORKER_TOKEN:-}` (déjà présent dans le
+   `docker-compose.yml` du dépôt). Relancer le projet. La variable d'environnement prime sur
+   le réglage de l'interface.
+3. Mac : la même valeur dans la variable `MATHPRINT_OCR_WORKER_TOKEN_NAS` du service
+   `com.kironina.ocr-worker` (voir `ocr_worker/config.toml`, bloc `[[servers]]` du NAS à décommenter).
+   Ne commitez jamais ce jeton.
+
+Chaque instance (Mac local, NAS) a **son propre jeton** : le worker en porte un par serveur.
+
+### 11.3 L'URL que le worker utilise
+
+Passez par **Tailscale**, pas par `app.kironina.com` :
+
+```
+url = "http://fabre.tail428d1a.ts.net:7070"
+```
+
+Le port 7070 est celui du conteneur web, dont nginx relaie `/api/` vers l'API. Cette URL n'est
+joignable que depuis le tailnet. Si vous utilisiez à la place le nom public (`https://app.kironina.com`),
+la route `/api/ocr-worker/` serait exposée sur Internet (protégée par le seul jeton) : bloquez-la
+alors dans le reverse proxy Synology. L'URL Tailscale est celle de la mémoire d'accès au NAS ;
+vérifiez-la une fois avec `curl -i http://fabre.tail428d1a.ts.net:7070/api/ocr-worker/pending`
+(attendu : 401 avec un jeton faux, 503 tant qu'aucun jeton n'est posé).
+
+### 11.4 Quand le Mac est éteint
+
+- `mathpix` et `shadow` : **aucun effet**, les lots ne dépendent pas du Mac.
+- `cascade` : le lot passe à l'état `ocr_local_pending` et attend. L'interface affiche
+  « Lecture en cours sur le Mac (n/N) » ; si aucun worker n'a sondé le serveur depuis plus de
+  2 minutes : « Mac hors ligne, la lecture reprendra à son retour ». Rien n'est perdu : les tâches
+  restent en file, un bail expiré (15 minutes par défaut) remet la tâche en file, 3 essais au plus
+  puis la découpe part en correction manuelle. Au retour du Mac, le worker reprend seul (launchd le
+  relance, `caffeinate -i` empêche la veille pendant un travail) et le lot se termine.
+- Une correction très urgente : repassez le NAS en `mathpix` (réglage), puis relancez le lot.
+
+### 11.5 À savoir
+
+- Les découpes à lire sont enregistrées sous `volumes/data/assessments/<id>/scans/derived/ocr/`
+  (quelques Ko par découpe) ; les planches Mathpix, si activées, sous `volumes/data/ocr_montages/`.
+  La sauvegarde du dossier de données les inclut.
+- Les planches Mathpix (plusieurs découpes par appel) sont **désactivées** (`ocr_montage_enabled`)
+  tant que `backend/scripts/mathpix_montage_bench.py` n'a pas montré 0 écart avec la lecture unitaire.
+- Les nouvelles tables (`ocr_crops`, `ocr_jobs`, `ocr_engine_reads`, `ocr_decisions`,
+  `ocr_montages`) sont créées au démarrage de l'API ; deux colonnes ajoutées aux tables du lot 1 le sont
+  par la migration. Vérifié sur PostgreSQL 16 (la version de l'image `postgres:16-alpine`).
+- Ne lancez pas la suite de tests sur le NAS.

@@ -23,14 +23,20 @@ const stages: Record<string, { label: string; color: string }> = {
 const emptySchool = { name: '', country_id: 'CI', program_ids: ['ci'], city: '', address: '', contact: '', notes: '', service_active: true }
 const emptyTeacher = { name: '', school_ids: [] as string[], email: '', phone: '', active: true }
 
-export default function Establishments() {
+// Deux pages sur le même écran :
+//   • mode="atelier" (/atelier) : suivi logistique des sujets, de la préparation
+//     à la restitution (admin et rôle Atelier) ;
+//   • mode="admin" (/admin/etablissements) : établissements, professeurs,
+//     classes et groupes, années, enseignements (administrateur seul).
+export default function Establishments({ mode }: { mode: 'atelier' | 'admin' }) {
+  const atelier = mode === 'atelier'
   const navigate = useNavigate()
   // L'établissement filtré se choisit dans la barre du haut (HeaderFilters).
   const { school: schoolId, setSchool: setSchoolId, setSchools: shareSchools } = useAppState()
   const [catalog, setCatalog] = useState<Catalog | null>(null); const [schools, setSchools] = useState<SchoolRow[]>([])
   const [teachers, setTeachers] = useState<TeacherRow[]>([]); const [classes, setClasses] = useState<ClassRow[]>([])
   const [years, setYears] = useState<YearRow[]>([]); const [role, setRole] = useState('')
-  const [stage, setStage] = useState<string | null>(null); const [search, setSearch] = useState(''); const [tab, setTab] = useState<string | null>('work')
+  const [stage, setStage] = useState<string | null>(null); const [search, setSearch] = useState(''); const [tab, setTab] = useState<string | null>(atelier ? 'work' : 'schools')
   const [dashboard, setDashboard] = useState<Dashboard>({ counts: {}, assessments: [], lots_at_schools: 0, overdue_collection_count: 0 }); const [error, setError] = useState('')
   const [schoolModal, setSchoolModal] = useState(false); const [schoolEdit, setSchoolEdit] = useState<string | null>(null); const [schoolForm, setSchoolForm] = useState(emptySchool)
   const [teacherModal, setTeacherModal] = useState(false); const [teacherEdit, setTeacherEdit] = useState<string | null>(null); const [teacherForm, setTeacherForm] = useState(emptyTeacher)
@@ -55,13 +61,17 @@ export default function Establishments() {
     setCatalog(c); setSchools(s); shareSchools(s); setTeachers(t); setClasses(cl); setYears(y); setRole(me.role)
   }, [shareSchools])
   const refreshWork = useCallback(async () => {
+    if (!atelier) return
     try {
       const q = new URLSearchParams(); if (schoolId) q.set('school_id', schoolId)
       setDashboard(await api.get<Dashboard>(`/api/operations/dashboard?${q}`)); setError('')
     } catch (e) { setError((e as Error).message) }
-  }, [schoolId])
+  }, [schoolId, atelier])
   useEffect(() => { refreshLists().catch(showError) }, [refreshLists])
-  useEffect(() => { void refreshWork(); const timer = setInterval(refreshWork, 5000); return () => clearInterval(timer) }, [refreshWork])
+  useEffect(() => {
+    if (!atelier) return
+    void refreshWork(); const timer = setInterval(refreshWork, 5000); return () => clearInterval(timer)
+  }, [refreshWork, atelier])
   async function act(fn: () => Promise<unknown>, after?: () => void) {
     setBusy(true)
     try { await fn(); await refreshLists(); await refreshWork(); after?.() }
@@ -83,21 +93,23 @@ export default function Establishments() {
   function tracking(a: Work, values: object) { return act(() => api.patch(`/api/operations/assessments/${a.id}`, values)) }
 
   return <Stack gap="lg">
-    <Group justify="space-between"><div><Group gap="sm"><Building2 size={26} /><Title order={2}>Établissements</Title></Group>
-      <Text c="dimmed" size="sm" mt={4}>Préparer, imprimer et suivre les copies jusqu’à leur restitution.</Text></div>
-      <Group><Button variant="subtle" leftSection={<RefreshCw size={15} />} onClick={() => { void refreshWork(); refreshLists().catch(showError) }}>Actualiser</Button>
-        <Button leftSection={<Plus size={16} />} onClick={() => newSubject()} disabled={!visibleClasses.some(c => !c.archived) || school?.service_active === false}>Créer un sujet</Button></Group></Group>
+    {atelier
+      ? <Group justify="flex-end"><Button variant="subtle" leftSection={<RefreshCw size={15} />} onClick={() => { void refreshWork(); refreshLists().catch(showError) }}>Actualiser</Button>
+        <Button leftSection={<Plus size={16} />} onClick={() => newSubject()} disabled={!visibleClasses.some(c => !c.archived) || school?.service_active === false}>Créer un sujet</Button></Group>
+      : <Group justify="space-between"><div><Group gap="sm"><Building2 size={26} /><Title order={2}>Établissements</Title></Group>
+        <Text c="dimmed" size="sm" mt={4}>Établissements, professeurs, classes et années scolaires du centre.</Text></div>
+        <Button variant="subtle" leftSection={<RefreshCw size={15} />} onClick={() => { refreshLists().catch(showError) }}>Actualiser</Button></Group>}
     {error && <Alert color="red">{error}</Alert>}
     {school && <Group align="end">
       <Badge color={school.service_active ? 'green' : 'orange'}>{school.service_active ? 'Service actif' : 'Service suspendu'}</Badge>
-      <Button size="xs" variant="light" onClick={() => editSchool(school)}>Modifier l’établissement</Button>
+      {!atelier && <Button size="xs" variant="light" onClick={() => editSchool(school)}>Modifier l’établissement</Button>}
     </Group>}
     {school?.service_active === false && <Alert color="orange">Service suspendu : les nouvelles générations et impressions sont bloquées. Les données et corrections restent accessibles.</Alert>}
     <Tabs value={tab} onChange={setTab}>
-      <Tabs.List><Tabs.Tab value="work">Suivi des sujets</Tabs.Tab><Tabs.Tab value="schools">Établissements</Tabs.Tab>
+      {!atelier && <Tabs.List><Tabs.Tab value="schools">Établissements</Tabs.Tab>
         <Tabs.Tab value="teachers">Professeurs</Tabs.Tab><Tabs.Tab value="classes">Classes et groupes</Tabs.Tab><Tabs.Tab value="years">Années scolaires</Tabs.Tab>
-        {role === 'admin' && <Tabs.Tab value="catalog">Enseignements</Tabs.Tab>}</Tabs.List>
-      <Tabs.Panel value="work" pt="lg"><Stack>
+        {role === 'admin' && <Tabs.Tab value="catalog">Enseignements</Tabs.Tab>}</Tabs.List>}
+      <Tabs.Panel value="work" pt={0}><Stack>
         <SimpleGrid cols={{ base: 2, sm: 4, lg: 7 }} spacing="sm" role="group" aria-label="Étapes du suivi">
           {['all', 'prepare', 'print', 'deliver', 'collect', 'correct', 'return'].map(key => {
             const selected = key === 'all' ? stage === null : stage === key
@@ -119,7 +131,7 @@ export default function Establishments() {
         </Alert>}
         <Group><Select placeholder="Toutes les étapes" clearable data={Object.entries(stages).map(([value, s]) => ({ value, label: `${s.label} (${value === 'collect' ? dashboard.lots_at_schools : dashboard.counts[value] || 0})` }))} value={stage} onChange={setStage} w={260} />
           <TextInput placeholder="Rechercher un sujet, une classe, un professeur…" value={search} onChange={e => setSearch(e.currentTarget.value)} style={{ flex: 1 }} />
-          <Button variant="light" onClick={() => navigate('/corrections')}>Déposer les scans</Button></Group>
+          <Button variant="light" onClick={() => navigate('/atelier/corrections')}>Déposer les scans</Button></Group>
         {!work.length && <Card withBorder p="xl"><Text c="dimmed" ta="center">{dashboard.assessments.length ? 'Aucun lot ne correspond aux filtres sélectionnés.' : 'Aucun sujet dans cette sélection. Créez un établissement, un professeur et une classe pour commencer.'}</Text></Card>}
         {work.map(a => <Card withBorder key={a.id} p="md"><Group justify="space-between" align="start" wrap="wrap">
           <Stack gap={4} style={{ flex: 1, minWidth: 240 }}><Group><Text fw={700}>{a.title}</Text><Badge color={stages[a.stage].color} variant="light">{stages[a.stage].label}</Badge></Group>
@@ -139,8 +151,8 @@ export default function Establishments() {
             {a.service_active && ['print', 'deliver'].includes(a.stage) && <PrintButton assessmentId={a.id} file="subject_batch.pdf" label={a.service_mode === 'accompanied' ? 'Imprimer sujets + intercalaire' : 'Imprimer les sujets'} assessmentDuplex={a.duplex} />}
             {a.stage === 'deliver' && <Button size="xs" leftSection={<Truck size={14} />} loading={busy} onClick={() => tracking(a, { subjects_delivered: true })}>Sujets livrés</Button>}
             {a.at_school && <Button size="xs" loading={busy} onClick={() => tracking(a, { originals_received: true })}>Copies récupérées</Button>}
-            {['scan', 'correct', 'blocked'].includes(a.stage) && <Button size="xs" variant="light" onClick={() => navigate(`/corrections?assessment=${a.id}`)}>Ouvrir la correction</Button>}
-            {a.stage === 'prepare' && <Button size="xs" variant="light" onClick={() => navigate('/sujets')}>Ouvrir les sujets</Button>}
+            {['scan', 'correct', 'blocked'].includes(a.stage) && <Button size="xs" variant="light" onClick={() => navigate(`/atelier/corrections?assessment=${a.id}`)}>Ouvrir la correction</Button>}
+            {a.stage === 'prepare' && <Button size="xs" variant="light" onClick={() => navigate('/atelier/sujets')}>Ouvrir les sujets</Button>}
             {a.service_active && a.stage === 'overlay' && <PrintButton assessmentId={a.id} file="correction_overlay.pdf" label="Imprimer les overlays" />}
             {a.stage === 'return' && <Button size="xs" color="teal" leftSection={<Check size={14} />} loading={busy} onClick={() => tracking(a, { returned: true })}>Copies restituées</Button>}
             <Button size="xs" variant="subtle" color="gray" onClick={() => { setNoteWork(a); setNote(a.note); setDue(a.delivery_due_at?.slice(0, 10) || '') }}>Suivi</Button>
@@ -150,7 +162,7 @@ export default function Establishments() {
         <SimpleGrid cols={{ base: 1, md: 2 }}>{schools.map(s => <Card key={s.id} withBorder><Group justify="space-between"><Text fw={700}>{s.name}</Text><Badge color={s.service_active ? 'green' : 'orange'}>{s.service_active ? 'Actif' : 'Suspendu'}</Badge></Group>
           <Text size="sm" c="dimmed" my="sm">{catalog?.countries.find(c => c.id === s.country_id)?.name} · {s.city} · {s.class_count} classes</Text>
           <Text size="xs" mb="sm">{s.program_ids.map(p => catalog?.programs.find(c => c.id === p)?.name).join(' · ')}</Text>
-          <Group><Button size="xs" variant="light" onClick={() => { setSchoolId(s.id); setTab('work') }}>Voir le suivi</Button><Button size="xs" variant="subtle" onClick={() => editSchool(s)}>Modifier</Button></Group></Card>)}</SimpleGrid>
+          <Group><Button size="xs" variant="light" onClick={() => { setSchoolId(s.id); navigate('/atelier') }}>Voir le suivi</Button><Button size="xs" variant="subtle" onClick={() => editSchool(s)}>Modifier</Button></Group></Card>)}</SimpleGrid>
       </Stack></Tabs.Panel>
       <Tabs.Panel value="teachers" pt="lg"><Stack><Group justify="space-between"><Text c="dimmed">Professeurs accompagnés. Le service fonctionne même sans compte de connexion.</Text><Button onClick={() => editTeacher()}>Ajouter un professeur</Button></Group>
         <Table.ScrollContainer minWidth={750}><Table striped><Table.Thead><Table.Tr>{['Professeur', 'Accès', 'Établissements', 'Actions'].map(x => <Table.Th key={x}>{x}</Table.Th>)}</Table.Tr></Table.Thead><Table.Tbody>
@@ -162,7 +174,7 @@ export default function Establishments() {
       <Tabs.Panel value="classes" pt="lg"><Stack><Group justify="space-between"><Text c="dimmed">Un professeur par matière. Les groupes permettent de distinguer les enseignements du lycée.</Text><Button onClick={() => { setClassEdit(null); setClassModal(true) }}>Nouvelle classe</Button></Group>
         {visibleClasses.map(c => <Card withBorder key={c.id}><Group justify="space-between"><div><Text fw={700}>{c.name} {c.archived && <Badge color="gray">Archivée</Badge>}</Text><Text size="sm" c="dimmed">{c.school_name} · {c.school_year} · {c.student_count} élèves · {catalog?.programs.find(p => p.id === c.program_id)?.name}{c.series_id ? ` · ${catalog?.paths.find(p => p.id === c.series_id)?.name}` : ''}</Text></div>
           <Group><Button size="xs" onClick={() => newSubject(c)} disabled={c.archived}>Créer un sujet</Button><Button size="xs" variant="light" onClick={() => openAssignments(c).catch(showError)}>Professeurs et groupes</Button>
-            <Button size="xs" variant="subtle" onClick={() => { setClassEdit(c); setClassModal(true) }}>Modifier</Button><Button size="xs" variant="subtle" onClick={() => navigate(`/eleves?class=${c.id}`)}>Élèves</Button>
+            <Button size="xs" variant="subtle" onClick={() => { setClassEdit(c); setClassModal(true) }}>Modifier</Button><Button size="xs" variant="subtle" onClick={() => navigate(`/admin/eleves?class=${c.id}`)}>Élèves</Button>
             <Button size="xs" variant="subtle" onClick={() => { setRollClass(c); setRollName(c.name); setRollGrade(c.grade_level); setRollSeries(c.series_id); setRollYear(null) }}>Reprendre la liste</Button></Group></Group></Card>)}
       </Stack></Tabs.Panel>
       <Tabs.Panel value="years" pt="lg"><Stack><Group><TextInput label="Nouvelle année scolaire" placeholder="2027-2028" value={yearLabel} onChange={e => setYearLabel(e.currentTarget.value)} /><Button mt={24} loading={busy} disabled={!yearLabel.trim()} onClick={() => act(() => api.post('/api/operations/years', { label: yearLabel }), () => setYearLabel(''))}>Créer</Button></Group>

@@ -1,6 +1,9 @@
-// Paramètres (§9.6) : Mon compte, API, Imprimantes, Calibration, Pédagogie,
-// Documents (éditeur de templates), Système, Journaux, Données, Utilisateurs
-// (admin). `?onglet=<valeur>` ouvre directement un onglet.
+// Paramètres, en deux pages distinctes :
+//   • scope="personal" (/parametres, roue crantée en haut à droite) : Mon compte,
+//     Mes imprimantes (prof), Mes raccourcis, Calibration (édition autonome) ;
+//   • scope="admin" (/admin/parametres, en bas de la barre latérale) : API,
+//     Scans par mail, Pédagogie, Documents, Système, Journaux, Données.
+// `?onglet=<valeur>` ouvre directement un onglet.
 import {
   Accordion, ActionIcon, Alert, Badge, Box, Button, Card, Checkbox, ColorInput, FileButton,
   Group, Loader, Modal, NumberInput, PasswordInput, SimpleGrid, Stack, Switch, Table, Tabs, Text,
@@ -8,22 +11,29 @@ import {
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
 import {
-  AlertTriangle, Database, Download, FileText, FlaskConical, KeyRound, Mail, Printer,
+  AlertTriangle, Database, Download, FileText, FlaskConical, KeyRound, Keyboard, Mail, Printer,
   RefreshCw, Ruler, ScrollText, Save, SlidersHorizontal, Trash2, UserRound, Users,
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { Navigate, useSearchParams } from 'react-router-dom'
 import { api, getToken } from '../api'
+import CalibrationPanel from '../components/CalibrationPanel'
 import MailIntakeSettings from '../components/MailIntakeSettings'
+import OcrEngineSettings from '../components/OcrEngineSettings'
 import PrinterSettings, { type PrintersInfo } from '../components/PrinterSettings'
 import TeachingPreferences from '../components/TeachingPreferences'
+import ShortcutsSettings from '../components/ShortcutsSettings'
+import SettingsSection from '../components/SettingsSection'
 import TemplateEditor from '../components/TemplateEditor'
-import UsersAdmin from './UsersAdmin'
 
 type Me = {
   id: string; email: string; display_name: string; role: string
   service_mode: string | null; program_id: string | null; subject_id: string | null
+  edition?: string
 }
+
+// Onglets de la page admin : un ancien lien /parametres?onglet=<admin> y est renvoyé.
+export const ADMIN_TABS = ['api', 'mail', 'pedagogie', 'documents', 'systeme', 'journaux', 'donnees']
 type Provider = { provider: string; secret_preview: string; active: boolean }
 type Build = { sha: string; time: string }
 type StudentRow = {
@@ -59,7 +69,8 @@ type SystemStatus = {
 }
 type LogEntry = { ts: string; method: string; path: string; error: string; traceback: string }
 
-export default function SettingsPage() {
+export default function SettingsPage({ scope = 'personal' }: { scope?: 'personal' | 'admin' }) {
+  const adminPage = scope === 'admin'
   const [me, setMe] = useState<Me | null>(null)
   const [curPwd, setCurPwd] = useState('')
   const [newPwd, setNewPwd] = useState('')
@@ -78,7 +89,6 @@ export default function SettingsPage() {
   const [status, setStatus] = useState<SystemStatus | null>(null)
   const [printers, setPrinters] = useState<PrintersInfo | null>(null)
   const [backups, setBackups] = useState<{ name: string; size: number }[]>([])
-  const [calibrations, setCalibrations] = useState<any[]>([])
   const [edit, setEdit] = useState<Record<string, string>>({})
   const [webBuild, setWebBuild] = useState<Build | null>(null)
   const [overview, setOverview] = useState<Overview | null>(null)
@@ -98,12 +108,13 @@ export default function SettingsPage() {
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [logsLoading, setLogsLoading] = useState(false)
   const [searchParams, setSearchParams] = useSearchParams()
-  const tab = searchParams.get('onglet') || 'compte'
+  const defaultTab = adminPage ? 'api' : 'compte'
+  const tab = searchParams.get('onglet') || defaultTab
   const isAdmin = me?.role === 'admin'
 
   async function refresh() {
     const account = await api.get<Me>('/api/auth/me'); setMe(account)
-    if (account.role === 'admin') {
+    if (account.role === 'admin' && adminPage) {
     api.get<Provider[]>('/api/settings/providers').then(setProviders)
     api.get<Record<string, any>>('/api/settings/system').then((values) => {
       setSystem(values)
@@ -114,9 +125,8 @@ export default function SettingsPage() {
     })
     api.get<SystemStatus>('/api/system/status').then(setStatus)
     }
-    api.get<PrintersInfo>('/api/printers').then(setPrinters)
-    if (account.role === 'admin') api.get<{ name: string; size: number }[]>('/api/system/backups').then(setBackups)
-    api.get<any[]>('/api/system/calibration/profiles').then(setCalibrations)
+    if (!adminPage) api.get<PrintersInfo>('/api/printers').then(setPrinters)
+    if (account.role === 'admin' && adminPage) api.get<{ name: string; size: number }[]>('/api/system/backups').then(setBackups)
     // build de l'interface web (image nginx) — absent en dev, servi en no-cache
     fetch('/build.json').then((r) => (r.ok ? r.json() : null)).then(setWebBuild)
       .catch(() => setWebBuild(null))
@@ -125,6 +135,7 @@ export default function SettingsPage() {
   // arrivée directe sur ?onglet=journaux : le chargement suit l'onglet ouvert
   useEffect(() => { if (tab === 'journaux') refreshLogs() }, [])
   useEffect(() => {
+    if (adminPage) return
     const timer = window.setInterval(() => {
       api.get<PrintersInfo>('/api/printers').then(setPrinters).catch(() => {})
     }, 10_000)
@@ -135,6 +146,7 @@ export default function SettingsPage() {
   // Vue compactée : on ne tire que l'agrégat par classe ; le détail d'une classe
   // (élèves/sujets/corrections) se charge à l'ouverture (loadClassDetail).
   function refreshData(reopen: string[] = openClasses) {
+    if (!adminPage) return
     api.get<Overview>('/api/data/overview')
       .then((o) => { setOverview(o); reopen.forEach(loadClassDetail) })
       .catch(() => {})
@@ -258,17 +270,6 @@ export default function SettingsPage() {
     refresh()
   }
 
-  async function saveShortcut(field: string, value: string) {
-    const key = (value || '').trim().slice(0, 1).toLowerCase()
-    if (!key) return
-    const cur = system.correction_shortcuts ?? {}
-    await api.post('/api/settings/system', {
-      key: 'correction_shortcuts', value: { ...cur, [field]: key },
-    })
-    notifications.show({ color: 'green', message: 'Raccourci enregistré' })
-    refresh()
-  }
-
   async function saveOcrThreshold() {
     const pct = Math.max(1, Math.min(100, Number(ocrThresholdPct) || 90))
     setSavingOcrThreshold(true)
@@ -355,59 +356,45 @@ export default function SettingsPage() {
     notifications.show({ color: 'green', message: 'Journal vidé' })
   }
 
-  async function downloadCalibrationPage() {
-    const res = await fetch('/api/system/calibration/page', {
-      method: 'POST', headers: { Authorization: `Bearer ${getToken()}` },
-    })
-    const blob = await res.blob()
-    const a = document.createElement('a')
-    a.href = URL.createObjectURL(blob)
-    a.download = 'calibration_page.pdf'
-    a.click()
-  }
+  // anciens liens /parametres?onglet=<onglet admin> : renvoyés vers la page admin
+  if (!adminPage && ADMIN_TABS.includes(tab)) return <Navigate to={`/admin/parametres?onglet=${tab}`} replace />
+  if (!adminPage && tab === 'utilisateurs') return <Navigate to="/admin/utilisateurs" replace />
 
-  async function uploadCalibrationScan(file: File | null) {
-    if (!file) return
-    const fd = new FormData()
-    fd.append('file', file)
-    try {
-      const r = await api.post<any>('/api/system/calibration/measure', fd)
-      notifications.show({
-        color: r.verdict === 'ok' ? 'green' : 'orange',
-        message: `Échelle ${r.scale_x}×${r.scale_y}, rotation ${r.rotation_deg}° — ${r.verdict}`,
-      })
-      refresh()
-    } catch (e) {
-      notifications.show({ color: 'red', message: (e as Error).message })
-    }
-  }
+  const pp = adminPage ? { pl: 'xl', maw: 900 } as const : { pt: 'md' } as const
 
   return (
     <Stack>
-      <Title order={2}>Paramètres</Title>
-      <Tabs value={tab} keepMounted={false}
+      <div>
+        <Title order={2}>{adminPage ? 'Paramètres admin' : 'Mes paramètres'}</Title>
+        {adminPage && <Text size="sm" c="dimmed">Services, pédagogie, documents et maintenance de l'instance.</Text>}
+      </div>
+      <Tabs value={tab} keepMounted={false} orientation={adminPage ? 'vertical' : 'horizontal'}
+        variant={adminPage ? 'pills' : 'default'}
         onChange={(v) => {
-          const next = v ?? 'compte'
-          setSearchParams(next === 'compte' ? {} : { onglet: next }, { replace: true })
+          const next = v ?? defaultTab
+          setSearchParams(next === defaultTab ? {} : { onglet: next }, { replace: true })
           if (next === 'journaux') refreshLogs()
         }}>
-        <Tabs.List>
-          <Tabs.Tab value="compte" leftSection={<UserRound size={15} />}>Mon compte</Tabs.Tab>
-          {isAdmin && <Tabs.Tab value="api" leftSection={<KeyRound size={15} />}>API</Tabs.Tab>}
-          <Tabs.Tab value="imprimantes" leftSection={<Printer size={15} />}>Imprimantes</Tabs.Tab>
-          {isAdmin && <Tabs.Tab value="mail" leftSection={<Mail size={15} />}>Scans par mail</Tabs.Tab>}
-          <Tabs.Tab value="calibration" leftSection={<Ruler size={15} />}>Calibration</Tabs.Tab>
-          {isAdmin && <Tabs.Tab value="pedagogie" leftSection={<SlidersHorizontal size={15} />}>Pédagogie</Tabs.Tab>}
-          {isAdmin && <Tabs.Tab value="documents" leftSection={<FileText size={15} />}>Documents</Tabs.Tab>}
-          {isAdmin && <Tabs.Tab value="systeme" leftSection={<Database size={15} />}>Système</Tabs.Tab>}
-          {isAdmin && <Tabs.Tab value="journaux" leftSection={<ScrollText size={15} />}>Journaux</Tabs.Tab>}
-          {isAdmin && <Tabs.Tab value="donnees" leftSection={<Trash2 size={15} />}>Données</Tabs.Tab>}
-          {isAdmin && (
-            <Tabs.Tab value="utilisateurs" leftSection={<Users size={15} />}>Utilisateurs</Tabs.Tab>
-          )}
+        <Tabs.List miw={adminPage ? 190 : undefined} pr={adminPage ? 'md' : undefined}
+          style={adminPage ? { gap: 4, alignSelf: 'flex-start' } : undefined}>
+          {!adminPage && <>
+            <Tabs.Tab value="compte" leftSection={<UserRound size={15} />}>Mon compte</Tabs.Tab>
+            {me?.role === 'teacher' && <Tabs.Tab value="imprimantes" leftSection={<Printer size={15} />}>Mes imprimantes</Tabs.Tab>}
+            <Tabs.Tab value="raccourcis" leftSection={<Keyboard size={15} />}>Raccourcis</Tabs.Tab>
+            {me?.edition === 'autonome' && <Tabs.Tab value="calibration" leftSection={<Ruler size={15} />}>Calibration</Tabs.Tab>}
+          </>}
+          {adminPage && isAdmin && <>
+            <Tabs.Tab value="api" leftSection={<KeyRound size={15} />}>API</Tabs.Tab>
+            <Tabs.Tab value="mail" leftSection={<Mail size={15} />}>Scans par mail</Tabs.Tab>
+            <Tabs.Tab value="pedagogie" leftSection={<SlidersHorizontal size={15} />}>Pédagogie</Tabs.Tab>
+            <Tabs.Tab value="documents" leftSection={<FileText size={15} />}>Documents</Tabs.Tab>
+            <Tabs.Tab value="systeme" leftSection={<Database size={15} />}>Système</Tabs.Tab>
+            <Tabs.Tab value="journaux" leftSection={<ScrollText size={15} />}>Journaux</Tabs.Tab>
+            <Tabs.Tab value="donnees" leftSection={<Trash2 size={15} />}>Données</Tabs.Tab>
+          </>}
         </Tabs.List>
 
-        <Tabs.Panel value="compte" pt="md">
+        {!adminPage && <Tabs.Panel value="compte" {...pp}>
           <Card withBorder maw={420}>
             {me && (
               <Group justify="space-between" mb="md">
@@ -415,7 +402,7 @@ export default function SettingsPage() {
                   <Text fw={600}>{me.display_name}</Text>
                   <Text size="sm" c="dimmed">{me.email}</Text>
                 </div>
-                <Badge variant="light">{me.role}</Badge>
+                <Badge variant="light">{({ admin: 'Administrateur', teacher: 'Professeur', corrector: 'Atelier' } as Record<string, string>)[me.role] ?? me.role}</Badge>
               </Group>
             )}
             <Stack gap="xs">
@@ -437,95 +424,68 @@ export default function SettingsPage() {
           {me?.service_mode === 'autonomous' && (
             <TeachingPreferences programId={me.program_id} subjectId={me.subject_id} />
           )}
-        </Tabs.Panel>
+        </Tabs.Panel>}
 
-        {isAdmin && <Tabs.Panel value="api" pt="md">
+        {adminPage && isAdmin && <Tabs.Panel value="api" {...pp}>
           <Stack>
             <Text size="sm" c="dimmed">
               Sans clé, un service reste en mode simulé. Les clés sont chiffrées au repos
               et jamais renvoyées intégralement.
             </Text>
-            {(['mathpix', 'deepseek-flash', 'deepseek-pro', 'anthropic', 'mistral', 'gemini'] as const).map((p) => {
-              const row = providers.find((x) => x.provider === p)
-              const labels: Record<string, string> = {
-                'deepseek-flash': 'DeepSeek Flash',
-                'deepseek-pro': 'DeepSeek Pro',
-                mistral: 'Mistral OCR (extraction Sésamaths)',
-                gemini: 'Gemini (création d\'exercices)',
-              }
-              return (
-                <Card key={p} withBorder>
-                  <Group justify="space-between">
-                    <Group>
-                      <Text fw={600}>{labels[p] ?? p}</Text>
-                      {row?.active && row.secret_preview
-                        ? <Badge variant="light" color="green">configuré {row.secret_preview}</Badge>
-                        : <Badge variant="light" color="gray"
-                            leftSection={<FlaskConical size={11} />}>simulé</Badge>}
+            <SimpleGrid cols={{ base: 1, md: 2 }} spacing="md">
+              {(['mathpix', 'deepseek-flash', 'deepseek-pro', 'anthropic', 'mistral', 'gemini'] as const).map((p) => {
+                const row = providers.find((x) => x.provider === p)
+                const labels: Record<string, string> = {
+                  'deepseek-flash': 'DeepSeek Flash',
+                  'deepseek-pro': 'DeepSeek Pro',
+                  mistral: 'Mistral OCR',
+                  anthropic: 'Anthropic',
+                  mathpix: 'Mathpix',
+                  gemini: 'Gemini',
+                }
+                const usage: Record<string, string> = {
+                  mistral: 'Extraction Sésamaths',
+                  gemini: "Création d'exercices",
+                }
+                return (
+                  <SettingsSection key={p} title={labels[p] ?? p} description={usage[p]}
+                    badge={row?.active && row.secret_preview
+                      ? <Badge variant="light" color="green">configuré {row.secret_preview}</Badge>
+                      : <Badge variant="light" color="gray"
+                          leftSection={<FlaskConical size={11} />}>simulé</Badge>}>
+                    <Group align="flex-end" wrap="nowrap">
+                      <TextInput style={{ flex: 1 }} label={p === 'mathpix' ? 'app_id:app_key' : 'Clé API'}
+                        type="password" placeholder={row?.active ? 'Remplacer la clé…' : 'Coller la clé'}
+                        onChange={(e) => setEdit({ ...edit, [p]: e.target.value })} />
+                      <Button leftSection={<Save size={14} />} onClick={() => save(p)}>Enregistrer</Button>
                     </Group>
-                  </Group>
-                  <TextInput mt="sm" label={p === 'mathpix' ? 'app_id:app_key' : 'Clé API'} type="password"
-                    onChange={(e) => setEdit({ ...edit, [p]: e.target.value })} />
-                  <Button size="xs" mt="sm" onClick={() => save(p)}>Enregistrer</Button>
-                </Card>
-              )
-            })}
+                  </SettingsSection>
+                )
+              })}
+            </SimpleGrid>
           </Stack>
         </Tabs.Panel>}
 
-        <Tabs.Panel value="imprimantes" pt="md">
+        {!adminPage && <Tabs.Panel value="imprimantes" {...pp}>
           <PrinterSettings printers={printers} refresh={refresh} />
-        </Tabs.Panel>
+        </Tabs.Panel>}
 
-        {isAdmin && <Tabs.Panel value="mail" pt="md">
+        {!adminPage && <Tabs.Panel value="raccourcis" {...pp}>
+          <ShortcutsSettings scope="personal" />
+        </Tabs.Panel>}
+
+        {adminPage && isAdmin && <Tabs.Panel value="mail" {...pp}>
           <MailIntakeSettings />
         </Tabs.Panel>}
 
-        <Tabs.Panel value="calibration" pt="md">
-          <Card withBorder>
-            <Text fw={600}>Assistant de calibration imprimante/scanner</Text>
-            <Text size="sm" c="dimmed" mt="xs">
-              1. Télécharger la page test → 2. L'imprimer à 100 % → 3. La scanner →
-              4. Déposer le scan : offsets, échelle et rotation sont mesurés sur les 4 marqueurs.
-            </Text>
-            <Group mt="sm">
-              <Button size="xs" onClick={downloadCalibrationPage}>Télécharger la page test</Button>
-              <FileButton onChange={uploadCalibrationScan} accept="application/pdf,image/*">
-                {(props) => <Button size="xs" variant="light" {...props}>Déposer le scan de la page test</Button>}
-              </FileButton>
-            </Group>
-            {calibrations.length > 0 && (
-              <Table mt="md" striped>
-                <Table.Thead>
-                  <Table.Tr>
-                    <Table.Th>Imprimante</Table.Th><Table.Th>Échelle X/Y</Table.Th>
-                    <Table.Th>Rotation</Table.Th><Table.Th>Offset (mm)</Table.Th><Table.Th>Validé</Table.Th>
-                  </Table.Tr>
-                </Table.Thead>
-                <Table.Tbody>
-                  {calibrations.map((c) => (
-                    <Table.Tr key={c.id}>
-                      <Table.Td>{c.printer || '—'}</Table.Td>
-                      <Table.Td>{c.scale_x} / {c.scale_y}</Table.Td>
-                      <Table.Td>{c.rotation_deg}°</Table.Td>
-                      <Table.Td>{c.offset_x_mm} / {c.offset_y_mm}</Table.Td>
-                      <Table.Td><Text size="xs">{c.validated_at?.slice(0, 16)}</Text></Table.Td>
-                    </Table.Tr>
-                  ))}
-                </Table.Tbody>
-              </Table>
-            )}
-          </Card>
-        </Tabs.Panel>
+        {!adminPage && <Tabs.Panel value="calibration" {...pp}>
+          <CalibrationPanel />
+        </Tabs.Panel>}
 
-        {isAdmin && <Tabs.Panel value="pedagogie" pt="md">
-          <Stack maw={640}>
-            <Card withBorder>
-              <Text fw={600} mb={4}>Lecture OCR et vision</Text>
-              <Text size="xs" c="dimmed" mb="sm">
-                Après la lecture des scans, « OCRiser » ne présente que les réponses
-                dont la confiance OCR/CV est sous ce seuil, avant toute correction.
-              </Text>
+        {adminPage && isAdmin && <Tabs.Panel value="pedagogie" {...pp}>
+          <Stack>
+            <SettingsSection title="Lecture OCR et vision"
+              description="Après la lecture des scans, « OCRiser » ne présente que les réponses dont la confiance OCR/CV est sous ce seuil, avant toute correction.">
               <Group align="flex-end">
                 <NumberInput label="Seuil de confiance" suffix=" %" min={1} max={100}
                   step={1} w={190} value={ocrThresholdPct}
@@ -534,14 +494,10 @@ export default function SettingsPage() {
                 <Button leftSection={<Save size={14} />} loading={savingOcrThreshold}
                   onClick={saveOcrThreshold}>Enregistrer</Button>
               </Group>
-            </Card>
-            <Card withBorder>
-              <Text fw={600} mb={4}>Correction DeepSeek</Text>
-              <Text size="xs" c="dimmed" mb="sm">
-                Une réponse corrigée par le LLM n'est envoyée dans l'assistant de
-                correction manuelle que si sa confiance est strictement inférieure
-                à ce seuil. La valeur par défaut est 90 %.
-              </Text>
+            </SettingsSection>
+            <OcrEngineSettings system={system} onSaved={refresh} />
+            <SettingsSection title="Correction DeepSeek"
+              description="Une réponse corrigée par le LLM n'est envoyée dans l'assistant de correction manuelle que si sa confiance est strictement inférieure à ce seuil. La valeur par défaut est 90 %.">
               <Group align="flex-end">
                 <NumberInput label="Seuil de confiance LLM" suffix=" %" min={1} max={100}
                   step={1} w={210} value={llmThresholdPct}
@@ -550,16 +506,9 @@ export default function SettingsPage() {
                 <Button leftSection={<Save size={14} />} loading={savingLlmThreshold}
                   onClick={saveLlmThreshold}>Enregistrer</Button>
               </Group>
-            </Card>
-            <Card withBorder>
-              <Text fw={600} mb={4}>Géométrie à tracer</Text>
-              <Text size="xs" c="dimmed" mb="sm">
-                La lecture automatique note un tracé quand sa confiance atteint ce
-                seuil ; en dessous, il part en correction manuelle (101 % : jamais
-                de note automatique). Une part des tracés notés automatiquement
-                passe quand même chez vous : vos notes servent à calibrer le seuil
-                (script calibrate_construction). Mettez-la à 0 une fois le seuil établi.
-              </Text>
+            </SettingsSection>
+            <SettingsSection title="Géométrie à tracer"
+              description="La lecture automatique note un tracé quand sa confiance atteint ce seuil ; en dessous, il part en correction manuelle (101 % : jamais de note automatique). Une part des tracés notés automatiquement passe quand même chez vous : vos notes servent à calibrer le seuil (script calibrate_construction). Mettez-la à 0 une fois le seuil établi.">
               <Group align="flex-end">
                 <NumberInput label="Seuil de confiance" suffix=" %" min={1} max={101}
                   step={1} w={170} value={traceThresholdPct}
@@ -572,75 +521,40 @@ export default function SettingsPage() {
                 <Button leftSection={<Save size={14} />} loading={savingTrace}
                   onClick={saveTraceSettings}>Enregistrer</Button>
               </Group>
-            </Card>
-            <Card withBorder>
-              <Text fw={600} mb={4}>Raccourcis de correction manuelle</Text>
-              <Text size="xs" c="dimmed" mb="sm">
-                Une touche attribue une fraction des points de l'exercice dans la
-                modale « Corriger manuellement » (les touches s'affichent sur les
-                boutons). Une seule lettre par action.
-              </Text>
-              <Group grow>
-                <TextInput label="Tous les points" maxLength={1}
-                  key={`f-${system.correction_shortcuts?.full ?? 'f'}`}
-                  defaultValue={system.correction_shortcuts?.full ?? 'f'}
-                  onBlur={(e) => saveShortcut('full', e.currentTarget.value)} />
-                <TextInput label="2⁄3 des points" maxLength={1}
-                  key={`d-${system.correction_shortcuts?.two_thirds ?? 'd'}`}
-                  defaultValue={system.correction_shortcuts?.two_thirds ?? 'd'}
-                  onBlur={(e) => saveShortcut('two_thirds', e.currentTarget.value)} />
-                <TextInput label="1⁄3 des points" maxLength={1}
-                  key={`s-${system.correction_shortcuts?.one_third ?? 's'}`}
-                  defaultValue={system.correction_shortcuts?.one_third ?? 's'}
-                  onBlur={(e) => saveShortcut('one_third', e.currentTarget.value)} />
-                <TextInput label="0 point" maxLength={1}
-                  key={`q-${system.correction_shortcuts?.zero ?? 'q'}`}
-                  defaultValue={system.correction_shortcuts?.zero ?? 'q'}
-                  onBlur={(e) => saveShortcut('zero', e.currentTarget.value)} />
-              </Group>
-            </Card>
-            <Card withBorder>
-              <Group justify="space-between" align="flex-start">
-                <Box>
-                  <Text fw={600} mb={4}>Phrase encourageante (Claude Haiku)</Text>
-                  <Text size="xs" c="dimmed" maw={440}>
-                    Une phrase courte générée par IA dans la zone Appréciation des copies
-                    corrigées, en plus des progrès de compétences (toujours affichés,
-                    sans IA). Désactivée par défaut.
-                  </Text>
-                </Box>
-                <Switch
-                  checked={system.appreciation_synthesis_enabled?.value ?? false}
-                  onChange={(e) => saveAppreciationSynthesis(e.currentTarget.checked)} />
-              </Group>
-            </Card>
-            <Card withBorder>
-              <Table>
+            </SettingsSection>
+            <ShortcutsSettings scope="default" />
+            <SettingsSection title="Phrase encourageante (Claude Haiku)"
+              description="Une phrase courte générée par IA dans la zone Appréciation des copies corrigées, en plus des progrès de compétences (toujours affichés, sans IA). Désactivée par défaut."
+              action={<Switch size="md"
+                checked={system.appreciation_synthesis_enabled?.value ?? false}
+                onChange={(e) => saveAppreciationSynthesis(e.currentTarget.checked)} />} />
+            <SettingsSection title="Révision et entraînement"
+              description="Paramètres fixes du moteur de révision (lecture seule).">
+              <Table verticalSpacing="xs" withRowBorders>
                 <Table.Tbody>
                   <Table.Tr>
                     <Table.Td>Seuil de courbe d'oubli (probabilité de rappel)</Table.Td>
-                    <Table.Td>{system.forgetting_threshold?.value ?? 0.8}</Table.Td>
+                    <Table.Td ta="right" fw={600}>{system.forgetting_threshold?.value ?? 0.8}</Table.Td>
                   </Table.Tr>
                   <Table.Tr>
                     <Table.Td>Variation automatique max du niveau (1-10) par cycle de révision</Table.Td>
-                    <Table.Td>±1</Table.Td>
+                    <Table.Td ta="right" fw={600}>±1</Table.Td>
                   </Table.Tr>
                   <Table.Tr>
                     <Table.Td>Répartition entraînement</Table.Td>
-                    <Table.Td>60 % consolidation / 30 % cible / 10 % défi</Table.Td>
+                    <Table.Td ta="right" fw={600}>60 % consolidation / 30 % cible / 10 % défi</Table.Td>
                   </Table.Tr>
                 </Table.Tbody>
               </Table>
-            </Card>
+            </SettingsSection>
           </Stack>
         </Tabs.Panel>}
 
-        {isAdmin && <Tabs.Panel value="documents" pt="md">
+        {adminPage && isAdmin && <Tabs.Panel value="documents" {...pp}>
           <Stack>
             <TemplateEditor />
-            <Card withBorder maw={640}>
-              <Text fw={600} mb="xs">Couleurs techniques</Text>
-              <Group grow>
+            <SettingsSection title="Couleurs techniques">
+              <Group grow align="flex-start">
                 <ColorInput size="xs" label="Zones de réponse élève (dropout)"
                   description="Supprimée avant OCR — garder un ton clair. Une plage de cette couleur est imprimée en bas de chaque page : le scan en mesure la teinte réelle pour mieux la supprimer."
                   value={system.dropout_color?.value ?? '#F5B7A8'}
@@ -653,16 +567,15 @@ export default function SettingsPage() {
                 Figé pour le repérage scanner : code DataMatrix de 20 chiffres signé (bas gauche),
                 4 fiduciels AprilTag 11 mm (coins), marges 9 mm.
               </Text>
-            </Card>
+            </SettingsSection>
           </Stack>
         </Tabs.Panel>}
 
-        {isAdmin && <Tabs.Panel value="systeme" pt="md">
+        {adminPage && isAdmin && <Tabs.Panel value="systeme" {...pp}>
           <Stack>
             {status && (
-              <Card withBorder>
-                <Text fw={600} mb="xs">État des services</Text>
-                <Group gap="lg">
+              <SettingsSection title="État des services">
+                <Group gap="xs">
                   <Badge variant="light" color={status.database.ok ? 'green' : 'red'}>
                     Base {status.database.url_scheme} {status.database.ok ? 'OK' : 'KO'}
                   </Badge>
@@ -687,45 +600,37 @@ export default function SettingsPage() {
                   {status.build?.sha && webBuild?.sha && status.build.sha !== webBuild.sha &&
                     ' — ⚠ web et API sur des builds différents (mise à jour en cours ou incomplète)'}
                 </Text>
-              </Card>
+              </SettingsSection>
             )}
-            <Card withBorder>
-              <Group justify="space-between">
-                <div>
-                  <Text fw={600}>Sauvegardes</Text>
-                  <Text size="sm" c="dimmed">
-                    Dump de la base dans /data/backups — rétention 30 fichiers.
-                  </Text>
-                </div>
-                <Button size="xs" onClick={doBackup}>Sauvegarder maintenant</Button>
-              </Group>
-              {backups.slice(0, 5).map((b) => (
-                <Group key={b.name} gap="xs" py={1}>
-                  <Text size="xs" ff="monospace">{b.name}</Text>
-                  <Text size="xs" c="dimmed">{(b.size / 1024).toFixed(0)} Ko</Text>
-                </Group>
-              ))}
-            </Card>
+            <SettingsSection title="Sauvegardes"
+              description="Dump de la base dans /data/backups — rétention 30 fichiers."
+              action={<Button size="xs" onClick={doBackup}>Sauvegarder maintenant</Button>}>
+              {backups.length === 0
+                ? <Text size="sm" c="dimmed">Aucune sauvegarde.</Text>
+                : <Table verticalSpacing={4}>
+                    <Table.Tbody>
+                      {backups.slice(0, 5).map((b) => (
+                        <Table.Tr key={b.name}>
+                          <Table.Td><Text size="xs" ff="monospace">{b.name}</Text></Table.Td>
+                          <Table.Td ta="right"><Text size="xs" c="dimmed">{(b.size / 1024).toFixed(0)} Ko</Text></Table.Td>
+                        </Table.Tr>
+                      ))}
+                    </Table.Tbody>
+                  </Table>}
+            </SettingsSection>
           </Stack>
         </Tabs.Panel>}
 
-        {isAdmin && <Tabs.Panel value="journaux" pt="md">
+        {adminPage && isAdmin && <Tabs.Panel value="journaux" {...pp}>
           <Stack>
-            <Group justify="space-between">
-              <div>
-                <Text fw={600}>Journal des erreurs serveur</Text>
-                <Text size="sm" c="dimmed">
-                  Les 50 dernières erreurs 500 avec leur trace complète — pour diagnostiquer
-                  un bug (ex. « Valider la correction »). Reproduis l'erreur, puis actualise.
-                </Text>
-              </div>
-              <Group gap="xs">
+            <SettingsSection title="Journal des erreurs serveur"
+              description="Les 50 dernières erreurs 500 avec leur trace complète — pour diagnostiquer un bug (ex. « Valider la correction »). Reproduis l'erreur, puis actualise."
+              action={<Group gap="xs">
                 <Button size="xs" variant="light" leftSection={<RefreshCw size={14} />}
                   loading={logsLoading} onClick={refreshLogs}>Actualiser</Button>
                 <Button size="xs" variant="subtle" color="red" leftSection={<Trash2 size={14} />}
                   onClick={clearLogs} disabled={logs.length === 0}>Vider</Button>
-              </Group>
-            </Group>
+              </Group>} />
             {logs.length === 0 ? (
               <Text size="sm" c="dimmed" py="md">
                 Aucune erreur enregistrée. Clique « Actualiser » après avoir reproduit le problème.
@@ -752,7 +657,7 @@ export default function SettingsPage() {
           </Stack>
         </Tabs.Panel>}
 
-        {isAdmin && <Tabs.Panel value="donnees" pt="md">
+        {adminPage && isAdmin && <Tabs.Panel value="donnees" {...pp}>
           <Stack>
             <Alert color="red" variant="light" icon={<AlertTriangle size={16} />}>
               Suppression définitive et irréversible — aucune corbeille. Supprimer une classe
@@ -781,13 +686,8 @@ export default function SettingsPage() {
               </SimpleGrid>
             )}
 
-            <Card withBorder>
-              <Text fw={600} mb={2}>Scans originaux</Text>
-              <Text size="xs" c="dimmed" mb="xs">
-                Chaque fichier déposé (bac à sable, dépôt ciblé, mail) est conservé tel quel
-                pendant 30 jours, même si sa correction est supprimée — puis effacé
-                automatiquement : ce sont des copies d'élèves.
-              </Text>
+            <SettingsSection title="Scans originaux"
+              description="Chaque fichier déposé (bac à sable, dépôt ciblé, mail) est conservé tel quel pendant 30 jours, même si sa correction est supprimée — puis effacé automatiquement : ce sont des copies d'élèves.">
               {scanOriginals.length === 0 ? (
                 <Text size="sm" c="dimmed">Aucun scan conservé.</Text>
               ) : (
@@ -809,13 +709,16 @@ export default function SettingsPage() {
                   </Table.Tbody>
                 </Table>
               )}
-            </Card>
+            </SettingsSection>
 
-            <Card withBorder style={overview && overview.totals.orphans > 0
-              ? { borderColor: 'var(--mantine-color-orange-5)' } : undefined}>
-              <Group justify="space-between" align="flex-start">
-                <div>
-                  <Text fw={600} mb={2}>Données orphelines</Text>
+            <SettingsSection title="Données orphelines"
+              tone={overview && overview.totals.orphans > 0 ? 'warning' : 'default'}
+              action={overview && overview.totals.orphans > 0 ? (
+                <Button color="orange" variant="outline" size="xs"
+                  leftSection={<Trash2 size={14} />} onClick={() => setOrphansPurgeOpen(true)}>
+                  Nettoyer ({overview.totals.orphans})
+                </Button>) : undefined}>
+              <div>
                   {overview && overview.orphans.length === 0 ? (
                     <Text size="sm" c="dimmed">Aucune donnée orpheline — la base est propre.</Text>
                   ) : (
@@ -827,31 +730,17 @@ export default function SettingsPage() {
                       ))}
                     </Stack>
                   )}
-                </div>
-                {overview && overview.totals.orphans > 0 && (
-                  <Button color="orange" variant="outline" size="xs"
-                    leftSection={<Trash2 size={14} />} onClick={() => setOrphansPurgeOpen(true)}>
-                    Nettoyer ({overview.totals.orphans})
-                  </Button>
-                )}
-              </Group>
-            </Card>
+              </div>
+            </SettingsSection>
 
-            <Card withBorder style={{ borderColor: 'var(--mantine-color-red-6)' }}>
-              <Text fw={600} mb={2}>Banque d'exercices</Text>
-              <Text size="sm" c="dimmed" mb="sm">
-                Supprime TOUS les exercices de la banque (quelle que soit leur source) ainsi
-                que l'état d'extraction Sésamaths déjà en cache — pour repartir d'une banque
-                vide et propre si des exercices étranges ou répétés s'y sont accumulés. La
-                prochaine génération réextrait tout depuis le manuel.
-              </Text>
-              <Button color="red" variant="outline" size="xs" leftSection={<Trash2 size={14} />}
+            <SettingsSection title="Banque d'exercices" tone="danger"
+              description="Supprime TOUS les exercices de la banque (quelle que soit leur source) ainsi que l'état d'extraction Sésamaths déjà en cache — pour repartir d'une banque vide et propre si des exercices étranges ou répétés s'y sont accumulés. La prochaine génération réextrait tout depuis le manuel."
+              action={<Button color="red" variant="outline" size="xs" leftSection={<Trash2 size={14} />}
                 onClick={() => setPurgeConfirmOpen(true)}>
                 Purger toute la banque
-              </Button>
-            </Card>
+              </Button>} />
 
-            <Text fw={600} size="sm" mt="xs">Par classe</Text>
+            <Text fw={650} mt="xs">Par classe</Text>
             <Accordion multiple variant="separated" value={openClasses}
               onChange={(v) => {
                 const opened = v as string[]
@@ -960,11 +849,6 @@ export default function SettingsPage() {
           </Stack>
         </Tabs.Panel>}
 
-        {isAdmin && (
-          <Tabs.Panel value="utilisateurs" pt="md">
-            <UsersAdmin />
-          </Tabs.Panel>
-        )}
       </Tabs>
 
       <Modal opened={!!confirmTarget} onClose={() => setConfirmTarget(null)}

@@ -27,9 +27,9 @@ from ..models import (
     ScannedPage, Student, StudentResponse, CompetencyEvidence, ExerciseCompetency,
 )
 from . import grading as grader
-from . import error_journal, llm_grader, microcorrection, ocr_shadow, providers, scoring, typography
+from . import error_journal, llm_grader, microcorrection, ocr_cascade, ocr_shadow, providers, scoring, typography
 from .runtime_settings import (construction_audit_share, construction_confidence_threshold,
-                               ocr_confidence_threshold)
+                               ocr_confidence_threshold, ocr_mode)
 from .appreciation import build_appreciation
 from . import construction, late_copies
 from .forgetting import apply_evidence, replay_states, update_level_after_assessment
@@ -37,7 +37,7 @@ from .overlay_queue import overlay_file
 from .pdfgen import (CARD_PAD, EDGE_MARK_SIZE, qcm_answer_rects, render_copy_review,
                      render_overlay)
 
-PHASES = ["uploaded", "split", "identified", "registered", "cropped",
+PHASES = ["uploaded", "split", "identified", "registered", "ocr_local_pending", "cropped",
           "ocr_complete", "ocr_review_pending", "ocr_confirmed", "graded",
           "review_pending", "finalized", "overlay_ready"]
 
@@ -342,7 +342,9 @@ def _decide_existing(db: Session, *, resp: StudentResponse, item: CopyItem,
     return False
 
 
-_READING_PROVIDERS = ("teacher_ocr", "mathpix", "mock", "cv_local")
+# cv_ocr : tableau avec case à choix (sinon il finissait toujours en OCRiser, et
+# update_ocr_reading refusait la reprise) ; ocr_fusion : lecture de la cascade locale.
+_READING_PROVIDERS = ("teacher_ocr", "mathpix", "mock", "cv_local", "cv_ocr", "ocr_fusion")
 
 
 def effective_reading(db: Session, zone_id: str | None) -> OcrAttempt | None:
@@ -489,7 +491,8 @@ def _wrong_answer(right: str, h: int) -> str:
 
 # --------------------------------------------------------------- chemin réel
 
-def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
+def _process_real(db: Session, batch: ScanBatch, assessment: Assessment,
+                  mode_override: str | None = None) -> int:
     import cv2
 
     from . import worker_cv  # import tardif : OpenCV chargé seulement si nécessaire
@@ -497,6 +500,11 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
     # sans clé Mathpix, l'OCR tourne sur son repli déterministe : on lui souffle
     # alors la réponse attendue pour simuler une lecture ; jamais avec une vraie clé.
     ocr_offline = providers.offline(db, "mathpix")
+    # lecture multicouche : `mathpix` (inchangé), `shadow` (Mathpix décide, le local enregistre)
+    # ou `cascade` (le local décide, Mathpix en dernier recours). Voir services.ocr_cascade.
+    ocr_run_mode = mode_override or ocr_mode(db)
+    cascade = ocr_run_mode == "cascade"
+    shadow = ocr_run_mode == "shadow"
     src = db.get(FileObject, batch.source_file_id)
     if not src or not Path(src.storage_path).exists():
         raise ValueError("Fichier scan introuvable")
@@ -720,6 +728,7 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
                 cells_meta = (zone.meta_json or {}).get("cells", [])
                 expected_cells = item.expected_json.get("cells", [])
                 cell_texts, cell_latex, confs = [], [], []
+                ocr_slots: list[tuple[int, "ocr_cascade.CropSpec"]] = []   # (position, découpe) pour le multicouche
                 k = 0  # index PLAT des cases non-"given" (row-major) : aligne
                        # cell_texts, le crop `-c{k}.png` et scans._cell_units.
                 for ri, row in enumerate(cells_meta):
@@ -757,6 +766,15 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
                             confs.append(worker_cv.blank_decision_confidence(
                                 cell_ink, threshold=0.01))
                             continue
+                        if shadow or cascade:
+                            ctype = (expected_cells[ri][ci].get("type") if ri < len(expected_cells)
+                                     and ci < len(expected_cells[ri]) else None)
+                            ocr_slots.append((len(cell_texts), ocr_cascade.make_spec(
+                                cfiltered, ocr_cascade.zone_class_for(ctype), cell_index=len(cell_texts))))
+                        if cascade:
+                            # le local décide : aucun appel Mathpix ici, la case attend sa lecture
+                            cell_texts.append(""); cell_latex.append(""); confs.append(0.0)
+                            continue
                         hint = None
                         if ocr_offline and ri < len(expected_cells) and ci < len(expected_cells[ri]):
                             hint = str(expected_cells[ri][ci]["value"])
@@ -765,12 +783,38 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
                         cell_texts.append(ocr_c["text"])
                         cell_latex.append(ocr_c.get("latex") or "")
                         confs.append(ocr_c["confidence"])
+                if cascade and ocr_slots:
+                    # squelette de la zone : ce que la CV a lu + la place de chaque découpe ;
+                    # la lecture `ocr_fusion` sera écrite quand toutes les découpes seront décidées
+                    by_pos = {pos: spec for pos, spec in ocr_slots}
+                    ocr_cascade.begin_zone(
+                        db, batch, zone, kind="table", corr_id=corr_id, mode="cascade",
+                        positions=[{"spec": by_pos[i]} if i in by_pos else
+                                   {"fixed": {"text": cell_texts[i], "latex": cell_latex[i],
+                                              "conf": confs[i]}} for i in range(len(cell_texts))])
+                    continue
+                # mode ombre : une part des zones ACCEPTÉES par Mathpix passe quand même chez le
+                # professeur (« Contrôle »), pour mesurer la lecture locale sur les cas faciles aussi
+                audit_extra: dict = {}
+                if (shadow and ocr_slots and min(confs, default=0.0) >= ocr_confidence_threshold(db)
+                        and ocr_cascade.shadow_audit_pick(db, zone, batch)):
+                    low = max(0.0, ocr_confidence_threshold(db) - 0.01)
+                    for pos, _spec in ocr_slots:
+                        confs[pos] = min(confs[pos], low)
+                    audit_extra = {"audit": True}
                 min_conf = min(confs) if confs else 1.0
                 db.add(OcrAttempt(zone_id=zone.id, provider="cv_ocr" if any(c.get("input") == "single_choice" for row in expected_cells for c in row) else "mathpix",
                                   raw_json={"cells": cell_texts,
                                             "cell_latex": cell_latex,
-                                            "cell_confidences": confs},
+                                            "cell_confidences": confs, **audit_extra},
                                   confidence=min_conf))
+                if shadow and ocr_slots:
+                    db.flush()
+                    ocr_cascade.begin_zone(
+                        db, batch, zone, kind="table", corr_id=corr_id, mode="shadow",
+                        positions=[{"spec": dict(ocr_slots).get(i)} if i in dict(ocr_slots) else
+                                   {"fixed": {"text": cell_texts[i], "latex": cell_latex[i],
+                                              "conf": confs[i]}} for i in range(len(cell_texts))])
                 n_review += _decide_and_store(
                     db, item=item, zone=zone, student=student,
                     ocr_text="", conf=min_conf, selected=None, corr_id=corr_id,
@@ -785,21 +829,56 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment) -> int:
                         db, item=item, zone=zone, student=student,
                         ocr_text="", conf=cv_conf, selected=None, corr_id=corr_id,
                     queue=queue, defer_grading=True)
+                elif cascade:
+                    # le local décide : une découpe par zone, ou par ligne non vide pour une rédaction
+                    multi = item.response_type == "multiline_text"
+                    if multi:
+                        specs = ocr_cascade.line_specs(res.warped, zone, item, worker_cv.BLANK_INK_THRESHOLD)
+                    else:
+                        specs = [ocr_cascade.make_spec(
+                            filtered, ocr_cascade.zone_class_for(item.expected_json.get("type")))]
+                    if not specs:
+                        ocr_cascade.no_line_zone(db, zone, item, student, corr_id)
+                    else:
+                        ocr_cascade.begin_zone(db, batch, zone, kind="text", corr_id=corr_id, mode="cascade",
+                                               positions=[{"spec": sp} for sp in specs])
                 else:
                     hint = _expected_as_text(item.expected_json) if ocr_offline else None
                     ocr = providers.mathpix_ocr(db, crop_path.read_bytes(), corr_id,
                                                 expected_hint=hint)
+                    ocr_conf, ocr_raw = ocr["confidence"], ocr["raw"]
+                    if (shadow and ocr_conf >= ocr_confidence_threshold(db)
+                            and ocr_cascade.shadow_audit_pick(db, zone, batch)):
+                        # mode ombre : lecture sûre tirée pour le contrôle (voir plus haut)
+                        ocr_conf = max(0.0, ocr_confidence_threshold(db) - 0.01)
+                        ocr_raw = {**(ocr_raw or {}), "audit": True}
                     db.add(OcrAttempt(zone_id=zone.id, provider="mathpix",
-                                      raw_json=ocr["raw"], latex=ocr["latex"],
-                                      text=ocr["text"], confidence=ocr["confidence"]))
+                                      raw_json=ocr_raw, latex=ocr["latex"],
+                                      text=ocr["text"], confidence=ocr_conf))
                     ocr_shadow.record(db, item=item, zone=zone, image=crop_path.read_bytes(),
                                       ocr_text=ocr["text"], ocr_confidence=float(ocr["confidence"]),
                                       threshold=ocr_confidence_threshold(db), correlation_id=corr_id)
+                    if shadow:
+                        multi = item.response_type == "multiline_text"
+                        specs = (ocr_cascade.line_specs(res.warped, zone, item, worker_cv.BLANK_INK_THRESHOLD)
+                                 if multi else [ocr_cascade.make_spec(
+                                     filtered, ocr_cascade.zone_class_for(item.expected_json.get("type")))])
+                        if specs:
+                            db.flush()
+                            ocr_cascade.begin_zone(db, batch, zone, kind="text", corr_id=corr_id, mode="shadow",
+                                                   positions=[{"spec": sp} for sp in specs])
                     n_review += _decide_and_store(
                         db, item=item, zone=zone, student=student,
-                        ocr_text=ocr["text"], conf=ocr["confidence"],
+                        ocr_text=ocr["text"], conf=ocr_conf,
                         selected=None, corr_id=corr_id, queue=queue, defer_grading=True)
         copy.status = "read"
+    if cascade:
+        db.flush()
+        if ocr_cascade.has_pending(db, batch):
+            # la lecture locale (Mac) n'est pas finie : le lot attend, puis reprend seul
+            _set_status(db, batch, "ocr_local_pending", since=datetime.now(timezone.utc).isoformat())
+            ocr_cascade._wake.set()
+            return n_review
     _set_status(db, batch, "cropped")
     _set_status(db, batch, "ocr_complete")
     return n_review
@@ -1026,7 +1105,7 @@ def audit_automatic_decisions(db: Session, assessment_id: str) -> int:
     return opened
 
 
-def process_batch(db: Session, batch: ScanBatch):
+def process_batch(db: Session, batch: ScanBatch, ocr_mode_override: str | None = None):
     """Exécute le pipeline jusqu'à graded/review_pending. Idempotent et reprenable."""
     assessment = db.get(Assessment, batch.assessment_id)
     _set_status(db, batch, "uploaded")
@@ -1036,11 +1115,13 @@ def process_batch(db: Session, batch: ScanBatch):
         return
 
     if batch.source_file_id:
-        _process_real(db, batch, assessment)
+        _process_real(db, batch, assessment, mode_override=ocr_mode_override)
         # scan illisible (aucune page reconnue) : _process_real a posé un message
         # d'erreur clair et s'est arrêté — on ne marque pas « corrigé » un lot vide.
         if batch.error:
             return
+        if batch.status == "ocr_local_pending":
+            return          # la lecture locale reprendra la pipeline (ocr_cascade.resume_ready_batches)
     else:
         _process_mock(db, batch, assessment)
         # Chemin synthétique historique des tests : aucune copie physique à
@@ -1057,6 +1138,12 @@ def process_batch(db: Session, batch: ScanBatch):
             finalize_batch(db, batch)
         return
 
+    _after_reading(db, batch, assessment)
+
+
+def _after_reading(db: Session, batch: ScanBatch, assessment: Assessment) -> None:
+    """Suite commune de la lecture : porte OCRiser puis notation. Appelée par process_batch
+    (lecture Mathpix) et par resume_after_local (lecture locale terminée)."""
     # Halte explicite entre LECTURE et CORRECTION. Le professeur réécrit ici la
     # réponse de l'élève ; aucun corrigé, comparateur Python ou LLM n'a encore été
     # consulté. Une relance recompte les lectures effectives (teacher_ocr inclus),
@@ -1068,6 +1155,15 @@ def process_batch(db: Session, batch: ScanBatch):
         return
     _set_status(db, batch, "ocr_confirmed")
     grade_stored_responses(db, batch)
+
+
+def resume_after_local(db: Session, batch: ScanBatch) -> None:
+    """Reprise d'un lot `ocr_local_pending` : toutes les découpes sont décidées et les lectures
+    `ocr_fusion` écrites. On enchaîne exactement comme après une lecture Mathpix."""
+    assessment = db.get(Assessment, batch.assessment_id)
+    _set_status(db, batch, "cropped")
+    _set_status(db, batch, "ocr_complete")
+    _after_reading(db, batch, assessment)
 
 
 class FinalizeInProgress(RuntimeError):

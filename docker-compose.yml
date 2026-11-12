@@ -48,6 +48,12 @@ services:
     environment:
       MATHPRINT_DATABASE_URL: postgresql+psycopg2://mathprint:${DB_PASSWORD}@db/mathprint
       MATHPRINT_MOCK_MODE: ${MOCK_MODE:-true}
+      # Édition de l'instance : le NAS (app.kironina.com) sert les profs
+      # autonomes seulement ; le centre (établissements, Atelier) tourne sur le
+      # Mac avec MATHPRINT_EDITION=centre. Un seul code pour les deux.
+      MATHPRINT_EDITION: ${MATHPRINT_EDITION:-autonome}
+      # jeton du worker OCR (Mac) ; vide = API /api/ocr-worker fermée (503)
+      MATHPRINT_OCR_WORKER_TOKEN: ${MATHPRINT_OCR_WORKER_TOKEN:-}
       # SECRET_KEY/HMAC_KEY : générés automatiquement au 1er démarrage et
       # persistés dans /data/runtime_secrets.env (services/bootstrap.py) —
       # rien à fournir ici. Le tout premier compte se crée depuis l'écran de

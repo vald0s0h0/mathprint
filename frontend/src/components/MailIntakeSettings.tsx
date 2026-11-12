@@ -1,11 +1,12 @@
 import {
-  Alert, Badge, Box, Button, Card, Group, NumberInput, PasswordInput, Stack,
-  Switch, TagsInput, Text, TextInput, Title,
+  Alert, Badge, Button, Group, NumberInput, PasswordInput, Stack,
+  Switch, TagsInput, Text, TextInput,
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
-import { CheckCircle2, Info, Mail, XCircle } from 'lucide-react'
+import { CheckCircle2, Info, XCircle } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { api } from '../api'
+import SettingsSection from './SettingsSection'
 
 type MailIntakeConfig = {
   host: string
@@ -82,25 +83,13 @@ export default function MailIntakeSettings() {
 
   return (
     <Stack gap="md">
-      <Card withBorder>
-        <Group justify="space-between" align="flex-start" mb="sm">
-          <Group gap="xs">
-            <Mail size={18} />
-            <Box>
-              <Title order={5}>Scans par mail</Title>
-              <Text size="sm" c="dimmed">
-                Relève automatique d’une boîte mail dédiée (ex. celle d’un scanner réseau ADF) :
-                les copies reçues en pièce jointe sont déposées comme au bac à sable, sans action du professeur.
-              </Text>
-            </Box>
-          </Group>
-          <Switch
-            checked={cfg.active}
-            label={cfg.active ? 'Active' : 'Inactive'}
-            onChange={(e) => setCfg({ ...cfg, active: e.currentTarget.checked })}
-          />
-        </Group>
-
+      <SettingsSection title="Scans par mail"
+        description="Relève automatique d’une boîte mail dédiée (ex. celle d’un scanner réseau ADF) : les copies reçues en pièce jointe sont déposées comme au bac à sable, sans action du professeur."
+        action={<Switch size="md"
+          checked={cfg.active}
+          label={cfg.active ? 'Active' : 'Inactive'}
+          onChange={(e) => setCfg({ ...cfg, active: e.currentTarget.checked })}
+        />}>
         {cfg.last_error && (
           <Alert color="red" icon={<XCircle size={16} />} mb="md">
             Dernière relève en échec : {cfg.last_error}
@@ -167,7 +156,7 @@ export default function MailIntakeSettings() {
           Seuls les mails avec une pièce jointe PDF/JPEG/PNG/HEIC contenant une copie Kiro & Nina
           déjà générée (code de page reconnu) sont pris en compte — les autres pièces jointes sont ignorées.
         </Alert>
-      </Card>
+      </SettingsSection>
     </Stack>
   )
 }

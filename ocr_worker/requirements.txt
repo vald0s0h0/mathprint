@@ -1,0 +1,10 @@
+torch>=2.6
+torchvision
+transformers>=5.0
+huggingface_hub
+accelerate
+pillow
+numpy
+psutil
+pyobjc-framework-Vision; sys_platform == "darwin"
+pytest

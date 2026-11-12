@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from ..config import settings
 from ..db import get_db
 from ..deps import current_user
 from ..models import User
@@ -44,7 +45,46 @@ def me(user: User = Depends(current_user), db: Session = Depends(get_db)):
             "service_mode": profile.service_mode if profile else None,
             "program_id": profile.program_id if profile else None,
             "subject_id": profile.subject_id if profile else None,
-            "teaching": teaching_scope(db, user)}
+            "teaching": teaching_scope(db, user), "edition": settings.edition}
+
+
+# Préférences personnelles (roue crantée). Chaque clé retombe sur le réglage
+# global du même nom (SystemSetting), modifiable par l'administrateur.
+PREFERENCE_KEYS = {"correction_shortcuts"}
+
+
+def _preferences(db: Session, user: User) -> dict:
+    from ..models import SystemSetting, UserPreference
+    out = {}
+    for key in sorted(PREFERENCE_KEYS):
+        default = db.get(SystemSetting, key)
+        mine = db.get(UserPreference, (user.id, key))
+        out[key] = {**(default.value_json if default else {}), **(mine.value_json if mine else {})}
+    return out
+
+
+@router.get("/me/preferences")
+def my_preferences(user: User = Depends(current_user), db: Session = Depends(get_db)):
+    return _preferences(db, user)
+
+
+class PreferenceIn(BaseModel):
+    value: dict
+
+
+@router.put("/me/preferences/{key}")
+def set_my_preference(key: str, body: PreferenceIn, user: User = Depends(current_user),
+                      db: Session = Depends(get_db)):
+    from ..models import UserPreference
+    if key not in PREFERENCE_KEYS:
+        raise HTTPException(404, "Préférence inconnue")
+    row = db.get(UserPreference, (user.id, key))
+    if not row:
+        row = UserPreference(user_id=user.id, key=key)
+        db.add(row)
+    row.value_json = body.value
+    db.commit()
+    return _preferences(db, user)
 
 
 class TeachingChoiceIn(BaseModel):

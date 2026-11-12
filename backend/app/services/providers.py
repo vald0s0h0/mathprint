@@ -277,6 +277,49 @@ def mathpix_ocr(db: Session, image_bytes: bytes, correlation_id: str,
             "confidence": confidence, "raw": data}
 
 
+def mathpix_montage_ocr(db: Session, image_bytes: bytes, correlation_id: str) -> dict:
+    """POST /v3/text sur une PLANCHE (plusieurs découpes en colonne) avec `include_line_data` :
+    UN appel pour plusieurs découpes. Même budget, mêmes identifiants, même comptage que
+    `mathpix_ocr`. Retourne {lines: [{text, latex, confidence, cnt}], raw, cost}.
+    Hors clé (mode mock) : aucune ligne, chaque découpe sera relue seule."""
+    cfg = _config(db, "mathpix")
+    if _today_cost(db, "mathpix") > settings.mathpix_daily_cost_limit_eur:
+        raise BudgetExceeded("Quota Mathpix quotidien atteint")
+    if _mock_enabled(db, cfg):
+        return {"lines": [], "raw": {"mock": True}, "cost": 0.0}
+    app_id, app_key = ((cfg.encrypted_secret or "").split(":", 1) + [""])[:2]
+    if not app_id.strip() or not app_key.strip():
+        raise ProviderConfigError("Identifiants Mathpix incomplets : « app_id:app_key » attendus.")
+    r = _post_with_deadline(
+        "https://api.mathpix.com/v3/text",
+        headers={"app_id": app_id.strip(), "app_key": app_key.strip()},
+        json_body={
+            "src": "data:image/png;base64," + __import__("base64").b64encode(image_bytes).decode(),
+            "formats": ["text", "latex_styled"],
+            "include_line_data": True,
+            "metadata": {"improve_mathpix": False},          # confidentialité (§6.3)
+        },
+        timeout=60, provider="Mathpix",
+    )
+    if r.status_code in (401, 403):
+        raise ProviderConfigError(f"Mathpix a refusé les identifiants ({r.status_code}).")
+    r.raise_for_status()
+    data = r.json()
+    _record(db, "mathpix", cfg.model or "v3/text", "ocr_montage", units=1, cost=0.004,
+            correlation_id=correlation_id)
+    lines = []
+    for ln in data.get("line_data") or []:
+        try:
+            conf = float(ln.get("confidence", ln.get("confidence_rate", 0.0)))
+        except (TypeError, ValueError):
+            conf = 0.0
+        if not __import__("math").isfinite(conf) or not 0.0 <= conf <= 1.0:
+            conf = 0.0
+        lines.append({"text": ln.get("text", ""), "latex": ln.get("text_display") or ln.get("text", ""),
+                      "confidence": conf, "cnt": ln.get("cnt") or []})
+    return {"lines": lines, "raw": data, "cost": 0.004}
+
+
 # ------------------------------------------------------------------- DeepSeek
 
 def deepseek_json(db: Session, operation: str, system: str, user_payload: dict,

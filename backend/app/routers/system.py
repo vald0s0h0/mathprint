@@ -65,7 +65,7 @@ def _indigo_status(db: Session) -> dict:
 
 # --------------------------------------------------------------- sauvegardes
 
-@router.post("/backup", dependencies=[Depends(require_role("admin", "teacher"))])
+@router.post("/backup", dependencies=[Depends(require_role("admin"))])
 def backup(db: Session = Depends(get_db), user: User = Depends(current_user)):
     """Sauvegarde de la base (dump SQLite ou pg_dump) dans /data/backups (§11.6)."""
     out_dir = settings.data_dir / BACKUP_DIR_KEY
@@ -233,7 +233,7 @@ def error_logs(n: int = 50):
     return {"entries": errorlog.tail(n)}
 
 
-@router.post("/logs/clear", dependencies=[Depends(require_role("admin", "teacher"))])
+@router.post("/logs/clear", dependencies=[Depends(require_role("admin"))])
 def clear_error_logs():
     from ..services import errorlog
     errorlog.clear()

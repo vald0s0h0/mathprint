@@ -86,6 +86,10 @@ def teaching_scope(db: Session, user) -> dict:
                .filter(SchoolClass.archived_at.is_(None)))
     profile = db.query(TeacherProfile).filter_by(user_id=user.id).first()
     autonomous = autonomous_profile(db, user)
+    if user.role != "teacher" and db.info.get("zone") in ("atelier", "admin"):
+        # Admin dans l'Atelier ou l'administration : tout le catalogue de
+        # l'instance, pas ses propres classes de prof (zone « user »).
+        profile = autonomous = None
     rows = classes.filter(ClassTeaching.teacher_id == profile.id).all() if profile else []
     if not autonomous:
         rows = rows or classes.all()

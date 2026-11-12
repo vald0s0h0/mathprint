@@ -26,6 +26,8 @@ export type Lot = {
   distributed: boolean
   stale: boolean
   rebuilding: boolean
+  /** Lecture locale sur le Mac (mode cascade) : avancement et présence du worker. */
+  ocrLocal?: { decided: number; total: number; worker_online: boolean; waiting_hours?: number; timeout_hours?: number; overdue?: boolean } | null
   /** Élèves du lot (nommés à côté du pipeline s'il y en a moins de 4). */
   students: string[]
   /** Dépôt et pages du lot (infobulle du badge). */
@@ -41,6 +43,8 @@ export type LotHandlers = {
   onOcr: () => void
   onCorrect: (scope: 'flagged' | 'all') => void
   onRetry: () => void
+  /** Lot en attente du Mac depuis trop longtemps : le relire avec Mathpix. */
+  onOcrFallback?: () => void
   onRetryLlm?: () => void
   onRefine: () => void
   onRegenerate: () => void
@@ -51,7 +55,7 @@ export type LotHandlers = {
 }
 
 // largeur de « 35 copies »
-const LOT_W = 92
+const LOT_W = 108
 
 export default function ScanLotRow({ lot, h }: { lot: Lot; h: LotHandlers }) {
   const ready = lot.stage === 'ready'
@@ -67,7 +71,7 @@ export default function ScanLotRow({ lot, h }: { lot: Lot; h: LotHandlers }) {
   return (
     <>
       <Tooltip label={lot.info} disabled={!lot.info} multiline maw={320}>
-        <Badge size="lg" variant="light" color="indigo" radius="sm" w={LOT_W} mr={16}
+        <Badge size="lg" variant="light" color="indigo" radius="sm" tt="none" w={LOT_W} mr={16}
           data-testid={`scan-lot-${lot.wave}`} style={{ fontVariantNumeric: 'tabular-nums' }}>
           {lot.stage === 'awaiting' ? '—' : `${n} copie${n > 1 ? 's' : ''}`}
         </Badge>
@@ -106,7 +110,24 @@ export default function ScanLotRow({ lot, h }: { lot: Lot; h: LotHandlers }) {
           {lot.stage === 'conflict' && (
             <LateConflictButton batchId={h.batchId} count={lot.conflicts} onResolved={h.onChanged} />
           )}
-          {lot.stage === 'processing' && (
+          {lot.stage === 'processing' && lot.ocrLocal && (
+            <Tooltip label={lot.ocrLocal.worker_online ? 'Les moteurs locaux lisent les écritures'
+              : 'Le worker n\'a pas sondé le serveur depuis plus de 2 minutes'} multiline maw={280}>
+              <Button size="xs" variant="light" color={lot.ocrLocal.worker_online ? 'blue' : 'gray'}
+                loading={lot.ocrLocal.worker_online} disabled data-testid="ocr-local-status">
+                {lot.ocrLocal.worker_online
+                  ? `Lecture en cours sur le Mac (${lot.ocrLocal.decided}/${lot.ocrLocal.total})`
+                  : 'Mac hors ligne, la lecture reprendra à son retour'}
+              </Button>
+            </Tooltip>
+          )}
+          {lot.stage === 'processing' && lot.ocrLocal?.overdue && h.onOcrFallback && (
+            <Tooltip multiline maw={300} label={`En attente du Mac depuis ${Math.round(lot.ocrLocal.waiting_hours ?? 0)} h : relire ce lot avec Mathpix, comme avant la lecture locale`}>
+              <Button size="xs" color="orange" variant="light" leftSection={<RefreshCw size={14} />}
+                onClick={h.onOcrFallback} data-testid="ocr-fallback">Lire avec Mathpix</Button>
+            </Tooltip>
+          )}
+          {lot.stage === 'processing' && !lot.ocrLocal && (
             <Button size="xs" variant="light" loading disabled>Correction en cours…</Button>
           )}
           {lot.stage === 'ocr_review' && (

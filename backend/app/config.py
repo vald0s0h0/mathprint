@@ -36,6 +36,13 @@ class Settings(BaseSettings):
     secret_key: str = "change-me-on-nas"          # JWT — voir bootstrap.py
     hmac_key: str = "change-me-hmac-key"          # signature des QR pages — idem
     session_hours: int = 24 * 30  # 30 jours : le professeur ne ressaisit pas son mot de passe chaque jour
+    # Édition de l'instance (un seul code pour les deux) :
+    #   • centre   : centre de service local (Mac) — établissements accompagnés,
+    #     Atelier (logistique, impression, scans), administration complète ;
+    #   • autonome : app.kironina.com (NAS) — profs autonomes seulement, sans
+    #     établissements, Atelier ni comptes Atelier.
+    # Les deux bases sont indépendantes : rien n'est synchronisé de l'une à l'autre.
+    edition: str = "centre"
 
     # --- Registre de modèles par défaut (RM-011 : jamais codé en dur ailleurs) ---
     deepseek_model: str = "deepseek-v4-flash"
@@ -233,6 +240,9 @@ class Settings(BaseSettings):
     # les notes, pour décider sur preuves de le faire passer avant le professeur.
     ocr_llm_shadow: bool = False
     mathpix_concurrency: int = 3
+    # Jeton du worker OCR (Mac) pour /api/ocr-worker/*, distinct de l'authentification
+    # des utilisateurs. Vide = API fermée. Variable MATHPRINT_OCR_WORKER_TOKEN.
+    ocr_worker_token: str = ""
     mathpix_daily_limit: int = 500
     # plafond de dépense Mathpix sur 24 h glissantes (OCR des copies élèves).
     # Réglage PROPRE depuis le 02/08 : il valait llm_daily_cost_limit_eur × 5,

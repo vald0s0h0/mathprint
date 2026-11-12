@@ -37,6 +37,8 @@ type Batch = {
   // (« Affiner la correction », backend services.refine), et sa régénération
   overlay_stale: boolean; overlay_rebuilding: boolean
   error: string | null; pending_reviews: number; pending_ocr: number; pending_llm: number
+  // lecture locale sur le Mac (mode cascade) : découpes lues / total, worker joignable ?
+  ocr_local?: { decided: number; total: number; worker_online: boolean; waiting_hours?: number; timeout_hours?: number; overdue?: boolean } | null
   // élèves jamais revenus à la finalisation (jamais pénalisés, cf. services
   // .pipeline.finalize_batch) — le prof doit savoir combien manquent sur ce sujet
   absent_count: number
@@ -54,8 +56,11 @@ type Batch = {
 // une case à corriger d'un tableau / de cases à trous (table_fill, multi_blank) :
 // sa réponse attendue lisible, ce que l'OCR a lu, le crédit calculé par le moteur
 // (auto_credit) et celui éventuellement déjà posé par le professeur (teacher_credit).
+// candidat de lecture proposé par les moteurs locaux (OCR multicouche)
+type OcrCandidate = { surface: string; engines: string[]; voices: number }
 type Cell = {
   index: number; label: string; expected_display: string
+  ocr_candidates?: OcrCandidate[]
   // crédit 1 (juste) / 0.5 (demi-point) / 0 (faux) ; null = non tranché
   ocr_text: string; ocr_latex: string
   auto_credit: number | null; teacher_credit: number | null
@@ -65,6 +70,8 @@ type GradeMode = 'cells' | 'binary' | 'partial'
 // une réponse d'élève à (re)corriger : signalée par le moteur (flagged) ou
 // simplement relue par le professeur. Clé de résolution = response_id.
 type Item = {
+  // lecture multicouche : élément tiré pour le contrôle (« Contrôle »), candidats des moteurs
+  ocr_audit?: boolean; ocr_candidates?: OcrCandidate[]
   response_id: string; review_id: string | null; flagged: boolean
   category: string | null; student: string; student_order: number; statement: string
   expected: Record<string, unknown>; correction: string
@@ -508,10 +515,11 @@ export default function Corrections() {
       r.status === 'unrecognized' || r.status === 'error').length,
   }), [sandboxResults])
 
-  // raccourcis de correction paramétrés (Réglages → Pédagogie), repli défauts
+  // raccourcis de correction : les miens (roue crantée), sinon le défaut de
+  // l'instance (Paramètres admin), sinon les défauts du code
   useEffect(() => {
-    api.get<Record<string, Partial<Shortcuts>>>('/api/settings/system')
-      .then((s) => setShortcuts({ ...DEFAULT_SHORTCUTS, ...(s.correction_shortcuts ?? {}) }))
+    api.get<{ correction_shortcuts?: Partial<Shortcuts> }>('/api/auth/me/preferences')
+      .then((p) => setShortcuts({ ...DEFAULT_SHORTCUTS, ...(p.correction_shortcuts ?? {}) }))
       .catch(() => {})
     // sans clé Mathpix, la correction est indisponible : on prévient et on bloque
     api.get<{ mathpix_configured: boolean; correction_llm_configured: boolean }>('/api/scans/config')
@@ -664,6 +672,29 @@ export default function Corrections() {
       // L'unité validée disparaît de la file. À droite, sa remplaçante prend le
       // même index ; à gauche, on revient sur l'index précédent.
       await loadOcrItems(b, direction > 0 ? ocrIdx : ocrIdx - 1)
+    } catch (e) {
+      notifications.show({ color: 'red', message: (e as Error).message })
+    } finally {
+      setSavingOcr(false)
+    }
+  }
+
+  // puce de candidat : remplit le champ, le professeur valide toujours lui-même
+  function fillOcrCandidate(surface: string) {
+    setOcrLatex(surface)
+    if (ocrLatexRef.current) ocrLatexRef.current.innerText = surface
+    ocrLatexRef.current?.focus()
+  }
+
+  // « C'est juste » (élément Contrôle) : confirme la lecture acceptée automatiquement
+  async function confirmCurrentOcr() {
+    const b = ocrBatch, unit = currentOcrUnit
+    if (!b || !unit || savingOcr) return
+    setSavingOcr(true)
+    try {
+      const r = await api.post<{ remaining: number }>(`/api/scans/responses/${unit.respId}/ocr/confirm`)
+      if (r.remaining === 0) { await finishOcr(b); return }
+      await loadOcrItems(b, ocrIdx)
     } catch (e) {
       notifications.show({ color: 'red', message: (e as Error).message })
     } finally {
@@ -835,6 +866,18 @@ export default function Corrections() {
     }
   }
 
+  // Lot en attente du Mac depuis trop longtemps : abandonne la lecture locale, relit avec Mathpix
+  async function ocrFallback(b: Batch) {
+    if (!window.confirm('Relire ce lot avec Mathpix (comme avant la lecture locale) ? La lecture locale en cours est abandonnée.')) return
+    try {
+      await api.post(`/api/scans/batches/${b.id}/ocr/fallback-mathpix`)
+      notifications.show({ color: 'blue', message: 'Lot relu avec Mathpix' })
+      refresh()
+    } catch (e) {
+      notifications.show({ color: 'red', message: (e as Error).message })
+    }
+  }
+
   // Recalcule/régénère les copies corrigées après un ajustement manuel — la
   // finalisation elle-même est désormais automatique dès la dernière revue
   // tranchée (halte « Valider la correction » supprimée, 02/09) ; ce bouton
@@ -904,6 +947,7 @@ export default function Corrections() {
       printed: b.overlay_printed, distributed: b.overlay_distributed,
       stale: b.overlay_stale, rebuilding: b.overlay_rebuilding,
       students: b.students ?? [],
+      ocrLocal: b.ocr_local ?? null,
       info: [`${b.page_count} p.`, fmt(b.created_at)].filter(Boolean).join(' · '),
     }
     const late: Lot[] = (b.late_jobs ?? []).map((job) => ({
@@ -930,6 +974,7 @@ export default function Corrections() {
       onOcr: () => openOcr(scoped),
       onCorrect: (s) => openCorrection(scoped, s),
       onRetry: () => retry(b),
+      onOcrFallback: isMain ? () => ocrFallback(b) : undefined,
       onRetryLlm: isMain ? () => retry(b) : undefined,
       onRefine: () => setRefine({ id: b.id, wave: (b.late_jobs ?? []).length ? lot.wave : undefined }),
       onRegenerate: () => regenerateOverlay(b),
@@ -1256,7 +1301,14 @@ export default function Corrections() {
           {currentOcrItem && currentOcrUnit ? (
             <>
               <Group justify="space-between">
-                <Text size="sm" fw={600}>{currentOcrItem.student}</Text>
+                <Group gap={8}>
+                  <Text size="sm" fw={600}>{currentOcrItem.student}</Text>
+                  {currentOcrItem.ocr_audit && (
+                    <Tooltip label="Lecture sûre tirée au hasard pour mesurer la fiabilité de la lecture automatique : confirmez-la ou corrigez-la" multiline maw={280}>
+                      <Badge color="grape" variant="light" data-testid="ocr-audit-badge">Contrôle</Badge>
+                    </Tooltip>
+                  )}
+                </Group>
                 <Text size="xs" c="var(--mp-text-blue)" fw={600}>
                   Reprise de la réponse élève — aucune note n'est attribuée ici
                 </Text>
@@ -1291,6 +1343,21 @@ export default function Corrections() {
                     <Text size="xs" c="dimmed" mb={6}>
                       Entrée valide · ←/→ valide et navigue · Maj+Entrée ajoute une ligne au raisonnement
                     </Text>
+                    {(() => {
+                      const cands = currentOcrCell?.ocr_candidates ?? currentOcrItem.ocr_candidates ?? []
+                      return cands.length > 0 && (
+                        <Group gap={6} mb={8} data-testid="ocr-candidates">
+                          <Text size="xs" c="dimmed">Lu par les moteurs :</Text>
+                          {cands.map((c) => (
+                            <Tooltip key={c.surface} multiline maw={260}
+                              label={`${c.voices} voix · ${c.engines.join(', ')}`}>
+                              <Button size="compact-xs" variant="light" color="blue"
+                                onClick={() => fillOcrCandidate(c.surface)}>{c.surface}</Button>
+                            </Tooltip>
+                          ))}
+                        </Group>
+                      )
+                    })()}
                     <Box ref={ocrLatexRef} contentEditable suppressContentEditableWarning role="textbox"
                       tabIndex={0}
                       aria-label="Modifier le LaTeX" key={currentOcrUnit.key}
@@ -1317,6 +1384,10 @@ export default function Corrections() {
               )}
 
               <Group justify="flex-end">
+                {currentOcrItem.ocr_audit && (
+                  <Button variant="light" color="grape" loading={savingOcr} onClick={confirmCurrentOcr}
+                    data-testid="ocr-confirm">C'est juste</Button>
+                )}
                 <Button color="blue" loading={savingOcr} onClick={() => saveCurrentOcr(1)}>
                   Valider la lecture et continuer <Kbd ml={8}>Entrée</Kbd>
                 </Button>

@@ -1,0 +1,35 @@
+# Profil CUDA (RTX 3070, 6 Go) — PRÉVU, NON TESTÉ : aucune machine CUDA n'a été disponible.
+# Copier en `config.toml` sur la machine CUDA (ou lancer `python -m ocr_worker --config ocr_worker/config.cuda.example.toml`).
+# Mettre en place avant : `ocr_worker/requirements-cuda.txt`, puis le test de parité (`scripts/parity.py`).
+name = "pc-3070"
+device = "cuda"
+poll_seconds = 30
+claim_batch = 16            # 6 Go : paquets plus petits
+
+# Même serveur que le Mac : les baux autorisent plusieurs workers en parallèle (une tâche n'est jamais
+# réservée deux fois). Le champ `device` de chaque lecture permet au rapport de comparer les deux machines.
+[[servers]]
+name = "local"
+url = "http://IP-DU-MAC:8787"            # ou l'URL Tailscale du Mac / du NAS
+token_env = "MATHPRINT_OCR_WORKER_TOKEN"
+
+# Apple Vision n'existe pas hors macOS : désactivé automatiquement. Un seul modèle en mémoire à la fois
+# (la boucle de vagues le garantit) : Uni-MuMER pèse 4,4 Go en poids, c'est le plus gros.
+[engines.trocr]
+impl = "trocr"
+model = "agomberto/trocr-large-handwritten-fr"
+processor = "microsoft/trocr-large-handwritten"
+dtype = "fp16"
+backend = "cuda"
+
+[engines.unimumer]
+impl = "unimumer"
+model = "phxember/Uni-MuMER-Qwen3.5-2B"
+dtype = "bf16"             # Ampere gère le bf16
+backend = "cuda"
+
+[engines.lighton]
+impl = "lighton"
+model = "lightonai/LightOnOCR-2-1B"
+dtype = "bf16"
+backend = "cuda"
