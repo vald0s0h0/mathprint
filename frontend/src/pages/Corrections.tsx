@@ -23,6 +23,7 @@ import { type Segment, stepWidths } from '../components/SegmentBar'
 import { type LateJob, lateJobNames } from '../components/LateJobs'
 import ScanLotRow, { type Lot, type LotHandlers, type LotStage } from '../components/ScanLotRow'
 import PrintButton from '../components/PrintButton'
+import OcrAssistant, { type OcrBatchRef } from '../components/OcrAssistant'
 import RefineCorrectionModal from '../components/RefineCorrectionModal'
 import { useAppState } from '../state/AppState'
 
@@ -116,7 +117,6 @@ type Unit = {
   attention: boolean         // avait besoin du professeur au chargement (OCR KO)
   responseRank: number       // ordre métier de la file (QCM → matching → écrit → raisonnement)
 }
-type OcrUnit = { key: string; respId: string; cellIndex: number | null }
 // raccourcis de correction manuelle (paramétrables, cf. Réglages → Pédagogie)
 type Shortcuts = { full: string; two_thirds: string; one_third: string; zero: string }
 const DEFAULT_SHORTCUTS: Shortcuts = { full: 'f', two_thirds: 'd', one_third: 's', zero: 'q' }
@@ -264,33 +264,6 @@ function buildUnits(items: Item[], scope: Scope): Unit[] {
   return us
 }
 
-function buildOcrUnits(items: Item[], threshold: number): OcrUnit[] {
-  const out: OcrUnit[] = []
-  for (const item of items) {
-    if (item.response_type === 'table_fill' || item.response_type === 'multi_blank') {
-      const confs = item.cell_confidences ?? []
-      item.cells.forEach((_, i) => {
-        if (!confs.length || (confs[i] ?? item.ocr_confidence ?? 0) < threshold)
-          out.push({ key: `${item.response_id}:${i}`, respId: item.response_id, cellIndex: i })
-      })
-    } else {
-      out.push({ key: `${item.response_id}:-`, respId: item.response_id, cellIndex: null })
-    }
-  }
-  const byResponse = new Map(items.map((item) => [item.response_id, item]))
-  out.sort((a, b) => {
-    const ia = byResponse.get(a.respId)!, ib = byResponse.get(b.respId)!
-    const family = (it: Item) => it.response_type.startsWith('qcm')
-      || it.response_type === 'checkbox_grid' || it.response_type === 'matching' ? 0
-        : it.response_type === 'multiline_text' || it.response_type === 'composite' ? 2 : 1
-    return family(ia) - family(ib)
-      || ia.group_key.localeCompare(ib.group_key)
-      || (a.cellIndex ?? -1) - (b.cellIndex ?? -1)
-      || ia.student_order - ib.student_order
-  })
-  return out
-}
-
 // Lecture CV d'un tracé. Sa note s'applique au-dessus du seuil réglé ; en dessous,
 // ou quand la copie est tirée pour le contrôle par échantillon, le professeur
 // tranche — et ses décisions servent au calibrage du seuil.
@@ -372,81 +345,6 @@ function ScanImage({ responseId, cellIndex, expectedOverlay = false, large = fal
   )
 }
 
-function OcrScan({ item, cellIndex, selectedChoices, selectedPairs, matchStart,
-  onChoice, onMatchPoint }: {
-  item: Item; cellIndex: number | null; selectedChoices: number[]; selectedPairs: number[][]
-  matchStart: number | null; onChoice: (box: { index: number; row?: number | null
-    col?: number | null }) => void; onMatchPoint: (side: 'left' | 'right', index: number) => void
-}) {
-  const [url, setUrl] = useState<string | null>(null)
-  useEffect(() => {
-    let revoke: string | null = null
-    const q = cellIndex != null ? `?cell=${cellIndex}` : ''
-    fetch(`/api/scans/responses/${item.response_id}/scan${q}`,
-      { headers: { Authorization: `Bearer ${getToken()}` } })
-      .then((r) => r.ok ? r.blob() : Promise.reject(new Error(`${r.status}`)))
-      .then((b) => { revoke = URL.createObjectURL(b); setUrl(revoke) })
-      .catch(() => setUrl(null))
-    return () => { if (revoke) URL.revokeObjectURL(revoke) }
-  }, [item.response_id, cellIndex])
-  const controls = item.ocr_controls
-  const isGrid = item.response_type === 'checkbox_grid'
-  const chosen = (box: { index: number; row?: number | null; col?: number | null }) =>
-    isGrid && box.row != null && box.col != null
-      ? selectedChoices[box.row] === box.col : selectedChoices.includes(box.index)
-  const left = controls?.left ?? [], right = controls?.right ?? []
-  const point = (side: 'left' | 'right', index: number) =>
-    (side === 'left' ? left : right).find((p) => p.index === index)
-  return (
-    <Box style={{ display: 'inline-block', position: 'relative', maxWidth: '100%' }}>
-      {url ? <img src={url} alt="Scan de la réponse de l'élève"
-        style={{ display: 'block', maxWidth: '100%', maxHeight: 430, objectFit: 'contain',
-          border: '1px solid var(--mp-border-subtle)', borderRadius: 4 }} />
-        : <Text size="xs" c="dimmed" p="sm">Chargement du scan…</Text>}
-      {url && controls?.kind === 'boxes' && (controls.boxes ?? []).map((box) => (
-        <button key={`${box.row ?? '-'}:${box.col ?? box.index}`}
-          type="button" aria-label={`Reprendre la coche ${box.index + 1}`}
-          onClick={() => onChoice(box)} style={{ position: 'absolute', cursor: 'pointer',
-            left: `${box.x * 100}%`, top: `${box.y * 100}%`,
-            width: `${Math.max(box.w, .018) * 100}%`, height: `${Math.max(box.h, .025) * 100}%`,
-            minWidth: 12, minHeight: 12, padding: 0,
-            // fond TRANSPARENT : la coche de l'élève doit rester visible sous la
-            // case cliquable (un fond blanc la masquait, cf. grilles/tableaux) ;
-            // case retenue = voile bleu translucide, pas un aplat opaque.
-            border: '2px solid #1971c2',
-            background: chosen(box) ? 'rgba(25, 113, 194, 0.35)' : 'transparent' }} />
-      ))}
-      {url && controls?.kind === 'matching' && (
-        <>
-          <svg aria-hidden style={{ position: 'absolute', inset: 0, width: '100%', height: '100%',
-            pointerEvents: 'none' }}>
-            {selectedPairs.map(([li, ri], i) => {
-              const a = point('left', li), b = point('right', ri)
-              // ORANGE épais et translucide : l'encre de l'élève (souvent bleue)
-              // reste visible PAR-DESSOUS — un trait élève manquant se voit
-              // tout de suite, au lieu de se confondre avec la reprise.
-              return a && b ? <line key={i} x1={`${a.x * 100}%`} y1={`${a.y * 100}%`}
-                x2={`${b.x * 100}%`} y2={`${b.y * 100}%`} stroke="#fd7e14" strokeWidth="10"
-                strokeOpacity="0.4" strokeLinecap="round" /> : null
-            })}
-          </svg>
-          {[...left.map((p) => ({ ...p, side: 'left' as const })),
-            ...right.map((p) => ({ ...p, side: 'right' as const }))].map((p) => (
-              <button type="button" key={`${p.side}:${p.index}`}
-                aria-label={`Point ${p.side === 'left' ? 'gauche' : 'droit'} ${p.index + 1}`}
-                onClick={() => onMatchPoint(p.side, p.index)} style={{ position: 'absolute',
-                  left: `${p.x * 100}%`, top: `${p.y * 100}%`, transform: 'translate(-50%, -50%)',
-                  width: 18, height: 18, borderRadius: '50%', cursor: 'pointer', padding: 0,
-                  border: '3px solid #fd7e14',
-                  background: p.side === 'left' && matchStart === p.index
-                    ? 'rgba(253, 126, 20, 0.5)' : 'transparent' }} />
-            ))}
-        </>
-      )}
-    </Box>
-  )
-}
-
 // pastille d'état de la note courante d'une réponse dans la file de correction
 function ItemStatus({ it }: { it: Item }) {
   if (it.cancelled) return <Badge size="sm" variant="light" color="gray">question annulée</Badge>
@@ -470,16 +368,7 @@ export default function Corrections() {
   const [items, setItems] = useState<Item[]>([])
   const [preview, setPreview] = useState<{ id: string; wave?: number } | null>(null)
   const [reviewBatch, setReviewBatch] = useState<Batch | null>(null)
-  const [ocrBatch, setOcrBatch] = useState<Batch | null>(null)
-  const [ocrItems, setOcrItems] = useState<Item[]>([])
-  const [ocrUnits, setOcrUnits] = useState<OcrUnit[]>([])
-  const [ocrIdx, setOcrIdx] = useState(0)
-  const [ocrLatex, setOcrLatex] = useState('')
-  const [ocrChoices, setOcrChoices] = useState<number[]>([])
-  const [ocrPairs, setOcrPairs] = useState<number[][]>([])
-  const [matchStart, setMatchStart] = useState<number | null>(null)
-  const [savingOcr, setSavingOcr] = useState(false)
-  const ocrLatexRef = useRef<HTMLDivElement>(null)
+  const [ocrBatch, setOcrBatch] = useState<OcrBatchRef | null>(null)
   const [scope, setScope] = useState<Scope>('flagged')
   const [mathpixOk, setMathpixOk] = useState(true)
   const [llmOk, setLlmOk] = useState(true)
@@ -608,139 +497,16 @@ export default function Corrections() {
     }
   }
 
-  const loadOcrItems = useCallback(async (b: Batch, desired = 0) => {
-    const rs = await api.get<Item[]>(`/api/scans/batches/${b.id}/ocr-items?${waveQuery(b).slice(1)}`)
-    const nextUnits = buildOcrUnits(rs, b.ocr_threshold || 0.9)
-    setOcrItems(rs); setOcrUnits(nextUnits)
-    setOcrIdx(Math.max(0, Math.min(desired, nextUnits.length - 1)))
-    return nextUnits.length
-  }, [])
-
-  async function openOcr(b: Batch) {
-    setOcrBatch(b)
-    try {
-      await loadOcrItems(b)
-    } catch (e) {
-      notifications.show({ color: 'red', message: (e as Error).message })
-      setOcrBatch(null)
-    }
+  // Assistant OCRiser (components/OcrAssistant) : même fenêtre pour le professeur
+  // et pour l'Atelier, en cascade comme en Mathpix seul.
+  function openOcr(b: Batch) {
+    setOcrBatch({ id: b.id, assessment_title: b.assessment_title,
+      ocr_threshold: b.ocr_threshold || 0.9, query: waveQuery(b).slice(1) })
   }
 
   function closeOcr() {
-    setOcrBatch(null); setOcrItems([]); setOcrUnits([]); setOcrIdx(0); refresh()
+    setOcrBatch(null); refresh()
   }
-
-  const currentOcrUnit = ocrUnits[ocrIdx]
-  const currentOcrItem = currentOcrUnit
-    ? ocrItems.find((x) => x.response_id === currentOcrUnit.respId) ?? null : null
-  const currentOcrCell = currentOcrItem && currentOcrUnit?.cellIndex != null
-    ? currentOcrItem.cells[currentOcrUnit.cellIndex] ?? null : null
-
-  useEffect(() => {
-    if (!currentOcrItem) return
-    const text = currentOcrCell?.ocr_text ?? currentOcrItem.ocr_text ?? ''
-    const latex = currentOcrCell?.ocr_latex || currentOcrItem.ocr_latex || text
-    setOcrLatex(latex)
-    setOcrChoices([...(currentOcrItem.selected_choices ?? [])])
-    setOcrPairs((currentOcrItem.selected_pairs ?? []).map((p) => [...p]))
-    setMatchStart(null)
-    window.setTimeout(() => ocrLatexRef.current?.focus(), 0)
-  }, [currentOcrItem?.response_id, currentOcrUnit?.cellIndex])
-
-  async function finishOcr(b: Batch) {
-    await api.post(`/api/scans/batches/${b.id}/ocr/complete`)
-    notifications.show({ color: 'blue', message: 'Lecture validée — correction automatique démarrée' })
-    closeOcr()
-  }
-
-  async function saveCurrentOcr(direction: -1 | 1 = 1) {
-    const b = ocrBatch, unit = currentOcrUnit, item = currentOcrItem
-    if (!b || !unit || !item || savingOcr) return
-    setSavingOcr(true)
-    try {
-      const editedLatex = ocrLatexRef.current?.innerText ?? ocrLatex
-      const body = item.response_type.startsWith('qcm') || item.response_type === 'checkbox_grid'
-        ? { selected_choices: ocrChoices }
-        : item.response_type === 'matching'
-          ? { selected_pairs: ocrPairs }
-          : { text: editedLatex, latex: editedLatex, cell_index: unit.cellIndex }
-      const r = await api.post<{ remaining: number }>(`/api/scans/responses/${unit.respId}/ocr`, body)
-      if (r.remaining === 0) {
-        await finishOcr(b)
-        return
-      }
-      // L'unité validée disparaît de la file. À droite, sa remplaçante prend le
-      // même index ; à gauche, on revient sur l'index précédent.
-      await loadOcrItems(b, direction > 0 ? ocrIdx : ocrIdx - 1)
-    } catch (e) {
-      notifications.show({ color: 'red', message: (e as Error).message })
-    } finally {
-      setSavingOcr(false)
-    }
-  }
-
-  // puce de candidat : remplit le champ, le professeur valide toujours lui-même
-  function fillOcrCandidate(surface: string) {
-    setOcrLatex(surface)
-    if (ocrLatexRef.current) ocrLatexRef.current.innerText = surface
-    ocrLatexRef.current?.focus()
-  }
-
-  // « C'est juste » (élément Contrôle) : confirme la lecture acceptée automatiquement
-  async function confirmCurrentOcr() {
-    const b = ocrBatch, unit = currentOcrUnit
-    if (!b || !unit || savingOcr) return
-    setSavingOcr(true)
-    try {
-      const r = await api.post<{ remaining: number }>(`/api/scans/responses/${unit.respId}/ocr/confirm`)
-      if (r.remaining === 0) { await finishOcr(b); return }
-      await loadOcrItems(b, ocrIdx)
-    } catch (e) {
-      notifications.show({ color: 'red', message: (e as Error).message })
-    } finally {
-      setSavingOcr(false)
-    }
-  }
-
-  function toggleOcrChoice(box: { index: number; row?: number | null; col?: number | null }) {
-    if (currentOcrItem?.response_type === 'checkbox_grid' && box.row != null && box.col != null) {
-      setOcrChoices((prev) => {
-        const next = [...prev]
-        while (next.length <= box.row!) next.push(-1)
-        next[box.row!] = next[box.row!] === box.col ? -1 : box.col!
-        return next
-      })
-    } else {
-      setOcrChoices((prev) => prev.includes(box.index)
-        ? prev.filter((x) => x !== box.index) : [...prev, box.index].sort((a, c) => a - c))
-    }
-  }
-
-  function toggleMatchPoint(side: 'left' | 'right', index: number) {
-    if (side === 'left') { setMatchStart((v) => v === index ? null : index); return }
-    if (matchStart == null) return
-    setOcrPairs((prev) => {
-      const exists = prev.some(([l, r]) => l === matchStart && r === index)
-      return exists ? prev.filter(([l, r]) => l !== matchStart || r !== index)
-        : [...prev.filter(([l, r]) => l !== matchStart && r !== index), [matchStart, index]]
-    })
-    setMatchStart(null)
-  }
-
-  useEffect(() => {
-    if (!ocrBatch || !currentOcrItem) return
-    const h = (e: KeyboardEvent) => {
-      if ((e.target as HTMLElement).tagName === 'TEXTAREA'
-          || (e.target as HTMLElement).isContentEditable) return
-      if (e.key === 'Enter' || e.key === 'ArrowRight') {
-        e.preventDefault(); saveCurrentOcr(1)
-      } else if (e.key === 'ArrowLeft') {
-        e.preventDefault(); saveCurrentOcr(-1)
-      }
-    }
-    window.addEventListener('keydown', h)
-    return () => window.removeEventListener('keydown', h)
-  })
 
   async function changeScope(s: Scope) {
     if (!reviewBatch) return
@@ -1036,12 +802,6 @@ export default function Corrections() {
   const remaining = new Set(items
     .filter((it) => it.flagged && it.decision_source !== 'teacher')
     .map((it) => it.response_id)).size
-  const ocrSameGroup = currentOcrItem ? ocrUnits.filter((u) => {
-    const it = ocrItems.find((x) => x.response_id === u.respId)
-    return it?.group_key === currentOcrItem.group_key && u.cellIndex === currentOcrUnit?.cellIndex
-  }) : []
-  const ocrSamePos = currentOcrUnit
-    ? ocrSameGroup.findIndex((u) => u.key === currentOcrUnit.key) + 1 : 0
 
   return (
     <Stack gap="lg">
@@ -1271,133 +1031,7 @@ export default function Corrections() {
         </Stack>
       </Modal>
 
-      <Modal opened={!!ocrBatch} onClose={closeOcr} size="xl"
-        title={<Group gap="xs"><Text fw={650} c="var(--mp-text-blue)">OCRiser</Text>
-          <Text fw={500}>— {ocrBatch?.assessment_title}</Text></Group>}>
-        <Stack>
-          <Group justify="space-between" wrap="nowrap">
-            <Group gap="xs">
-              <Badge color="blue" variant="filled">{currentOcrItem?.group_label ?? 'Lecture'}</Badge>
-              {currentOcrItem?.ocr_confidence != null && (
-                <Badge color="blue" variant="light">
-                  confiance {(currentOcrItem.ocr_confidence * 100).toFixed(0)} %
-                </Badge>
-              )}
-              {ocrSameGroup.length > 1 && (
-                <Badge color="cyan" variant="light">
-                  {ocrSamePos}/{ocrSameGroup.length} même case de réponse
-                </Badge>
-              )}
-            </Group>
-            <Group gap={6} wrap="nowrap">
-              <ActionIcon variant="light" disabled={ocrIdx <= 0 || savingOcr}
-                onClick={() => saveCurrentOcr(-1)}><ChevronLeft size={16} /></ActionIcon>
-              <Text size="xs" c="dimmed">{ocrUnits.length ? `${ocrIdx + 1} / ${ocrUnits.length}` : '—'}</Text>
-              <ActionIcon variant="light" disabled={!ocrUnits.length || savingOcr}
-                onClick={() => saveCurrentOcr(1)}><ChevronRight size={16} /></ActionIcon>
-            </Group>
-          </Group>
-
-          {currentOcrItem && currentOcrUnit ? (
-            <>
-              <Group justify="space-between">
-                <Group gap={8}>
-                  <Text size="sm" fw={600}>{currentOcrItem.student}</Text>
-                  {currentOcrItem.ocr_audit && (
-                    <Tooltip label="Lecture sûre tirée au hasard pour mesurer la fiabilité de la lecture automatique : confirmez-la ou corrigez-la" multiline maw={280}>
-                      <Badge color="grape" variant="light" data-testid="ocr-audit-badge">Contrôle</Badge>
-                    </Tooltip>
-                  )}
-                </Group>
-                <Text size="xs" c="var(--mp-text-blue)" fw={600}>
-                  Reprise de la réponse élève — aucune note n'est attribuée ici
-                </Text>
-              </Group>
-              <Card withBorder padding="sm">
-                <Text size="xs" c="dimmed" fw={600} tt="uppercase" mb="xs">
-                  Scan de l'élève{currentOcrCell?.label ? <> — <Text span inherit tt="none"><MathText text={currentOcrCell.label} /></Text></> : null}
-                </Text>
-                <OcrScan item={currentOcrItem} cellIndex={currentOcrUnit.cellIndex}
-                  selectedChoices={ocrChoices} selectedPairs={ocrPairs} matchStart={matchStart}
-                  onChoice={toggleOcrChoice} onMatchPoint={toggleMatchPoint} />
-                {(currentOcrItem.response_type.startsWith('qcm')
-                  || currentOcrItem.response_type === 'checkbox_grid') && (
-                  <Text size="xs" c="var(--mp-text-blue)" mt="xs">
-                    Cliquez les carrés bleus directement sur le scan : plein = coché, vide = non coché.
-                  </Text>
-                )}
-                {currentOcrItem.response_type === 'matching' && (
-                  <Text size="xs" c="var(--mp-text-blue)" mt="xs">
-                    Cliquez un point bleu à gauche puis son correspondant à droite. Recliquez la liaison pour la retirer.
-                  </Text>
-                )}
-              </Card>
-
-              {!currentOcrItem.response_type.startsWith('qcm')
-                && currentOcrItem.response_type !== 'checkbox_grid'
-                && currentOcrItem.response_type !== 'matching' && (
-                  <Card withBorder padding="sm" style={{ borderColor: 'var(--mp-border-blue)' }}>
-                    <Text size="xs" c="var(--mp-text-blue)" fw={600} tt="uppercase" mb={6}>
-                      Aperçu LaTeX — modifiable
-                    </Text>
-                    <Text size="xs" c="dimmed" mb={6}>
-                      Entrée valide · ←/→ valide et navigue · Maj+Entrée ajoute une ligne au raisonnement
-                    </Text>
-                    {(() => {
-                      const cands = currentOcrCell?.ocr_candidates ?? currentOcrItem.ocr_candidates ?? []
-                      return cands.length > 0 && (
-                        <Group gap={6} mb={8} data-testid="ocr-candidates">
-                          <Text size="xs" c="dimmed">Lu par les moteurs :</Text>
-                          {cands.map((c) => (
-                            <Tooltip key={c.surface} multiline maw={260}
-                              label={`${c.voices} voix · ${c.engines.join(', ')}`}>
-                              <Button size="compact-xs" variant="light" color="blue"
-                                onClick={() => fillOcrCandidate(c.surface)}>{c.surface}</Button>
-                            </Tooltip>
-                          ))}
-                        </Group>
-                      )
-                    })()}
-                    <Box ref={ocrLatexRef} contentEditable suppressContentEditableWarning role="textbox"
-                      tabIndex={0}
-                      aria-label="Modifier le LaTeX" key={currentOcrUnit.key}
-                      onInput={(e) => {
-                        const value = e.currentTarget.innerText ?? ''
-                        setOcrLatex(value)
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === 'ArrowRight') { e.preventDefault(); saveCurrentOcr(1) }
-                        else if (e.key === 'ArrowLeft') { e.preventDefault(); saveCurrentOcr(-1) }
-                        else if (e.key === 'Enter'
-                          && !(e.shiftKey && (currentOcrItem.response_type === 'multiline_text'
-                            || currentOcrItem.response_type === 'composite'))) {
-                          e.preventDefault(); saveCurrentOcr(1)
-                        }
-                      }} style={{ minHeight: 34, padding: 7, color: 'var(--mp-text-blue-strong)',
-                        border: '1px solid var(--mp-border-blue)', borderRadius: 4,
-                        fontFamily: 'monospace', whiteSpace: 'pre-wrap' }}>{ocrLatex}</Box>
-                    <Divider my="sm" />
-                    <Box fz="1.55rem" c="var(--mp-text-blue-strong)" style={{ minHeight: 38 }}>
-                      <MathAnswer text={ocrLatex} fallback="Aucune réponse détectée" />
-                    </Box>
-                  </Card>
-              )}
-
-              <Group justify="flex-end">
-                {currentOcrItem.ocr_audit && (
-                  <Button variant="light" color="grape" loading={savingOcr} onClick={confirmCurrentOcr}
-                    data-testid="ocr-confirm">C'est juste</Button>
-                )}
-                <Button color="blue" loading={savingOcr} onClick={() => saveCurrentOcr(1)}>
-                  Valider la lecture et continuer <Kbd ml={8}>Entrée</Kbd>
-                </Button>
-              </Group>
-            </>
-          ) : (
-            <Text c="dimmed" py="lg">Aucune lecture sous le seuil de confiance.</Text>
-          )}
-        </Stack>
-      </Modal>
+      <OcrAssistant batch={ocrBatch} onClose={closeOcr} />
 
       <Modal opened={!!reviewBatch} onClose={closeCorrection} size="xl"
         title={<Text fw={650}>Correction — {reviewBatch?.assessment_title}</Text>}>

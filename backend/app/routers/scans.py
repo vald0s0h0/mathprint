@@ -1064,8 +1064,15 @@ def list_ocr_items(batch_id: str, db: Session = Depends(get_db), wave: int | Non
             sugg = ocr_truth.suggestions(db, resp.zone_id) if resp.zone_id else {"audit": False, "zone": [], "cells": {}}
             row["ocr_audit"] = bool(sugg["audit"] or (reading and (reading.raw_json or {}).get("audit")))
             row["ocr_candidates"] = sugg["zone"]
+            # assistant OCRiser : lectures de TOUS les moteurs et de Mathpix, regroupées par
+            # surface, rendues en LaTeX, cliquables (un clic = cette lecture, case suivante)
+            opts = (ocr_truth.review_options(db, resp.zone_id, (item.expected_json or {}).get("type"),
+                                             multiline=item.response_type == "multiline_text")
+                    if resp.zone_id else {"zone": [], "cells": {}})
+            row["ocr_options"] = opts["zone"]
             for cell in row.get("cells") or []:
                 cell["ocr_candidates"] = sugg["cells"].get(cell.get("index"), [])
+                cell["ocr_options"] = opts["cells"].get(cell.get("index"), [])
             out.append(row)
 
     def rank(row: dict) -> tuple:

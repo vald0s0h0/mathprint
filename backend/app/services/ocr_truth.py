@@ -104,3 +104,113 @@ def backfill(db: Session, zone_id: str) -> int:
         elif isinstance(t, int) and isinstance(cells, list) and 0 <= t < len(cells):
             texts[t] = str(cells[t] or "")
     return record_truth(db, zone_id, texts) if texts else 0
+
+
+# ------------------------------------------------------------ options de l'assistant OCRiser
+
+# Ordre d'affichage des moteurs, et moteur dont la forme brute sert au rendu LaTeX
+# d'une lecture partagée (les VLM et Mathpix écrivent du LaTeX, TrOCR du texte).
+_DISPLAY_PRIORITY = ("mathpix", "mock", "unimumer", "lighton", "apple_vision", "trocr")
+
+
+def _prio(engine: str) -> int:
+    return _DISPLAY_PRIORITY.index(engine) if engine in _DISPLAY_PRIORITY else len(_DISPLAY_PRIORITY)
+
+
+def group_options(entries: list[tuple[str, str]], zone_class: str) -> list[dict]:
+    """Regroupe des lectures (moteur, texte brut) par surface canonique. Chaque option porte
+    TOUS les moteurs qui l'ont lue : la choisir n'est pas un vote pour un moteur, la vérité
+    est une surface et elle crédite chacun d'eux. Les plus partagées d'abord."""
+    by: dict[str, dict] = {}
+    for engine, raw in entries:
+        raw = (raw or "").strip()
+        if not raw:
+            continue
+        surface = to_surface(raw, zone_class) if zone_class != "multiline" else \
+            "\n".join(to_surface(line, "multiline_line") for line in raw.split("\n"))
+        if not surface.strip():
+            continue
+        g = by.setdefault(surface, {"surface": surface, "raws": {}})
+        g["raws"].setdefault(engine, raw)
+    out = []
+    for g in by.values():
+        engines = sorted(g["raws"], key=lambda e: (_prio(e), e))
+        out.append({"surface": g["surface"], "text": g["raws"][engines[0]], "engines": engines})
+    out.sort(key=lambda o: (-len(o["engines"]), min(_prio(e) for e in o["engines"]), o["surface"]))
+    return out
+
+
+def _crop_reads(db: Session, crop: OcrCrop) -> dict[str, str]:
+    """Dernière lecture exploitable de chaque moteur (et de Mathpix) pour une découpe."""
+    from ..models import OcrEngineRead
+    out: dict[str, str] = {}
+    for r in (db.query(OcrEngineRead)
+              .filter(OcrEngineRead.crop_id == crop.id, OcrEngineRead.kind.in_(("read", "mathpix")))
+              .order_by(OcrEngineRead.created_at).all()):
+        if r.error or r.illegible or not (r.raw_text or "").strip():
+            out.pop(r.engine, None)
+            continue
+        out[r.engine] = r.raw_text
+    return out
+
+
+def review_options(db: Session, zone_id: str, expected_type: str | None = None,
+                   multiline: bool = False) -> dict:
+    """Lectures proposées au professeur dans OCRiser, quel que soit le mode : moteurs locaux
+    (cascade, ombre) et Mathpix (tous modes). {"zone": [...], "cells": {index: [...]}}.
+    Jamais la valeur attendue : seulement ce que les moteurs ont lu librement."""
+    from ..models import OcrAttempt
+    from .ocr_cascade import zone_class_for
+    zone_entries: list[tuple[str, str]] = []
+    cell_entries: dict[int, list[tuple[str, str]]] = {}
+    cell_class: dict[int, str] = {}
+    zone_class = "multiline" if multiline else zone_class_for(expected_type)
+
+    zrow = _latest_zone_row(db, zone_id)
+    if zrow is not None:
+        crops = (db.query(OcrCrop).filter_by(zone_id=zone_id, batch_id=zrow.batch_id)
+                 .order_by(OcrCrop.cell_index, OcrCrop.line_index).all())
+        lines = [c for c in crops if c.line_index is not None]
+        for c in crops:
+            if c.line_index is not None:
+                continue
+            reads = _crop_reads(db, c)
+            if c.cell_index is not None:
+                cell_class[c.cell_index] = c.zone_class
+                cell_entries.setdefault(c.cell_index, []).extend(reads.items())
+            else:
+                zone_class = c.zone_class
+                zone_entries.extend(reads.items())
+        if lines:                       # rédaction : un moteur propose la zone s'il a lu chaque ligne
+            per_line = [_crop_reads(db, c) for c in lines]
+            for engine in set().union(*per_line):
+                if all(engine in r for r in per_line):
+                    zone_entries.append((engine, "\n".join(r[engine] for r in per_line)))
+
+    att = (db.query(OcrAttempt).filter(OcrAttempt.zone_id == zone_id,
+                                       OcrAttempt.provider.in_(("mathpix", "mock")))
+           .order_by(OcrAttempt.created_at.desc()).first())
+    if att is not None:
+        raw = att.raw_json or {}
+        cells = raw.get("cells")
+        if isinstance(cells, list) and cells:
+            lat = raw.get("cell_latex") or []
+            for i, text in enumerate(cells):
+                value = (lat[i] if i < len(lat) and lat[i] else text) or ""
+                if str(value).strip():
+                    cell_entries.setdefault(i, []).append((att.provider, str(value)))
+        else:
+            value = att.latex or att.text or ""
+            if value.strip():
+                zone_entries.append((att.provider, value))
+
+    def dedupe(entries):            # un moteur, une lecture (Mathpix déjà lu par découpe en cascade)
+        seen, out = set(), []
+        for e, v in entries:
+            if e not in seen:
+                seen.add(e)
+                out.append((e, v))
+        return out
+    return {"zone": group_options(dedupe(zone_entries), zone_class),
+            "cells": {i: group_options(dedupe(v), cell_class.get(i, "math_line"))
+                      for i, v in cell_entries.items()}}

@@ -1,5 +1,9 @@
 """Tests : filtre CV (dropout, QCM, seuils adaptatifs)."""
+import cv2
 import numpy as np
+import pytest
+
+from app.services import worker_cv as W
 
 
 def test_dropout_preserves_blue_ink_removes_salmon():
@@ -623,3 +627,58 @@ def test_detect_matching_pale_thin_link_is_never_silently_dropped():
     cv2.line(img, (int(lx), int(ly)), (int(rx), int(ry)), (205, 200, 195), 1, cv2.LINE_AA)
     pairs, conf = W.detect_matching(img, left, right)
     assert conf < 0.9 or sorted(pairs) == [[0, 1], [1, 3], [2, 0], [3, 2]]
+
+
+def _swatch_page(tint: bool):
+    """Page avec la grille pipette + un cadre saumon, dégradée comme un scan (flou, JPEG)."""
+    import io
+    from reportlab.pdfgen import canvas
+    from app.services import pdfgen as P
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=(P.PAGE_W, P.PAGE_H))
+    P._draw_swatch_grid(c)
+    c.setStrokeColor(P.DROPOUT)
+    c.setLineWidth(0.9)
+    c.rect(100, 400, 120, 40)
+    c.showPage()
+    c.save()
+    import pypdfium2 as pdfium
+    bm = pdfium.PdfDocument(buf.getvalue())[0].render(scale=W.DPI / 72.0, rev_byteorder=True)
+    img = cv2.cvtColor(bm.to_numpy(), cv2.COLOR_RGBA2BGR if bm.to_numpy().shape[2] == 4 else cv2.COLOR_RGB2BGR)
+    im = img.astype(np.float32)
+    if tint:
+        im = im * np.array([0.85, 0.92, 0.97]) + np.array([0, 3, 6])
+    im = cv2.GaussianBlur(np.clip(im, 0, 255).astype(np.uint8), (0, 0), 1.1)
+    return cv2.imdecode(cv2.imencode(".jpg", im, [cv2.IMWRITE_JPEG_QUALITY, 35])[1], 1)
+
+
+@pytest.mark.parametrize("tint", [False, True])
+def test_calibrate_dropout_erases_grid_and_frames(tint):
+    img = _swatch_page(tint)
+    prof = W.calibrate_dropout(img)
+    assert prof is not None and prof.residual <= W.SWATCH_RESIDUAL_WARN
+    out = cv2.cvtColor(W.dropout_filter(img, prof), cv2.COLOR_BGR2GRAY)
+    x0, y1 = W.pt_to_px(W.SWATCH_X, W.SWATCH_Y)
+    x1, y0 = W.pt_to_px(W.SWATCH_X + W.SWATCH_W, W.SWATCH_Y + W.SWATCH_H)
+    assert (out[int(y0):int(y1), int(x0):int(x1)] < 245).mean() < 0.03
+    fx0, fy1 = W.pt_to_px(94, 394)
+    fx1, fy0 = W.pt_to_px(226, 446)
+    assert (out[int(fy0):int(fy1), int(fx0):int(fx1)] < 245).mean() < 0.005
+
+
+def test_calibrate_dropout_blank_page_is_none():
+    assert W.calibrate_dropout(np.full((2339, 1654, 3), 255, np.uint8)) is None
+
+
+@pytest.mark.parametrize("col", [(170, 170, 170), (165, 170, 176), (120, 120, 120), (122, 128, 136)])
+def test_calibrate_dropout_keeps_pencil(col):
+    """Un trait de crayon à papier (gris, même à dominante chaude) croisant un cadre saumon
+    survit au masque calibré : seuls les pixels clairs comme la grille sont masqués."""
+    img = _swatch_page(False)
+    prof = W.calibrate_dropout(img)
+    y0, x0 = int((W.PAGE_H - 440) * W.SCALE), int(100 * W.SCALE)
+    cv2.line(img, (x0 + 40, y0 - 30), (x0 + 300, y0 + 10), col, 3, cv2.LINE_AA)
+    win = (slice(y0 - 40, y0 + 20), slice(x0, x0 + 320))
+    before = (cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)[win] < 200).sum()
+    after = (cv2.cvtColor(W.dropout_filter(img, prof), cv2.COLOR_BGR2GRAY)[win] < 200).sum()
+    assert after >= 0.9 * before

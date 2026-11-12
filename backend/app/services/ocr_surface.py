@@ -134,6 +134,9 @@ def to_surface(raw: str | None, zone_class: str = "text_line") -> str:
     # structure
     s = _frac_and_sqrt(s)
     s = _exponents(s)
+    # degré : `62^{\circ}`, `62^°`, `62^{°}` et `62º` (ordinal pris pour un degré) -> `62°`.
+    # Même écriture, pas un exposant : sans cela trois moteurs d'accord semblaient diverger.
+    s = re.sub(r"\^\s*(?:\{\s*°\s*\}|°)", "°", s.replace("º", "°"))
     if zone_class in _MATH:
         s = _SPACES.sub("", s)
     else:

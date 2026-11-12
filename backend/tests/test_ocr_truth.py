@@ -168,3 +168,55 @@ def test_confirm_text_zone_and_unknown_response(world, mathpix):
     with pytest.raises(HTTPException) as e:
         scans_router.confirm_ocr_reading("inconnue", db, None)
     assert e.value.status_code == 404
+
+
+# ------------------------------------------------------------ options de l'assistant OCRiser
+
+def test_review_options_list_every_engine_and_mathpix_grouped_by_surface(world, mathpix):
+    def conflict(k):
+        r = _cascade_reads(k)
+        c1 = k[(2, 1, None)].id
+        r["apple_vision"][c1], r["unimumer"][c1], r["lighton"][c1] = "1,2", "1,79", "1,79"
+        return r
+    db, k, b = _run_cascade(world, mathpix, reads_fn=conflict, mathpix_cell="1,2", ocr_audit_share=1.0)
+    items = {i["sequence"]: i for i in scans_router.list_ocr_items(b.id, db)}
+    cell = items[2]["cells"][1]["ocr_options"]
+    by = {o["surface"]: o for o in cell}
+    # Mathpix figure parmi les lectures, même quand la case part en manuel
+    assert "mathpix" in by["1,2"]["engines"] and "apple_vision" in by["1,2"]["engines"]
+    assert set(by["1,79"]["engines"]) >= {"unimumer", "lighton"}
+    # la plus partagée d'abord ; le texte rendu vient d'un moteur LaTeX quand il y en a un
+    assert len(cell[0]["engines"]) >= len(cell[-1]["engines"])
+    assert by["1,2"]["text"].strip().startswith("\\(")                      # forme brute de Mathpix
+    # zone simple : un seul groupe pour "24" et "2 4" (même surface)
+    zone = items[1]["ocr_options"]
+    assert zone[0]["surface"] == "24" and {"apple_vision", "unimumer"} <= set(zone[0]["engines"])
+    # rédaction : un moteur propose la zone entière s'il a lu toutes les lignes
+    multi = items[3]["ocr_options"]
+    assert any(o["surface"] == "On calcule\nBC = 10" for o in multi)
+    assert "expected" not in str(items[2]["cells"][1]["ocr_options"]).lower()
+
+
+def test_review_options_exist_in_mathpix_mode_too(world, mathpix):
+    db = world.db
+    set_mode(db, "mathpix")
+    mathpix.by_order = [("2 4", .5), ("5", .97), ("1,79", .4), ("On calcule\nBC = 10", .5)]
+    b = world.make_batch()
+    pipeline.process_batch(db, b)
+    items = {i["sequence"]: i for i in scans_router.list_ocr_items(b.id, db)}
+    assert items[1]["ocr_options"] == [{"surface": "24", "text": "\\( 2 4 \\)", "engines": ["mathpix"]}]
+    assert items[2]["cells"][1]["ocr_options"][0]["engines"] == ["mathpix"]
+    assert items[3]["ocr_options"][0]["engines"] == ["mathpix"]
+
+
+def test_choosing_a_shared_reading_credits_every_engine_that_read_it(world, mathpix):
+    db, k, b = _run_cascade(world, mathpix, ocr_audit_share=1.0)
+    resp = _resp(db, world, 1)
+    opt = next(o for o in scans_router.list_ocr_items(b.id, db) if o["sequence"] == 1)["ocr_options"][0]
+    scans_router.update_ocr_reading(resp.id, scans_router.OcrReadingIn(text=opt["text"], latex=opt["text"]), db, None)
+    d = _decision(db, k[(1, None, None)])
+    assert d.truth_surface == "24"
+    from app.models import OcrEngineRead
+    right = {r.engine for r in db.query(OcrEngineRead).filter_by(crop_id=k[(1, None, None)].id, kind="read")
+             if r.surface == d.truth_surface}
+    assert {"apple_vision", "unimumer"} <= right                          # pas seulement celui dont on a pris le texte

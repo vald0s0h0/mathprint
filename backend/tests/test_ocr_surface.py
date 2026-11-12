@@ -104,3 +104,12 @@ def test_idempotent():
 def test_text_wrapper_inside_math_keeps_the_words():
     assert s("12 \\text{ cm}", M) == "12cm"
     assert s("\\text{Vrai}", T) == "Vrai"
+
+
+def test_degree_forms_are_one_reading():
+    # lu sur une vraie copie (3e, trigonométrie) : trois moteurs d'accord semblaient diverger
+    for raw in ("62^{\\circ}", "62^°", "62^{°}", "62°", "62 °", "62º", "62\\degree"):
+        assert s(raw, M) == "62°", raw
+    assert s("2,8^{\\circ}", M) == "2,8°"
+    assert s("28°", M) != s("2,8°", M)                       # la valeur reste distincte
+    assert s("x^{2}", M) == "x^2"                             # un vrai exposant reste un exposant

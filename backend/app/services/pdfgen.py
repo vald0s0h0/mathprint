@@ -260,10 +260,15 @@ NOTE_W_V3 = 24 * mm
 CLASS_W = 22 * mm                      # zone classe : largeur FIXE (l'overlay ne connaît pas le nom)
 LABEL_W = 56 * mm                      # « Correction — Nom » et « total brut → note »
 DATE_RIGHT = TR_X - 3 * mm             # la date : bas de page, à droite, contre le fiduciel BR
-# Plage « pipette » : un aplat de la couleur de masquage (rouge saumon des cadres de
-# réponse), imprimé en bas de CHAQUE page, avec le même toner que les cadres. À la
-# lecture du scan, la vision mesure sa vraie couleur (imprimante, papier, scanner)
-# et masque exactement cette teinte (cf. worker_cv.sample_dropout_target).
+# Plage « pipette » : une GRILLE de traits (verticaux + horizontaux) de la couleur de
+# masquage, imprimée en bas de CHAQUE page, avec le même toner et la même épaisseur
+# que les cadres de réponse. Un aplat n'est pas rendu comme un trait (imprimante,
+# compression du scanner) : la grille reproduit ce que deviennent les cadres. À la
+# lecture du scan, la vision règle le masque jusqu'à ce que les traits de la grille
+# disparaissent complètement ; les cadres, de même nature, disparaissent alors aussi
+# (cf. worker_cv.calibrate_dropout).
+SWATCH_LINE_W = 0.9                        # pt : même épaisseur que les cadres de réponse
+SWATCH_PITCH = 1.5 * mm
 SWATCH_RIGHT = DATE_RIGHT - 23 * mm        # laisse la place de la date
 SWATCH_W = 22 * mm
 SWATCH_X = SWATCH_RIGHT - SWATCH_W
@@ -362,9 +367,26 @@ def _draw_markers(c: canvas.Canvas, page_payload: str):
     }.items():
         c.drawImage(_fiducial_image(FIDUCIAL_IDS[role]), x, y, QR_MINI, QR_MINI)
     _draw_datamatrix(c, DM_X, DM_Y, printable_code(page_payload))
-    c.setFillColor(DROPOUT)
-    c.rect(SWATCH_X, SWATCH_Y, SWATCH_W, SWATCH_H, stroke=0, fill=1)
-    c.setFillColor(black)
+    _draw_swatch_grid(c)
+
+
+def _draw_swatch_grid(c: canvas.Canvas):
+    """Grille de la plage pipette : traits DROPOUT de l'épaisseur des cadres, pas
+    SWATCH_PITCH, bords compris (lignes rentrées d'une demi-épaisseur)."""
+    half = SWATCH_LINE_W / 2
+    c.saveState()
+    c.setStrokeColor(DROPOUT)
+    c.setLineWidth(SWATCH_LINE_W)
+    c.setLineCap(0)
+    nx = max(1, round(SWATCH_W / SWATCH_PITCH))
+    ny = max(1, round(SWATCH_H / SWATCH_PITCH))
+    for i in range(nx + 1):
+        x = SWATCH_X + half + i * (SWATCH_W - SWATCH_LINE_W) / nx
+        c.line(x, SWATCH_Y, x, SWATCH_Y + SWATCH_H)
+    for j in range(ny + 1):
+        y = SWATCH_Y + half + j * (SWATCH_H - SWATCH_LINE_W) / ny
+        c.line(SWATCH_X, y, SWATCH_X + SWATCH_W, y)
+    c.restoreState()
 
 
 BADGE_GAP = 1.8 * mm    # blanc entre le badge et le début de l'énoncé

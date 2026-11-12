@@ -542,7 +542,22 @@ export default function Dashboard() {
     try {
       const fd = new FormData()
       for (const f of files) fd.append('files', f)
-      const r = await api.post<{ results: SandboxResult[] }>('/api/scans/sandbox', fd)
+      // Dépôt ASYNCHRONE (comme dans Corrections) : la réponse part dès la
+      // réception, l'identification tourne en tâche de fond. Sans ce suivi,
+      // le message affichait toujours « 0 page identifiée ».
+      type SandboxJob = { job_id: string; status: string; results: SandboxResult[]; error?: string | null }
+      let r = await api.post<SandboxJob>('/api/scans/sandbox', fd)
+      if (r.status === 'running') {
+        notifications.show({ color: 'blue', message: 'Fichier reçu — identification des copies en cours…' })
+      }
+      const deadline = Date.now() + 15 * 60_000
+      while (r.status === 'running' && Date.now() < deadline) {
+        await new Promise((ok) => setTimeout(ok, 3000))
+        r = await api.get<SandboxJob>(`/api/scans/sandbox/jobs/${r.job_id}`)
+      }
+      if (r.status !== 'done') {
+        throw new Error(r.error || 'Le dépôt n’a pas abouti — le fichier reste dans les scans originaux (Paramètres → Données)')
+      }
       const pages = sum(r.results.map((x) => x.pages_added))
       const dups = sum(r.results.map((x) => x.duplicates_rejected + (x.status === 'duplicate_file' ? 1 : 0)))
       const blocked = sum(r.results.map((x) => x.blocked_pages))

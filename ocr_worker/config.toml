@@ -11,11 +11,11 @@ name = "local"
 url = "http://127.0.0.1:8787"
 token_env = "MATHPRINT_OCR_WORKER_TOKEN"
 
-# NAS (autonome) : à activer quand le jeton du NAS est posé, voir DEPLOIEMENT_NAS.md.
-# [[servers]]
-# name = "nas"
-# url = "http://fabre.tail428d1a.ts.net:7070"
-# token_env = "MATHPRINT_OCR_WORKER_TOKEN_NAS"
+# NAS (autonome), par Tailscale. Jeton dans le plist du service, voir DEPLOIEMENT_NAS.md §11.
+[[servers]]
+name = "nas"
+url = "http://fabre.tail428d1a.ts.net:7070"
+token_env = "MATHPRINT_OCR_WORKER_TOKEN_NAS"
 
 # Un moteur absent de cette liste n'est jamais chargé, même si le plan le cite.
 [engines.apple_vision]

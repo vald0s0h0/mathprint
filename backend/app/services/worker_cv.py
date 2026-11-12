@@ -58,9 +58,9 @@ class PageAnalysis:
     blur: float = 0.0
     warped: np.ndarray | None = None
     warnings: list[str] = field(default_factory=list)
-    # teinte de masquage mesurée sur la plage pipette de la page (H, S en échelle
-    # OpenCV 0-179 / 0-255), None sur les anciennes copies ou si la plage est illisible
-    dropout_target: tuple[float, float] | None = None
+    # réglage du masque saumon calibré sur la grille pipette de la page, None si
+    # la grille est illisible (anciennes copies, scan coupé)
+    dropout_target: "DropoutProfile | None" = None
 
 
 def iter_raster_pdf(path: str, dpi: int = DPI):
@@ -351,9 +351,11 @@ def analyze_page(img: np.ndarray, forced_page_id: str | None = None) -> PageAnal
     # donne la vraie teinte à supprimer (mesurée AVANT le blanchiment, qui la ferait
     # disparaître). Les anciennes copies n'en ont pas : filtre nominal.
     if is_code_page_id(res.page_id):
-        res.dropout_target = sample_dropout_target(warped)
+        res.dropout_target = calibrate_dropout(warped)
         if res.dropout_target is None:
             res.warnings.append("dropout_swatch_unreadable")
+        elif res.dropout_target.residual > SWATCH_RESIDUAL_WARN:
+            res.warnings.append("dropout_grid_not_erased")
     res.warped = flatten_background(warped, res.dropout_target)
     res.status = "registered"
     return res
@@ -444,52 +446,122 @@ def draw_expected_answer(crop: np.ndarray, *, zone_geo: dict, meta: dict,
 
 
 # Pipette : la teinte réellement imprimée par CETTE imprimante sur CE papier, lue
-# par ce scanner, peut sortir de la plage « rouge » nominale (saumon plus orangé ou
-# plus rosé). Une plage de la couleur de masquage est imprimée en bas de chaque page :
-# on y mesure la teinte et la saturation, et on masque ce qui y ressemble.
-SWATCH_INSET_MM = 1.5          # on mesure au cœur de la plage, loin de ses bords flous
-SWATCH_MIN_SAT = 25            # en dessous : papier blanc ou plage absente, pas du saumon
-SWATCH_MIN_VAL = 120           # au dessous : tache ou ombre, pas la plage
-DROPOUT_HUE_TOL = 10           # écart de teinte toléré autour de la teinte mesurée
+# par ce scanner (compression comprise), sort de la plage « rouge » nominale, et un
+# trait n'est pas rendu comme un aplat. Une GRILLE de traits de la couleur de masquage
+# (même toner, même épaisseur que les cadres de réponse) est imprimée en bas de chaque
+# page : on règle le masque jusqu'à ce que ces traits disparaissent complètement. Les
+# cadres des cases de réponse, de même nature, disparaissent alors avec eux.
+SWATCH_PAD_MM = 0.3            # marge ajoutée autour de la grille (tolérance de recalage)
+SWATCH_MIN_SAT = 25            # saturation médiane des traits sous laquelle la teinte n'est plus fiable
+SWATCH_MIN_VAL = 120           # au dessous : tache ou ombre, pas la grille
+SWATCH_MIN_CORE = 40           # pixels de trait mini pour croire à la présence de la grille
+SWATCH_DIST_MIN = 14           # écart au papier (BGR) à partir duquel un pixel compte comme « reste de trait »
+SWATCH_RESIDUAL_OK = 0.01      # fraction de trait restant tolérée : « complètement disparu »
+SWATCH_RESIDUAL_WARN = 0.10    # au delà, la grille n'a pas pu être effacée
 _SALMON_HUES = (range(0, 31), range(150, 180))   # plage plausible pour accepter la mesure
+_HUE_TOL_START, _HUE_TOL_MAX = 6, 22
+_SAT_MIN_FLOOR = 8
 
 
-def sample_dropout_target(warped: np.ndarray) -> tuple[float, float] | None:
-    """Teinte (H) et saturation (S) de la plage pipette d'une page recalée, ou None
-    si elle est illisible (papier blanc, tache, scan coupé) : le filtre nominal
-    s'applique alors. Mesure par médiane, donc insensible à une poussière."""
-    inset = SWATCH_INSET_MM / 25.4 * 72
-    x0, y1 = pt_to_px(SWATCH_X + inset, SWATCH_Y + inset)
-    x1, y0 = pt_to_px(SWATCH_X + SWATCH_W - inset, SWATCH_Y + SWATCH_H - inset)
+@dataclass(frozen=True)
+class DropoutProfile:
+    """Réglage du masque saumon calibré sur la grille pipette d'une page."""
+    hue: float          # teinte centrale des traits (OpenCV 0-179)
+    hue_tol: int        # demi-largeur de teinte masquée
+    sat_min: int        # saturation minimale masquée
+    grow: int           # épaississement du masque (px) : halo des traits, repris par la compression
+    val_min: int = 150  # luminosité minimale masquée : le saumon est CLAIR, le crayon à papier non
+    residual: float = 0.0   # fraction de trait restant sur la grille après masquage (0 = effacée)
+
+
+def _hue_dist(h: np.ndarray, h0: float) -> np.ndarray:
+    d = np.abs(h.astype(np.float32) - h0)
+    return np.minimum(d, 180 - d)
+
+
+def _profile_mask(hsv: np.ndarray, gray: np.ndarray, hue: float, hue_tol: int,
+                  sat_min: int, grow: int, val_min: int = 150) -> np.ndarray:
+    # Le plancher de luminosité protège le crayon à papier (gris, parfois à dominante
+    # chaude) : seuls les pixels aussi clairs que les traits de la grille sont masqués.
+    mask = (_hue_dist(hsv[..., 0], hue) <= hue_tol) & (hsv[..., 1] > sat_min) & (hsv[..., 2] >= val_min)
+    if grow > 0:
+        k = 2 * grow + 1
+        dil = cv2.dilate(mask.astype(np.uint8), cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))) > 0
+        mask = mask | (dil & (gray >= val_min))   # jamais sur l'encre ni le crayon de l'élève
+    return mask
+
+
+def calibrate_dropout(warped: np.ndarray) -> DropoutProfile | None:
+    """Règle le masque saumon sur la grille pipette de la page recalée (mesurée AVANT
+    le blanchiment). Repère les traits (écart au papier), mesure leur teinte, puis
+    élargit progressivement teinte, saturation minimale et épaississement jusqu'à ce que
+    la grille soit effacée (résidu <= SWATCH_RESIDUAL_OK). Retourne le réglage le plus
+    sobre qui y parvient, sinon celui qui laisse le moins de trait ; None si la grille
+    est illisible (papier blanc, tache, scan coupé) : le filtre nominal s'applique."""
+    pad = SWATCH_PAD_MM / 25.4 * 72
+    x0, y1 = pt_to_px(SWATCH_X - pad, SWATCH_Y - pad)
+    x1, y0 = pt_to_px(SWATCH_X + SWATCH_W + pad, SWATCH_Y + SWATCH_H + pad)
     h, w = warped.shape[:2]
     x0, x1, y0, y1 = max(0, int(x0)), min(w, int(x1)), max(0, int(y0)), min(h, int(y1))
-    if x1 - x0 < 8 or y1 - y0 < 4:
+    if x1 - x0 < 16 or y1 - y0 < 8:
         return None
     patch = warped[y0:y1, x0:x1]
-    # médiane de chaque canal BGR, puis conversion : la moyenne de teintes serait fausse
-    # près de la coupure 179/0 du rouge
-    med = np.median(patch.reshape(-1, 3), axis=0).astype(np.uint8).reshape(1, 1, 3)
-    hue, sat, val = (int(x) for x in cv2.cvtColor(med, cv2.COLOR_BGR2HSV)[0, 0])
-    if sat < SWATCH_MIN_SAT or val < SWATCH_MIN_VAL or not any(hue in r for r in _SALMON_HUES):
+    # papier = 90e centile de chaque canal (les traits couvrent < 40 % de la plage)
+    paper = np.percentile(patch.reshape(-1, 3), 90, axis=0).astype(np.float32)
+    dist = np.linalg.norm(patch.astype(np.float32) - paper, axis=2)
+    top = float(np.percentile(dist, 99))
+    if top < 2 * SWATCH_DIST_MIN:
+        return None                                  # rien d'assez contrasté : plage absente
+    core = dist >= 0.5 * top                         # cœur des traits
+    if int(core.sum()) < SWATCH_MIN_CORE:
         return None
-    return float(hue), float(sat)
+    hsv = cv2.cvtColor(patch, cv2.COLOR_BGR2HSV)
+    gray = cv2.cvtColor(patch, cv2.COLOR_BGR2GRAY)
+    ch, cs, cv_ = hsv[..., 0][core], hsv[..., 1][core], hsv[..., 2][core]
+    # teinte médiane sur l'échelle recentrée sur le rouge (la moyenne est fausse à 179/0)
+    shifted = ((ch.astype(np.int16) + 90) % 180) - 90
+    hue = float(np.median(shifted)) % 180
+    if (float(np.median(cs)) < SWATCH_MIN_SAT or float(np.median(cv_)) < SWATCH_MIN_VAL
+            or not any(int(round(hue)) % 180 in r for r in _SALMON_HUES)):
+        return None
+    spread = float(np.percentile(_hue_dist(ch, hue), 90))
+    sat_core = float(np.percentile(cs, 5))
+    val_min = int(np.clip(np.percentile(cv_, 2) - 12, 150, 200))
+    lines = dist >= SWATCH_DIST_MIN
+    n_lines = max(1, int(lines.sum()))
+
+    best: DropoutProfile | None = None
+    tol_start = int(min(_HUE_TOL_MAX, max(_HUE_TOL_START, np.ceil(spread) + 2)))
+    for grow in (0, 1, 2):
+        for tol in range(tol_start, _HUE_TOL_MAX + 1, 4):
+            for sat_min in (int(max(_SAT_MIN_FLOOR, 0.6 * sat_core)), 20, 14, _SAT_MIN_FLOOR):
+                mask = _profile_mask(hsv, gray, hue, tol, sat_min, grow, val_min)
+                residual = float((lines & ~mask).sum()) / n_lines
+                prof = DropoutProfile(hue, tol, sat_min, grow, val_min, residual)
+                if residual <= SWATCH_RESIDUAL_OK:
+                    return prof
+                if best is None or residual < best.residual:
+                    best = prof
+    return best
 
 
-def dropout_filter(crop: np.ndarray, target: tuple[float, float] | None = None) -> np.ndarray:
+def sample_dropout_target(warped: np.ndarray) -> DropoutProfile | None:
+    """Alias conservé : réglage du masque calibré sur la grille pipette."""
+    return calibrate_dropout(warped)
+
+
+def dropout_filter(crop: np.ndarray, target: DropoutProfile | None = None) -> np.ndarray:
     """Supprime les teintes rouge/orangé claires (cadres, lignes guides) ;
-    conserve l'encre noire et bleue de l'élève (§5.3). `target` (teinte, saturation
-    mesurées sur la plage pipette, cf. sample_dropout_target) élargit le masque à la
-    teinte réellement imprimée ; sans elle, plage nominale seule."""
+    conserve l'encre noire et bleue de l'élève (§5.3). `target` (réglage calibré sur
+    la grille pipette, cf. calibrate_dropout) s'ajoute au masque nominal ; sans lui,
+    plage nominale seule."""
     hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
     h, s, v = hsv[..., 0], hsv[..., 1], hsv[..., 2]
     red_hue = (h <= 18) | (h >= 165)
     mask = red_hue & (s > 30) & (v > 90)
     if target is not None:
-        h0, s0 = target
-        hi = h.astype(np.int16)
-        dist = np.minimum(np.abs(hi - int(h0)), 180 - np.abs(hi - int(h0)))
-        s_min = int(min(30, max(15, 0.4 * s0)))       # plage pâle : on descend un peu plus bas en saturation
-        mask |= (dist <= DROPOUT_HUE_TOL) & (s > s_min) & (v > 90)
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        mask |= _profile_mask(hsv, gray, target.hue, target.hue_tol, target.sat_min, target.grow, target.val_min)
     out = crop.copy()
     out[mask] = (255, 255, 255)
     return out
@@ -514,7 +586,7 @@ _FLATTEN_DOWN = 8            # sous-échantillonnage pour estimer le fond (vites
 _FLATTEN_KERNEL_MM = 12.0    # noyau de fermeture, > plus gros aplat d'encre à garder
 
 
-def flatten_background(bgr: np.ndarray, target: tuple[float, float] | None = None) -> np.ndarray:
+def flatten_background(bgr: np.ndarray, target: "DropoutProfile | None" = None) -> np.ndarray:
     """Retire le saumon (dropout) puis blanchit le fond par division par la carte
     d'illumination. Idempotent sur une page déjà blanche (le fond y vaut ~255).
     Une seule passe par page — sert la détection QCM ET l'OCR Mathpix."""

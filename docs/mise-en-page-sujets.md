@@ -17,8 +17,9 @@ les blancs verticaux se resserrent.
 - **Code de page** : DataMatrix 8×32 (8 modules sur 8,25 mm, la hauteur du carré noir d'un
   fiduciel), en bas à **gauche** contre le fiduciel BL — loin de la manche d'un élève droitier.
 - **Date** : en bas à droite, contre le fiduciel BR.
-- **Plage pipette** : un aplat (22 × 8,25 mm) de la couleur de masquage, imprimé en bas de chaque page
-  avec le même toner que les cadres de réponse (cf. ci-dessous).
+- **Plage pipette** : une **grille** de traits verticaux et horizontaux (22 × 8,25 mm, pas 1,5 mm,
+  épaisseur 0,9 pt) de la couleur de masquage, imprimée en bas de chaque page avec le même toner et la même
+  épaisseur que les cadres de réponse (cf. ci-dessous). Un aplat n'est pas rendu comme un trait.
 - **Espacements verticaux** (`CARD_PAD_T/M/B`, `GAP`, bande de correction, encadrés d'aide) resserrés.
 
 ## Code de page
@@ -42,12 +43,14 @@ identifiant à 12 chiffres = v3, sinon v1) :
 
 ## Pipette de la couleur de masquage
 
-À chaque page lue (`worker_cv.analyze_page`, copies à code DataMatrix), la vision mesure la teinte et la
-saturation (médiane) de la plage pipette, **avant** le blanchiment du fond. Cette mesure sert uniquement à
-**améliorer** la suppression du saumon : `dropout_filter` applique la plage nominale (rouge/orangé clair)
-**et** la teinte mesurée (±10), jamais l'une à la place de l'autre. Mesure illisible (plage absente, tache,
-papier blanc) : filtre nominal seul, avertissement `dropout_swatch_unreadable`. Coût : ~0,05 ms par page,
-donc refaite pour chaque page.
+À chaque page lue (`worker_cv.analyze_page`, copies à code DataMatrix), `calibrate_dropout` règle le masque
+sur la grille, **avant** le blanchiment du fond : elle repère les traits (écart au papier), mesure leur teinte,
+puis élargit par paliers la tolérance de teinte (6 → 22), abaisse la saturation minimale et épaissit le masque
+(0 → 2 px) sur les seuls pixels aussi clairs que la grille (le crayon à papier, gris, est préservé) jusqu'à ce que la grille soit **effacée** (résidu ≤ 1 %). Les cadres de
+réponse, de même nature, disparaissent alors aussi. `dropout_filter` applique la plage nominale **et** ce réglage.
+Grille illisible (absente, tache, papier blanc) : filtre nominal seul, avertissement `dropout_swatch_unreadable` ;
+grille non effaçable dans les limites (résidu > 10 %) : avertissement `dropout_grid_not_erased`.
+Les anciennes copies à aplat restent calibrables (l'aplat est un cas particulier de trait).
 
 ## Points à valider sur papier
 

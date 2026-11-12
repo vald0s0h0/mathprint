@@ -377,6 +377,13 @@ def _apply_mathpix(db: Session, crop: OcrCrop, text: str, latex: str, conf: floa
     prev = db.query(OcrDecision).filter_by(crop_id=crop.id).first()
     local_reason = prev.reason if prev else ""
     mp = {"cost": cost, "montage_id": montage_id}
+    # La lecture Mathpix est gardée telle quelle (kind « mathpix », hors du vote et des
+    # statistiques des moteurs locaux) : OCRiser la propose au professeur même quand la
+    # découpe part en manuel.
+    db.add(OcrEngineRead(crop_id=crop.id, engine="mathpix", family="mathpix", backend="api",
+                         kind="mathpix", raw_text=latex or text or "",
+                         surface=to_surface(text or latex or "", crop.zone_class),
+                         illegible=not (text or latex or "").strip(), confidence_raw=conf))
     if out.action == "accept":
         _write_decision(db, crop, decision="mathpix_confirmed", stage="mathpix",
                         reason=f"{local_reason}>{out.reason}", cands=out.candidates, surface=out.surface,
