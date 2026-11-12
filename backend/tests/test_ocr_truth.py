@@ -220,3 +220,22 @@ def test_choosing_a_shared_reading_credits_every_engine_that_read_it(world, math
     right = {r.engine for r in db.query(OcrEngineRead).filter_by(crop_id=k[(1, None, None)].id, kind="read")
              if r.surface == d.truth_surface}
     assert {"apple_vision", "unimumer"} <= right                          # pas seulement celui dont on a pris le texte
+
+
+# ------------------------------------------------------------ reprise de l'assistant
+
+def test_ocr_items_keep_what_the_teacher_already_read_so_he_can_come_back(world, mathpix):
+    db, k, b = _run_cascade(world, mathpix, ocr_audit_share=1.0)
+    units = pipeline.pending_ocr_units(db, world.assessment.id)
+    # compteur en lectures (cases), comme l'assistant : un tableau compte ses cases douteuses
+    assert units[world.items[1].id] == 1 and units[world.items[2].id] >= 1
+    scans_router.update_ocr_reading(_resp(db, world, 1).id, scans_router.OcrReadingIn(text="24"), db, None)
+    scans_router.update_ocr_reading(_resp(db, world, 2).id,
+                                    scans_router.OcrReadingIn(text="1,8", cell_index=1), db, None)
+    items = {i["sequence"]: i for i in scans_router.list_ocr_items(b.id, db)}
+    assert set(items) == {1, 2, 3}                                     # rien ne disparaît une fois lu
+    assert items[1]["ocr_pending"] is False and items[1]["ocr_touched"] == ["zone"]
+    assert items[1]["ocr_text"] == "24"
+    assert items[2]["ocr_touched"] == [1] and items[2]["cells"][1]["ocr_text"] == "1,8"
+    assert items[3]["ocr_pending"] is True and items[3]["ocr_touched"] == []
+    assert world.items[1].id not in pipeline.pending_ocr_units(db, world.assessment.id)

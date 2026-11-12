@@ -358,6 +358,35 @@ def effective_reading(db: Session, zone_id: str | None) -> OcrAttempt | None:
 
 def pending_ocr_responses(db: Session, assessment_id: str) -> list[StudentResponse]:
     """Réponses dont la dernière lecture CV/OCR reste sous le seuil réglé."""
+    return [resp for resp, _ in _pending_ocr(db, assessment_id)]
+
+
+def pending_ocr_units(db: Session, assessment_id: str) -> dict[str, int]:
+    """Lectures à vérifier par question (`copy_item_id` -> nombre), comptées comme
+    l'assistant OCRiser les présente : une case de tableau douteuse = une lecture,
+    une zone = une lecture. Le compteur du lot et celui de l'assistant concordent."""
+    threshold = ocr_confidence_threshold(db)
+    out: dict[str, int] = {}
+    for resp, reading in _pending_ocr(db, assessment_id):
+        raw = (reading.raw_json or {}) if reading else {}
+        n = 1
+        if raw.get("cells") is not None and isinstance(raw.get("cells"), list):
+            confs = raw.get("cell_confidences") or []
+            n = (sum(1 for c in confs if not _finite_at_least(c, threshold)) if confs
+                 else len(raw["cells"])) or 1
+        out[resp.copy_item_id] = n
+    return out
+
+
+def _finite_at_least(value, threshold: float) -> bool:
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(v) and v >= threshold
+
+
+def _pending_ocr(db: Session, assessment_id: str) -> list[tuple[StudentResponse, OcrAttempt | None]]:
     threshold = ocr_confidence_threshold(db)
     # Une copie finalisée est close : une copie tardive ne rouvre pas sa lecture.
     copies = (db.query(Copy).filter(Copy.assessment_id == assessment_id,
@@ -377,7 +406,7 @@ def pending_ocr_responses(db: Session, assessment_id: str) -> list[StudentRespon
         except (TypeError, ValueError):
             confidence = 0.0
         if not math.isfinite(confidence) or confidence < threshold:
-            out.append(resp)
+            out.append((resp, reading))
     return out
 
 

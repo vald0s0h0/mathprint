@@ -29,7 +29,7 @@ from ..services.file_sniff import sniff_file as _sniff_file
 from ..services.pipeline import (
     FinalizeInProgress, build_overlays, effective_reading, finalize_batch,
     grade_stored_responses,
-    pending_ocr_responses, process_batch,
+    pending_ocr_responses, pending_ocr_units, process_batch,
 )
 from ..services.runtime_settings import llm_confidence_threshold, ocr_confidence_threshold
 
@@ -545,7 +545,7 @@ def _batch_view(db: Session, b: ScanBatch) -> dict:
         pending = _pending_reviews_query(db, b.assessment_id).count()
     pending_llm = (_pending_reviews_query(db, b.assessment_id)
                    .filter(GradingDecision.reason_code == "llm_unavailable").count())
-    pending_ocr = len(pending_ocr_responses(db, b.assessment_id)) if (
+    pending_ocr = sum(pending_ocr_units(db, b.assessment_id).values()) if (
         b.status == "ocr_review_pending") else 0
     stale = refine.overlay_stale(b)
     rebuilding = stale and _is_running(b.id)
@@ -1051,10 +1051,24 @@ def list_ocr_items(batch_id: str, db: Session = Depends(get_db), wave: int | Non
         student = db.get(Student, copy.student_id)
         for item in db.query(CopyItem).filter_by(copy_id=copy.id).all():
             resp = db.query(StudentResponse).filter_by(copy_item_id=item.id).first()
-            if not resp or resp.id not in pending:
+            if not resp:
+                continue
+            # lectures déjà faites par le professeur pendant cet OCRiser : renvoyées
+            # aussi, pour qu'il puisse revenir dessus après avoir fermé l'assistant
+            touched: list = []
+            if resp.zone_id:
+                mine = (db.query(OcrAttempt)
+                        .filter(OcrAttempt.zone_id == resp.zone_id,
+                                OcrAttempt.provider == "teacher_ocr",
+                                OcrAttempt.created_at >= batch.created_at)
+                        .order_by(OcrAttempt.created_at.desc()).first())
+                touched = list((mine.raw_json or {}).get("touched") or ["zone"]) if mine else []
+            if resp.id not in pending and not touched:
                 continue
             zone = db.get(ResponseZone, resp.zone_id) if resp.zone_id else None
             row = _review_unit(db, resp, item, copy, student)
+            row["ocr_pending"] = resp.id in pending
+            row["ocr_touched"] = touched
             row["ocr_controls"] = _normalized_ocr_controls(zone, item) if zone else {"kind": "text"}
             reading = effective_reading(db, resp.zone_id)
             row["cell_confidences"] = ((reading.raw_json or {}).get("cell_confidences")
@@ -1164,7 +1178,7 @@ def update_ocr_reading(response_id: str, body: OcrReadingIn,
     elif not item.response_type.startswith("qcm") and item.response_type not in ("checkbox_grid", "matching"):
         ocr_truth.record_truth(db, resp.zone_id, {None: text or ""})
     db.commit()
-    remaining = len(pending_ocr_responses(db, copy.assessment_id)) if copy else 0
+    remaining = sum(pending_ocr_units(db, copy.assessment_id).values()) if copy else 0
     return {"ok": True, "remaining": remaining}
 
 
@@ -1199,7 +1213,7 @@ def confirm_ocr_reading(response_id: str, db: Session = Depends(get_db),
                           text=text, latex=latex, confidence=1.0))
         ocr_truth.record_truth(db, resp.zone_id, texts)
         db.commit()
-    remaining = len(pending_ocr_responses(db, copy.assessment_id)) if copy else 0
+    remaining = sum(pending_ocr_units(db, copy.assessment_id).values()) if copy else 0
     return {"ok": True, "remaining": remaining}
 
 

@@ -132,7 +132,7 @@ export default function ScanLotRow({ lot, h }: { lot: Lot; h: LotHandlers }) {
           )}
           {lot.stage === 'ocr_review' && (
             <Button size="xs" color="blue" leftSection={<ScanLine size={14} />} onClick={h.onOcr}>
-              OCRiser ({lot.pendingOcr})
+              {lot.pendingOcr > 0 ? `OCRiser (${lot.pendingOcr})` : 'OCRiser : revoir et lancer la correction'}
             </Button>
           )}
           {lot.stage === 'error' && (

@@ -19,18 +19,20 @@ import {
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
 import { Check, ChevronLeft, ChevronRight, PencilLine } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { api, getToken } from '../api'
 import MathText, { MathAnswer } from './MathText'
 
 export type OcrOption = { surface: string; text: string; engines: string[] }
-type OcrCell = { index: number; label: string; cell_latex?: string; ocr_options?: OcrOption[] }
+type OcrCell = { index: number; label: string; ocr_text?: string; ocr_options?: OcrOption[] }
 type Box4 = { index: number; row?: number | null; col?: number | null; x: number; y: number; w: number; h: number }
 export type OcrItem = {
   response_id: string; student: string; student_order: number
   group_key: string; group_label: string; response_type: string
   ocr_confidence: number | null; cell_confidences?: number[]
   ocr_audit?: boolean; ocr_options?: OcrOption[]
+  ocr_text?: string | null
+  ocr_pending?: boolean; ocr_touched?: (number | 'zone')[]
   selected_choices: number[]; selected_pairs: number[][]
   cells: OcrCell[]
   ocr_controls?: {
@@ -58,16 +60,23 @@ const isBoxes = (it: OcrItem) => it.response_type.startsWith('qcm') || it.respon
 const isMatching = (it: OcrItem) => it.response_type === 'matching'
 const isMultiline = (it: OcrItem) => it.response_type === 'multiline_text' || it.response_type === 'composite'
 
+const isTable = (it: OcrItem) => it.response_type === 'table_fill' || it.response_type === 'multi_blank'
+
+/** Cases à lire : celles encore douteuses, plus celles déjà lues par le professeur
+ *  pendant cet OCRiser (pour y revenir, même après avoir fermé l'assistant). */
 function buildUnits(items: OcrItem[], threshold: number): Unit[] {
   const out: Unit[] = []
   for (const item of items) {
-    if (item.response_type === 'table_fill' || item.response_type === 'multi_blank') {
+    const pending = item.ocr_pending !== false
+    const touched = item.ocr_touched ?? []
+    if (isTable(item)) {
       const confs = item.cell_confidences ?? []
       item.cells.forEach((_, i) => {
-        if (!confs.length || (confs[i] ?? item.ocr_confidence ?? 0) < threshold)
+        const doubtful = pending && (!confs.length || (confs[i] ?? item.ocr_confidence ?? 0) < threshold)
+        if (doubtful || touched.includes(i))
           out.push({ key: `${item.response_id}:${i}`, respId: item.response_id, cellIndex: i })
       })
-    } else {
+    } else if (pending || touched.length) {
       out.push({ key: `${item.response_id}:-`, respId: item.response_id, cellIndex: null })
     }
   }
@@ -80,6 +89,111 @@ function buildUnits(items: OcrItem[], threshold: number): Unit[] {
       || (a.cellIndex ?? -1) - (b.cellIndex ?? -1) || ia.student_order - ib.student_order
   })
   return out
+}
+
+/** Lectures déjà enregistrées par le professeur (session précédente de l'assistant). */
+function doneFromServer(items: OcrItem[], units: Unit[]): Record<string, Done> {
+  const by = new Map(items.map((it) => [it.response_id, it]))
+  const out: Record<string, Done> = {}
+  for (const u of units) {
+    const it = by.get(u.respId)!
+    const touched = it.ocr_touched ?? []
+    if (u.cellIndex != null) {
+      if (touched.includes(u.cellIndex))
+        out[u.key] = { text: it.cells[u.cellIndex]?.ocr_text ?? '', status: 'saved' }
+    } else if (touched.length) {
+      out[u.key] = isBoxes(it) ? { choices: [...(it.selected_choices ?? [])], status: 'saved' }
+        : isMatching(it) ? { pairs: (it.selected_pairs ?? []).map((p) => [...p]), status: 'saved' }
+          : { text: it.ocr_text ?? '', status: 'saved' }
+    }
+  }
+  return out
+}
+
+// ------------------------------------------------------------ clavier de saisie
+// Symboles insérés tels qu'on les écrit (≈, °, ℝ…), modèles LaTeX avec un curseur
+// `|` posé au bon endroit ; Tab saute à la case vide `{}` suivante.
+type Key = { label: string; insert: string; tip: string }
+const KEY_ROWS: { title: string; keys: Key[] }[] = [
+  { title: 'Modèles', keys: [
+    { label: 'a/b', insert: '\\frac{|}{}', tip: 'Fraction : numérateur, Tab, dénominateur' },
+    { label: 'xⁿ', insert: '^{|}', tip: 'Puissance (exposant)' },
+    { label: 'x²', insert: '^{2}', tip: 'Au carré' },
+    { label: 'x₁', insert: '_{|}', tip: 'Indice' },
+    { label: '√', insert: '\\sqrt{|}', tip: 'Racine carrée' },
+    { label: '( )', insert: '(|)', tip: 'Parenthèses' },
+    { label: '[ ; ]', insert: '[|;]', tip: 'Intervalle' },
+    { label: '|x|', insert: '|||', tip: 'Valeur absolue' },
+    { label: 'AB⃗', insert: '\\overrightarrow{|}', tip: 'Vecteur' },
+    { label: 'Â', insert: '\\widehat{|}', tip: 'Angle' },
+    { label: 'Texte', insert: '\\text{|}', tip: 'Mots dans une formule' },
+  ] },
+  { title: 'Symboles', keys: [
+    { label: '×', insert: '×', tip: 'Multiplié' }, { label: '÷', insert: '÷', tip: 'Divisé' },
+    { label: '−', insert: '-', tip: 'Moins' }, { label: '±', insert: '±', tip: 'Plus ou moins' },
+    { label: '≈', insert: '≈', tip: 'Environ égal (égal ondulé)' }, { label: '≠', insert: '≠', tip: 'Différent' },
+    { label: '≤', insert: '≤', tip: 'Inférieur ou égal' }, { label: '≥', insert: '≥', tip: 'Supérieur ou égal' },
+    { label: '°', insert: '°', tip: 'Degré' }, { label: '%', insert: '%', tip: 'Pour cent' },
+    { label: 'π', insert: 'π', tip: 'Pi' }, { label: '∞', insert: '∞', tip: 'Infini' },
+    { label: '€', insert: '€', tip: 'Euro' },
+  ] },
+  { title: 'Ensembles et logique', keys: [
+    { label: 'ℕ', insert: 'ℕ', tip: 'Entiers naturels' }, { label: 'ℤ', insert: 'ℤ', tip: 'Entiers relatifs' },
+    { label: 'ⅅ', insert: '\\mathbb{D}', tip: 'Décimaux' }, { label: 'ℚ', insert: 'ℚ', tip: 'Rationnels' },
+    { label: 'ℝ', insert: 'ℝ', tip: 'Réels' }, { label: '∈', insert: '∈', tip: 'Appartient à' },
+    { label: '∉', insert: '∉', tip: "N'appartient pas à" }, { label: '⊂', insert: '⊂', tip: 'Inclus dans' },
+    { label: '∪', insert: '∪', tip: 'Union' }, { label: '∩', insert: '∩', tip: 'Intersection' },
+    { label: '∅', insert: '∅', tip: 'Ensemble vide' }, { label: '⇒', insert: '⇒', tip: 'Implique' },
+    { label: '⇔', insert: '⇔', tip: 'Équivaut à' }, { label: '//', insert: '//', tip: 'Parallèle' },
+    { label: '⊥', insert: '⊥', tip: 'Perpendiculaire' },
+  ] },
+  { title: 'Lettres grecques', keys: [
+    { label: 'α', insert: 'α', tip: 'alpha' }, { label: 'β', insert: 'β', tip: 'bêta' },
+    { label: 'θ', insert: 'θ', tip: 'thêta' }, { label: 'Δ', insert: 'Δ', tip: 'delta' },
+  ] },
+]
+
+type Field = HTMLInputElement | HTMLTextAreaElement
+
+/** Insère `template` à la place de la sélection ; `|` marque le curseur (la sélection y va). */
+function insertAt(el: Field, value: string, template: string): { value: string; caret: number } {
+  const a = el.selectionStart ?? value.length, b = el.selectionEnd ?? value.length
+  const sel = value.slice(a, b)
+  const at = template.indexOf('|')
+  const t = at < 0 ? template + sel : template.slice(0, at) + sel + template.slice(at + 1)
+  const caret = a + (at < 0 ? t.length : at + sel.length)
+  return { value: value.slice(0, a) + t + value.slice(b), caret }
+}
+
+/** Tab : place le curseur dans la prochaine accolade vide `{}` (dénominateur…). */
+function nextSlot(el: Field): boolean {
+  const from = el.selectionEnd ?? 0
+  const i = el.value.indexOf('{}', from)
+  if (i < 0) return false
+  el.setSelectionRange(i + 1, i + 1)
+  return true
+}
+
+function MathKeyboard({ onKey }: { onKey: (k: Key) => void }) {
+  return (
+    <Stack gap={6} mt="xs">
+      {KEY_ROWS.map((row) => (
+        <Group key={row.title} gap={4} wrap="wrap" align="center">
+          <Text size="10px" c="dimmed" w={78} style={{ lineHeight: 1.1 }}>{row.title}</Text>
+          {row.keys.map((k) => (
+            <Tooltip key={k.label} label={k.tip} openDelay={300}>
+              <Button size="compact-sm" variant="default" miw={34} px={8}
+                styles={{ label: { fontSize: 15 } }}
+                // ne vole pas le focus : le curseur reste dans la saisie
+                onMouseDown={(e) => e.preventDefault()} onClick={() => onKey(k)}>
+                {k.label}
+              </Button>
+            </Tooltip>
+          ))}
+        </Group>
+      ))}
+    </Stack>
+  )
 }
 
 function scanUrl(u: Unit) {
@@ -165,7 +279,12 @@ export default function OcrAssistant({ batch, onClose }: { batch: OcrBatchRef | 
     api.get<OcrItem[]>(`/api/scans/batches/${batch.id}/ocr-items${batch.query ? `?${batch.query}` : ''}`)
       .then((rs) => {
         if (cancelled) return
-        setItems(rs); setUnits(buildUnits(rs, batch.ocr_threshold || 0.9))
+        const us = buildUnits(rs, batch.ocr_threshold || 0.9)
+        const d = doneFromServer(rs, us)
+        setItems(rs); setUnits(us); setDone(d)
+        // reprise : première case encore à lire, ou l'écran de fin si tout est lu
+        const first = us.findIndex((u) => !d[u.key])
+        setIdx(first < 0 ? us.length : first)
       })
       .catch((e) => { notifications.show({ color: 'red', message: (e as Error).message }); onClose() })
       .finally(() => !cancelled && setLoading(false))
@@ -197,7 +316,6 @@ export default function OcrAssistant({ batch, onClose }: { batch: OcrBatchRef | 
   const cell = item && unit?.cellIndex != null ? item.cells[unit.cellIndex] ?? null : null
   const options: OcrOption[] = (cell ? cell.ocr_options : item?.ocr_options) ?? []
   const mine = unit ? done[unit.key] : undefined
-  const savedCount = Object.values(done).filter((d) => d.status === 'saved').length
   const answered = units.filter((u) => done[u.key]).length
 
   // nouvelle case : saisie vide (ou celle déjà faite), coches de l'élève, focus clavier
@@ -235,6 +353,17 @@ export default function OcrAssistant({ batch, onClose }: { batch: OcrBatchRef | 
 
   const choose = (text: string) => unit && item && save(unit, item, { text })
   const validateManual = () => { if (manual.trim()) choose(manual) }
+
+  function pressKey(k: Key) {
+    const el = inputRef.current
+    if (!el) { setManual((m) => m + k.insert.replace('|', '')); return }
+    const r = insertAt(el, manual, k.insert)
+    setManual(r.value)
+    window.setTimeout(() => { el.focus(); el.setSelectionRange(r.caret, r.caret) }, 0)
+  }
+  const onFieldTab = (e: ReactKeyboardEvent<Field>) => {
+    if (e.key === 'Tab' && !e.shiftKey && nextSlot(e.currentTarget)) e.preventDefault()
+  }
   const validateMarks = () => unit && item && save(unit, item, isBoxes(item) ? { choices } : { pairs })
 
   const go = useCallback((delta: number) => setIdx((i) => Math.max(0, Math.min(units.length, i + delta))), [units.length])
@@ -291,6 +420,7 @@ export default function OcrAssistant({ batch, onClose }: { batch: OcrBatchRef | 
   }
 
   const errors = units.filter((u) => done[u.key]?.status === 'error').length
+  const canFinish = answered === units.length && errors === 0
   const sameGroup = useMemo(() => !item ? [] : units.filter((u) => {
     const it = items.find((x) => x.response_id === u.respId)
     return it?.group_key === item.group_key && u.cellIndex === unit?.cellIndex
@@ -326,7 +456,12 @@ export default function OcrAssistant({ batch, onClose }: { batch: OcrBatchRef | 
         <Progress value={units.length ? (answered / units.length) * 100 : 0} size="sm" radius="xl"
           aria-label={`${answered} lectures sur ${units.length}`} />
         {loading ? <Text c="dimmed" py="xl" ta="center">Chargement des lectures…</Text>
-          : !units.length ? <Text c="dimmed" py="xl" ta="center">Aucune lecture à vérifier.</Text>
+          : !units.length ? (
+              <Stack align="center" py="xl" gap="md">
+                <Text c="dimmed">Aucune lecture à vérifier.</Text>
+                <Button color="blue" loading={finishing} onClick={finish}>Lancer la correction</Button>
+              </Stack>
+            )
             : idx >= units.length ? (
               <Stack align="center" py="xl" gap="md">
                 <Text fz="xl" fw={650}>{answered === units.length ? 'Toutes les lectures sont faites' : `${answered} lectures faites sur ${units.length}`}</Text>
@@ -338,8 +473,7 @@ export default function OcrAssistant({ batch, onClose }: { batch: OcrBatchRef | 
                 </Text>
                 <Group>
                   <Button variant="default" leftSection={<ChevronLeft size={16} />} onClick={() => go(-1)}>Revoir</Button>
-                  <Button color="blue" loading={finishing} disabled={answered < units.length || errors > 0
-                    || savedCount < answered && !finishing} onClick={finish}>Lancer la correction</Button>
+                  <Button color="blue" loading={finishing} disabled={!canFinish} onClick={finish}>Lancer la correction</Button>
                 </Group>
               </Stack>
             ) : item && unit && (
@@ -419,12 +553,12 @@ export default function OcrAssistant({ batch, onClose }: { batch: OcrBatchRef | 
                             onChange={(e) => setManual(e.currentTarget.value)}
                             placeholder="Texte ou LaTeX — Maj+Entrée pour une nouvelle ligne"
                             styles={{ input: { fontFamily: 'monospace' } }}
-                            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); validateManual() } }} />
+                            onKeyDown={(e) => { onFieldTab(e); if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); validateManual() } }} />
                         ) : (
                           <TextInput ref={inputRef} value={manual} onChange={(e) => setManual(e.currentTarget.value)}
-                            placeholder="Ex. 17   ·   \frac{3}{4}   ·   x^2+1" autoComplete="off" spellCheck={false}
+                            placeholder="Ex. 17   ·   3/4   ·   x^2+1   — ou les touches ci-dessous" autoComplete="off" spellCheck={false}
                             styles={{ input: { fontFamily: 'monospace', fontSize: 16 } }}
-                            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); validateManual() } }} />
+                            onKeyDown={(e) => { onFieldTab(e); if (e.key === 'Enter') { e.preventDefault(); validateManual() } }} />
                         )}
                         <Group justify="space-between" mt="xs" wrap="nowrap">
                           <Box fz="1.4rem" style={{ minHeight: 30, overflowX: 'auto' }}>
@@ -434,6 +568,7 @@ export default function OcrAssistant({ batch, onClose }: { batch: OcrBatchRef | 
                             Valider <Kbd ml={6} size="xs">Entrée</Kbd>
                           </Button>
                         </Group>
+                        <MathKeyboard onKey={pressKey} />
                       </Card>
                     </>
                   )}
@@ -444,9 +579,17 @@ export default function OcrAssistant({ batch, onClose }: { batch: OcrBatchRef | 
           <Text size="xs" c="dimmed">
             Un clic sur une lecture la retient et passe à la suivante · <Kbd size="xs">←</Kbd> <Kbd size="xs">→</Kbd> pour naviguer
           </Text>
-          <Text size="xs" c={errors ? 'red' : 'dimmed'}>
-            {answered}/{units.length} lues{errors ? ` · ${errors} en erreur` : ''}
-          </Text>
+          <Group gap="sm" wrap="nowrap">
+            <Text size="xs" c={errors ? 'red' : 'dimmed'}>
+              {answered}/{units.length} lues{errors ? ` · ${errors} en erreur` : ''}
+            </Text>
+            {units.length > 0 && idx < units.length && (
+              <Tooltip label={canFinish ? 'Toutes les lectures sont faites' : `Encore ${units.length - answered} lecture${units.length - answered > 1 ? 's' : ''} à faire`}>
+                <Button size="xs" color="blue" variant={canFinish ? 'filled' : 'light'} loading={finishing}
+                  disabled={!canFinish} onClick={finish}>Lancer la correction</Button>
+              </Tooltip>
+            )}
+          </Group>
         </Group>
       </Stack>
     </Modal>

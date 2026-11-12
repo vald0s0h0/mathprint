@@ -406,11 +406,11 @@ def job_segments(stage: str, *, printed: bool) -> list[dict]:
 
 def jobs_view(db: Session, batch: ScanBatch) -> list[dict]:
     """Une entrée par enchaînement tardif : c'est elle qui fait une ligne à part."""
-    from .pipeline import pending_ocr_responses
+    from .pipeline import pending_ocr_units
 
     if not batch.overlay_wave:
         return []
-    pending_ocr = {r.copy_item_id for r in pending_ocr_responses(db, batch.assessment_id)}
+    pending_ocr = pending_ocr_units(db, batch.assessment_id)
     open_items = {item_id for (item_id,) in
                   db.query(StudentResponse.copy_item_id)
                     .join(GradingDecision, GradingDecision.response_id == StudentResponse.id)
@@ -436,7 +436,7 @@ def jobs_view(db: Session, batch: ScanBatch) -> list[dict]:
                 item_ids |= {z.item_id for z in db.query(ResponseZone).filter_by(page_id=page.id)}
         conflicts = sum(row.status == "conflict" for row in rows)
         pages = len({row.page_id or row.replaces_page_id for row in rows})
-        ocr = len(item_ids & pending_ocr)
+        ocr = sum(pending_ocr.get(i, 0) for i in item_ids)
         reviews = len(item_ids & open_items)
         ready = wave_overlay_ready(db, batch, wave)
         if state.get("closed"):
