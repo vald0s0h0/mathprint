@@ -106,15 +106,19 @@ def test_admin_user_zone_shows_only_own_classes(env):
     client, _, t, ids = env
     everything = {c["id"] for c in client.get("/api/classes", headers=t["admin"]).json()}
     assert everything == {ids["own"], ids["other"]}
-    for zone in ("atelier", "admin"):
-        h = {**t["admin"], "X-KN-Zone": zone}
-        assert {c["id"] for c in client.get("/api/classes", headers=h).json()} == everything
+    h = {**t["admin"], "X-KN-Zone": "admin"}
+    assert {c["id"] for c in client.get("/api/classes", headers=h).json()} == everything
+    # Atelier : étanche, seul l'univers accompagné (jamais les essais de l'admin)
+    h = {**t["admin"], "X-KN-Zone": "atelier"}
+    assert [c["id"] for c in client.get("/api/classes", headers=h).json()] == [ids["other"]]
+    assert [c["id"] for c in client.get("/api/classes", headers=t["corrector"]).json()] == [ids["other"]]
+    assert client.get(f"/api/classes/{ids['own']}/students", headers=h).status_code == 404
     user = {**t["admin"], "X-KN-Zone": "user"}
     assert [c["id"] for c in client.get("/api/classes", headers=user).json()] == [ids["own"]]
     assert client.get(f"/api/classes/{ids['other']}/students", headers=user).status_code == 404
     # filtres du haut : ses cycles en zone user, ceux de toute l'instance à l'Atelier
     with_school = client.get("/api/auth/me", headers={**t["admin"], "X-KN-Zone": "atelier"}).json()
-    assert with_school["teaching"]["cycles"] == ["4e", "3e"]
+    assert with_school["teaching"]["cycles"] == ["4e"]
     assert client.get("/api/auth/me", headers=user).json()["teaching"]["cycles"] == ["3e"]
     # zone inconnue : ignorée (pas de filtrage), les droits suivent le rôle
     odd = {**t["admin"], "X-KN-Zone": "n'importe"}

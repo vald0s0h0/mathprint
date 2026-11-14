@@ -10,13 +10,32 @@ import GradeSelectionRequired from './GradeSelectionRequired'
 import ExerciseCatalogCard, { exerciseDifficulty, type CatalogExercise, type ReviewVerdict } from './ExerciseCatalogCard'
 import ExerciseMasonry from './ExerciseMasonry'
 import MathText from './MathText'
+import { DURATION_HINT, formatHours, formatMinutes } from '../utils/duration'
 import BankHealthPanel from './BankHealthPanel'
+import { SeriesBadge, SeriesSlots, VariantLabel, seriesColumnWidth, type Variant } from './SeriesBadges'
 
 type Summary = {
   competency_id: string; code?: string; short_id: string; label: string; grade_level?: string
   domain_code: string; domain_name: string; chapter_code: string; chapter_name: string
+  recommended_minutes?: number | null; chapter_hours?: number | null
   needs_review?: number; needs_update?: number; framework_id?: string; total?: number; problems?: number; draft?: number; validated?: number; published?: number
+  // Lycée ivoirien : série du référentiel et ligne fusionnée de la filière
+  series?: string | null; merge?: Merge | null
+  // vue fusionnée : compétences de chaque série réunies sur cette ligne
+  members?: Summary[]
 }
+type Merge = {
+  group: string; line: string; order: number; chapter_key: string; chapter_code: string; chapter_name: string
+  variant: Variant | null
+}
+// Filières du lycée ivoirien : les séries affichées ensemble, une ligne par contenu.
+const FILIERES: Record<string, { key: string; label: string; series: string[] }[]> = {
+  '2nde': [{ key: 'A', label: 'Série A', series: ['A'] }, { key: 'C', label: 'Série C', series: ['C'] }],
+  '1re': [{ key: 'S', label: 'Scientifique · C D', series: ['C', 'D'] }, { key: 'L', label: 'Littéraire · A1 A2', series: ['A1', 'A2'] }],
+  'tle': [{ key: 'S', label: 'Scientifique · C D', series: ['C', 'D'] }, { key: 'L', label: 'Littéraire · A1 A2', series: ['A1', 'A2'] }],
+}
+const exerciseCount = (s: Summary) => s.total ?? (s.draft ?? 0) + (s.validated ?? 0)
+const sumOf = (s: Summary, value: (m: Summary) => number) => (s.members ?? [s]).reduce((n, m) => n + value(m), 0)
 type Framework = { id: string; grade_level: string; subject_id: string; program_id: string }
 type PublicationSelection = {
   grade_level: string; program_id: string; subject_id: string; competency_ids: string[]
@@ -51,9 +70,22 @@ export default function ExerciseCatalog({ admin = false }: { admin?: boolean }) 
   const publicationRequest = useRef(0)
   const detailRef = useRef<HTMLDivElement>(null)
   const title = admin ? 'Exercices' : 'Banque de contenus'
+  // Filière (lycée ivoirien, vue admin) : les référentiels de ses séries, fusionnés.
+  const filieres = admin && catalog.program === 'ci' ? FILIERES[grade] ?? [] : []
+  const [filiereKey, setFiliereKey] = useState<Record<string, string>>(() => {
+    try { return JSON.parse(localStorage.getItem('mathprint_filiere') || '{}') } catch { return {} }
+  })
+  const filiere = filieres.find(f => f.key === filiereKey[grade]) ?? filieres[0]
+  const chooseFiliere = (key: string) => setFiliereKey(current => {
+    const next = { ...current, [grade]: key }
+    try { localStorage.setItem('mathprint_filiere', JSON.stringify(next)) } catch { /* préférence locale facultative */ }
+    return next
+  })
+  const merged = Boolean(filiere)
   const frameworkIds = frameworks.filter(f => f.grade_level === grade && f.subject_id === subjectId && teaching.programs.includes(f.program_id)).map(f => f.id).join(',')
   const scope = admin
     ? `grade_level=${grade}&program_id=${catalog.program}&subject_id=${subjectId}`
+      + (filiere ? `&paths=${filiere.series.map(serie => `ci-${serie}`).join(',')}` : '')
     : `grade_level=${grade}&subject_id=${subjectId}`
   const endpoint = admin ? '/api/indigo' : '/api/content'
   const selected = summary?.find(s => s.competency_id === params.get('competency')) ?? null
@@ -78,7 +110,7 @@ export default function ExerciseCatalog({ admin = false }: { admin?: boolean }) 
     const ids = frameworkIds.split(',').filter(Boolean)
     const scopes = admin ? [scope] : ids.map(id => `${scope}&framework_id=${encodeURIComponent(id)}`)
     Promise.all(scopes.map(query => api.get<Summary[]>(`${endpoint}/summary?${query}`)))
-      .then(groups => { if (current) setSummary(groups.flatMap((rows, i) => rows.map(row => ({ ...row, framework_id: ids[i] })))) })
+      .then(groups => { if (current) setSummary(groups.flatMap((rows, i) => rows.map(row => ({ ...row, framework_id: ids[i] ?? row.framework_id })))) })
       .catch(e => { if (current) setError(e.message) })
     if (!admin) Promise.all(scopes.map(query => api.get<Matrix>(`/api/assessments/competency-matrix?${query}`)))
       .then(groups => { if (current) setMatrix({
@@ -131,11 +163,54 @@ export default function ExerciseCatalog({ admin = false }: { admin?: boolean }) 
       for (const c of ch.competencies) out.set(c.id, c.mastery_by_class)
     return out
   }, [matrix])
+  // Durée du programme : colonne affichée seulement si le référentiel la fournit.
+  const hasDuration = useMemo(() => (summary ?? []).some(s => s.recommended_minutes != null), [summary])
+  const seriesList = filiere?.series ?? []
+  const hasVariants = merged && seriesList.length > 1 && (summary ?? []).some(s => s.merge?.variant)
   const columns = useMemo<CompetencyHierarchyColumn<Summary>[]>(() => [
-    { key: 'total', label: <VisuallyHidden>Total</VisuallyHidden>, width: 72, align: 'center', render: s => <Text size="sm">{s.total ?? (s.draft ?? 0) + (s.validated ?? 0)}</Text> },
-    ...(admin ? [{ key: 'published', label: 'Publiés', width: 80, align: 'center' as const, render: (s: Summary) => <Text size="sm">{s.published ?? 0}</Text> }] : []),
-    ...(admin ? [{ key: 'needs_update', label: 'Mettre à jour', width: 115, align: 'center' as const, render: (s: Summary) => <Tooltip label="Exercices déjà publiés dont la version actuelle diffère de la version en banque"><Text size="sm" fw={s.needs_update ? 650 : undefined} c={s.needs_update ? 'orange' : 'dimmed'}>{s.needs_update ?? 0}</Text></Tooltip> }] : []),
-    ...(admin ? [{ key: 'needs_review', label: 'À reprendre', width: 110, align: 'center' as const, render: (s: Summary) => <Text size="sm" c={s.needs_review ? 'red' : 'dimmed'}>{s.needs_review ?? 0}</Text> }] : []),
+    // Vue fusionnée : un badge par série (durée de la compétence dans cette série),
+    // et dans le bandeau du chapitre, le code et les heures de la leçon dans chaque série.
+    ...(merged ? [{
+      key: 'series', label: <VisuallyHidden>Séries</VisuallyHidden>, width: seriesColumnWidth(seriesList.length), align: 'left' as const,
+      bandLabel: (chapter: { code: string; rows: Summary[] }) => <SeriesSlots series={seriesList}>{serie => {
+        const member = chapter.rows.flatMap(r => r.members ?? [r]).find(m => m.series === serie)
+        // code de la leçon dans le badge seulement s'il diffère d'une série à l'autre
+        const hours = `${member?.chapter_hours ?? '?'} h`
+        return member ? <SeriesBadge series={serie} text={chapter.code ? hours : `${member.chapter_code} · ${hours}`}
+          title={`Série ${serie} : leçon ${member.chapter_code}, ${member.chapter_hours ?? '?'} h au programme`} /> : null
+      }}</SeriesSlots>,
+      render: (row: Summary) => <SeriesSlots series={seriesList}>{serie => {
+        const member = (row.members ?? [row]).find(m => m.series === serie)
+        return member ? <SeriesBadge series={serie}
+          text={member.recommended_minutes == null ? '—' : formatMinutes(member.recommended_minutes)}
+          title={`Série ${serie} · ${member.short_id} : ouvrir ses exercices`} onClick={() => open(member)} /> : null
+      }}</SeriesSlots>,
+    }] : []),
+    ...(hasDuration && !merged ? [{
+      key: 'duration', label: <Tooltip label={DURATION_HINT} multiline w={280}><span>Durée</span></Tooltip>,
+      width: 84, align: 'center' as const,
+      render: (s: Summary) => <Text size="sm" c="dimmed" style={{ fontVariantNumeric: 'tabular-nums' }}>
+        {s.recommended_minutes == null ? '—' : formatMinutes(s.recommended_minutes)}</Text>,
+    }] : []),
+    { key: 'total', label: <VisuallyHidden>Total</VisuallyHidden>, width: 60, align: 'center', render: s => <Text size="sm">{sumOf(s, exerciseCount)}</Text> },
+    ...(admin ? [{ key: 'published', label: 'Publiés', width: 76, align: 'center' as const, render: (s: Summary) => <Text size="sm">{sumOf(s, m => m.published ?? 0)}</Text> }] : []),
+    ...(admin ? [{ key: 'needs_update', label: 'Mettre à jour', width: 104, align: 'center' as const, render: (s: Summary) => {
+      const n = sumOf(s, m => m.needs_update ?? 0)
+      return <Tooltip label="Exercices déjà publiés dont la version actuelle diffère de la version en banque"><Text size="sm" fw={n ? 650 : undefined} c={n ? 'orange' : 'dimmed'}>{n}</Text></Tooltip>
+    } }] : []),
+    ...(admin ? [{ key: 'needs_review', label: 'À reprendre', width: 100, align: 'center' as const, render: (s: Summary) => {
+      const n = sumOf(s, m => m.needs_review ?? 0)
+      return <Text size="sm" c={n ? 'red' : 'dimmed'}>{n}</Text>
+    } }] : []),
+    // Variantes : exercices de chaque série sur une ligne dont le texte diffère d'un détail.
+    ...(hasVariants ? [{
+      key: 'variants', label: <Tooltip label="Même contenu à un détail près : les exercices de chaque série" multiline w={260}><span>Variantes</span></Tooltip>,
+      width: 110, align: 'center' as const,
+      render: (s: Summary) => s.merge?.variant
+        ? <Text size="sm" style={{ fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+            {(s.members ?? [s]).map(m => `${m.series} ${exerciseCount(m)}`).join(' · ')}</Text>
+        : null,
+    }] : []),
     ...(matrix?.classes ?? []).map(cls => ({
       key: cls.id, label: cls.name, width: 100, align: 'center' as const,
       render: (s: Summary) => {
@@ -145,13 +220,42 @@ export default function ExerciseCatalog({ admin = false }: { admin?: boolean }) 
         </Tooltip>
       },
     })),
-  ], [admin, matrix, mastery])
+  ], [admin, matrix, mastery, hasDuration, merged, hasVariants, filiere])
 
   const domains = useMemo(() => {
     const groups = new Map<string, { key: string; code: string; name: string; chapters: { key: string; code: string; name: string; rows: Summary[] }[] }>()
+    const query = search.toLocaleLowerCase('fr')
+    if (merged && filiere) {
+      // Une ligne par contenu de la filière : les compétences des séries au même
+      // `merge.line` sont le même contenu, dans l'ordre fusionné du programme.
+      const lines = new Map<string, Summary[]>()
+      for (const s of summary ?? []) {
+        if (!s.merge) continue
+        lines.set(s.merge.line, [...(lines.get(s.merge.line) ?? []), s])
+      }
+      const rows = [...lines.values()].map(members => {
+        members.sort((a, b) => filiere.series.indexOf(a.series ?? '') - filiere.series.indexOf(b.series ?? ''))
+        return { ...members[0], members }
+      }).sort((a, b) => a.merge!.order - b.merge!.order)
+      for (const row of rows) {
+        const members = row.members!
+        if (onlyProblems && !members.some(m => m.needs_review)) continue
+        if (query && !members.some(m => `${m.short_id} ${m.label} ${m.chapter_name}`.toLocaleLowerCase('fr').includes(query))) continue
+        const key = `${row.merge!.group}/${row.domain_code}`
+        if (!groups.has(key)) groups.set(key, { key, code: row.domain_code, name: row.domain_name, chapters: [] })
+        const domain = groups.get(key)!
+        let chapter = domain.chapters.find(c => c.key === `${key}/${row.merge!.chapter_key}`)
+        if (!chapter) {
+          chapter = { key: `${key}/${row.merge!.chapter_key}`, code: row.merge!.chapter_code, name: row.merge!.chapter_name, rows: [] }
+          domain.chapters.push(chapter)
+        }
+        chapter.rows.push(row)
+      }
+      return [...groups.values()]
+    }
     for (const s of summary ?? []) {
       if (onlyProblems && !(s.needs_review ?? 0)) continue
-      if (search && !`${s.short_id} ${s.label} ${s.chapter_name}`.toLocaleLowerCase('fr').includes(search.toLocaleLowerCase('fr'))) continue
+      if (query && !`${s.short_id} ${s.label} ${s.chapter_name}`.toLocaleLowerCase('fr').includes(query)) continue
       const key = `${s.framework_id ?? s.grade_level ?? grade}/${s.domain_code}`
       if (!groups.has(key)) groups.set(key, { key, code: s.domain_code, name: s.domain_name, chapters: [] })
       const domain = groups.get(key)!
@@ -160,7 +264,7 @@ export default function ExerciseCatalog({ admin = false }: { admin?: boolean }) 
       chapter.rows.push(s)
     }
     return [...groups.values()]
-  }, [summary, search, grade, onlyProblems])
+  }, [summary, search, grade, onlyProblems, merged, filiere])
 
   const open = (row: Summary) => {
     setParams(current => { const next = new URLSearchParams(current); next.set('competency', row.competency_id); return next })
@@ -204,7 +308,7 @@ export default function ExerciseCatalog({ admin = false }: { admin?: boolean }) 
     } finally { setPublishing(false) }
   }
   const preparePublicationSelection = async () => {
-    const competency_ids = domains.flatMap(d => d.chapters.flatMap(ch => ch.rows.map(r => r.competency_id)))
+    const competency_ids = domains.flatMap(d => d.chapters.flatMap(ch => ch.rows.flatMap(r => (r.members ?? [r]).map(m => m.competency_id))))
     if (!competency_ids.length) return
     const selection = { grade_level: grade, program_id: catalog.program, subject_id: subjectId, competency_ids }
     const request = ++publicationRequest.current
@@ -268,7 +372,11 @@ export default function ExerciseCatalog({ admin = false }: { admin?: boolean }) 
   if (grade === 'all') return <GradeSelectionRequired title={title} noClass={!admin && !teaching.cycles.length} />
   return <Stack gap="md" ref={detailRef}>
     <Group justify="space-between" align="center">
-      <Title order={2}><Group gap={8}><Library size={22} />{title}</Group></Title>
+      <Group gap="md" align="center">
+        <Title order={2}><Group gap={8}><Library size={22} />{title}</Group></Title>
+        {filieres.length > 1 && !selected && <SegmentedControl size="sm" aria-label="Filière" value={filiere?.key}
+          onChange={chooseFiliere} data={filieres.map(f => ({ value: f.key, label: f.label }))} />}
+      </Group>
       <Group gap="xs" wrap="wrap">
         {admin && !selected && <Button leftSection={<Send size={15} />} loading={preparingPublication}
           disabled={!summary || !domains.length} onClick={preparePublicationSelection}>Tout publier / mettre à jour</Button>}
@@ -322,11 +430,18 @@ export default function ExerciseCatalog({ admin = false }: { admin?: boolean }) 
       {admin && <BankHealthPanel />}
       {admin && onlyProblems && summary && domains.length === 0 && <Text c="teal">Aucun exercice ne nécessite votre intervention dans cette sélection.</Text>}
       {summary === null ? (!error && (admin || frameworkIds) ? <Loader /> : !error && <Text c="dimmed">Aucune compétence disponible pour ce cycle.</Text>) : summary.length === 0 ? <Text c="dimmed">Aucune compétence disponible pour ce cycle.</Text> :
-        <ScrollArea><CompetencyHierarchy domains={domains} columns={columns} tableMinWidth={360 + columns.length * 100}
-          getRowKey={s => s.competency_id} getShortId={s => s.short_id || s.code || ''} getLabel={s => s.label}
+        <ScrollArea><CompetencyHierarchy domains={domains} columns={columns}
+          tableMinWidth={360 + columns.reduce((sum, column) => sum + (typeof column.width === 'number' ? column.width : 100), 0)}
+          getRowKey={s => s.competency_id}
+          getShortId={s => [...new Set((s.members ?? [s]).map(m => m.short_id || m.code || ''))].join(' / ')}
+          getLabel={s => s.label}
+          renderLabel={merged ? (s => s.merge?.variant
+            ? <VariantLabel variant={s.merge.variant} series={seriesList} />
+            : <MathText text={s.label} />) : undefined}
           onRowClick={open} columnsInChapterBand chapterCount={chapter => {
-            const count = chapter.rows.reduce((sum, row) => sum + (row.total ?? (row.draft ?? 0) + (row.validated ?? 0)), 0)
-            return `${count} exercice${count > 1 ? 's' : ''}`
+            const count = chapter.rows.reduce((sum, row) => sum + sumOf(row, exerciseCount), 0)
+            const hours = merged ? undefined : chapter.rows.find(row => row.chapter_hours != null)?.chapter_hours
+            return `${count} exercice${count > 1 ? 's' : ''}` + (hours != null ? ` · ${formatHours(hours)} au programme` : '')
           }} /></ScrollArea>}
     </> : <>
       {navigation}

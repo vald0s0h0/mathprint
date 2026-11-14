@@ -9,6 +9,7 @@ Figures supportées :
 - coordinate_plane(points, grid)
 - geo   : figure géométrique DÉCLARATIVE (services.geofig)
 - chart : graphique déclaratif — courbes, diagrammes, arbres (services.chartfig)
+- tikz  : dessin TikZ dans la charte K&N (services.tikzfig) — moteur des nouvelles figures
 
 Chaque figure est rasterisée en PNG et mise en cache disque.
 """
@@ -26,14 +27,15 @@ from ..config import settings
 
 
 FIGURE_TYPES = {"rectangle", "triangle", "circle", "angle", "number_line",
-                "coordinate_plane", "image", "geo", "chart", "template", "svg"}
+                "coordinate_plane", "image", "geo", "chart", "template", "svg", "tikz"}
 # figures déclaratives : spec contrôlée par leur propre moteur, erreur LISIBLE
-DECLARATIVE_TYPES = {"geo", "chart", "template", "svg"}
+DECLARATIVE_TYPES = {"geo", "chart", "template", "svg", "tikz"}
 
 
 def _engine(ftype: str):
-    from . import chartfig, figtemplate, geofig, svgfig
-    return {"geo": geofig, "chart": chartfig, "template": figtemplate, "svg": svgfig}[ftype]
+    from . import chartfig, figtemplate, geofig, svgfig, tikzfig
+    return {"geo": geofig, "chart": chartfig, "template": figtemplate, "svg": svgfig,
+            "tikz": tikzfig}[ftype]
 
 
 def figure_error(figure_json) -> str | None:
@@ -361,6 +363,10 @@ def figure_cache_key(figure_json: dict) -> str:
     import json as _json
     from .figkit import ENGINE_VERSION
     key_src = {**figure_json, "_engine": ENGINE_VERSION}
+    if figure_json.get("type") == "tikz":
+        # la charte fait partie du rendu : la changer doit invalider le cache
+        from .tikzfig import CHARTE_VERSION
+        key_src["_charte"] = CHARTE_VERSION
     return hashlib.sha256(
         _json.dumps(key_src, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 

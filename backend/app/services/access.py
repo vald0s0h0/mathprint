@@ -32,7 +32,53 @@ def scoped_as_teacher(user, zone: str | None) -> bool:
     return user.role == "teacher" or (user.role == "admin" and zone == "user")
 
 
+def scoped_as_atelier(user, zone: str | None) -> bool:
+    return user.role == "corrector" or (user.role == "admin" and zone == "atelier")
+
+
+def scope_atelier(db):
+    """Atelier : seul l'univers des professeurs accompagnés est visible. Les
+    classes, élèves, sujets et copies des professeurs autonomes (dont les essais
+    de l'admin dans les onglets du haut) restent étanches. Une classe est
+    accompagnée si elle a un établissement et qu'aucun professeur autonome ne
+    l'enseigne."""
+    if db.info.get("atelier_scope"):
+        return
+    t = m.ClassTeaching.__table__.c
+    tp = m.TeacherProfile.__table__.c
+    cl = m.SchoolClass.__table__.c
+    a = m.Assessment.__table__.c
+    st = m.Student.__table__.c
+    autonomous = (select(t.class_id).select_from(m.ClassTeaching.__table__)
+        .join(m.TeacherProfile.__table__, tp.id == t.teacher_id).where(tp.service_mode == "autonomous"))
+    classes = select(cl.id).where(cl.school_id.is_not(None), cl.id.not_in(autonomous))
+    assessments = select(a.id).where(a.class_id.in_(classes))
+    students = select(st.id).where(st.class_id.in_(classes))
+    copies = select(m.Copy.__table__.c.id).where(m.Copy.__table__.c.assessment_id.in_(assessments))
+    batches = select(m.ScanBatch.__table__.c.id).where(m.ScanBatch.__table__.c.assessment_id.in_(assessments))
+    teachings = select(t.id).where(t.class_id.in_(classes))
+    rules = [(m.SchoolClass, m.SchoolClass.id.in_(classes)),
+        (m.ClassTeaching, m.ClassTeaching.class_id.in_(classes)),
+        (m.TeachingGroup, m.TeachingGroup.teaching_id.in_(teachings)),
+        (m.Student, m.Student.id.in_(students)),
+        (m.Assessment, m.Assessment.id.in_(assessments)),
+        (m.Copy, m.Copy.id.in_(copies)),
+        (m.ScanBatch, m.ScanBatch.id.in_(batches)),
+        (m.ScannedPage, m.ScannedPage.batch_id.in_(batches)),
+        (m.CopyResult, m.CopyResult.assessment_id.in_(assessments)),
+        (m.StudentLearningEvent, m.StudentLearningEvent.copy_id.in_(copies)),
+        (m.Job, or_(m.Job.assessment_id.is_(None), m.Job.assessment_id.in_(assessments)))]
+    db.info["atelier_scope"] = True
+    def apply_scope(execute_state):
+        if execute_state.is_select or execute_state.is_update or execute_state.is_delete:
+            execute_state.statement = execute_state.statement.options(*[
+                with_loader_criteria(model, criterion, include_aliases=True) for model, criterion in rules])
+    event.listen(db, "do_orm_execute", apply_scope)
+
+
 def scope_session(db, user, zone: str | None = None):
+    if scoped_as_atelier(user, zone):
+        return scope_atelier(db)
     if not scoped_as_teacher(user, zone) or db.info.get("teacher_scope"):
         return
     profile = db.query(m.TeacherProfile).filter_by(user_id=user.id, active=True).first()

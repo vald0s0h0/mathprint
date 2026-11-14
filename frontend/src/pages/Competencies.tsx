@@ -17,13 +17,20 @@ import CompetencyHierarchy, { type CompetencyHierarchyColumn } from '../componen
 import GradeSelectionRequired from '../components/GradeSelectionRequired'
 import { useAppState } from '../state/AppState'
 import { masteryColor } from '../utils/mastery'
+import { formatHours, formatMinutes } from '../utils/duration'
 
 type Framework = { id: string; name: string; grade_level: string; version: string; status: string; program_id: string; subject_id: string; path_id: string | null }
-type Comp = { id: string; code: string; short_id: string; label: string }
-type Domain = {
-  code: string; name: string
-  chapters: { code: string; name: string; competencies: Comp[] }[]
+type Comp = {
+  id: string; code: string; short_id: string; label: string
+  // durée estimée et rang dans l'année, quand le programme les fournit (CI)
+  recommended_minutes?: number | null; teaching_order?: number | null
 }
+type Chapter = {
+  code: string; name: string; competencies: Comp[]
+  // leçon dans la progression annuelle officielle : heures, rang, semaine de début
+  hours?: number | null; rank?: number | null; week?: number | null
+}
+type Domain = { code: string; name: string; chapters: Chapter[] }
 type ClassRef = { id: string; name: string }
 type Matrix = {
   classes: ClassRef[]
@@ -31,6 +38,7 @@ type Matrix = {
 }
 
 const CLASS_COL_WIDTH = 96
+const DURATION_COL_WIDTH = 84
 const LABEL_MIN_WIDTH = 320
 
 function MasteryCell({ value, strong, hint }: { value: number | null | undefined; strong?: boolean; hint: string }) {
@@ -90,15 +98,30 @@ export default function Competencies() {
     return out
   }, [matrix])
 
+  // Durée estimée : colonne affichée seulement si le référentiel la fournit.
+  const hasTiming = useMemo(() => tree.some((d) => d.chapters.some((ch) =>
+    ch.competencies.some((c) => c.recommended_minutes != null))), [tree])
+
   const columns = useMemo<CompetencyHierarchyColumn<Comp>[]>(() => {
     const classes = matrix?.classes ?? []
-    if (!classes.length) return []
+    const duration: CompetencyHierarchyColumn<Comp>[] = hasTiming ? [{
+      key: '__duree', label: 'Durée', width: DURATION_COL_WIDTH, align: 'right' as const,
+      render: (c: Comp) => c.recommended_minutes == null ? <Text size="xs" c="dimmed">—</Text> : (
+        <Tooltip label={`Durée estimée${c.teaching_order ? ` · ${c.teaching_order === 1 ? '1re' : `${c.teaching_order}e`} compétence de l’année` : ''}`}>
+          <Text size="xs" c="dimmed" style={{ fontVariantNumeric: 'tabular-nums' }}>
+            {formatMinutes(c.recommended_minutes)}
+          </Text>
+        </Tooltip>
+      ),
+    }] : []
+    if (!classes.length) return duration
     const average = (c: Comp) => {
       const values = Object.values(masteryById.get(c.id) ?? {})
         .filter((v): v is number => v != null)
       return values.length ? values.reduce((a, b) => a + b, 0) / values.length : null
     }
     return [
+      ...duration,
       ...classes.map((cls) => ({
         key: cls.id, label: cls.name, width: CLASS_COL_WIDTH, align: 'center' as const,
         render: (c: Comp) => <MasteryCell value={masteryById.get(c.id)?.[cls.id]} hint={cls.name} />,
@@ -109,7 +132,7 @@ export default function Competencies() {
         render: (c: Comp) => <MasteryCell value={average(c)} strong hint="Toutes classes" />,
       },
     ]
-  }, [matrix, masteryById])
+  }, [matrix, masteryById, hasTiming])
 
   useEffect(() => {
     if (!sel) return
@@ -131,6 +154,21 @@ export default function Competencies() {
       })).filter((ch) => ch.competencies.length),
     })).filter((d) => d.chapters.length)
   }, [tree, filter])
+
+  const chapterInfo = useMemo(() => {
+    const out = new Map<string, Chapter>()
+    for (const d of tree) for (const ch of d.chapters) out.set(`${d.code}/${ch.code || ch.name}`, ch)
+    return out
+  }, [tree])
+  const chapterCount = (chapter: { key: string; rows: Comp[] }) => {
+    const n = chapter.rows.length
+    const parts = [`${n} compétence${n > 1 ? 's' : ''}`]
+    const info = chapterInfo.get(chapter.key)
+    if (info?.hours != null) parts.push(formatHours(info.hours))
+    if (info?.rank != null) parts.push(`leçon n° ${info.rank} de l’année`)
+    if (info?.week != null) parts.push(`semaine ${info.week}`)
+    return parts.join(' · ')
+  }
 
   const total = tree.reduce((n, d) => n + d.chapters.reduce((m, ch) => m + ch.competencies.length, 0), 0)
   const hierarchy = useMemo(() => filtered.map((domain) => ({
@@ -178,6 +216,7 @@ export default function Competencies() {
       {total === 0 && <Text size="sm" c="dimmed">Structure prête. Les compétences seront ajoutées ultérieurement.</Text>}
       <ScrollArea>
         <CompetencyHierarchy domains={hierarchy} columns={columns} columnsInChapterBand
+          chapterCount={chapterCount}
           tableMinWidth={columns.length ? LABEL_MIN_WIDTH + columns.length * CLASS_COL_WIDTH : undefined}
           getRowKey={(competency) => competency.id}
           getShortId={(competency) => competency.short_id || competency.code}

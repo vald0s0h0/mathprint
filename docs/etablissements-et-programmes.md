@@ -13,6 +13,11 @@ enseignement optionnel. Les nouvelles combinaisons sont initialisées en brouill
 sans inventer de compétences ni d’exercices. Les référentiels français existants
 restent utilisables. L’ajout d’une matière prépare ses référentiels vides.
 
+Les référentiels ivoiriens de mathématiques du collège et des séries générales
+(2nde A et C, 1re et Tle A1, A2, C, D) sont remplis au démarrage depuis les
+programmes officiels DPFC, avec durées et ordre annuel issus des progressions :
+voir [programmes/ci/](programmes/ci/README.md). Les séries techniques restent vides.
+
 Une compétence appartient à un seul référentiel. `section=common` signifie
 « Compétences communes », `section=complement` signifie « Compléments ».
 `source_competency_id` et `source_exercise_id` permettent de conserver la provenance
@@ -112,6 +117,7 @@ avant de renouveler une demande d’impression après une coupure réseau.
 
 - [DPFC — programmes et guides du secondaire](https://dpfc-ci.net/documents/programmes-educatifs-et-guides-dexecution/programmes-educatifs-et-guides-dexecution-du-secondaire/) : séries générales ivoiriennes et programmes.
 - [DPFC — progressions de mathématiques 2022–2023](https://dpfc-ci.net/wp-content/uploads/dpfc_fichiers/2022-2023/progressions/MATHS_Progressions%202022-2023.pdf).
+- [DPFC — programmes éducatifs de mathématiques, version CND 09/2023](https://dpfc-ci.net/dpfc/programmes/maths/) et [progressions 2024–2025](https://dpfc-ci.net/progressions/2024-2025/MATHS%20-%20Progressions%20du%20secondaire%202024-2025.pdf) : source du référentiel ivoirien intégré.
 - [Annuaire ministériel technique 2020–2021](https://dpsimetfpa.com/docs/annuaire/annuaire_2021.pdf) : liste technique initiale, datée, à compléter selon les établissements réellement servis.
 - [Bulletin officiel français du 12 janvier 2023](https://www.education.gouv.fr/bo/23/Hebdo2/MENE2300946N.htm) : enseignements de mathématiques au lycée général.
 

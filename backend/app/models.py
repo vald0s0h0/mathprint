@@ -257,6 +257,27 @@ class Competency(Base):
     domain_name: Mapped[str] = mapped_column(String, default="")
     chapter_code: Mapped[str] = mapped_column(String, default="")
     chapter_name: Mapped[str] = mapped_column(String, default="")
+    # Repères de temps et d'ordre, quand le programme les fournit (aujourd'hui
+    # le programme ivoirien, via les progressions annuelles officielles) :
+    # - chapter_hours / chapter_rank / chapter_week : la leçon (H2) dans
+    #   l'année : volume horaire officiel, rang dans la progression, semaine
+    #   de début (1-32) ;
+    # - recommended_minutes : durée estimée de la compétence (heures de la
+    #   leçon réparties au prorata de ses contenus) ;
+    # - teaching_order : rang de la compétence dans l'année (leçons dans
+    #   l'ordre de la progression, compétences dans l'ordre du programme).
+    # NULL = inconnu (référentiels français).
+    chapter_hours: Mapped[float | None] = mapped_column(Float, nullable=True)
+    chapter_rank: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    chapter_week: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    recommended_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    teaching_order: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Vue fusionnée des séries d'une même filière (lycée ivoirien, onglet
+    # Exercices) : {group, line, order, chapter_key, chapter_code, chapter_name,
+    # variant}. Deux compétences de séries différentes au même `line` sont le
+    # même contenu ; `variant` = {pre, post, parts: {série: texte}} quand le
+    # texte ne diffère que d'un détail. NULL hors séries.
+    merge_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
 
 class ExerciseCatalog(Base):

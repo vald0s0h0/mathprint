@@ -278,38 +278,9 @@
     "micro_skill": "Repérer l'hypoténuse dans le théorème de Pythagore",
     "family_id": "pythagore-egalite",
     "figure": {
-     "kind": "geo",
+     "kind": "tikz",
      "spec": {
-      "points": {
-       "A": [
-        0,
-        3
-       ],
-       "B": [
-        0,
-        0
-       ],
-       "C": [
-        4,
-        0
-       ]
-      },
-      "polygons": [
-       [
-        "A",
-        "B",
-        "C"
-       ]
-      ],
-      "angles": [
-       {
-        "at": "B",
-        "from": "A",
-        "to": "C",
-        "right": true
-       }
-      ],
-      "width_mm": 32
+      "tikz": "\\begin{tikzpicture}[x=0.8cm,y=0.8cm]\n\\coordinate (A) at (0,3); \\coordinate (B) at (0,0); \\coordinate (C) at (4,0);\n\\filldraw[trait,aplat] (A)--(B)--(C)--cycle;\n\\AngDroit{A}{B}{C}\n\\Nom{(A)}{A}{above} \\Nom{(B)}{B}{below left} \\Nom{(C)}{C}{right}\n\\end{tikzpicture}"
      }
     },
     "leak_keys": [],

@@ -52,6 +52,11 @@ PROBLEM_POINTS_PER_MINUTE = (0.3, 1.2)
 EMPTY_RATIO_MAX, EMPTY_RUN_MAX_MM, SIDE_VOID_MAX, NORMAL_GAP_MM = 0.15, 12.0, 0.25, 6.0
 FIGURE_SCALES = (1.0, 0.85, 0.7)
 FIGURE_MIN_RATIO = 0.7
+# Une figure TikZ est dessinée à l'échelle de la charte (traits, chiffres de 9,5 pt) :
+# le compactage ne la réduit presque pas, sinon les figures ne seraient plus homogènes.
+TIKZ_MIN_RATIO = 0.9
+# Moteur des nouvelles figures ; les autres restent lus pour les exercices déjà en banque.
+NEW_FIGURE_KINDS = ("tikz",)
 SIMULATIONS = 200
 FILL_MEDIAN_MIN, FILL_P10_MIN = 0.90, 0.80
 # Anti-copie : refus seulement d'une suite de 20 mots identique au manuel. Les
@@ -972,9 +977,9 @@ def _figure_problems(figure) -> list[str]:
         return []
     if not isinstance(figure, dict):
         return ["figure : objet attendu"]
-    if figure.get("kind") not in figures.DECLARATIVE_TYPES:
-        return [f"figure : kind {figure.get('kind')!r} ; geo, chart, template ou svg attendu "
-                "(jamais de découpe d'une page de manuel)"]
+    if figure.get("kind") not in NEW_FIGURE_KINDS:
+        return [f"figure : kind {figure.get('kind')!r} ; toute figure s'écrit en tikz, dans la "
+                "charte (schema.md, section Figures) — jamais de découpe d'une page de manuel"]
     error = figures.figure_error(figure_to_json(figure))
     return [error] if error else []
 
@@ -1628,6 +1633,8 @@ def _figure_stays_readable(ex: dict, layout: str | None, scale: float) -> bool:
     final_w = min(natural[1], limit) * scale if side else natural[1] * scale
     constraints = (ex.get("grading") or {}).get("figure_constraints") or {}
     minimum = max(FIGURE_MIN_RATIO, constraints.get("min_scale", 0))
+    if (ex.get("figure") or {}).get("type") == "tikz":
+        minimum = max(minimum, TIKZ_MIN_RATIO)
     if final_w < max(figkit.MIN_WIDTH_MM, constraints.get("min_width_mm", 0)) * pdfgen.mm or final_w / natural[1] < minimum - 1e-6:
         return False
     if constraints.get("min_label_pt"):

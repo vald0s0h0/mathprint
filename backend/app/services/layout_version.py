@@ -16,8 +16,10 @@ LAYOUT_FILES = (
     "pdfgen.py", "card_preview.py", "blocks.py", "construction.py", "generation.py",
     "handwriting.py", "mathrender.py", "typography.py", "statement.py", "sheet_engine.py",
     "answer_mix.py", "draw_rules.py", "figkit.py", "figures.py", "geofig.py", "svgfig.py",
-    "chartfig.py", "figtemplate.py",
+    "chartfig.py", "figtemplate.py", "tikzfig.py",
 )
+# La charte TikZ décide de l'aspect de toute figure TikZ : la changer périme les aperçus.
+_EXTRA_FILES = (_SERVICES.parent / "assets" / "tikz" / "kn-figures.tex",)
 
 
 @lru_cache(maxsize=1)
@@ -26,6 +28,9 @@ def layout_version() -> str:
     for name in LAYOUT_FILES:
         p = _SERVICES / name
         h.update(name.encode())
+        h.update(p.read_bytes() if p.exists() else b"-")
+    for p in _EXTRA_FILES:
+        h.update(p.name.encode())
         h.update(p.read_bytes() if p.exists() else b"-")
     fonts = _SERVICES.parent / "assets" / "fonts"
     if fonts.is_dir():

@@ -52,8 +52,16 @@ def competencies(framework_id: str | None = None, db: Session = Depends(get_db))
              "description": c.description, "framework_id": c.framework_id,
              "section": c.section, "source_competency_id": c.source_competency_id,
              "domain_code": c.domain_code, "domain_name": c.domain_name,
-             "chapter_code": c.chapter_code, "chapter_name": c.chapter_name}
+             "chapter_code": c.chapter_code, "chapter_name": c.chapter_name,
+             **_timing(c)}
             for c in q.all()]
+
+
+def _timing(c: Competency) -> dict:
+    """Repères de temps et d'ordre d'une compétence (None = inconnus)."""
+    return {"recommended_minutes": c.recommended_minutes, "teaching_order": c.teaching_order,
+            "chapter_hours": c.chapter_hours, "chapter_rank": c.chapter_rank,
+            "chapter_week": c.chapter_week}
 
 
 def build_competency_tree(rows: list[Competency], competency_extra=None) -> list[dict]:
@@ -71,9 +79,11 @@ def build_competency_tree(rows: list[Competency], competency_extra=None) -> list
             domains.append(d)
         ch = next((x for x in d["chapters"] if x["code"] == c.chapter_code), None)
         if ch is None:
-            ch = {"code": c.chapter_code, "name": c.chapter_name, "competencies": []}
+            ch = {"code": c.chapter_code, "name": c.chapter_name, "hours": c.chapter_hours,
+                  "rank": c.chapter_rank, "week": c.chapter_week, "competencies": []}
             d["chapters"].append(ch)
-        entry = {"id": c.id, "code": c.code, "short_id": c.short_id, "label": c.label, "section": c.section}
+        entry = {"id": c.id, "code": c.code, "short_id": c.short_id, "label": c.label, "section": c.section,
+                 "recommended_minutes": c.recommended_minutes, "teaching_order": c.teaching_order}
         if competency_extra:
             entry.update(competency_extra(c))
         ch["competencies"].append(entry)

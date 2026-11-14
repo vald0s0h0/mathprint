@@ -120,6 +120,7 @@ def summary(grade_level: str | None = None, db: Session = Depends(get_db), frame
             "grade_level": grade,
             "domain_code": comp.domain_code, "domain_name": comp.domain_name,
             "chapter_code": comp.chapter_code, "chapter_name": comp.chapter_name,
+            "recommended_minutes": comp.recommended_minutes, "chapter_hours": comp.chapter_hours,
             "by_level": {str(l): by_level.get(l, 0) for l in range(1, 6)},
             "total": sum(by_level.values()),
             "problems": prob_counts.get(comp.id, 0),

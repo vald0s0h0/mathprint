@@ -65,11 +65,22 @@ def manual_page(which: str, index: int, grade_level: str = "3e"):
 
 # ------------------------------------------------------------- compétences 3e
 
-def _catalog_competencies(db: Session, grade_level: str, program_id: str, subject_id: str) -> list[Competency]:
-    """Compétences du cycle dans le programme choisi (« all » : tous les programmes)."""
+def _paths(paths: str | None) -> list[str] | None:
+    return [p for p in (paths or "").split(",") if p] or None
+
+
+def _catalog_competencies(db: Session, grade_level: str, program_id: str, subject_id: str,
+                          paths: list[str] | None = None, any_path: bool = False) -> list[Competency]:
+    """Compétences du cycle dans le programme choisi (« all » : tous les programmes).
+    Sans `paths`, les référentiels sans série ; avec `paths`, ceux de ces séries
+    (ex. ci-C, ci-D : une filière du lycée ivoirien) ; `any_path` : toutes."""
     frameworks = (db.query(CompetencyFramework.id)
-                  .filter_by(grade_level=grade_level, subject_id=subject_id, path_id=None)
+                  .filter_by(grade_level=grade_level, subject_id=subject_id)
                   .filter(CompetencyFramework.status != "archived"))
+    if paths:
+        frameworks = frameworks.filter(CompetencyFramework.path_id.in_(paths))
+    elif not any_path:
+        frameworks = frameworks.filter(CompetencyFramework.path_id.is_(None))
     if program_id != "all":
         frameworks = frameworks.filter_by(program_id=program_id)
     return (db.query(Competency).filter(Competency.framework_id.in_(frameworks))
@@ -355,7 +366,7 @@ def dismiss_extraction(extraction_id: str, db: Session = Depends(get_db)):
 
 @router.get("/summary")
 def summary(grade_level: str = "3e", db: Session = Depends(get_db),
-            program_id: str = "fr", subject_id: str = "math"):
+            program_id: str = "fr", subject_id: str = "math", paths: str | None = None):
     """Arbre Domaine > Chapitre > Compétence avec compteurs séparés.
 
     Les exercices sont rattachés à une compétence. Les problèmes sont
@@ -363,9 +374,12 @@ def summary(grade_level: str = "3e", db: Session = Depends(get_db),
     compteurs de chapitre sont renvoyés sur chaque ligne afin que l'UI puisse
     les afficher dans des cellules fusionnées.
     """
-    rows = _catalog_competencies(db, grade_level, program_id, subject_id)
+    rows = _catalog_competencies(db, grade_level, program_id, subject_id, _paths(paths))
     by_id = {c.id: c for c in rows}
-    chapter_key = lambda c: f"{c.domain_code}\0{c.chapter_code}"
+    series = {f.id: (f.path_id.split("-", 1)[1] if f.path_id and "-" in f.path_id else f.path_id)
+              for f in db.query(CompetencyFramework).filter(
+                  CompetencyFramework.id.in_({c.framework_id for c in rows}))}
+    chapter_key = lambda c: f"{c.framework_id}\0{c.domain_code}\0{c.chapter_code}"
     work: dict[str, dict] = {}
     problem_work: dict[str, dict] = {}
     review_counts: dict[str, int] = {}
@@ -406,6 +420,9 @@ def summary(grade_level: str = "3e", db: Session = Depends(get_db),
         out.append({"competency_id": c.id, "short_id": c.short_id, "label": c.label,
                     "domain_code": c.domain_code, "domain_name": c.domain_name,
                     "chapter_code": c.chapter_code, "chapter_name": c.chapter_name,
+                    "recommended_minutes": c.recommended_minutes, "chapter_hours": c.chapter_hours,
+                    "framework_id": c.framework_id, "series": series.get(c.framework_id),
+                    "merge": c.merge_json,
                     "draft": w["draft"], "validated": w["validated"],
                     "published": p, "done": done,
                     "needs_review": review_counts.get(c.id, 0),
@@ -436,7 +453,8 @@ class PublishSelection(BaseModel):
 
 
 def _publication_selection(body: PublishSelection, db: Session) -> dict:
-    allowed = {c.id for c in _catalog_competencies(db, body.grade_level, body.program_id, body.subject_id)}
+    allowed = {c.id for c in _catalog_competencies(db, body.grade_level, body.program_id, body.subject_id,
+                                                   any_path=True)}
     if not set(body.competency_ids) <= allowed:
         raise HTTPException(400, "Une compétence est hors du cycle, pays ou de la matière sélectionnés.")
     return indigo.publication_selection(db, body.competency_ids)

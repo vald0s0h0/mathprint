@@ -74,6 +74,8 @@ def startup():
         seed(db)
         from .services.education import seed_structure
         seed_structure(db)
+        from .services.ci_curriculum import seed_ci_curriculum
+        seed_ci_curriculum(db)   # référentiels ivoiriens (data/competencies_ci.json)
         indigo.seed_published(db)   # exercices Indigo publiés -> banque (tous déploiements)
         job_worker.resume_stuck_jobs(db)
         indigo.resume_stuck(db)

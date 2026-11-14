@@ -102,6 +102,13 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, ...]]] = {
     ],
     "competencies": [
         ("short_id", "TEXT"),
+        # repères de temps et d'ordre (cf. modèle Competency) : NULL = inconnu
+        ("chapter_hours", "FLOAT"),
+        ("chapter_rank", "INTEGER"),
+        ("chapter_week", "INTEGER"),
+        ("recommended_minutes", "INTEGER"),
+        ("teaching_order", "INTEGER"),
+        ("merge_json", "JSON"),
     ],
     "student_responses": [
         ("selected_pairs", "JSON"),

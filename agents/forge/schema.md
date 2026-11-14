@@ -227,50 +227,131 @@ Le script la fixe d'après le format. Tu peux seulement demander le LLM pour une
 
 ## Figures
 
-`{"kind": "...", "spec": {...}}`, par ordre de préférence. **Jamais de découpe d'une page de manuel.**
+`{"kind": "tikz", "spec": {"tikz": "\\begin{tikzpicture}...\\end{tikzpicture}"}}`. **Toute nouvelle figure s'écrit en TikZ**, jamais de découpe d'une page de manuel. Les anciens moteurs (`geo`, `chart`, `template`, `svg`) ne servent plus qu'aux exercices déjà en banque ; `check` les refuse dans une nouvelle carte.
 
-### `geo` : géométrie exacte
+Tu n'écris que le dessin. La charte `backend/app/assets/tikz/kn-figures.tex` fixe tout le reste : épaisseurs, couleurs, police, codages, cotes. Les figures de tous les exercices se ressemblent donc, quel que soit l'auteur. tikz, tkz-euclide, tikz-3dplot et pgfplots sont chargés ; les bibliothèques `calc`, `angles`, `quotes`, `arrows.meta`, `intersections`, `positioning`, `decorations` et `fit` aussi.
 
-```json
-{"kind": "geo", "spec": {
-  "points": {"A": [0, 0], "B": [4, 0], "C": [4, 3]},
-  "polygons": [["A", "B", "C"]],
-  "angles": [{"at": "B", "from": "A", "to": "C", "right": true}],
-  "lengths": [{"seg": ["A", "B"], "label": "4 cm"}],
-  "width_mm": 45}}
+### Échelle
+
+- **Une unité vaut 1 cm imprimé.** Une figure fait au plus 93 × 90 mm ; vise 40 à 75 mm de large.
+- Si la figure est trop grande, réduis `x` et `y` ensemble, par palier : `[x=0.8cm,y=0.8cm]`, puis `0.6cm`, puis `0.5cm`. Un quadrillage de 5 mm : `[x=0.5cm,y=0.5cm]`. Garde les vraies valeurs dans les coordonnées : un côté de 6 cm vaut 6 unités.
+- Perspective cavalière (collège) : `[x={(0.85cm,0)},y={(0.36cm,0.25cm)},z={(0,0.85cm)}]`, fuyante à 45° environ et réduite de moitié. Vraie perspective (lycée) : `\tdplotsetmaincoords{70}{110}` puis `[tdplot_main_coords]`.
+- La taille des textes ne bouge pas : 10 pt pour les noms, 9,5 pt pour les cotes. Ne réduis pas une figure pour la caser.
+
+### Styles
+
+| Style | Pour |
+|---|---|
+| `trait` | tout trait de la figure |
+| `fort` | ce qu'il faut voir : section, segment cherché |
+| `cache` | arête cachée, tirets |
+| `constr` | trait de construction, hauteur auxiliaire, pointillés de lecture |
+| `aplat`, `aplatB` | fond très clair d'une surface, purement décoratif |
+| `section` | section d'un solide (aplat et contour bleus) ; l'énoncé dit « la section colorée », jamais « grisée » |
+| `sectionbord` | bords visibles d'une section, quand le fond est tracé à part (`\fill[section,draw=none]`) |
+| `grille` | quadrillage : `\draw[grille] (0,0) grid[step=1] (12,8);` |
+| `axe` | axe fléché |
+| `origine` | figure de départ à repérer : aplat bleu soutenu |
+| `figA` à `figE` | figures à distinguer entre elles : bleu, vert, violet, orange, framboise (couleurs `repA` à `repE`) |
+| `faceH`, `faceV`, `faceD` | faces du dessus, de face et de côté d'un solide |
+| `cylL`, `cylT` | surface et dessus d'un cylindre ou d'un cône |
+| `etiq` | nom d'un point ou d'une figure (gras, bleu) |
+| `petit` | graduation, légende secondaire |
+| `cote` | valeur d'une longueur ou d'un angle (gras, orange) |
+| `boite` | expression dans une case : programme de calcul, plateau de balance |
+
+L'ordre de dessin est imposé par la charte, quel que soit l'ordre de ton code : les fonds (`aplat`, faces, `origine`, `figA`…) tout en bas, puis les codages d'angle, puis les traits et les textes. Un angle ne recouvre donc jamais un trait.
+
+Le quadrillage `grille` est gris-bleu et bien visible : il sert à lire une figure, jamais à tracer. L'élève ne trace que dans une géométrie à tracer (`geo_construction`), dont le quadrillage et la case restent saumon : la CV les efface pour lire le tracé.
+
+Interdit dans une figure : `line width`, `thin`, `thick`, `scale=`, `font=`, `\fontsize`, `\definecolor`, `\tikzset`, `\def`, `\newcommand`, `\input` et toute couleur hors palette. Pour une valeur calculée : `\pgfmathsetmacro{\r}{2}`.
+
+### Couleurs
+
+- Palette : `ink` (traits), `nomc` (noms), `cotec` (cotes), `accent`, `fillA`, `fillB`, `angfill`, `gridc`, `repA` à `repE`, `white`. Mélanges permis : `repA!40`, `fillA!50`.
+- **Les sujets sont imprimés en couleur.** Une couleur sert à repérer, jamais à décorer :
+  - la figure d'origine en `origine` ;
+  - ses images ou les figures candidates en `figA` à `figE`, une couleur par figure ;
+  - une courbe ou un tracé : `draw=repA` ; plusieurs courbes, une couleur chacune ;
+  - une section en `section`.
+- Ne donne jamais une réponse par la couleur : quatre images candidates ont quatre couleurs différentes, pas la bonne en vert.
+
+### Macros
+
+| Macro | Effet |
+|---|---|
+| `\Pt{(2,1)}{A}{above right}` | point marqué d'une croix, et son nom |
+| `\Nom{(A)}{A}{below left}` | nom seul : sommet d'un polygone, numéro d'une figure |
+| `\PtA{(A)}{A}{215}`, `\NomA{(A)}{A}{215}` | même chose, nom posé à 3,2 mm dans la direction donnée en degrés : la plus dégagée, à l'opposé des traits qui partent du point |
+| `\AngDroit{A}{B}{C}` | angle droit en B (points définis par `\coordinate`) |
+| `\AngMark{A}{B}{C}{37°}{1}` | angle en B avec 1 ou 2 arcs et sa valeur ; `{}` sans valeur ; `0` arc pour la valeur seule |
+| `\Cote{(A)}{(B)}{6 cm}{4mm}` | cote fléchée parallèle à [AB], décalée de 4 mm à gauche du sens A→B (`-4mm` : à droite), avec lignes de rappel |
+| `\CoteV{(5,0)}{(5,3)}{3 m}` | cote verticale, valeur à droite |
+| `\Marque{(A)}{(B)}{2}` | codage de longueurs égales (1 à 3 traits) |
+| `\DroiteGraduee{-5}{7}` | droite graduée d'entiers ; points avec `\Pt{(2,0)}{A}{above}` |
+| `\Balance{$5x+4$}{$34$}` | balance de Roberval ; `\Balance[gauche]{…}{…}` si le plateau gauche est plus lourd, `[droite]` sinon |
+
+Une figure qui se replie ou se mesure est géométriquement juste. Patron de cône : secteur d'angle 360° × r / g, disque tangent à l'arc en son milieu. Patron de cylindre : longueur du rectangle égale à 2πr, disques tangents aux grands côtés. Dans un commentaire `%`, note le calcul qui fixe ces dimensions.
+
+Place chaque cote **hors de la figure**, du côté libre ; une valeur ne chevauche jamais un trait. Les nombres s'écrivent à la française (`2,4`, `37°`) ; une expression en `$…$` prend la police de la figure.
+
+### Exemples
+
+Triangle coté et codé :
+
+```latex
+\begin{tikzpicture}[x=0.85cm,y=0.85cm]
+\coordinate (A) at (2.7,4.2); \coordinate (B) at (0,0); \coordinate (C) at (7,0);
+\coordinate (M) at (1.62,2.52); \coordinate (N) at (4.43,2.52);
+\filldraw[trait,aplat] (A)--(B)--(C)--cycle;
+\draw[trait] (M)--(N);
+\Nom{(A)}{A}{above} \Nom{(B)}{B}{below left} \Nom{(C)}{C}{below right}
+\Nom{(M)}{M}{left} \Nom{(N)}{N}{right}
+\Cote{(A)}{(M)}{2}{-3mm} \Cote{(A)}{(N)}{2,4}{3mm} \Cote{(B)}{(C)}{7}{-5mm}
+\end{tikzpicture}
 ```
 
-Le rendu suit les coordonnées : rends-les vraies et cohérentes avec les valeurs affichées.
+Figures à repérer sur quadrillage :
 
-Clés : `points`, `segments`, `lines`, `rays`, `polygons`, `circles`, `arcs`, `angles`, `lengths`, `equal_marks`, `parallel_marks`, `texts`, `axes`, `functions`, `width_mm`. Leur détail est en tête de `backend/app/services/geofig.py`.
+```latex
+\begin{tikzpicture}[x=0.45cm,y=0.45cm]
+\draw[grille] (0,0) grid[step=1] (15,9);
+\filldraw[origine] (6,6)--(9,6)--(9,7)--(7,7)--(7,8)--(6,8)--cycle;
+\filldraw[figA] (6,4)--(6,1)--(7,1)--(7,3)--(8,3)--(8,4)--cycle;
+\filldraw[figB] (4,6)--(1,6)--(1,7)--(3,7)--(3,8)--(4,8)--cycle;
+\Pt{(5,5)}{O}{above right}
+\Nom{(8.2,7.6)}{F}{} \Nom{(7.6,1.8)}{1}{} \Nom{(2.2,7.6)}{2}{}
+\end{tikzpicture}
+```
 
-### `chart` : données
+Pavé en perspective cavalière avec section :
 
-Repère et courbes, barres, histogramme, secteurs, arbre de probabilités. Détail en tête de `backend/app/services/chartfig.py`.
+```latex
+\begin{tikzpicture}[x={(0.85cm,0)},y={(0.36cm,0.25cm)},z={(0,0.85cm)}]
+\foreach \n/\c in {A/{0,0,0},B/{6,0,0},C/{6,4,0},D/{0,4,0},E/{0,0,3},F/{6,0,3},
+  G/{6,4,3},H/{0,4,3},I/{2.5,0,0},J/{2.5,4,0},K/{2.5,4,3},L/{2.5,0,3}} \coordinate (\n) at (\c);
+\fill[faceH] (E)--(F)--(G)--(H)--cycle; \fill[faceV] (A)--(B)--(F)--(E)--cycle;
+\fill[faceD] (B)--(C)--(G)--(F)--cycle;
+\fill[section,draw=none] (I)--(J)--(K)--(L)--cycle;
+\draw[cache] (A)--(D)--(C) (D)--(H) (I)--(J)--(K);
+\draw[trait] (A)--(B)--(C)--(G)--(H)--(E)--cycle (E)--(F)--(G) (F)--(B);
+\draw[sectionbord] (I)--(L)--(K);
+\Nom{(A)}{A}{below left} \Nom{(B)}{B}{below} \Nom{(L)}{L}{above left}
+\Cote{(A)}{(B)}{6 cm}{-6mm} \Cote{(E)}{(A)}{3 cm}{-6mm}
+\end{tikzpicture}
+```
 
-### `template` : gabarits
+Courbe dans un repère (pgfplots) :
 
-`{"kind": "template", "spec": {"name": "cube", "labels": {"width": "3 cm"}, "width_mm": 35}}`
+```latex
+\begin{tikzpicture}
+\begin{axis}[kn repere,width=6cm,height=5cm,xmin=-1,xmax=5,ymin=-1,ymax=6,xtick={0,...,4},ytick={0,...,5}]
+\addplot[draw=repA,domain=-1:5,samples=50] {0.5*x^2-x+1};
+\end{axis}
+\end{tikzpicture}
+```
 
-| `name` | Paramètres |
-|---|---|
-| `cube` | `labels` : `width`, `height`, `depth` |
-| `pave` | `width`, `height`, `depth`, `labels` |
-| `cylindre`, `cone` | `labels` : `height`, `radius` |
-| `pyramide` | `labels` : `height` |
-| `boule` | `labels` : `radius` |
-| `patron_cube` | `cells` (6 positions), `marks` (`{"0": "A"}`) |
-| `fraction` | `total`, `filled`, `shape` (`bar` ou `disc`) |
-| `droite_graduee` | `min`, `max`, `step`, `label_every`, `points` (`[{"x": 2, "label": "A"}]`) |
-| `balance` | `left`, `right`, `state` (`equal`, `left`, `right`) |
-
-### `svg` : dessin qu'aucun gabarit ne couvre
-
-`{"kind": "svg", "spec": {"svg": "<svg viewBox=\"0 0 100 60\">...</svg>", "width_mm": 50}}`
-
-Balises : `svg`, `g`, `line`, `polyline`, `polygon`, `rect`, `circle`, `ellipse`, `path`, `text`. Couleurs : `none`, `black`, `white`, `gray` ou `#hex`. Ni script, ni lien, ni image.
-
-Choisis la taille la plus petite qui reste lisible. Une figure ne porte aucune information par la seule couleur, car l'impression peut être en noir et blanc.
+`check` compile chaque figure et renvoie l'erreur avec son numéro de ligne (« tikz : ligne 4 : Undefined control sequence »). Il refuse aussi une figure trop grande ou un réglage hors charte. Regarde la carte rendue : aucun nom ni aucune valeur ne doit chevaucher un trait.
 
 
 ## Contraintes de rendu et de reprise
@@ -278,7 +359,7 @@ Choisis la taille la plus petite qui reste lisible. Une figure ne porte aucune i
 - `rework_summary` : résumé concret de ce qui a été corrigé ; apparaît dans l’historique admin après une reprise.
 - `response_layout: {"width": "content", "align": "center", "uniform_fields": true}` : largeur naturelle et centrage (défauts), champs homogènes. `width: "full"` impose la largeur de la carte ; `align: "left"` aligne un tableau à gauche.
 - Les champs manuscrits suivent une règle commune : empreinte de la réponse et des erreurs prévues, marge horizontale de 4 mm et verticale de 2 mm, arrondi supérieur à 2 mm, minimum 14 × 8 mm. Une fraction reçoit la hauteur de deux lignes. Une ligne de réponse se centre avec son libellé et son unité ; les tableaux restent centrés. Pas de largeur propre à un exercice.
-- `figure_constraints: {"min_scale": 1, "min_width_mm": 70, "min_label_pt": 7}` : contraintes optionnelles d’échelle physique effective et de lisibilité ; une disposition latérale ne peut pas les réduire. `min_label_pt` contrôle les textes SVG. Les contraintes impossibles bloquent le rendu.
+- `figure_constraints: {"min_scale": 1, "min_width_mm": 70, "min_label_pt": 7}` : contraintes optionnelles d’échelle physique effective et de lisibilité ; une disposition latérale ne peut pas les réduire. `min_label_pt` contrôle les textes SVG. Les contraintes impossibles bloquent le rendu. Inutile pour une figure TikZ, déjà à sa taille réelle : ne la renseigne pas.
 - `guide_omission_reason` : raison explicite autorisant une carte facile/moyenne sans guide lorsque l’aide révélerait la réponse. Goldfish lit la carte sans connaître cette raison.
 
 ### Cellules mixtes et politiques numériques

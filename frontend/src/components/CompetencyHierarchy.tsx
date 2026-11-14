@@ -22,6 +22,9 @@ export type CompetencyHierarchyColumn<T> = {
   width?: CSSProperties['width']
   align?: 'left' | 'center' | 'right'
   render: (row: T, chapter: CompetencyHierarchyChapter<T>) => ReactNode
+  // En-tête propre à chaque chapitre, quand les libellés de colonnes sont portés
+  // par le bandeau du chapitre (ex. heures de la leçon dans chaque série).
+  bandLabel?: (chapter: CompetencyHierarchyChapter<T>) => ReactNode
 }
 
 type Props<T> = {
@@ -29,6 +32,8 @@ type Props<T> = {
   getRowKey: (row: T) => string
   getShortId: (row: T) => string
   getLabel: (row: T) => string
+  // Remplace le rendu MathText du libellé (ex. parties propres à chaque série).
+  renderLabel?: (row: T) => ReactNode
   columns?: CompetencyHierarchyColumn<T>[]
   selectedKey?: string | null
   onRowClick?: (row: T) => void
@@ -52,7 +57,7 @@ type Props<T> = {
  * lisible sans ajouter de filets verticaux.
  */
 export default function CompetencyHierarchy<T>({
-  domains, getRowKey, getShortId, getLabel, columns = [],
+  domains, getRowKey, getShortId, getLabel, renderLabel, columns = [],
   selectedKey, onRowClick, chapterCount, columnsInChapterBand = false, tableMinWidth,
 }: Props<T>) {
   const accordionKey = domains.map((domain) => domain.key).join('|')
@@ -130,7 +135,7 @@ export default function CompetencyHierarchy<T>({
                                   ? '0 var(--mantine-radius-sm) var(--mantine-radius-sm) 0'
                                   : undefined,
                               }}>
-                                {column.label}
+                                {column.bandLabel ? column.bandLabel(chapter) : column.label}
                               </Table.Th>
                             ))}
                           </Table.Tr>
@@ -171,7 +176,7 @@ export default function CompetencyHierarchy<T>({
                                   <Text span size="xs" c="dimmed" fw={650} mr={7}>
                                     {getShortId(row)}
                                   </Text>
-                                  <Text span size="sm" fw={500}><MathText text={getLabel(row)} /></Text>
+                                  <Text span size="sm" fw={500}>{renderLabel ? renderLabel(row) : <MathText text={getLabel(row)} />}</Text>
                                 </Box>
                               </Table.Td>
                               {columns.map((column, index) => (
