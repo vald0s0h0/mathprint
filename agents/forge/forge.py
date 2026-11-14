@@ -590,7 +590,9 @@ def refresh_grid(run: Path) -> str | None:
 
 def remaining_slots(run: Path) -> list[dict]:
     """Emplacements sans fichier : point de reprise après une coupure."""
-    return [s for s in load_json(run / "grid.json") if not (run / "slots" / f"{s['slot']}.json").exists()]
+    return [s for s in load_json(run / "grid.json")
+            if not (run / "slots" / f"{s['slot']}.json").exists()
+            and not (run / "familles" / f"{s['slot']}.json").exists()]
 
 
 def unfinished_runs() -> list[Path]:
@@ -1350,8 +1352,9 @@ def _slot_problems(exercise: dict, slot: dict, payload: dict) -> list[str]:
 
 
 def load_slots(run: Path) -> dict[str, dict]:
+    """Cartes du run par clé : les emplacements, puis leurs jumelles (`s10.j2d1`)."""
     out = {}
-    for path in sorted((run / "slots").glob("*.json")):
+    for path in [*sorted((run / "slots").glob("*.json")), *sorted((run / "jumelles").glob("*.json"))]:
         try:
             out[path.stem] = load_json(path)
         except json.JSONDecodeError as exc:
@@ -1446,8 +1449,8 @@ def leak_conflicts(exercises: dict, contracts: dict) -> list[tuple[str, str, str
     for key in contracts:
         answers = set(map(fold, exercises[key].get("leak_keys") or []))
         for other in contracts:
-            if other == key:
-                continue
+            if other.split(".", 1)[0] == key.split(".", 1)[0]:
+                continue                      # une jumelle n'est jamais tirée avec sa famille
             common = answers & set(map(fold, exercises[other].get("gives") or []))
             if common:
                 conflicts.append((key, other, sorted(common)[0]))
@@ -1464,16 +1467,25 @@ def check(db, run: Path) -> tuple[Report, dict]:
     from app.models import Competency
     payload = load_json(run / "payload.json")
     grid = load_json(run / "grid.json")
+    import familles
+    family_errors = familles.develop(run)
     exercises = load_slots(run)
     by_code = {c["code"]: c for c in payload["competencies"]}
     corpus = copy_corpus(payload)
     report = Report()
     contracts: dict = {}
     seen: set = set()
-    for slot in grid:
-        key = slot["slot"]
-        if key not in exercises:
+    by_slot = {s["slot"]: s for s in grid}
+    for key, problems in family_errors.items():
+        report.slots[key] = {"errors": problems}
+        report.errors += [f"{key} : {p}" for p in problems]
+    # Chaque emplacement, puis ses jumelles : mêmes contrôles, même grille.
+    ordered = [s["slot"] for s in grid] + sorted(k for k in exercises if "." in k)
+    for key in ordered:
+        slot = by_slot.get(familles.group_of(key))
+        if slot is None or key not in exercises:
             continue
+        twin = key != slot["slot"]
         exercise = exercises[key]
         if "_json_error" in exercise:
             found = [f"JSON invalide : {exercise['_json_error']}"]
@@ -1484,7 +1496,9 @@ def check(db, run: Path) -> tuple[Report, dict]:
             if comp is None:
                 found.append(f"compétence {code!r} absente")
             else:
-                contract, more = build_contract(db, exercise, slot, comp, payload["subject"], seen)
+                # une jumelle répète son énoncé : elle n'est pas un doublon de sa famille
+                contract, more = build_contract(db, exercise, slot, comp, payload["subject"],
+                                                set() if twin else seen)
                 found += more
                 if contract is not None and not found:
                     contracts[key] = contract
@@ -1495,7 +1509,13 @@ def check(db, run: Path) -> tuple[Report, dict]:
                     contracts.pop(key, None)
         report.slots[key] = {"errors": found}
         report.errors += [f"{key} : {p}" for p in found]
-    missing = [s["slot"] for s in grid if s["slot"] not in exercises]
+    # Une famille vaut par toutes ses jumelles : une seule fautive les retire toutes.
+    for group in {familles.group_of(k) for k in exercises if "." in k}:
+        members = [k for k in exercises if familles.group_of(k) == group]
+        if any(k not in contracts for k in members):
+            for k in members:
+                contracts.pop(k, None)
+    missing = [s["slot"] for s in grid if s["slot"] not in exercises and s["slot"] not in family_errors]
     if missing:
         report.warnings.append(f"Reste à écrire : {', '.join(missing)}")
     valid_exercises = {k: exercises[k] for k in contracts}
@@ -1750,7 +1770,7 @@ def render(db, run: Path) -> dict:
     leading: list[str] = []
     geometry: dict = {}
     for key, contract in contracts.items():
-        exercise, slot = exercises[key], grid[key]
+        exercise, slot = exercises[key], grid[key.split(".", 1)[0]]
         ex = preview_exercise(contract, exercise, slot)
         chosen, scale, height = best_layout(ex)
         layouts[key] = {"figure_layout": chosen, "figure_scale": scale}
@@ -1795,22 +1815,24 @@ def render(db, run: Path) -> dict:
                       "tier": pdfgen.reading_tier(slot["level"], slot["kind"] == "problem"),
                       "fits_column": height * pdfgen.mm <= pdfgen.column_capacity(1)}
     dump_json(run / "layouts.json", layouts)
+    # Tailles et simulation de sujets : une carte par emplacement, pas ses jumelles.
+    principal = {k: c for k, c in cards.items() if "." not in k}
     actual: dict[str, int] = {}
-    for card in cards.values():
+    for card in principal.values():
         actual[card["size"]] = actual.get(card["size"], 0) + 1
     targets = size_targets(list(grid.values()))
     size_gaps = {name: {"cible": targets.get(name, 0), "mesure": actual.get(name, 0)}
                  for name, _ in SIZE_LIMITS_MM
                  if abs(targets.get(name, 0) - actual.get(name, 0)) > SIZE_TOLERANCE}
-    simulation = simulate([c["height_mm"] for c in cards.values()],
-                          [c["tier"] for c in cards.values()], seed=run.name)
+    simulation = simulate([c["height_mm"] for c in principal.values()],
+                          [c["tier"] for c in principal.values()], seed=run.name)
     from app.services.exercise_review import fingerprint
     summary = {"inputs": {k: fingerprint({"exercise": exercises[k], "contract": v}) for k, v in contracts.items()}, "cards": cards, "size_gaps": size_gaps, "simulation": simulation,
                "writing": writing, "field_whitespace": field_whitespace, "leading": leading, "traces": traces,
                "geometry": geometry,
                "too_tall": [k for k, c in cards.items() if not c["fits_column"]],
                "excess": {k: c["excess"] for k, c in cards.items() if c["excess"]},
-               "complete": len(contracts) == len(grid)}
+               "complete": len(principal) == len(grid)}
     dump_json(run / "render.json", summary)
     return summary
 
@@ -1911,11 +1933,13 @@ def persist(db, run: Path, *, replace: bool = False, slots: list[str] | None = N
         raise SystemExit(f"Contrôles en échec ({len(report.errors)}) : rien n'a été écrit.")
     payload = load_json(run / "payload.json")
     grid = {s["slot"]: s for s in load_json(run / "grid.json")}
-    if set(contracts) != set(grid):
+    if {k for k in contracts if "." not in k} != set(grid):
         raise SystemExit(f"Run incomplet : {sorted(set(grid) - set(contracts))}")
     if slots and set(slots) - set(contracts):
         raise SystemExit(f"Emplacements inconnus : {sorted(set(slots) - set(contracts))}")
-    targets = {f"{run.name}/{key}" for key in (slots or contracts)}
+    # Un emplacement choisi emporte ses jumelles : une famille se remplace entière.
+    selected = [k for k in contracts if not slots or k.split(".", 1)[0] in slots]
+    targets = {f"{run.name}/{key}" for key in selected}
     replace = replace or bool(slots)
     rendered = load_json(run / "render.json") if (run / "render.json").exists() else {}
     if "writing" not in rendered:
@@ -1924,7 +1948,7 @@ def persist(db, run: Path, *, replace: bool = False, slots: list[str] | None = N
     # Sans sélection explicite, toutes les cartes restent contrôlées.
     refused = (set(rendered["writing"]) | set(rendered.get("leading") or [])
                | set(rendered.get("traces") or []) | set(rendered.get("geometry") or [])
-               ) & set(slots or contracts)
+               ) & set(selected)
     if refused:
         raise SystemExit("Cartes refusées à la mise en page : " + ", ".join(
             sorted(refused)))
@@ -1952,7 +1976,7 @@ def persist(db, run: Path, *, replace: bool = False, slots: list[str] | None = N
         if not slots:
             raise SystemExit("Une reprise exige une sélection explicite --slots.")
         rework.verify(existing, load_json(Path(reprise)), targets)
-    for key in (slots or contracts):
+    for key in selected:
         rework.proof(run, key, exercises[key], contracts[key], rendered,
                      (goldfish.get("verdicts") or {}).get(key) or {}, required=bool(reprise))
     previous = {r.source_number: {"snapshot": exercise_review.snapshot(r),
@@ -1975,7 +1999,7 @@ def persist(db, run: Path, *, replace: bool = False, slots: list[str] | None = N
     for order, key in enumerate(sorted(contracts)):
         if f"{run.name}/{key}" not in targets:
             continue
-        contract, exercise, slot = contracts[key], exercises[key], grid[key]
+        contract, exercise, slot = contracts[key], exercises[key], grid[key.split(".", 1)[0]]
         code = slot.get("competency") or slot["competencies"][0]
         statement, expected, grading = indigo_fields.adapt_fields(
             contract["statement"], contract["response_type"], contract.get("expected"), contract.get("grading"))
@@ -1995,6 +2019,15 @@ def persist(db, run: Path, *, replace: bool = False, slots: list[str] | None = N
                                        | {what for first, _other, what in conflicts if first == key}),
                    "gives": sorted(set(exercise.get("gives") or [])
                                    | {what for _first, other, what in conflicts if other == key})}
+        twin = exercise.get("twin")
+        if twin:
+            # Jumelles d'une même carte : même énoncé, autre jeu de valeurs ou autre
+            # disposition. L'ordre des réponses est celui de l'auteur : rien ne le mélange.
+            grading = {**grading, "author_order": True,
+                       "twin": {"group": f"{run.name}/{twin['group']}", "jeu": twin["jeu"],
+                                "disposition": twin["disposition"], "jeux": twin["jeux"],
+                                "dispositions": twin["dispositions"],
+                                "principal": (twin["jeu"], twin["disposition"]) == (1, 1)}}
         problem = slot["kind"] == "problem"
         row = IndigoExercise(
             extraction_id=extraction.id, competency_id=by_code[code], grade_level=payload["cycle"],

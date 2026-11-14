@@ -87,7 +87,7 @@ def _cmd_next(args, db):
         print("Tous les emplacements sont écrits. Lance `check`.")
         return 0
     size = args.lot
-    print(f"{run.name} : {len(slots)} emplacement(s) restant(s). Lot à écrire dans {run / 'slots'} :")
+    print(f"{run.name} : {len(slots)} emplacement(s) restant(s). Lot à écrire, une famille par emplacement, dans {run / 'familles'} :")
     for slot in slots[:size]:
         code = slot.get("competency") or ", ".join(slot.get("competencies", []))
         print(f"  {slot['slot']} {slot['difficulty']} {slot['response_type']} taille {slot['size']}"

@@ -193,6 +193,10 @@ def mix_shape(shape: dict, rng: random.Random, width: float, font_size: int) -> 
     """Carte `shape` (generation.render_shape) avec ses champs mélangés. `width` :
     pdfgen.answer_zone_width de la carte. Les sous-questions d'un composite gardent
     leur ordre, chacune mélangée à part."""
+    # Carte dont l'auteur a écrit lui-même les dispositions (jumelles de la forge) :
+    # son ordre est celui qui s'imprime, aucun mélange ne s'y ajoute.
+    if (shape.get("grading") or {}).get("author_order"):
+        return shape
     if shape["response_type"] == "composite":
         parts = []
         for part in shape["grading"].get("parts") or []:

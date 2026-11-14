@@ -2,6 +2,56 @@
 
 Un fichier par exercice. `run.py check` vérifie ce contrat et renvoie une erreur courte en cas d'écart.
 
+## Familles : `familles/<emplacement>.json`
+
+Tu écris la carte une fois, avec ses valeurs à remplir. `check` en tire les jumelles (chaque jeu, dans chaque disposition), les contrôle toutes et les rend toutes.
+
+```json
+{"slot": "s10",
+ "jeux": [{"a": 5, "b": 2, "c": 6}, {"a": 4, "b": 3, "c": 7}, {"a": 8, "b": 2, "c": 9}],
+ "carte": {
+   "response_type": "qcm_single",
+   "statement": "Calcule $<<a>> + <<b>> \\times <<c>>$.",
+   "choices": [
+     {"id": "a", "text": "$<<a+b*c>>$", "correct": true},
+     {"id": "b", "text": "$<<(a+b)*c>>$", "correct": false, "calc": "(<<a>>+<<b>>)*<<c>>",
+      "error": "math.calc.priorite_operations", "feedback": "Tu as additionné d'abord : …"},
+     {"id": "c", "text": "$<<a+b+c>>$", "correct": false, "calc": "<<a>>+<<b>>+<<c>>",
+      "error": "math.calc.operation_inversee", "feedback": "Tu as additionné $<<b>>$ et $<<c>>$ : …"}],
+   "answer_expr": "<<a>>+<<b>>*<<c>>",
+   "dispositions": [["a", "b", "c"], ["c", "a", "b"]],
+   "…": "le reste du contrat ci-dessous"}}
+```
+
+**`jeux`** : 2 ou 3 jeux, mêmes noms dans chacun. Une valeur est un nombre (`5`, `"2,5"`, `"3/4"`) ou un texte (`"M"`, `"Awa"`, `"un sac de riz"`). `check` refuse des jeux de difficulté inégale (un entier ici, un décimal là ; un signe qui change ; une valeur dix fois plus grande) et deux jeux qui donnent la même réponse.
+
+**`<<…>>`** se remplit partout dans `carte` : énoncé, propositions, messages, guides, figure, dossier du correcteur.
+
+| Tu écris | Il s'imprime | Remarque |
+|---|---|---|
+| `<<a>>` | la valeur du jeu | un texte est repris tel quel |
+| `<<a*b+1>>` | le résultat, calculé par SymPy | **n'écris jamais toi-même un résultat** : il serait faux dans les autres jeux |
+| dans `$…$` | `2{,}5`, ou `\dfrac{1}{3}` si le décimal ne tombe pas juste | choisi seul |
+| hors formule | `2,5` | choisi seul |
+| dans `calc`, `answer_expr` | `5/2` | écriture SymPy, choisie seule |
+| dans une figure TikZ | `2.5` | pour une valeur affichée, écris `<<a\|txt>>` |
+| `"value": "<<a*b>>"` (seul dans le champ) | le nombre `10`, pas un texte | pour `answer.value`, une cellule, un `blank` |
+
+Formats à ajouter après une barre quand le choix automatique ne convient pas : `|txt` (2,5), `|tex` (2{,}5), `|frac` (fraction même si le décimal tombe juste), `|dec2` (arrondi à 2 décimales), `|calc`, `|pt` (2.5), `|num` (nombre), `|rat` (`[5, 2]`, pour une réponse de type `rational`).
+
+**`dispositions`**, sur la question (ou sur chaque partie d'un composite) : deux ordres, écrits par toi.
+
+| Format | Ce que tu ordonnes |
+|---|---|
+| `qcm_single`, `qcm_multiple` | les `id` des propositions |
+| `checkbox_grid` | les `id` des lignes, seulement si elles sont indépendantes |
+| `matching` | les `id` de la colonne de droite |
+| `table_fill` | les rangs des colonnes, à partir de 0 (`[[0, 1, 2], [2, 0, 1]]`) ; les lignes ne bougent jamais |
+
+Sur ces quatre formats, `dispositions` est obligatoire, sauf pour le tableau. Si l'ordre ne peut pas changer, écris à la place `"ordre_impose": "étapes d'un raisonnement"` (ou chronologie, valeurs croissantes, protocole) : la carte n'a alors qu'une disposition. `check` refuse deux dispositions identiques, une disposition incomplète, et un QCM dont la bonne réponse garde la même place.
+
+Une famille fautive ne donne aucune carte : l'erreur est rendue sous le nom de l'emplacement. Une jumelle refusée (`s10.j2d1 : …`) fait tomber toute sa famille : corrige la famille, jamais une jumelle.
+
 ## Commun à tout exercice
 
 | Champ | Contenu |

@@ -290,6 +290,9 @@ def run(run_dir: Path, *, slots: list[str] | None = None, cli: str | None = None
     cli = "session" if session_dir else (cli or choose_cli(payload.get("model", "")))
     read = (lambda system, text, images: session_ask(session_dir, system, text, images)) if session_dir else (lambda system, text, images: ask(cli, system, text, images))
     rendered = sorted(p.stem for p in (run_dir / "cards").glob("*.png"))
+    # D'une famille, le lecteur lit la première jumelle et sa seconde disposition : les
+    # autres jeux ont le même énoncé, et leurs valeurs sont vérifiées par le script.
+    rendered = [k for k in rendered if "." not in k or k.endswith(".j1d2")]
     todo = [k for k in rendered if (k in slots if slots else k not in state["verdicts"])]
     if not todo:
         return state
@@ -319,7 +322,7 @@ def run(run_dir: Path, *, slots: list[str] | None = None, cli: str | None = None
                 raise GoldfishError("Verdict élève incomplet")
             attempts = state["attempts"].get(key, 0) + 1
             exercise = exercises[key]
-            level = grid[key]["level"]
+            level = grid[key.split(".", 1)[0]]["level"]
             leaves = forge._leaves(exercise)
             severity, notes = judge_student(verdict, exercise, level)
             staged[key] = {
@@ -332,7 +335,7 @@ def run(run_dir: Path, *, slots: list[str] | None = None, cli: str | None = None
         # Un seul appel par paquet aussi pour les messages : à plusieurs milliers de
         # cartes, un appel par carte consommerait vite le quota.
         targets = [(key, target) for key in pack
-                   for target in _correction_targets(exercises[key], grid[key]["level"], rng)]
+                   for target in _correction_targets(exercises[key], grid[key.split(".", 1)[0]]["level"], rng)]
         if targets:
             order = {key: i + 1 for i, key in enumerate(pack)}
             listing = "\n".join(
