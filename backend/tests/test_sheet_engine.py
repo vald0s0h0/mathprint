@@ -274,7 +274,7 @@ def test_grid_rows_move_with_their_answer_and_message():
     rows = [{"label": f"Affirmation {k}", "correct": k % 2} for k in range(5)]
     shape = {"response_type": "checkbox_grid", "statement": "Vrai ou faux ?",
              "grading": {"comparator": "grid", "cols": ["Vrai", "Faux"], "rows": rows,
-                         "option_ids": [f"o{k}" for k in range(5)]},
+                         "option_ids": [f"o{k}" for k in range(5)], "mix": "rows"},
              "expected": {"type": "grid", "cols": ["Vrai", "Faux"], "rows": rows}}
     moved = False
     for seed in range(10):
@@ -288,10 +288,24 @@ def test_grid_rows_move_with_their_answer_and_message():
     assert moved
 
 
-def _table_shape(labels=None, feedback=None):
+def test_rows_never_move_without_a_declaration():
+    rows = [{"label": f"Affirmation {k}", "correct": k % 2} for k in range(5)]
+    grid = {"response_type": "checkbox_grid", "statement": "Vrai ou faux ?",
+            "grading": {"comparator": "grid", "cols": ["Vrai", "Faux"], "rows": rows,
+                        "option_ids": [f"o{k}" for k in range(5)]},
+            "expected": {"type": "grid", "cols": ["Vrai", "Faux"], "rows": rows}}
+    table = _table_shape([f"Calcul {name}" for name in "wxyz"], mix=None)
+    for seed in range(10):
+        assert answer_mix.mix_shape(grid, random.Random(seed), COL_W, 9)["grading"] == grid["grading"]
+        assert answer_mix.mix_shape(table, random.Random(seed), COL_W, 9)["grading"] == table["grading"]
+
+
+def _table_shape(labels=None, feedback=None, mix="rows"):
     cells = [[{"type": "integer", "value": k * 10}] for k in range(4)]
     grading = {"comparator": "table_cells", "cells": cells, "col_labels": ["Résultat"],
                "row_labels": labels}
+    if mix:
+        grading["mix"] = mix
     if feedback:
         grading["feedback"] = feedback
     return {"response_type": "table_fill", "statement": "Complète.", "grading": grading,

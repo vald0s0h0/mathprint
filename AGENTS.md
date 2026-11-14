@@ -36,5 +36,16 @@ lancer la pipeline forge :
 Si le programme ou le cycle manque, demande-le avant toute chose. Ne modifie pas le
 code de l'application pendant un run : ton travail est dans les fichiers du run.
 
+## Commande « forge contexte »
+
+Quand l'utilisateur écrit `forge contexte <programme> <niveau> <leçon…>` (ex.
+`forge contexte ci 3e E2`, `forge contexte fr 3e C2`,
+`forge contexte ci tle E1 --serie D --matiere svt --sources ~/Manuels/svt-tle.pdf --pages 40-61`),
+ou demande d'écrire la fiche ou le contexte d'une leçon :
+
+1. lis **entièrement** `agents/forge/CONTEXTE.md` ;
+2. suis sa procédure jusqu'au bilan. Ce n'est pas un run forge : ne lis ni FORGE.md ni
+   schema.md, et n'écris aucun exercice.
+
 Ce fichier est la seule source d'instructions du dépôt : ne crée pas de `CLAUDE.md`,
 car Claude Code cesserait alors de lire `AGENTS.md`.

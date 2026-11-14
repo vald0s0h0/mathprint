@@ -1,7 +1,8 @@
 """Mélange anti-triche des champs de réponse d'une carte, propre à une copie.
 
-Propositions de QCM, lignes de grille cochée, lignes OU colonnes des tableaux,
-colonne de droite des points à relier. La permutation s'applique ensemble au barème, à la réponse
+Propositions de QCM, colonnes des tableaux, colonne de droite des points à relier.
+Les lignes d'une grille cochée ou d'un tableau ne bougent que si la carte le
+déclare (`mix: "rows"`) : par défaut, leur ordre est celui de l'auteur. La permutation s'applique ensemble au barème, à la réponse
 attendue et aux identifiants de micro-correction. La carte étant ensuite figée
 sur sa CopyItem, le CV, la note et l'overlay lisent tous l'ordre imprimé.
 
@@ -70,7 +71,10 @@ def _mix_qcm(grading: dict, expected: dict, rng: random.Random,
 
 def _mix_grid(grading: dict, expected: dict, rng: random.Random) -> tuple[dict, dict]:
     rows = grading.get("rows") or []
-    if len(rows) < 2 or not _labels_are_free([r.get("label", "") for r in rows]):
+    # Des lignes ne changent d'ordre que sur déclaration de l'auteur (`mix: "rows"`) :
+    # une suite logique ou chronologique ne se reconnaît pas à ses libellés.
+    if (grading.get("mix") != "rows" or len(rows) < 2
+            or not _labels_are_free([r.get("label", "") for r in rows])):
         return grading, expected
     order = _shuffled_order(len(rows), rng)
     mixed = {**grading, "rows": _permuted(rows, order)}
@@ -106,6 +110,9 @@ def _mix_table(grading: dict, expected: dict, rng: random.Random) -> tuple[dict,
             return grading, expected
         axis, count, label_key = 1, cols, "col_labels"
     else:
+        # Jamais de lignes mélangées sans déclaration : sans elle, le tableau reste entier.
+        if declared != "rows":
+            return grading, expected
         labels = grading.get("row_labels")
         labelled = bool(labels) and len(labels) == len(cells) and _labels_are_free(labels)
         # Sans libellé, une valeur imprimée doit distinguer chaque ligne.
