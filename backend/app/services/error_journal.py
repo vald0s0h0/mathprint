@@ -211,6 +211,33 @@ def _is_active(rows, seen, exercises) -> bool:
     return len(avoided) < RESOLVED_AFTER
 
 
+def closures(db: Session, student_id: str, subject_id: str | None = "math") -> list[tuple[str, StudentLearningEvent, bool]]:
+    """Erreurs vaincues : (code, ligne qui l'a refermée, encore refermée aujourd'hui).
+
+    Même règle que `error_stats` (active à 2 occurrences sur 2 exercices, refermée
+    après RESOLVED_AFTER occasions évitées sur des exercices différents), rejouée
+    ligne après ligne : la ligne de fermeture désigne la carte et le devoir où
+    l'erreur a été vaincue. Une erreur revenue puis revaincue compte à chaque fois."""
+    by_code: dict[str, list[StudentLearningEvent]] = {}
+    for row in _current_rows(db, student_id, subject_id):
+        if not row.error_code.startswith("comptage."):
+            by_code.setdefault(row.error_code, []).append(row)
+    out = []
+    for code, rows in by_code.items():
+        rows.sort(key=lambda r: (r.occurred_at or datetime.min.replace(tzinfo=None), r.recorded_at))
+        was_active = False
+        found = []
+        for i in range(len(rows)):
+            prefix = rows[:i + 1]
+            seen = [r for r in prefix if r.observed]
+            active = bool(seen) and _is_active(prefix, seen, {r.exercise_id or r.copy_item_id for r in seen})
+            if was_active and not active:
+                found.append(rows[i])
+            was_active = active
+        out += [(code, row, not was_active) for row in found]
+    return out
+
+
 def active_errors(db: Session, student_id: str, subject_id: str | None = "math") -> set[str]:
     """Erreurs à retravailler. Les codes de comptage décrivent une attitude, pas
     une notion : ils restent au journal, mais ne déclenchent aucune remédiation."""
@@ -226,4 +253,4 @@ def active_error_competencies(db: Session, student_id: str, subject_id: str | No
 
 
 __all__ = ["sync_copy", "withdraw_items", "withdraw_copy", "error_stats", "active_errors",
-           "ErrorStat"]
+           "closures", "ErrorStat"]

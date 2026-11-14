@@ -91,6 +91,14 @@ def twin_for(db: Session, row: GeneratedExercise, position: int,
     (la seule active de sa famille) ; sans jumelles, elle est rendue telle quelle."""
     if not row.twin_group:
         return row
+    siblings = twin_siblings(db, row, cache)
+    jeux = max((j for j, _d in siblings), default=1)
+    dispositions = max((d for _j, d in siblings), default=1)
+    return siblings.get(twin_choice(position, jeux, dispositions), row)
+
+
+def twin_siblings(db: Session, row: GeneratedExercise, cache: dict | None = None) -> dict:
+    """{(jeu, disposition) → jumelle} de la famille de `row`."""
     cache = cache if cache is not None else {}
     siblings = cache.get(row.twin_group)
     if siblings is None:
@@ -99,9 +107,23 @@ def twin_for(db: Session, row: GeneratedExercise, position: int,
                         GeneratedExercise.twin_group == row.twin_group,
                         GeneratedExercise.status.in_(("active", TWIN_STATUS))).all()}
         cache[row.twin_group] = siblings
+    return siblings
+
+
+def revenge_twin_for(db: Session, row: GeneratedExercise, position: int, served: dict,
+                     cache: dict | None = None) -> GeneratedExercise:
+    """Jumelle de REVANCHE : un autre jeu de valeurs que ceux déjà servis à l'élève
+    (services.revenge.revenge_choice). Prime sur la règle des voisins, dont on ne
+    garde que la disposition quand elle existe pour ce jeu."""
+    from .revenge import revenge_choice
+    if not row.twin_group:
+        return row
+    siblings = twin_siblings(db, row, cache)
     jeux = max((j for j, _d in siblings), default=1)
     dispositions = max((d for _j, d in siblings), default=1)
-    return siblings.get(twin_choice(position, jeux, dispositions), row)
+    neighbour = twin_choice(position, jeux, dispositions)[1]
+    choice = revenge_choice(siblings, served or {}, neighbour)
+    return siblings.get(choice, row) if choice else row
 
 
 def family_heads(db: Session, exercise_ids) -> dict[str, str]:

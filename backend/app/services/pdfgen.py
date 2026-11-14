@@ -258,6 +258,12 @@ DM_Y = MARGIN + FID_INSET
 TR_X = PAGE_W - MARGIN - QR_MINI       # fiduciel haut-droit
 NOTE_W_V3 = 24 * mm
 CLASS_W = 22 * mm                      # zone classe : largeur FIXE (l'overlay ne connaît pas le nom)
+GOAL_VERDICT_W = 25 * mm               # réserve de l'overlay : « Objectif : pas encore »
+GOAL_FS = 6.2                          # corps de la ligne d'objectif
+GOAL_MIN_W = 30 * mm                   # en deçà, l'objectif n'est pas imprimé
+REVANCHE_FS = 5.6
+VANQUISHED_FS = 4.8                    # tient dans l'espace GAP entre deux cartes
+FOLLOWUP_COLOR = HexColor("#1F7A74")   # revanche, objectif, erreur vaincue : jamais de rouge
 LABEL_W = 56 * mm                      # « Correction — Nom » et « total brut → note »
 DATE_RIGHT = TR_X - 3 * mm             # la date : bas de page, à droite, contre le fiduciel BR
 # Plage « pipette » : une GRILLE de traits (verticaux + horizontaux) de la couleur de
@@ -301,6 +307,11 @@ def header_geometry(assessment_type: str, layout: str = LAYOUT_V3) -> dict:
         "raw": {"x": xe - LABEL_W, "baseline": top - 18.6, "w": LABEL_W},
         # pages suivantes : même libellé, à droite de la ligne de rappel
         "label_run": {"x": xe - LABEL_W, "baseline": top - 8.5, "w": LABEL_W},
+        # objectif du devoir (sujet individuel) : 3e ligne de la bande d'identité,
+        # à droite ; l'overlay écrit son verdict dans la réserve `goal_verdict`
+        "goal": {"x0": id_x + 0.5 * mm, "x1": xe - GOAL_VERDICT_W - 1 * mm,
+                 "baseline": top - 27.4},
+        "goal_verdict": {"x": xe - GOAL_VERDICT_W, "baseline": top - 27.4, "w": GOAL_VERDICT_W},
     }
 
 
@@ -458,7 +469,7 @@ def header_info_line(info: dict | None) -> str:
 
 def _draw_header(c: canvas.Canvas, student_name: str, class_name: str, title: str,
                  assessment_type: str, the_date: str, tpl: dict | None = None,
-                 info: dict | None = None):
+                 info: dict | None = None, goal: str = ""):
     """Bande de 11 mm (la hauteur d'un fiduciel) : case Note vide en pointillés
     (contrôle) | élève, titre, professeur · matière · établissement | classe en
     grand. La date est au bas de la page (cf. _draw_page_date). Le libellé
@@ -502,12 +513,66 @@ def _draw_header(c: canvas.Canvas, student_name: str, class_name: str, title: st
         c.setFillColor(accent)
         c.setFont(_font("bold"), tfs)
         c.drawString(x0, top - 18.6 - drop, t)
+    left_end = x0
     if line:
         t = _pdf_safe(line)
         ifs = _fit_size(t, _font(), x1 - x0, _subject_font_size(7.2), _subject_font_size(5.0))
         c.setFillColor(HexColor("#263238"))
         c.setFont(_font(), ifs)
         c.drawString(x0, top - 27.4, t)
+        left_end = x0 + c.stringWidth(t, _font(), ifs)
+    elif title:
+        # sans ligne d'information, le titre descend jusqu'au-dessus de la 3e ligne
+        left_end = x0 + c.stringWidth(t, _font("bold"), tfs)
+    if goal:
+        _draw_goal(c, goal, geo["goal"], left_end + 3 * mm)
+    c.setFillColor(black)
+
+
+def goal_fit(text: str, width: float, font: str | None = None) -> str:
+    """L'objectif tronqué proprement (au mot, avec « … ») pour tenir dans `width`,
+    ou "" s'il n'y a pas la place minimale."""
+    font = font or _font()
+    fs = _subject_font_size(GOAL_FS)
+    if width < GOAL_MIN_W:
+        return ""
+    text = _pdf_safe(text)
+    if stringWidth(text, font, fs) <= width:
+        return text
+    words = text.rstrip("»").rstrip().split(" ")
+    while len(words) > 3:
+        words.pop()
+        cut = " ".join(words).rstrip(" ,;:«") + "… »"
+        if stringWidth(cut, font, fs) <= width:
+            return cut
+    return ""
+
+
+def _draw_goal(c: canvas.Canvas, goal: str, geo: dict, start_x: float) -> None:
+    """Ligne « Ton objectif : … », alignée à droite sur la 3e ligne de la bande
+    d'identité, sans rien déplacer : seule la place restante est utilisée."""
+    x0 = max(geo["x0"], start_x)
+    text = goal_fit(goal, geo["x1"] - x0)
+    if not text:
+        return
+    c.setFillColor(FOLLOWUP_COLOR)
+    c.setFont(_font(), _subject_font_size(GOAL_FS))
+    c.drawRightString(geo["x1"], geo["baseline"], text)
+
+
+def _draw_revanche_tag(c: canvas.Canvas, x: float, y_top: float, w: float) -> None:
+    """« Revanche » posé sur le bord haut de la carte, à gauche : la carte garde
+    exactement sa hauteur et son contenu, et la mention « Erreur vaincue » de la
+    carte précédente (à droite, sous sa bande) ne la croise jamais."""
+    label = "Revanche"
+    fs = REVANCHE_FS
+    tw = stringWidth(label, _font("bold"), fs)
+    tx = x + 4 * mm
+    c.setFillColor(white)
+    c.rect(tx - 1.2, y_top - fs * 0.45, tw + 2.4, fs * 0.9, stroke=0, fill=1)
+    c.setFillColor(FOLLOWUP_COLOR)
+    c.setFont(_font("bold"), fs)
+    c.drawString(tx, y_top - fs * 0.35, label)
     c.setFillColor(black)
 
 
@@ -3581,7 +3646,7 @@ def render_copy(pdf_canvas: canvas.Canvas, *, student_name: str, class_name: str
                 tpl: dict | None = None,
                 placement: list[tuple[int, int]] | None = None,
                 min_pages: int = 0, dyslexic: bool = False,
-                header_info: dict | None = None) -> list[dict]:
+                header_info: dict | None = None, goal: str = "") -> list[dict]:
     """Point d'entrée isolant la police par rendu, y compris si plusieurs
     requêtes PDF sont traitées simultanément.
 
@@ -3593,7 +3658,7 @@ def render_copy(pdf_canvas: canvas.Canvas, *, student_name: str, class_name: str
             pdf_canvas, student_name=student_name, class_name=class_name,
             title=title, assessment_type=assessment_type, items=items,
             pages_meta=pages_meta, font_size=font_size, tpl=tpl,
-            placement=placement, min_pages=min_pages, header_info=header_info)
+            placement=placement, min_pages=min_pages, header_info=header_info, goal=goal)
     finally:
         _USE_DYSLEXIC.reset(token)
 
@@ -3603,7 +3668,8 @@ def _render_copy(pdf_canvas: canvas.Canvas, *, student_name: str, class_name: st
                  pages_meta: list[dict], font_size: int = 9,
                  tpl: dict | None = None,
                  placement: list[tuple[int, int]] | None = None,
-                 min_pages: int = 0, header_info: dict | None = None) -> list[dict]:
+                 min_pages: int = 0, header_info: dict | None = None,
+                 goal: str = "") -> list[dict]:
     """Dessine une copie complète. `items` contient les exercices à imprimer.
     `tpl` porte les templates éditables (runtime_settings).
     Retourne les zones pour le manifeste.
@@ -3679,7 +3745,7 @@ def _render_copy(pdf_canvas: canvas.Canvas, *, student_name: str, class_name: st
     _draw_markers(pdf_canvas, pages_meta[0]["payload"])
     _draw_page_date(pdf_canvas, today, tpl["header"])
     _draw_header(pdf_canvas, student_name, class_name, title, assessment_type, today,
-                 tpl["header"], header_info)
+                 tpl["header"], header_info, goal)
 
     seq = 0
     for idx, item in enumerate(items):
@@ -3693,6 +3759,8 @@ def _render_copy(pdf_canvas: canvas.Canvas, *, student_name: str, class_name: st
             x = MARGIN + col * (col_w + COL_GAP)
             card_h, part_zones = _draw_composite_card(
                 pdf_canvas, x, y_cursor, col_w, seq, cl, item, ex_tpl, font_size)
+            if item.get("revanche"):
+                _draw_revanche_tag(pdf_canvas, x, y_cursor, col_w)
             for pz in part_zones:
                 zones.append({
                     "item_id": pz["item_id"], "page_index": page_idx,
@@ -3713,6 +3781,8 @@ def _render_copy(pdf_canvas: canvas.Canvas, *, student_name: str, class_name: st
             item.get("level3", 3), item["response_type"], choices, ex_tpl,
             font_size, zone_fs, item.get("grading"),
             probleme=item.get("is_probleme", False))
+        if item.get("revanche"):
+            _draw_revanche_tag(pdf_canvas, x, y_cursor, col_w)
         zones.append({
             "item_id": item["item_id"], "page_index": page_idx,
             "page_id": pages_meta[page_idx]["page_id"],
@@ -3849,6 +3919,14 @@ def _draw_correction_strip(c: canvas.Canvas, z: dict, col):
     c.setFillColor(col)
     c.setFont("Helvetica-Bold", 11)
     c.drawRightString(sx + sw, sy + sh / 2 - 11 * 0.34, score_txt)
+    if z.get("vanquished"):
+        # « Erreur vaincue » juste sous la bande, à droite, dans l'espace entre deux
+        # cartes (GAP) : une ligne, sans rouge, sans toucher au retour personnalisé
+        # ni à la carte suivante (son étiquette « Revanche » est à gauche).
+        c.setFillColor(FOLLOWUP_COLOR)
+        c.setFont("Helvetica-Bold", VANQUISHED_FS)
+        c.drawRightString(sx + sw, sy - VANQUISHED_FS * 0.8, "Erreur vaincue")
+        c.setFillColor(col)
 
 
 PROGRESS_GREEN = HexColor("#2E7D32")
@@ -4044,6 +4122,13 @@ def _draw_header_marks_v3(c: canvas.Canvas, page: dict, geo: dict, col) -> bool:
         _draw_note_box(c, geo, page["note"], col)
         if page.get("note_raw") and page["note_raw"] != page["note"]:
             _draw_raw_to_note(c, geo, page["note_raw"], page["note"], col)
+    if page.get("goal_reached") is not None:
+        g = geo["goal_verdict"]
+        c.setFillColor(FOLLOWUP_COLOR if page["goal_reached"] else HexColor("#4E5860"))
+        c.setFont("Helvetica-Bold", GOAL_FS)
+        c.drawRightString(g["x"] + g["w"], g["baseline"],
+                          "Objectif atteint" if page["goal_reached"] else "Objectif : pas encore")
+        c.setFillColor(col)
     return False
 
 

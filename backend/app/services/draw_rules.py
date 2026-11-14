@@ -25,10 +25,13 @@ class DrawContext:
     dislikes: set[str] = field(default_factory=set)
     active_errors: set[str] = field(default_factory=set)
     remediation_left: int = 0
+    # revanche (services.revenge) : {famille de jumelles → erreur active observée dessus}
+    revenge: dict[str, str] = field(default_factory=dict)
 
-    def for_student(self, active_errors: set[str]) -> "DrawContext":
+    def for_student(self, active_errors: set[str],
+                    revenge: dict[str, str] | None = None) -> "DrawContext":
         return DrawContext(self.likes, self.dislikes, set(active_errors),
-                           MAX_REMEDIATION_CARDS if active_errors else 0)
+                           MAX_REMEDIATION_CARDS if active_errors else 0, dict(revenge or {}))
 
 
 def preference_owner(db: Session, assessment) -> str | None:
@@ -65,14 +68,22 @@ class _Part:
     grading_json: dict
 
 
+def is_revenge(row, context: DrawContext) -> bool:
+    """Carte d'une famille où l'élève a commis une erreur encore active : sa
+    revanche. Elle compte dans le plafond de remédiation."""
+    return bool(context.remediation_left > 0 and getattr(row, "twin_group", None)
+                and row.twin_group in context.revenge)
+
+
 def is_remediation(row, context: DrawContext) -> bool:
-    return bool(context.remediation_left > 0 and row_error_targets(row) & context.active_errors)
+    return bool(context.remediation_left > 0 and (row_error_targets(row) & context.active_errors
+                                                  or is_revenge(row, context)))
 
 
-def preference_key(row, context: DrawContext) -> tuple[bool, bool, bool]:
-    """À rang égal, le plus petit passe devant."""
-    return (not is_remediation(row, context), row.id not in context.likes,
-            row.source != FORGE_SOURCE)
+def preference_key(row, context: DrawContext) -> tuple[bool, bool, bool, bool]:
+    """À rang égal, le plus petit passe devant : la revanche d'abord."""
+    return (not is_revenge(row, context), not is_remediation(row, context),
+            row.id not in context.likes, row.source != FORGE_SOURCE)
 
 
 def allowed(rows: list, context: DrawContext) -> list:

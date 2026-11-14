@@ -405,6 +405,9 @@ class Copy(Base):
     # calculé une fois à la finalisation, réutilisé pour une réimpression sans
     # re-facturer l'appel Claude Haiku.
     appreciation_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # objectif du devoir (sujet individuel, services.revenge) : {competency_id,
+    # label, text, source, error_code}, imprimé en tête et jugé sur la copie corrigée
+    goal_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
 
 class CopyItem(Base):

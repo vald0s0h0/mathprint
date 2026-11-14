@@ -31,7 +31,7 @@ from . import error_journal, llm_grader, microcorrection, ocr_cascade, ocr_shado
 from .runtime_settings import (construction_audit_share, construction_confidence_threshold,
                                ocr_confidence_threshold, ocr_mode)
 from .appreciation import build_appreciation
-from . import construction, late_copies, pdfgen
+from . import construction, late_copies, pdfgen, revenge
 from .forgetting import apply_evidence, replay_states, update_level_after_assessment
 from .overlay_queue import overlay_file
 from .pdfgen import (CARD_PAD, EDGE_MARK_SIZE, qcm_answer_rects, render_copy_review,
@@ -1641,6 +1641,8 @@ def copy_overlay_pages(db: Session, assessment: Assessment, copy: Copy,
     group_messages: dict[tuple, list[str]] = {}
     group_zones: dict[tuple, tuple] = {}
     group_members: dict[tuple, list[dict]] = {}
+    # erreurs vaincues sur CE devoir (services.revenge) : mention sous la note de la carte
+    vanquished = revenge.vanquished_items(db, copy, assessment.subject_id or "math")
     for item in items:
         resp = db.query(StudentResponse).filter_by(copy_item_id=item.id).first()
         zone = db.query(ResponseZone).filter_by(item_id=item.id).first()
@@ -1669,6 +1671,8 @@ def copy_overlay_pages(db: Session, assessment: Assessment, copy: Copy,
                  "marks": _zone_marks(db, item, zone, decision),
                  # repères de l'aperçu interactif, ignorés par le rendu PDF
                  "response_id": resp.id, "sequence": item.sequence}
+        if item.id in vanquished:
+            zdict["vanquished"] = True
         # Micro-correction : recalculée à chaque rendu, jamais stockée. Absente des
         # exercices sans contrat, dont l'overlay reste donc strictement identique.
         selection = microcorrection.select(item, decision, resp, _latest_ocr(db, zone.id))
@@ -1738,7 +1742,9 @@ def copy_overlay_pages(db: Session, assessment: Assessment, copy: Copy,
         comment = (f"Score {scoring.format_points(result.points_earned)}/"
                    f"{scoring.format_points(result.points_total)} points")
     header = {"note": note, "note_raw": note_raw, "progress": appreciation.get("progress"),
-              "synthesis": appreciation.get("synthesis"), "comment": comment}
+              "synthesis": appreciation.get("synthesis"), "comment": comment,
+              # objectif du devoir : « atteint » / « pas encore », jamais sans carte corrigée
+              "goal_reached": revenge.goal_verdict(db, copy) if copy.goal_json else None}
     # Une page d'overlay PAR page scannée — indispensable en recto-verso et
     # sur les sujets longs. L'ordre interne suit lui aussi l'ADF ; page_no
     # n'est qu'un repli pour les anciens lots sans positions persistées.

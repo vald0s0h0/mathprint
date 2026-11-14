@@ -163,29 +163,14 @@ def progress_curve(db: Session, student_id: str, comp_ids: set[str], end: dateti
 
 def vanquished_errors(db: Session, student_id: str, subject_id: str,
                       start: datetime, end: datetime) -> list[str]:
-    """Erreurs types qui étaient actives et se sont refermées pendant la période
-    (même règle que error_journal : 2 occasions évitées d'affilée sur des
-    exercices différents), et qui le sont restées jusqu'à la fin."""
-    by_code: dict[str, list] = {}
-    for row in error_journal._current_rows(db, student_id, subject_id):
-        if not row.error_code.startswith("comptage.") and _utc(row.occurred_at) and _utc(row.occurred_at) < end:
-            by_code.setdefault(row.error_code, []).append(row)
-    out = []
-    for code, rows in by_code.items():
-        rows.sort(key=lambda r: (_utc(r.occurred_at), r.recorded_at))
-        was_active, closed_at = False, None
-        for i in range(len(rows)):
-            prefix = rows[:i + 1]
-            seen = [r for r in prefix if r.observed]
-            exercises = {r.exercise_id or r.copy_item_id for r in seen}
-            active = bool(seen) and error_journal._is_active(prefix, seen, exercises)
-            if was_active and not active:
-                closed_at = _utc(rows[i].occurred_at)
-            elif active:
-                closed_at = None
-            was_active = active
-        if closed_at and start <= closed_at < end and not was_active:
-            out.append(code)
+    """Erreurs types vaincues pendant la période et restées vaincues : la règle
+    est celle d'error_journal.closures, la même que la mention « Erreur
+    vaincue » imprimée sur la copie corrigée."""
+    out = set()
+    for code, row, still in error_journal.closures(db, student_id, subject_id):
+        at = _utc(row.occurred_at)
+        if still and at and start <= at < end:
+            out.add(code)
     return sorted(out)
 
 

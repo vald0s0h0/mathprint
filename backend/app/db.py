@@ -47,7 +47,7 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, ...]]] = {
                      ("waves_json", "JSON")],
     "scanned_pages": [("manual_page_id", "TEXT"), ("dismissed", "BOOLEAN"),
                       ("wave", "INTEGER", "0"), ("replaces_page_id", "TEXT")],
-    "copies": [("appreciation_json", "JSON"), ("variant_key", "TEXT")],
+    "copies": [("appreciation_json", "JSON"), ("variant_key", "TEXT"), ("goal_json", "JSON")],
     "generated_exercises": [
         ("verifier_model", "TEXT"),
         ("verifier_verdict_json", "JSON"),

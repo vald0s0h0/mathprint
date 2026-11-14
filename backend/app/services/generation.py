@@ -33,7 +33,7 @@ from ..models import (
     Assessment, ClassTeaching, Competency, Copy, CopyItem, DocumentPage, FileObject, Job,
     ResponseZone, School, SchoolClass, StudentLevel, Subject, TeacherProfile,
 )
-from . import blocks, distribution, draw_rules, error_journal, exercise_gen, scoring, student_history
+from . import blocks, distribution, draw_rules, error_journal, exercise_gen, revenge, scoring, student_history
 from . import statement as statement_mod
 from . import pdfgen
 from .runtime_settings import doc_templates
@@ -433,9 +433,13 @@ def generate_assessment_job(db: Session, assessment: Assessment,
         # pour toute la copie.
         ex_log = student_history.exercise_log(db, student.id) if individual else {}
         # Remédiation : sujets individuels seulement, jamais les sujets communs.
+        # Revanche : familles de jumelles où traîne une erreur active (services.revenge).
+        revenge_map = (revenge.revenge_groups(db, student.id, assessment.subject_id or "math")
+                       if individual else {})
+        revenge_served = revenge.served_twins(db, student.id, revenge_map)
         student_draw = draw.for_student(
             error_journal.active_errors(db, student.id, assessment.subject_id or "math")
-            if individual else set())
+            if individual else set(), revenge_map)
         sheet = draw_rules.SheetState()
         if individual:
             slots, _stats = student_history.student_plan(
@@ -449,6 +453,11 @@ def generate_assessment_job(db: Session, assessment: Assessment,
             priority = distribution.priority_competencies(db, student.id, ordered_ids)
             slot_levels = [level3] * len(priority)
         copy = Copy(assessment_id=assessment.id, student_id=student.id, seed=seed)
+        if individual:
+            # Objectif du devoir : figé sur la copie, jugé sur la copie corrigée.
+            copy.goal_json = revenge.choose_goal(
+                db, student.id, assessment.subject_id or "math", ordered_ids,
+                list(dict.fromkeys(priority)))
         db.add(copy)
         db.flush()
 
@@ -501,7 +510,11 @@ def generate_assessment_job(db: Session, assessment: Assessment,
                     # déjà réussi) : autrement un exercice déjà servi, mais du
                     # bon type, passerait devant un inédit.
                     if individual:
-                        bank = student_history.preferred_rows(bank, ex_log) or bank
+                        best = student_history.preferred_rows(bank, ex_log) or bank
+                        # la revanche est par nature une famille déjà vue : elle
+                        # reste candidate malgré le rang « inédit d'abord »
+                        bank = best + [r for r in bank if r not in best
+                                       and draw_rules.is_revenge(r, student_draw)]
                     if not allow_repeat:
                         bank = [r for r in bank
                                 if distribution.exercise_identity(r) not in picked_keys]
@@ -536,7 +549,14 @@ def generate_assessment_job(db: Session, assessment: Assessment,
             sheet.add(row)
             # Anti-triche : la carte est choisie sur la famille, la jumelle servie
             # dépend de la place de l'élève (deux voisins n'ont pas les mêmes valeurs).
-            row = distribution.twin_for(db, row, s_idx, twin_cache)
+            revenge_code = (student_draw.revenge.get(row.twin_group)
+                            if draw_rules.is_revenge(row, student_draw) else None)
+            if revenge_code:
+                # la jumelle de revanche prime sur la règle des voisins
+                row = distribution.revenge_twin_for(
+                    db, row, s_idx, revenge_served.get(row.twin_group, {}), twin_cache)
+            else:
+                row = distribution.twin_for(db, row, s_idx, twin_cache)
             if draw_rules.is_remediation(row, student_draw):
                 student_draw.remediation_left -= 1
             # les cartes de remplissage ne passent pas par le tirage équilibré
@@ -549,6 +569,11 @@ def generate_assessment_job(db: Session, assessment: Assessment,
                 seq=seq, guides=mode)
             if render is None:
                 return False
+            if revenge_code:
+                render = {**render, "revanche": True}
+                for iid in render.get("part_item_ids") or [render["item_id"]]:
+                    ci = db.get(CopyItem, iid)
+                    ci.grading_json = {**(ci.grading_json or {}), "revanche": revenge_code}
             if quota is not None:
                 quota.take(has_guide, guided)
             # palier de lecture : du plus simple au plus difficile, problèmes
@@ -886,7 +911,8 @@ def generate_assessment_job(db: Session, assessment: Assessment,
             assessment_type=assessment.type, items=render_items,
             pages_meta=pages_meta, font_size=font_size, tpl=tpl,
             placement=placement, dyslexic=student.dyslexic,
-            header_info=header_info(db, assessment, school_class))
+            header_info=header_info(db, assessment, school_class),
+            goal=(copy.goal_json or {}).get("text", ""))
 
         used_pages = max((z["page_index"] for z in zones), default=0) + 1
         if used_pages > max_pages + PAGE_RESERVE:
