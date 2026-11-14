@@ -26,7 +26,7 @@ fichier `astra_output.json` du run.
 ## Commande « forge »
 
 Quand l'utilisateur écrit `forge <programme> <cycle> <cible>` (ex. `forge fr 3e A1.2`,
-`forge fr 3e A1`, `forge fr 3e A1 --problemes`, `forge fr 3e A1.2 --complement 10`,
+`forge ci tle E1.4 --serie D`, `forge fr 3e A1 --problemes`, `forge fr 3e A1.2 --suite`, `forge fr 3e A1.2 --complement 10`,
 `forge fr 3e C1.2 --traces 4`, `forge reprendre`, `forge ecartes fr-3e-A4`), ou demande de
 lancer la pipeline forge :
 

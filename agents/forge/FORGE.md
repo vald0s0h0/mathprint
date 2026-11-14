@@ -6,15 +6,15 @@ Les scripts vérifient tout ce qui se vérifie : formats, quotas, LaTeX, calculs
 
 ## Commande
 
-`forge <programme> <cycle> <cible> [--problemes] [--pilote] [--traces N]`, par exemple `forge fr 3e A1.2`.
+`forge <programme> <cycle> <cible> [--serie S] [--matiere M] [--problemes] [--suite] [--pilote] [--traces N]`, par exemple `forge fr 3e A1.2` ou `forge ci tle E1.4 --serie D`.
 
-Le programme et le cycle sont obligatoires : s'il en manque un, demande-le avant toute chose. Les scripts se lancent depuis la racine du dépôt avec `backend/.venv/bin/python agents/forge/run.py`. Ne modifie pas le code de l'application pendant un run. Ton travail, ce sont les fichiers `slots/*.json` du run et la fiche du chapitre.
+Le programme et le cycle sont obligatoires : s'il en manque un, demande-le avant toute chose. Les scripts se lancent depuis la racine du dépôt avec `backend/.venv/bin/python agents/forge/run.py`. Ne modifie pas le code de l'application pendant un run. Ton travail, ce sont les fichiers `familles/*.json` du run. Tu écris les exercices avec Opus ; la fiche de la leçon a été écrite avant, par une autre commande (`forge contexte`), et tu ne la modifies pas.
 
 ## Procédure
 
-1. **Préparer.** `run.py prepare <programme> <cycle> <cible> --modele <ton identifiant exact>`, avec `--problemes` ou `--pilote` si demandé.
+1. **Préparer.** `run.py prepare <programme> <cycle> <cible> --modele <ton identifiant exact>`, avec `--serie`, `--matiere`, `--problemes`, `--suite` ou `--pilote` si demandé. Si la commande répond `FICHE ABSENTE`, arrête-toi et donne à l'utilisateur la commande `forge contexte` qu'elle affiche : on n'écrit pas d'exercices sans fiche. Par défaut, le run est une **amorce** (une partie du socle de la compétence) ; `--suite` produit le reste.
 2. **Lire le contexte**, dans l'ordre affiché, une seule fois, sans modifier ces fichiers. Cet ordre stable permet au cache de fonctionner.
-3. **Fiche du chapitre, si elle est marquée « À ÉCRIRE ».** Lis les sources et les images indiquées, puis écris la fiche (voir plus bas). Elle resservira à tout le chapitre. Si le chapitre compte plusieurs compétences, traite chacune dans un **contexte neuf** (sous-agent ou nouvelle session), à partir du même ordre de lecture. Un chapitre par session, trois sous-agents au plus en parallèle : au-delà, la limite d'usage coupe les runs en cours, et chaque reprise relit tout sans cache. Passe toujours le nom du run aux commandes, et lance `persist` dès qu'un run est fini.
+3. **Un contexte neuf par compétence.** Si la cible est une leçon entière, traite chaque compétence dans un contexte neuf (sous-agent ou nouvelle session), à partir du même ordre de lecture. Une leçon par session, trois sous-agents au plus en parallèle : au-delà, la limite d'usage coupe les runs en cours, et chaque reprise relit tout sans cache. Passe toujours le nom du run aux commandes, et lance `persist` dès qu'un run est fini.
 4. **Rédiger par lots.** `run.py suivant` donne le prochain lot. Écris une **famille** par emplacement, dans `familles/<emplacement>.json` (contrat : `schema.md`, section Familles) : la carte une seule fois, avec 2 ou 3 jeux de valeurs et, quand des réponses se déplacent, tes deux dispositions. `check` en tire les jumelles et les range dans `slots/` et `jumelles/` : n'écris jamais ces deux dossiers toi-même. Prends 5 emplacements à la fois, 3 si les figures sont complexes.
 5. **Contrôler après chaque lot.** `run.py check` : corrige seulement les emplacements en erreur, jusqu'à zéro erreur. Après deux échecs sur un même emplacement, réécris-le depuis zéro plutôt que de le rafistoler.
 6. **Rendre, quand tout est écrit.** `run.py render` produit le PNG réel de chaque carte, mesure le blanc et simule des sujets. Il essaie déjà lui-même les mises en page de figure. Le texte de l'énoncé, les guides et les figures se placent seuls : figure centrée si le texte est trop court pour l'accompagner, marges équilibrées sinon, colonne de libellés réduite tant que le tableau ne grandit pas. Il simule aussi **l'écriture de l'élève** dans chaque case, ligne et cellule, avec la réponse attendue et les réponses fausses prévues (`ecrit/`, à regarder en cas de doute). Il contrôle enfin **la géométrie** de la carte et de sa figure sur les objets du PDF : un nom ou une cote posé sur un trait, deux textes qui se recouvrent, un texte qui touche une case, sort du cadre ou recouvre la figure. Pour une figure, `check` le dit dès la compilation, avec le texte fautif et sa position en mm : déplace-le du côté libre. `ÉCRITURE TROP SERRÉE`, `INTERLIGNE CASSÉ` et `MISE EN PAGE` bloquent `persist` : réécris la carte (moins de colonnes, réponse plus courte, tableau au lieu d'une phrase à trous). Quand une carte contexte + question a une figure, sépare la question finale par un saut de ligne : elle passera sous la figure, sur toute la largeur.
@@ -31,7 +31,7 @@ Ce que le relecteur doit regarder sur une carte précise va aussi dans son champ
 
 **Tracés.** `forge fr 3e C1.2 --traces 4` ne produit que des géométries à tracer (`geo_construction`, voir `schema.md`), à ajouter à une compétence déjà fournie, sans en remplacer aucune. Les modes suivent la même progression que la grille : ancrés sur quadrillage en facile, ancré puis libre en moyen, libre puis ancré sans quadrillage en difficile. Réserve-les aux savoir-faire où construire est la compétence évaluée : symétries, translations, rotations, agrandissements, perpendiculaires, parallèles, cercles, triangles et angles à construire. Un tracé est ancré (figure de départ imprimée) ou libre (case vide : « construis un triangle de côtés… », « trace un angle de 50° »). `suivant` annonce le barème et le temps de chaque tracé ; le bilan les rappelle, carte par carte. Comme pour un second run, la fiche existe déjà et `existants.md` résume la banque.
 
-**Second run.** `forge fr 3e A1.2 --complement 10` (ou `--difficile 6`) ne produit que ce qui manque. La fiche existe déjà : ne relis aucune page. Le fichier `existants.md`, à la fin de l'ordre de lecture, résume la banque : ne reprends ni ces structures ni ces valeurs.
+**Second run.** `forge fr 3e A1.2 --suite` produit le reste du socle après l'amorce ; `forge fr 3e A1.2 --complement 10` (ou `--difficile 6`) ajoute des cartes à une compétence épuisée. Le fichier `existants.md`, à la fin de l'ordre de lecture, résume la banque : ne reprends ni ces structures ni ces valeurs.
 
 ## Écrire un exercice, dans cet ordre
 
@@ -49,7 +49,7 @@ Ce que le relecteur doit regarder sur une carte précise va aussi dans son champ
 - **Elle se suffit à elle-même.** Une carte est tirée seule, parmi d'autres, dans un sujet. Elle ne renvoie à aucune autre, ni au cours, ni à « la figure ci-dessus » sans figure.
 - **Elle dit exactement quoi faire.** Un élève qui connaît la notion ne doit jamais hésiter sur la consigne.
 - **Elle est au bon niveau.** Pas plus difficile à lire qu'à résoudre. Respecte ce que la fiche classe hors programme.
-- **Elle est variée.** Les 20 exercices couvrent les micro-savoir-faire de la compétence. Changer les nombres ne fait pas un nouvel exercice.
+- **Elle est variée.** Les familles d'une compétence couvrent ses micro-savoir-faire. Changer les nombres ne fait pas une nouvelle famille : c'est le rôle des jeux de valeurs.
 - **Elle est réaliste.** Des valeurs plausibles et des résultats raisonnables.
 - **Elle est compacte.** Pas de phrase décorative. Le blanc perdu sur une copie se paie.
 
@@ -63,6 +63,13 @@ Deux élèves assis côte à côte ne reçoivent jamais la même carte. Chaque c
 - Si rien ne peut bouger sans casser le sens, dis-le (`ordre_impose`) : la carte n'a qu'une disposition, et ses jeux de valeurs suffisent.
 
 ## Grille : le script décide, tu remplis
+
+Le nombre de familles dépend de la compétence : une seule pour un savoir à restituer (« Connaître », « Identifier »), quatre à six pour un savoir-faire selon sa durée, trois pour un raisonnement. Une compétence « Traiter une situation » n'a pas d'exercices : elle se travaille par les problèmes de la leçon (`--problemes`).
+
+`suivant` donne aussi, pour chaque emplacement :
+
+- son **archétype**, à déclarer dans la carte (`"archetype": "ERR"`) : ce que la carte fait faire, d'après la doctrine de la matière. Une application directe, une erreur à trouver, deux élèves en désaccord ne se rédigent pas pareil. `check` refuse un autre archétype sans `slot_swap.reason` ;
+- parfois une **idée** : le mécanisme d'un bon exercice, en deux phrases. Construis ta famille sur ce mécanisme, avec ton propre contexte, tes personnages et tes valeurs. Rien d'autre n'est à reprendre.
 
 La grille donne pour chaque emplacement la difficulté, le format, la taille visée et la présence d'une figure. Ne recalcule aucun pourcentage. La taille est un objectif, la qualité passe avant : si un format ou une taille dégrade vraiment l'exercice, remplis `slot_swap.reason`.
 
@@ -86,20 +93,9 @@ Le barème est calculé par le script, jamais par toi. Donne seulement `estimate
 
 Un problème porte sur tout le chapitre : une situation plus longue, 2 à 5 parties liées, un titre concret. Chaque partie déclare la compétence qu'elle évalue, et les compétences indiquées par la grille doivent toutes apparaître. Une partie ne doit pas exiger le résultat exact de la précédente quand c'est évitable : donne-le si besoin (« On admet que… »), pour qu'une erreur ne se propage pas.
 
-## Fiche du chapitre
+## La fiche de la leçon
 
-Fichier Markdown, sans aucune date, écrit une fois par chapitre, pour chaque compétence :
-
-- ce que signifie la maîtriser (ce que l'élève sait faire seul) ;
-- les méthodes et le vocabulaire enseignés à ce niveau ;
-- ce qui est hors programme à ce niveau ;
-- les prérequis ;
-- les micro-savoir-faire et leur progression, du plus simple au plus exigeant ;
-- les types de tâches et de figures ;
-- les erreurs fréquentes, avec leur code de la taxonomie ;
-- son profil de tracés, sur une ligne à part : `**Tracés : central.**`, `partiel` ou `aucun`, suivi de la raison. `central` quand construire est la compétence évaluée (symétries, translations, rotations, agrandissements, constructions de triangles, d'angles, de parallèles ou de perpendiculaires) ; `partiel` quand un tracé l'illustre sans en être le cœur ; `aucun` quand rien ne se construit sur une feuille plane (sections de solides, calculs, repérage sur une sphère). Avec `central` ou `partiel`, la fiche décrit aussi les tracés possibles et les erreurs qui se dessinent.
-
-**Aucun énoncé recopié, aucune suite de valeurs du manuel.** La fiche décrit, elle ne cite pas.
+Elle est dans ton ordre de lecture. C'est ta seule source sur le contenu : ce qu'elle classe hors programme ou « pas encore vu » n'apparaît dans aucune carte, même en piège, et une carte n'affirme aucun fait qu'elle ne contient pas. Si la fiche te semble fausse ou incomplète, n'invente pas : dis-le dans le bilan.
 
 ## Rédaction libre : le dossier du correcteur
 

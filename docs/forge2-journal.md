@@ -8,3 +8,6 @@ Plan : [idees/forge-refonte-plan.md](idees/forge-refonte-plan.md). Branche `forg
 | 0 | musée des défauts (`agents/forge/musee/`, rejoué par `backend/tests/test_musee.py`) | fait |
 | 1 | contrôle géométrique : figure (`services/figlint.py`, branché sur `check`) et carte entière (branché sur `render`, bloque `persist`) ; calibré sans faux positif sur les 64 figures et les 653 cartes de la banque | fait |
 | 3 | familles (`agents/forge/familles.py`) : jeux de valeurs, calculs remplis par SymPy, deux dispositions écrites par l'auteur, jumelles contrôlées, rendues et écrites en banque en un groupe ; `author_order` : aucun mélange par script à l'impression ; le lecteur relit les deux dispositions | fait |
+| 4 | doctrine de maths et archétypes (`matieres/math/doctrine.md`), archétype par emplacement, vérifié par `check` ; étalons par archétype : à écrire | fait, sauf étalons |
+| 4 bis | contexte sans aucun texte de manuel (Indigo gardé pour le seul contrôle anti-copie, et pour le français seulement) ; bloc « idées » donné par `suivant` ; `prepare` refuse sans fiche | fait |
+| 5 | programme ivoirien : séries du lycée (`--serie`), profil `programmes/ci.md`, progression de l'année dans le référentiel du run, volumes par formule avec amorce et `--suite`, bases du calendrier (`run.py calendrier`) et de l'épuisement (`run.py epuisement`) | fait |

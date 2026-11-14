@@ -1,0 +1,186 @@
+"""Plan d'un run : combien de familles, lesquelles, avec quelle intention.
+
+Le script décide ce que le modèle n'a pas à deviner :
+
+  - le **volume**, d'après le verbe de la compétence et sa durée (un savoir à
+    restituer ne demande pas autant d'exercices qu'un savoir-faire) ;
+  - le **format** et le **niveau** de chaque emplacement ;
+  - l'**archétype** de chaque emplacement (application, erreur à corriger, deux
+    élèves en désaccord…), pour que la banque ne soit pas une suite de « Calcule » ;
+  - l'**idée** donnée à certains emplacements, quand la leçon en a (fiches-idées).
+
+Un emplacement est une famille : il s'imprime en 4 ou 6 jumelles.
+"""
+from __future__ import annotations
+
+import math
+import random
+import re
+import unicodedata
+from datetime import date, timedelta
+from pathlib import Path
+
+LEVEL_NAMES = {1: "facile", 2: "moyen", 3: "difficile"}
+# Part du socle générée à la première demande ; le reste vient si la compétence est tirée.
+AMORCE = 0.4
+# Au plus cette part des emplacements reçoit une idée tirée d'une source : au-delà,
+# un manuel dicterait toute la banque.
+IDEA_SHARE = 0.4
+PROBLEMS_PER_LESSON = 4
+
+# Nature d'une compétence d'après le verbe de son libellé.
+VERBS = {
+    "savoir": ("connaitre", "identifier", "reconnaitre", "noter", "nommer", "citer", "definir",
+               "distinguer", "enoncer"),
+    "raisonnement": ("justifier", "demontrer", "interpreter", "prouver", "argumenter", "expliquer",
+                     "analyser", "critiquer"),
+    "situation": ("traiter",),
+}
+# (niveau, format, taille, archétype), dans l'ordre où l'on prend les emplacements.
+PLANS = {
+    "savoir": ((1, "qcm_single", "XS", "CALC"), (1, "matching", "S", "REPR"),
+               (2, "checkbox_grid", "M", "CONTRE")),
+    "savoir_faire": ((1, "qcm_single", "XS", "CALC"), (2, "short_text", "S", "CALC"),
+                     (2, "qcm_multiple", "M", "ERR"), (3, "multiline_text", "L", "QUI"),
+                     (2, "table_fill", "L", "REPR"), (3, "table_fill", "XL", "INVERSE")),
+    "raisonnement": ((2, "qcm_multiple", "M", "ERR"), (3, "multiline_text", "L", "QUI"),
+                     (2, "checkbox_grid", "M", "CONTRE"), (3, "multiline_text", "L", "CALC")),
+}
+ARCHETYPES = {
+    "CALC": "application directe du savoir-faire",
+    "REPR": "passer d'une représentation à une autre (tableau, graphique, formule, figure, schéma)",
+    "ERR": "une copie d'élève contient une erreur : la trouver, la corriger",
+    "QUI": "deux élèves ne sont pas d'accord : qui a raison, et pourquoi",
+    "CONTRE": "vrai ou faux, avec un contre-exemple quand c'est faux",
+    "INVERSE": "le résultat est donné, il faut retrouver la donnée",
+    "ESTIM": "ordre de grandeur : ce résultat est-il possible ?",
+    "DOC": "lire un document : ticket, facture, horaires, étiquette, relevé",
+    "DECIDE": "prendre une décision que le bon sens seul ne permet pas",
+}
+
+
+def _fold(text: str) -> str:
+    text = unicodedata.normalize("NFD", text.lower())
+    return "".join(ch for ch in text if unicodedata.category(ch) != "Mn")
+
+
+def nature(label: str) -> str:
+    """savoir, savoir_faire, raisonnement ou situation, d'après le premier mot du libellé."""
+    words = re.findall(r"[a-zà-ÿ]+", _fold(label or ""))
+    verb = words[0] if words else ""
+    for name, verbs in VERBS.items():
+        if verb in verbs:
+            return name
+    return "savoir_faire"
+
+
+def family_count(label: str, minutes: int | None = None) -> int:
+    """Socle d'une compétence, en familles. La durée module un savoir-faire : sans
+    durée, la valeur médiane."""
+    kind = nature(label)
+    if kind == "savoir":
+        return 1
+    if kind == "raisonnement":
+        return 3
+    if kind == "situation":
+        return 0                      # une situation se traite en problèmes, par leçon
+    if minutes is None:
+        return 5
+    return 4 if minutes <= 15 else (5 if minutes <= 30 else 6)
+
+
+def first_batch(count: int) -> int:
+    """Nombre de familles de l'amorce."""
+    return max(1, math.ceil(AMORCE * count)) if count else 0
+
+
+def family_grid(code: str, label: str, minutes: int | None, *, figures: float = 0.2,
+                traces: str = "aucun", count: int | None = None, skip: int = 0) -> list[dict]:
+    """Emplacements d'une compétence. `count` : nombre voulu (amorce), `skip` : rangs
+    déjà produits par un run précédent. Déterministe : même appel, même grille."""
+    kind = nature(label)
+    plan = list(PLANS.get(kind, PLANS["savoir_faire"]))
+    total = family_count(label, minutes)
+    rng = random.Random(f"{code}/plan")
+    if kind == "savoir":
+        plan = plan[rng.randrange(len(plan)):] + plan      # un savoir : format varié d'un contenu à l'autre
+    plan = plan[:total]
+    if traces == "central":
+        plan = [(1, "geo_construction", "M", "CALC"), *plan[1:-1], (2, "geo_construction", "L", "CALC")][:max(total, 2)]
+    elif traces == "partiel" and plan:
+        plan = [*plan[:-1], (2, "geo_construction", "L", "CALC")]
+    chosen = plan[skip:skip + (count if count is not None else len(plan))]
+    with_figure = {i for i in range(len(chosen)) if rng.random() < figures}
+    grid = []
+    for i, (level, rtype, size, archetype) in enumerate(chosen):
+        slot = {"slot": f"s{skip + i + 1:02d}", "kind": "exercise", "competency": code, "level": level,
+                "difficulty": LEVEL_NAMES[level], "response_type": rtype, "size": size,
+                "figure": i in with_figure and rtype != "geo_construction", "archetype": archetype}
+        if rtype == "geo_construction":
+            slot.update(trace_mode="quadrillage" if level == 1 else "libre", figure=False)
+        grid.append(slot)
+    return grid
+
+
+def problem_slots(codes: list[str], count: int = PROBLEMS_PER_LESSON) -> list[dict]:
+    """Problèmes d'une leçon : une situation, 2 à 4 parties, au moins 2 compétences."""
+    levels = ([1, 2, 2, 3] * count)[:count]
+    parts = {1: 2, 2: 3, 3: 4}
+    out = []
+    for i, level in enumerate(levels):
+        wanted = max(2, min(len(codes), parts[level])) if len(codes) >= 2 else 1
+        out.append({"slot": f"p{i + 1:02d}", "kind": "problem",
+                    "competencies": [codes[(i + k) % len(codes)] for k in range(wanted)],
+                    "level": level, "difficulty": LEVEL_NAMES[level], "response_type": "composite",
+                    "parts": parts[level], "size": "L", "figure": i % 2 == 0,
+                    "archetype": "DECIDE" if i % 2 else "DOC"})
+    return out
+
+
+# ------------------------------------------------------------------ idées
+def load_ideas(path: Path) -> list[dict]:
+    """Fiches-idées d'une leçon (fichier `.idees.yaml` écrit par `forge contexte`)."""
+    if not path.is_file():
+        return []
+    import yaml
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or []
+    except yaml.YAMLError:
+        return []
+    return [i for i in data if isinstance(i, dict) and i.get("id") and i.get("mecanisme")]
+
+
+def assign_ideas(grid: list[dict], ideas: list[dict], code: str) -> list[dict]:
+    """Donne une idée à une partie des emplacements : celles de la compétence, jamais
+    deux fois la même, jamais sur une application directe (elle n'en a pas besoin)."""
+    mine = [i for i in ideas if code in (i.get("competences") or [])]
+    if not mine:
+        return grid
+    limit = math.ceil(IDEA_SHARE * len(grid))
+    open_slots = [s for s in grid if s.get("archetype") != "CALC"] or grid
+    rng = random.Random(f"{code}/idees")
+    rng.shuffle(mine)
+    for slot, idea in zip(open_slots[:limit], mine):
+        slot["idee"] = {"id": idea["id"], "mecanisme": idea["mecanisme"],
+                        "ne_pas_reprendre": idea.get("ne_pas_reprendre") or ""}
+    return grid
+
+
+# ------------------------------------------------------------------ calendrier
+def school_week(today: date, start: date) -> int:
+    """Semaine de l'année scolaire (1 = semaine de la rentrée)."""
+    return (today - start).days // 7 + 1
+
+
+def default_start(today: date) -> date:
+    """Rentrée par défaut : le troisième lundi de septembre de l'année scolaire en cours."""
+    year = today.year if today.month >= 8 else today.year - 1
+    first = date(year, 9, 1)
+    monday = first + timedelta(days=(7 - first.weekday()) % 7)
+    return monday + timedelta(days=14)
+
+
+def upcoming(lessons: list[dict], week: int, ahead: int = 3) -> list[dict]:
+    """Leçons qui commencent dans les `ahead` semaines à venir (ou viennent de commencer)."""
+    return sorted((l for l in lessons if l.get("week") and week - 1 <= l["week"] <= week + ahead),
+                  key=lambda l: (l["week"], l.get("level", ""), l.get("code", "")))

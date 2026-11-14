@@ -1,0 +1,129 @@
+"""Plan d'un run forge : volume d'après le verbe et la durée, archétypes, idées,
+séries du lycée, et aucun texte de manuel dans le contexte du rédacteur."""
+import sys
+from datetime import date
+from pathlib import Path
+
+import pytest
+
+REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO / "backend"))
+sys.path.insert(0, str(REPO / "agents" / "forge"))
+
+import forge  # noqa: E402
+import plan  # noqa: E402
+import run as cli  # noqa: E402
+
+from app.models import Competency, CompetencyFramework  # noqa: E402
+from test_forge import db  # noqa: E402,F401
+
+
+@pytest.mark.parametrize("label,kind,count", [
+    ("Connaître la définition d'une racine carrée", "savoir", 1),
+    ("Identifier un triangle rectangle", "savoir", 1),
+    ("Calculer une longueur avec la propriété de Thalès", "savoir_faire", 5),
+    ("Démontrer que deux droites sont parallèles", "raisonnement", 3),
+    ("Traiter une situation faisant appel à Thalès", "situation", 0),
+    ("Fractions : additionner", "savoir_faire", 5),
+])
+def test_volume_follows_the_verb(label, kind, count):
+    assert plan.nature(label) == kind and plan.family_count(label) == count
+
+
+def test_duration_scales_a_skill_and_the_first_batch_is_a_part_of_it():
+    label = "Calculer une longueur"
+    assert [plan.family_count(label, m) for m in (10, 25, 45)] == [4, 5, 6]
+    assert [plan.first_batch(n) for n in (0, 1, 3, 5, 6)] == [0, 1, 2, 2, 3]
+    first = plan.family_grid("E2.3", label, 45, count=3)
+    rest = plan.family_grid("E2.3", label, 45, count=3, skip=3)
+    assert [s["slot"] for s in first + rest] == ["s01", "s02", "s03", "s04", "s05", "s06"]
+    assert first == plan.family_grid("E2.3", label, 45, count=3)          # déterministe
+    assert {s["archetype"] for s in first + rest} >= {"CALC", "ERR", "QUI"}
+    assert first[0]["level"] == 1 and first[0]["response_type"] == "qcm_single"
+
+
+def test_ideas_go_to_some_slots_only_and_never_to_a_direct_application():
+    grid = plan.family_grid("E2.3", "Calculer une longueur", 45)
+    ideas = [{"id": f"i{k}", "mecanisme": f"mécanisme {k}", "competences": ["E2.3"]} for k in range(6)]
+    ideas.append({"id": "autre", "mecanisme": "ailleurs", "competences": ["E2.9"]})
+    plan.assign_ideas(grid, ideas, "E2.3")
+    given = [s for s in grid if s.get("idee")]
+    assert 1 <= len(given) <= 3 and all(s["archetype"] != "CALC" for s in given)
+    assert len({s["idee"]["id"] for s in given}) == len(given)
+    assert all(s["idee"]["id"] != "autre" for s in given)
+
+
+def test_calendar_week_and_upcoming_lessons():
+    start = date(2026, 9, 14)
+    assert plan.school_week(date(2026, 9, 14), start) == 1
+    assert plan.school_week(date(2026, 11, 14), start) == 9
+    assert plan.default_start(date(2026, 11, 14)) == date(2026, 9, 21)
+    lessons = [{"code": "A", "week": 9}, {"code": "B", "week": 12}, {"code": "C", "week": 13},
+               {"code": "D", "week": 3}]
+    assert [l["code"] for l in plan.upcoming(lessons, 9, 3)] == ["A", "B"]
+
+
+def _lycee(db):  # noqa: F811
+    for serie in ("C", "D"):
+        framework = CompetencyFramework(grade_level="tle", name=f"Tle {serie}", program_id="ci",
+                                        subject_id="math", status="published", path_id=f"ci-{serie}")
+        db.add(framework)
+        db.flush()
+        for rank, (chapter, name) in enumerate((("E2", "Thalès"), ("E1", "Triangle rectangle")), 1):
+            db.add(Competency(framework_id=framework.id, code=f"{chapter}.1", short_id=f"{chapter}.1",
+                              label="Calculer une longueur", chapter_code=chapter, chapter_name=name,
+                              chapter_rank=rank, chapter_week=rank * 2, order_index=rank,
+                              recommended_minutes=20))
+    db.commit()
+
+
+def test_a_level_with_series_needs_one_and_resolves_it(db):  # noqa: F811
+    _lycee(db)
+    with pytest.raises(SystemExit, match="précise --serie"):
+        forge.resolve_target(db, "ci", "tle", "E2.1")
+    with pytest.raises(SystemExit, match="inconnue"):
+        forge.resolve_target(db, "ci", "tle", "E2.1", serie="Z")
+    target = forge.resolve_target(db, "ci", "tle", "E2.1", serie="D")
+    assert target["framework"].path_id == "ci-D"
+
+
+def test_the_writer_reads_no_manual_and_sees_the_year_progression(db):  # noqa: F811
+    _lycee(db)
+    run = forge.prepare(db, "ci", "tle", "E2.1", model="m", serie="D", volume="formule")[0]
+    payload = forge.load_json(run / "payload.json")
+    context = payload["context"]
+    assert run.name.startswith("ci-tle-D-E2.1-") and payload["serie"] == "D"
+    assert context["fiche"].endswith("ci-tle-D-E2.md") and context["figure_images"] == []
+    assert Path(context["source"]).read_text() == ""       # jamais les pages françaises
+    assert not any("sources/ci-tle-D-E2.md" in p or "/packs/" in p for p in context["read_order"])
+    assert all(Path(p).exists() or p == context["fiche"] for p in context["read_order"])
+    referential = Path(context["referential"]).read_text()
+    assert "Pas encore vu" in referential and "E1 Triangle rectangle" in referential
+    grid = forge.load_json(run / "grid.json")
+    assert len(grid) == 2 and all(s.get("archetype") for s in grid)      # amorce de 5 familles
+    rest = forge.prepare(db, "ci", "tle", "E2.1", model="m", serie="D", volume="formule", suite=True)[0]
+    assert [s["slot"] for s in forge.load_json(rest / "grid.json")] == ["s03", "s04", "s05"]
+    assert forge.load_json(rest / "payload.json")["context"]["read_order"][-1].endswith("existants.md")
+
+
+def test_the_declared_archetype_must_match_the_slot():
+    slot = {"slot": "s01", "kind": "exercise", "competency": "Z1.1", "level": 2, "difficulty": "moyen",
+            "response_type": "qcm_multiple", "size": "M", "figure": False, "archetype": "ERR"}
+    base = {"response_type": "qcm_multiple", "estimated_seconds": 90, "family_id": "f", "micro_skill": "m"}
+    assert any("archetype" in p for p in forge._slot_problems({**base, "archetype": "CALC"}, slot, {}))
+    assert not any("archetype" in p for p in forge._slot_problems({**base, "archetype": "ERR"}, slot, {}))
+
+
+def test_no_exercises_without_the_lesson_sheet(db, capsys):  # noqa: F811
+    _lycee(db)
+    args = cli.argparse.Namespace(programme="ci", cycle="tle", cible="E2.1", modele="m", matiere="math",
+                                  serie="D", problemes=False, pilote=False, complement=None, traces=None,
+                                  facile=None, moyen=None, difficile=None, suite=False, vingt=False)
+    assert cli._cmd_prepare(args, db) == 1
+    out = capsys.readouterr().out
+    assert "FICHE ABSENTE" in out and "forge contexte ci tle E2 --serie D" in out
+    fiche = forge.fiche_path("ci", "tle", "E2", "math", "D")
+    fiche.parent.mkdir(parents=True, exist_ok=True)
+    fiche.write_text("# Fiche\n")
+    assert cli._cmd_prepare(args, db) == 0
+    assert "2 famille(s) à écrire (amorce" in capsys.readouterr().out

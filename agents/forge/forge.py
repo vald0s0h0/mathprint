@@ -100,23 +100,36 @@ def size_class(height_mm: float) -> str:
 
 
 # ================================================================== CIBLE
-def framework_for(db, programme: str, cycle: str, subject: str = SUBJECT_DEFAULT):
-    """Le référentiel fixe programme, cycle et matière : le filtre est explicite,
-    pour ne jamais prendre une compétence d'un autre programme de même niveau."""
+def framework_for(db, programme: str, cycle: str, subject: str = SUBJECT_DEFAULT,
+                  serie: str | None = None):
+    """Le référentiel fixe programme, cycle, matière et série : le filtre est explicite,
+    pour ne jamais prendre une compétence d'un autre programme de même niveau. Un niveau
+    à séries (lycée ivoirien) exige la série ; un niveau sans série la refuse."""
     from app.models import CompetencyFramework
     frameworks = (db.query(CompetencyFramework)
-                  .filter_by(program_id=programme, grade_level=cycle,
-                             subject_id=subject, path_id=None)
+                  .filter_by(program_id=programme, grade_level=cycle, subject_id=subject)
                   .filter(CompetencyFramework.status != "archived").all())
+    series = sorted({f.path_id.split("-", 1)[-1] for f in frameworks if f.path_id})
+    if serie:
+        wanted = f"{programme}-{serie}".lower()
+        frameworks = [f for f in frameworks if (f.path_id or "").lower() == wanted]
+        if not frameworks and series:
+            raise SystemExit(f"Série {serie!r} inconnue en {programme} {cycle}. Séries : {', '.join(series)}")
+    else:
+        common = [f for f in frameworks if not f.path_id]
+        if not common and series:
+            raise SystemExit(f"{programme} {cycle} a des séries : précise --serie ({', '.join(series)})")
+        frameworks = common
     frameworks.sort(key=lambda f: f.program_year or 0, reverse=True)
     return frameworks[0] if frameworks else None
 
 
-def resolve_target(db, programme: str, cycle: str, target: str, subject: str = SUBJECT_DEFAULT) -> dict:
+def resolve_target(db, programme: str, cycle: str, target: str, subject: str = SUBJECT_DEFAULT,
+                   serie: str | None = None) -> dict:
     """(référentiel, chapitre, compétence visée ou None). Une cible ambiguë ou
     inconnue arrête la commande plutôt que d'être devinée."""
     from app.models import Competency
-    framework = framework_for(db, programme, cycle, subject)
+    framework = framework_for(db, programme, cycle, subject, serie)
     if framework is None:
         raise SystemExit(f"Aucun référentiel {programme} {cycle} {subject}.")
     comps = (db.query(Competency).filter_by(framework_id=framework.id)
@@ -125,10 +138,10 @@ def resolve_target(db, programme: str, cycle: str, target: str, subject: str = S
     hit = [c for c in comps if fold(c.short_id or c.code) == wanted or fold(c.code) == wanted]
     if len(hit) == 1:
         chapter = [c for c in comps if c.chapter_code == hit[0].chapter_code]
-        return {"framework": framework, "chapter": chapter, "competency": hit[0]}
+        return {"framework": framework, "chapter": chapter, "competency": hit[0], "all": comps}
     chapter = [c for c in comps if fold(c.chapter_code) == wanted]
     if chapter:
-        return {"framework": framework, "chapter": chapter, "competency": None}
+        return {"framework": framework, "chapter": chapter, "competency": None, "all": comps}
     known = ", ".join(sorted({c.chapter_code for c in comps if c.chapter_code}))
     raise SystemExit(f"Cible {target!r} inconnue en {programme} {cycle}. Chapitres : {known}")
 
@@ -374,45 +387,79 @@ def figure_share(cycle: str, code: str) -> float:
     return sum(bool(r.get("has_figure")) for r in rows) / len(rows) if rows else 0.2
 
 
+def lesson_tag(programme: str, cycle: str, code: str, serie: str | None = None) -> str:
+    return "-".join(x for x in (programme, cycle, serie, code) if x)
+
+
+def fiche_path(programme: str, cycle: str, code: str, subject: str = SUBJECT_DEFAULT,
+               serie: str | None = None) -> Path:
+    """Fiche de la leçon, écrite par `forge contexte` : un sous-dossier par matière,
+    sauf pour les maths."""
+    folder = data_dir() / "fiches"
+    if subject != SUBJECT_DEFAULT:
+        folder = folder / subject
+    return folder / f"{lesson_tag(programme, cycle, code, serie)}.md"
+
+
+def progression(chapter_comps: list, all_comps: list) -> str:
+    """Ce qui a déjà été vu cette année et ce qui ne l'a pas encore été, d'après
+    l'ordre officiel des leçons. Vide si le référentiel ne donne pas cet ordre."""
+    rank = chapter_comps[0].chapter_rank
+    if rank is None:
+        return ""
+    lessons: dict[str, tuple[int, str]] = {}
+    for comp in all_comps:
+        if comp.chapter_rank is not None and comp.chapter_code:
+            lessons[comp.chapter_code] = (comp.chapter_rank, comp.chapter_name)
+    before = sorted((r, c, n) for c, (r, n) in lessons.items() if r < rank)
+    after = sorted((r, c, n) for c, (r, n) in lessons.items() if r > rank)
+    lines = ["", "## Progression de l'année",
+             "Déjà vu avant cette leçon : " + ("; ".join(f"{c} {n}" for _r, c, n in before) or "rien") + "."]
+    if after:
+        lines.append("**Pas encore vu : un exercice de cette leçon n'en mobilise rien.** "
+                     + "; ".join(f"{c} {n}" for _r, c, n in after) + ".")
+    return "\n".join(lines) + "\n"
+
+
 def build_context(run: Path, *, programme: str, cycle: str, subject: str, chapter_comps: list,
-                  competency, problems: bool) -> dict:
+                  competency, problems: bool, serie: str | None = None,
+                  all_comps: list | None = None) -> dict:
     """Écrit le contexte du run, du plus stable au plus variable. Les blocs
-    réutilisés vivent hors du run pour rester identiques d'un run à l'autre."""
+    réutilisés vivent hors du run pour rester identiques d'un run à l'autre.
+
+    Aucun texte de manuel n'entre dans ce contexte : un manuel ne sert qu'à l'étape
+    précédente (`forge contexte`), qui en tire la fiche et les fiches-idées. Le texte
+    d'Indigo n'est gardé que pour le contrôle anti-copie, jamais lu par le rédacteur."""
     code = chapter_comps[0].chapter_code
     base = data_dir()
-    tag = f"{programme}-{cycle}-{code}"
+    tag = lesson_tag(programme, cycle, code, serie)
     source_path = base / "sources" / f"{tag}.md"
-    text, stats = source_text(cycle, code)
+    # Les pages d'Indigo sont celles du programme français : un chapitre ivoirien de
+    # même code est une autre leçon.
+    text, stats = source_text(cycle, code) if programme == "fr" and subject == SUBJECT_DEFAULT else ("", {"pages": 0})
     write_stable(source_path, text)
-    images = render_figure_pages(cycle, code, base / "sources" / tag)
     referential = "\n".join(
         f"- {comp_code(c)} — {c.label}" + (f" : {c.description}" if c.description else "")
         for c in chapter_comps)
     referential_path = base / "sources" / f"{tag}-referentiel.md"
     write_stable(referential_path,
-                 f"# Référentiel {programme} {cycle} — {chapter_comps[0].chapter_name}\n{referential}\n")
-    fiche = base / "fiches" / f"{tag}.md"
+                 f"# Référentiel {programme} {cycle}{' ' + serie if serie else ''} — "
+                 f"{chapter_comps[0].chapter_name}\n{referential}\n"
+                 + progression(chapter_comps, all_comps or chapter_comps))
+    fiche = fiche_path(programme, cycle, code, subject, serie)
     fiche.parent.mkdir(parents=True, exist_ok=True)
-    read_order = [
-        str(HERE / "FORGE.md"), str(HERE / "schema.md"),
-        str(HERE / "matieres" / subject / "charte.md"),
-        str(REPO / "backend" / "app" / "data" / "misconceptions" / f"{subject}.json"),
-        str(HERE / "matieres" / subject / "etalons.json"),
-        str(HERE / "programmes" / f"{programme}.md"),
-        str(referential_path),
-        str(fiche),
-    ]
-    pack = None
-    if competency is not None and not problems:
-        examples = published_examples(cycle, comp_code(competency))
-        pack = base / "packs" / f"{programme}-{cycle}-{comp_code(competency)}.md"
-        lines = [f"# Compétence {comp_code(competency)} — {competency.label}",
-                 "Exemples sources, à ne jamais recopier : leur niveau et leur intention seulement.", ""]
-        lines += [f"## Exemple {i + 1}\n{s}\n" for i, s in enumerate(examples)]
-        write_stable(pack, "\n".join(lines))
-        read_order.append(str(pack))
+    ideas = fiche.with_suffix(".idees.yaml")
+    stable = [HERE / "FORGE.md", HERE / "schema.md",
+              HERE / "matieres" / subject / "doctrine.md",
+              HERE / "matieres" / subject / "charte.md",
+              REPO / "backend" / "app" / "data" / "misconceptions" / f"{subject}.json",
+              HERE / "matieres" / subject / "etalons.json",
+              HERE / "programmes" / f"{programme}.md"]
+    # Un fichier absent n'est pas cité : le rédacteur ne lit que ce qui existe.
+    read_order = [str(p) for p in stable if p.exists()] + [str(referential_path), str(fiche)]
     return {"read_order": read_order, "fiche": str(fiche), "fiche_ready": fiche.exists(),
-            "source": str(source_path), "source_stats": stats, "figure_images": images,
+            "ideas": str(ideas) if ideas.exists() else None,
+            "source": str(source_path), "source_stats": stats, "figure_images": [],
             "referential": str(referential_path)}
 
 
@@ -496,10 +543,12 @@ def existing_signatures(db, comp_ids: list[str], problems: bool) -> list[str]:
 
 def prepare(db, programme: str, cycle: str, target: str, *, model: str, problems: bool = False,
             subject: str = SUBJECT_DEFAULT, pilot: bool = False,
-            complement: dict[int, int] | None = None, traces: int | None = None) -> list[Path]:
+            complement: dict[int, int] | None = None, traces: int | None = None,
+            serie: str | None = None, volume: str = "vingt", suite: bool = False) -> list[Path]:
     """Prépare un run par compétence (un chapitre en donne plusieurs), ou un run
     de problèmes pour le chapitre. `traces` : seulement N géométries à tracer."""
-    resolved = resolve_target(db, programme, cycle, target, subject)
+    import plan
+    resolved = resolve_target(db, programme, cycle, target, subject, serie)
     chapter_comps = resolved["chapter"]
     competency = resolved["competency"]
     if problems and competency is not None:
@@ -512,9 +561,13 @@ def prepare(db, programme: str, cycle: str, target: str, *, model: str, problems
     for comp in targets:
         profile = None
         suffix = comp_code(comp) if comp else f"{chapter_comps[0].chapter_code}-problemes"
-        run = _new_run_dir(f"{programme}-{cycle}-{suffix}-{stamp}")
+        if volume == "formule" and comp is not None and not (complement or traces) \
+                and plan.family_count(comp.label, comp.recommended_minutes) == 0:
+            continue                  # « Traiter une situation » : par les problèmes de la leçon
+        run = _new_run_dir(f"{lesson_tag(programme, cycle, suffix, serie)}-{stamp}")
         context = build_context(run, programme=programme, cycle=cycle, subject=subject,
-                                chapter_comps=chapter_comps, competency=comp, problems=problems)
+                                chapter_comps=chapter_comps, competency=comp, problems=problems,
+                                serie=serie, all_comps=resolved.get("all"))
         if complement or traces:
             codes = [comp_code(c) for c in chapter_comps]
             grid = (traces_grid(comp_code(comp), traces) if traces else
@@ -527,14 +580,34 @@ def prepare(db, programme: str, cycle: str, target: str, *, model: str, problems
                               + "\n".join(signatures) + "\n", encoding="utf-8")
             context["read_order"].append(str(memory))
         elif problems:
-            grid = problem_grid([comp_code(c) for c in chapter_comps])
+            codes = [comp_code(c) for c in chapter_comps]
+            grid = plan.problem_slots(codes) if volume == "formule" else problem_grid(codes)
         else:
-            share = figure_share(cycle, comp_code(comp))
+            share = figure_share(cycle, comp_code(comp)) if programme == "fr" else 0.2
             profile = trace_profile(Path(context["fiche"]), comp_code(comp), comp.label)
-            grid = exercise_grid(comp_code(comp), round(20 * share), profile[0])
+            if volume == "formule":
+                # Amorce d'abord ; `suite` produit le reste du socle.
+                total = plan.family_count(comp.label, comp.recommended_minutes)
+                first = plan.first_batch(total)
+                grid = plan.family_grid(comp_code(comp), comp.label, comp.recommended_minutes,
+                                        figures=share, traces=profile[0],
+                                        count=(total - first) if suite else first,
+                                        skip=first if suite else 0)
+                grid = plan.assign_ideas(grid, plan.load_ideas(Path(context["ideas"] or "")),
+                                         comp_code(comp))
+            else:
+                grid = exercise_grid(comp_code(comp), round(20 * share), profile[0])
+        if suite and not (complement or traces):
+            memory = run / "existants.md"
+            memory.write_text("# Exercices déjà en banque : ne reprends ni leur structure ni leurs valeurs\n"
+                              + "\n".join(existing_signatures(
+                                  db, [c.id for c in chapter_comps] if problems else [comp.id], problems))
+                              + "\n", encoding="utf-8")
+            context["read_order"].append(str(memory))
         dump_json(run / "grid.json", grid)
         dump_json(run / "payload.json", {
             "run_id": run.name, "programme": programme, "cycle": cycle, "subject": subject,
+            "serie": serie, "volume": volume, "suite": suite,
             "model": model, "version": VERSION, "prompt_version": PROMPT_VERSION,
             "mode": "problems" if problems else "exercises", "pilot": pilot,
             "complement": bool(complement or traces), "traces": traces or 0,
@@ -572,7 +645,8 @@ def refresh_grid(run: Path) -> str | None:
     si la grille a changé."""
     payload = load_json(run / "payload.json")
     current = payload.get("trace_profile")
-    if not current or payload.get("mode") != "exercises" or payload.get("complement"):
+    if (not current or payload.get("mode") != "exercises" or payload.get("complement")
+            or payload.get("volume") == "formule"):
         return None
     if any((run / "slots").glob("*.json")):
         return None
@@ -1298,6 +1372,10 @@ def _slot_problems(exercise: dict, slot: dict, payload: dict) -> list[str]:
     if exercise.get("response_type") != wanted and not swap.get("reason"):
         problems.append(f"format {exercise.get('response_type')!r} au lieu de {wanted} sans "
                         "slot_swap.reason")
+    wanted_archetype = slot.get("archetype")
+    if wanted_archetype and exercise.get("archetype") != wanted_archetype and not swap.get("reason"):
+        problems.append(f"archetype {exercise.get('archetype')!r} au lieu de {wanted_archetype} "
+                        "(doctrine de la matière) sans slot_swap.reason")
     mode = slot.get("trace_mode")
     if mode and exercise.get("response_type") in DRAW_TYPES and not swap.get("reason"):
         found = construction_mode(exercise)

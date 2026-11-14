@@ -52,25 +52,38 @@ def _cmd_prepare(args, db):
         levels = {1: args.facile or 0, 2: args.moyen or 0, 3: args.difficile or 0}
         complement = ({k: v for k, v in levels.items() if v} if any(levels.values())
                       else forge.split_complement(args.complement))
+    # La fiche de la leçon s'écrit avant, par `forge contexte` : sans elle, pas d'exercices.
+    target = forge.resolve_target(db, args.programme, args.cycle, args.cible, args.matiere, args.serie)
+    fiche = forge.fiche_path(args.programme, args.cycle, target["chapter"][0].chapter_code,
+                             args.matiere, args.serie)
+    if not fiche.exists():
+        serie = f" --serie {args.serie}" if args.serie else ""
+        matiere = f" --matiere {args.matiere}" if args.matiere != forge.SUBJECT_DEFAULT else ""
+        print(f"FICHE ABSENTE : {fiche}\nÉcris-la d'abord, dans une session à part :\n"
+              f"  forge contexte {args.programme} {args.cycle} {target['chapter'][0].chapter_code}{serie}{matiere}")
+        return 1
     runs = forge.prepare(db, args.programme, args.cycle, args.cible, model=args.modele,
                          problems=args.problemes, subject=args.matiere, pilot=args.pilote,
-                         complement=complement, traces=args.traces)
+                         complement=complement, traces=args.traces, serie=args.serie,
+                         volume="vingt" if args.vingt else "formule", suite=args.suite)
+    if not runs:
+        print("Rien à générer pour cette cible : une compétence « Traiter une situation » se "
+              "travaille par les problèmes de la leçon (--problemes).")
+        return 0
     for run in runs:
         payload = forge.load_json(run / "payload.json")
         context = payload["context"]
         print(f"Run : {run.name}")
-        print(f"  Fiche : {'prête' if context['fiche_ready'] else 'À ÉCRIRE'} — {context['fiche']}")
+        grid = forge.load_json(run / "grid.json")
+        print(f"  Fiche : {context['fiche']}")
+        print(f"  {len(grid)} famille(s) à écrire" + (" (suite du socle)" if payload.get("suite") else
+              (" (amorce : `--suite` pour le reste du socle)" if payload.get("volume") == "formule" else "")))
         profile = payload.get("trace_profile")
         if profile:
             traces = sum(s["response_type"] in forge.DRAW_TYPES
                          for s in forge.load_json(run / "grid.json"))
-            print(f"  Tracés : {profile['profile']} ({profile['source']}), {traces} sur 20")
+            print(f"  Tracés : {profile['profile']} ({profile['source']}), {traces} sur {len(grid)}")
     first = forge.load_json(runs[0] / "payload.json")["context"]
-    if not first["fiche_ready"]:
-        print(f"Sources de la fiche : {first['source']} "
-              f"({first['source_stats'].get('pages', 0)} page(s))")
-        for image in first["figure_images"]:
-            print(f"  Image : {image}")
     print("Lis dans cet ordre, sans rien modifier :")
     for path in first["read_order"]:
         print(f"  {path}")
@@ -94,6 +107,13 @@ def _cmd_next(args, db):
               f"{' figure' if slot.get('figure') else ''} [{code}]")
         if slot["response_type"] in forge.DRAW_TYPES:
             print(f"    {forge.trace_brief(slot)}")
+        if slot.get("archetype"):
+            import plan
+            print(f"    archétype {slot['archetype']} : {plan.ARCHETYPES.get(slot['archetype'], '')}")
+        if slot.get("idee"):
+            print(f"    idée {slot['idee']['id']} : {slot['idee']['mecanisme']}")
+            if slot["idee"].get("ne_pas_reprendre"):
+                print(f"      à ne pas reprendre : {slot['idee']['ne_pas_reprendre']}")
     return 0
 
 
@@ -207,6 +227,64 @@ def _cmd_resume(args, db):
     return 0
 
 
+def _cmd_calendar(args, db):
+    """Bases du déclencheur « calendrier » : ce qui commence bientôt, pour les niveaux
+    qui ont des classes. Ne lance rien : la génération reste une commande."""
+    from datetime import date
+
+    import plan
+    from app.models import Competency, CompetencyFramework, SchoolClass
+    today = date.today()
+    start = date.fromisoformat(args.rentree) if args.rentree else plan.default_start(today)
+    week = plan.school_week(today, start)
+    classes: dict[str, int] = {}
+    for row in db.query(SchoolClass).all():
+        classes[row.grade_level] = classes.get(row.grade_level, 0) + 1
+    lessons = []
+    frameworks = (db.query(CompetencyFramework)
+                  .filter_by(program_id=args.programme, subject_id=args.matiere)
+                  .filter(CompetencyFramework.status != "archived").all())
+    for framework in frameworks:
+        serie = framework.path_id.split("-", 1)[-1] if framework.path_id else None
+        seen = set()
+        for comp in db.query(Competency).filter_by(framework_id=framework.id).order_by(Competency.order_index):
+            if comp.chapter_code in seen or comp.chapter_week is None:
+                continue
+            seen.add(comp.chapter_code)
+            fiche = forge.fiche_path(args.programme, framework.grade_level, comp.chapter_code,
+                                     args.matiere, serie)
+            lessons.append({"level": framework.grade_level, "serie": serie, "code": comp.chapter_code,
+                            "name": comp.chapter_name, "week": comp.chapter_week,
+                            "classes": classes.get(framework.grade_level, 0), "fiche": fiche.exists()})
+    print(f"Semaine {week} de l'année scolaire (rentrée le {start.isoformat()}). "
+          f"Leçons qui commencent d'ici {args.semaines} semaine(s) :")
+    rows = plan.upcoming(lessons, week, args.semaines)
+    for lesson in rows:
+        serie = f" {lesson['serie']}" if lesson["serie"] else ""
+        state = "fiche prête" if lesson["fiche"] else "FICHE À ÉCRIRE"
+        active = f"{lesson['classes']} classe(s)" if lesson["classes"] else "aucune classe"
+        print(f"  sem. {lesson['week']:>2}  {lesson['level']}{serie} {lesson['code']} "
+              f"{lesson['name']} — {active}, {state}")
+    if not rows:
+        print("  aucune")
+    return 0
+
+
+def _cmd_exhaustion(args, db):
+    """Déclencheur « épuisement » : les compétences où une classe n'a presque plus
+    d'exercices inédits, avec la commande de complément."""
+    from app.services import bank_health
+    rows = bank_health.exhaustion(db)
+    if not rows:
+        print("Aucune compétence épuisée.")
+        return 0
+    for row in rows:
+        print(f"  [{row['severity']}] {row['programme']} {row['cycle']} {row['target']} "
+              f"({row['difficulty']}) {row['label']} — {row['students_out']} élève(s) sans inédit, "
+              f"médiane {row['median_unseen']:g} inédit(s)\n      {row['command']}")
+    return 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="forge", description="Pipeline forge.")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -216,6 +294,9 @@ def main(argv=None) -> int:
     prep.add_argument("cible", help="Compétence (A1.2) ou chapitre (A1)")
     prep.add_argument("--modele", required=True, help="Modèle réellement utilisé, ex. claude-opus-5-5")
     prep.add_argument("--matiere", default=forge.SUBJECT_DEFAULT)
+    prep.add_argument("--serie", help="Série du lycée ivoirien : A, A1, A2, C, D")
+    prep.add_argument("--suite", action="store_true", help="Le reste du socle, après l'amorce")
+    prep.add_argument("--vingt", action="store_true", help="Ancienne grille fixe de 20 cartes")
     prep.add_argument("--problemes", action="store_true", help="Les 20 problèmes du chapitre")
     prep.add_argument("--pilote", action="store_true", help="Toutes les cartes à relire")
     prep.add_argument("--complement", type=int, help="Second run : nombre d'exercices à ajouter")
@@ -240,6 +321,12 @@ def main(argv=None) -> int:
             cmd.add_argument("--session-dir", type=Path, help="Transport de session indépendante : requêtes/réponses JSON")
             cmd.add_argument("--modele", help="Modèle indépendant utilisé dans la session")
     sub.add_parser("reprendre", help="Liste les runs inachevés.")
+    cal = sub.add_parser("calendrier", help="Leçons qui commencent bientôt, et celles sans fiche.")
+    cal.add_argument("programme")
+    cal.add_argument("--matiere", default=forge.SUBJECT_DEFAULT)
+    cal.add_argument("--semaines", type=int, default=3, help="Horizon, en semaines")
+    cal.add_argument("--rentree", help="Date de la rentrée, AAAA-MM-JJ")
+    sub.add_parser("epuisement", help="Compétences dont une classe n'a plus d'inédits.")
     ecartes = sub.add_parser("ecartes", help="Liste les cartes au pouce baissé.")
     ecartes.add_argument("filtre", nargs="?", default="", help="Morceau du run, ex. fr-3e-A4")
     for option in ("programme", "cycle", "domaine", "matiere"):
@@ -250,7 +337,8 @@ def main(argv=None) -> int:
     try:
         return {"prepare": _cmd_prepare, "suivant": _cmd_next, "check": _cmd_check,
                 "render": _cmd_render, "goldfish": _cmd_goldfish, "persist": _cmd_persist,
-                "reprendre": _cmd_resume, "ecartes": _cmd_disliked}[args.cmd](args, db) or 0
+                "reprendre": _cmd_resume, "ecartes": _cmd_disliked,
+                "calendrier": _cmd_calendar, "epuisement": _cmd_exhaustion}[args.cmd](args, db) or 0
     finally:
         db.close()
 
