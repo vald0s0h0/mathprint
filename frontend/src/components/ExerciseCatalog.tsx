@@ -7,7 +7,7 @@ import { api } from '../api'
 import { useAppState } from '../state/AppState'
 import CompetencyHierarchy, { type CompetencyHierarchyColumn } from './CompetencyHierarchy'
 import GradeSelectionRequired from './GradeSelectionRequired'
-import ExerciseCatalogCard, { exerciseDifficulty, type CatalogExercise, type ReviewVerdict } from './ExerciseCatalogCard'
+import ExerciseCatalogCard, { exerciseDifficulty, type CatalogExercise, type ReviewVerdict, type Twin } from './ExerciseCatalogCard'
 import ExerciseMasonry from './ExerciseMasonry'
 import MathText from './MathText'
 import { DURATION_HINT, formatHours, formatMinutes } from '../utils/duration'
@@ -34,6 +34,7 @@ const FILIERES: Record<string, { key: string; label: string; series: string[] }[
   '1re': [{ key: 'S', label: 'Scientifique · C D', series: ['C', 'D'] }, { key: 'L', label: 'Littéraire · A1 A2', series: ['A1', 'A2'] }],
   'tle': [{ key: 'S', label: 'Scientifique · C D', series: ['C', 'D'] }, { key: 'L', label: 'Littéraire · A1 A2', series: ['A1', 'A2'] }],
 }
+const twinOf = (e: CatalogExercise): Twin | undefined => e.grading?.twin
 const exerciseCount = (s: Summary) => s.total ?? (s.draft ?? 0) + (s.validated ?? 0)
 const sumOf = (s: Summary, value: (m: Summary) => number) => (s.members ?? [s]).reduce((n, m) => n + value(m), 0)
 type Framework = { id: string; grade_level: string; subject_id: string; program_id: string }
@@ -284,7 +285,11 @@ export default function ExerciseCatalog({ admin = false }: { admin?: boolean }) 
   }
   const changeReview = async (id: string, value: ReviewVerdict | null, comment?: string) => {
     const saved = await api.put<Pick<CatalogExercise, 'review_comment' | 'review_history' | 'needs_review'>>(`/api/indigo/exercises/${id}/review-verdict`, { value, comment })
-    const update = (items: CatalogExercise[] | null) => items?.map(e => e.id === id ? { ...e, ...saved, review_verdict: value } : e) ?? null
+    // l'avis d'une carte vaut pour ses jumelles : le serveur l'a posé sur toute la famille
+    const group = [...(exercises ?? []), ...(problems ?? [])].find(e => e.id === id)?.grading?.twin?.group
+    const update = (items: CatalogExercise[] | null) => items?.map(e =>
+      e.id === id ? { ...e, ...saved, review_verdict: value }
+        : group && e.grading?.twin?.group === group ? { ...e, review_verdict: value, review_comment: saved.review_comment } : e) ?? null
     setExercises(update); setProblems(update)
     try { setSummary(await api.get<Summary[]>(`${endpoint}/summary?${scope}`)) }
     catch { notifications.show({ color: 'red', message: 'Avis enregistré. Actualisez la page pour mettre les compteurs à jour.' }) }
@@ -335,7 +340,14 @@ export default function ExerciseCatalog({ admin = false }: { admin?: boolean }) 
   }
   const renderCards = (items: CatalogExercise[] | null) => {
     if (items === null) return detailError ? null : <Loader size="sm" />
-    const shown = filtered(items)
+    // Jumelles d'une même carte (autres valeurs, autre disposition) : une seule carte
+    // à l'écran, qui les fait défiler. L'avis porte sur toute la famille.
+    const all = filtered(items)
+    const shown = all.filter(ex => !twinOf(ex) || twinOf(ex)!.principal)
+    const twinsOf = (ex: CatalogExercise) => twinOf(ex)
+      ? all.filter(o => twinOf(o)?.group === twinOf(ex)!.group)
+        .sort((x, y) => twinOf(x)!.jeu - twinOf(y)!.jeu || twinOf(x)!.disposition - twinOf(y)!.disposition)
+      : undefined
     return shown.length ? <Stack gap="xl">{[1, 2, 3].map(difficulty => {
       const group = shown.filter(ex => exerciseDifficulty(ex) === difficulty)
       if (!group.length) return null
@@ -344,7 +356,7 @@ export default function ExerciseCatalog({ admin = false }: { admin?: boolean }) 
           <Title order={4}>{['Faciles', 'Moyens', 'Difficiles'][difficulty - 1]}</Title>
           <Text size="xs" c="dimmed">{group.length} exercice{group.length > 1 ? 's' : ''}</Text>
         </Group>
-        <ExerciseMasonry>{group.map(ex => <ExerciseCatalogCard key={ex.id} exercise={ex} admin={admin}
+        <ExerciseMasonry>{group.map(ex => <ExerciseCatalogCard key={ex.id} exercise={ex} admin={admin} twins={twinsOf(ex)}
           onPreference={admin ? undefined : value => changePreference(ex.id, value)}
           onReview={admin ? (value, comment) => changeReview(ex.id, value, comment) : undefined} />)}</ExerciseMasonry>
       </Stack>

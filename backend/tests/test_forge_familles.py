@@ -167,3 +167,30 @@ def test_twins_are_rendered_and_saved_as_one_group(db):  # noqa: F811
     assert sorted((t["jeu"], t["disposition"]) for t in twins) == [(j, d) for j in (1, 2, 3) for d in (1, 2)]
     assert sum(t["principal"] for t in twins) == 1
     assert all(r.grading_json["author_order"] for r in rows)
+
+
+def test_a_verdict_and_the_bank_treat_the_family_as_one_card(db):  # noqa: F811
+    from app.models import GeneratedExercise, IndigoExercise
+    from app.services import indigo
+    run = forge.prepare(db, "fr", "3e", "Z1.1", model="test-model")[0]
+    forge.dump_json(run / "grid.json", [s for s in forge.load_json(run / "grid.json") if s["slot"] == "s01"])
+    (run / "familles").mkdir()
+    (run / "familles" / "s01.json").write_text(json.dumps(_family()), encoding="utf-8")
+    forge.render(db, run)
+    forge.persist(db, run)
+    rows = db.query(IndigoExercise).all()
+    head = next(r for r in rows if r.grading_json["twin"]["principal"])
+    indigo.set_review_verdict(db, head, "dislike", "valeurs trop grandes")
+    assert all((r.raw_ocr_json or {}).get("review_verdict") == "dislike" for r in db.query(IndigoExercise).all())
+    indigo.set_review_verdict(db, head, None)
+    # en banque : une seule carte active, ses jumelles en réserve pour l'impression
+    data = {"exercises": []}
+    for r in db.query(IndigoExercise).all():
+        rec = {"id": r.id, "competency_code": "Z1.1", "grade_level": "3e", "statement": r.statement,
+               "response_type": r.response_type, "expected": r.expected_json, "grading": r.grading_json,
+               "source": "forge", "difficulty": 1}
+        assert indigo._seed_record(db, data, rec, Path("."))
+    db.flush()
+    bank = db.query(GeneratedExercise).all()
+    assert sorted(b.status for b in bank) == ["active"] + ["twin"] * 5
+    assert {b.twin_group for b in bank} == {f"{run.name}/s01"}

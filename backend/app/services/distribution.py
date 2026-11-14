@@ -121,6 +121,44 @@ def family_heads(db: Session, exercise_ids) -> dict[str, str]:
     return {twin_id: heads[group] for twin_id, group in twins if group in heads}
 
 
+def reorder_class_from_scan(db: Session, batch_id: str) -> int:
+    """La liste d'une classe suit l'ordre de son dernier lot scanné : les copies sont
+    ramassées de proche en proche, donc deux élèves qui se suivent dans le lot sont
+    voisins, et c'est sur cet ordre que les jumelles sont réparties au sujet suivant.
+
+    Rien ne bouge si le lot mêle plusieurs classes ou couvre moins de la moitié de la
+    classe (un rattrapage ne dit rien de la salle). Les élèves absents du lot gardent
+    leur ordre, à la suite. Renvoie le nombre d'élèves replacés."""
+    from ..models import Copy, DocumentPage, ScannedPage, Student
+    rows = (db.query(Copy.student_id, ScannedPage.wave, ScannedPage.source_index)
+            .join(DocumentPage, DocumentPage.copy_id == Copy.id)
+            .join(ScannedPage, ScannedPage.page_id == DocumentPage.id)
+            .filter(ScannedPage.batch_id == batch_id, ScannedPage.dismissed.is_(False))
+            .order_by(ScannedPage.wave, ScannedPage.source_index).all())
+    scanned: list[str] = []
+    for student_id, _wave, _index in rows:
+        if student_id not in scanned:
+            scanned.append(student_id)
+    if not scanned:
+        return 0
+    students = {s.id: s for s in db.query(Student).filter(Student.id.in_(scanned)).all()}
+    classes = {s.class_id for s in students.values()}
+    if len(classes) != 1 or None in classes:
+        return 0
+    roster = (db.query(Student).filter_by(class_id=classes.pop(), active=True)
+              .order_by(Student.order_index, Student.id).all())
+    if len(scanned) * 2 < len(roster):
+        return 0
+    present = [students[i] for i in scanned if i in students]
+    absent = [s for s in roster if s.id not in students]
+    moved = 0
+    for position, student in enumerate(present + absent):
+        if student.order_index != position:
+            student.order_index = position
+            moved += 1
+    return moved
+
+
 def exercise_bucket(row: GeneratedExercise) -> str:
     if row.response_type.startswith("qcm"):
         return "qcm"

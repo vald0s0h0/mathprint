@@ -2379,18 +2379,31 @@ def set_review_verdict(db, ex: IndigoExercise, value: str | None,
                        comment: str | None = None) -> IndigoExercise:
     """Avis de relecture de l'admin. `updated_at` ne bouge pas : il versionne l'URL
     de la figure, et un avis ne change rien à la carte imprimée."""
-    raw = {k: v for k, v in (ex.raw_ocr_json or {}).items() if k != "review_verdict"}
-    if comment is not None:
-        raw["review_comment"] = comment.strip()
-    ex.raw_ocr_json = {**raw, "review_verdict": value} if value else raw
     from . import exercise_review
-    exercise_review.append(ex, exercise_review.event(
-        "accepted" if value == "like" else "disliked" if value == "dislike" else "unrated",
-        "Accepté par l’administrateur" if value == "like" else
-        "À reprendre selon l’administrateur" if value == "dislike" else "Avis retiré",
-        actor="admin", comment=raw.get("review_comment", "")))
+    # Les jumelles d'une carte (autres valeurs, autre disposition) partagent son avis :
+    # une famille se publie ou se reprend entière.
+    for row in [ex, *twin_siblings(db, ex)]:
+        raw = {k: v for k, v in (row.raw_ocr_json or {}).items() if k != "review_verdict"}
+        if comment is not None:
+            raw["review_comment"] = comment.strip()
+        row.raw_ocr_json = {**raw, "review_verdict": value} if value else raw
+        exercise_review.append(row, exercise_review.event(
+            "accepted" if value == "like" else "disliked" if value == "dislike" else "unrated",
+            "Accepté par l’administrateur" if value == "like" else
+            "À reprendre selon l’administrateur" if value == "dislike" else "Avis retiré",
+            actor="admin", comment=raw.get("review_comment", "")))
     db.commit()
     return ex
+
+
+def twin_siblings(db, ex: IndigoExercise) -> list[IndigoExercise]:
+    """Les autres jumelles du brouillon `ex` (même famille de la forge), sans lui."""
+    group = ((ex.grading_json or {}).get("twin") or {}).get("group")
+    if not group:
+        return []
+    return [row for row in db.query(IndigoExercise).filter(
+                IndigoExercise.extraction_id == ex.extraction_id, IndigoExercise.id != ex.id).all()
+            if ((row.grading_json or {}).get("twin") or {}).get("group") == group]
 
 
 def publish_competency(db, competency_id: str, user_id: str | None) -> dict:

@@ -1,6 +1,6 @@
 import { ActionIcon, Badge, Box, Button, Group, Paper, Stack, Text, Textarea, Tooltip, UnstyledButton } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
-import { Copy, ThumbsDown, ThumbsUp } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Copy, ThumbsDown, ThumbsUp } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
 import ExercisePrintPreview, { type PrintableExercise } from './ExercisePrintPreview'
 import MathText from './MathText'
@@ -23,6 +23,8 @@ export type CatalogExercise = PrintableExercise & {
   needs_update?: boolean
   review_history?: { at: string; status: string; summary: string; actor?: string; comment?: string; reason?: string; model?: string; goldfish?: { reader?: string; flag?: boolean; notes?: string[] }; previous?: { comment?: string; notes?: string[] } }[]
 }
+// Jumelle d'une carte de la forge : même énoncé, autre jeu de valeurs ou autre disposition.
+export type Twin = { group: string; jeu: number; disposition: number; jeux: number; dispositions: number; principal: boolean }
 export type ReviewVerdict = 'like' | 'dislike'
 export const exerciseDifficulty = (ex: CatalogExercise) => Math.max(1, Math.min(3, ex.difficulty ?? ex.level ?? 2))
 export const formatPoints = (v: number) => v.toLocaleString('fr-FR', { maximumFractionDigits: 3 })
@@ -129,8 +131,10 @@ function ReviewPanel({ notes, verdict, comment = '', onChange }: {
   </Stack>
 }
 
-export default function ExerciseCatalogCard({ exercise: ex, admin, onPreference, onReview, guides = true, caption }: {
+export default function ExerciseCatalogCard({ exercise: head, admin, onPreference, onReview, guides = true, caption, twins }: {
   exercise: CatalogExercise; admin?: boolean
+  // les jumelles de la carte (elle comprise), à faire défiler ; avis et préférence portent sur la carte
+  twins?: CatalogExercise[]
   onPreference?: (value: 'like' | 'dislike' | null) => Promise<void>
   // avis de relecture, côté admin
   onReview?: (value: ReviewVerdict | null, comment?: string) => Promise<void>
@@ -140,6 +144,13 @@ export default function ExerciseCatalogCard({ exercise: ex, admin, onPreference,
   caption?: ReactNode
 }) {
   const [busy, setBusy] = useState(false)
+  const [twinIndex, setTwinIndex] = useState(0)
+  const family = twins && twins.length > 1 ? twins : null
+  // la jumelle affichée ; l'avis, la préférence et l'historique restent ceux de la carte
+  const shownTwin = family?.[Math.min(twinIndex, family.length - 1)]
+  const ex = shownTwin ? { ...shownTwin, preference: head.preference, review_verdict: head.review_verdict,
+    review_comment: head.review_comment, review_notes: head.review_notes, review_history: head.review_history } : head
+  const twinInfo: Twin | undefined = (head.grading as Record<string, any> | undefined)?.twin
   const level = exerciseDifficulty(ex)
   const raw = ex.raw_ocr ?? ex.raw ?? {}
   const seconds = ex.estimated_seconds || raw.estimated_seconds || raw.indigo?.estimated_seconds || 0
@@ -168,6 +179,20 @@ export default function ExerciseCatalogCard({ exercise: ex, admin, onPreference,
             {['Facile', 'Moyen', 'Difficile'][level - 1] ?? 'Moyen'}
           </Badge>
           {admin && routes(ex).map(route => <Badge key={route} size="xs" variant="light" color="blue">{route}</Badge>)}
+          {twinInfo && <Tooltip label="Anti-triche : deux voisins reçoivent la même carte avec d'autres valeurs et une autre place des réponses">
+            <Badge size="xs" variant="light" color="grape">
+              {twinInfo.jeux} jeux{twinInfo.dispositions > 1 ? ` · ${twinInfo.dispositions} dispositions` : ''}
+            </Badge>
+          </Tooltip>}
+          {family && shownTwin && <Group gap={2} wrap="nowrap">
+            <ActionIcon size="xs" variant="subtle" aria-label="Jumelle précédente"
+              onClick={() => setTwinIndex(i => (i + family.length - 1) % family.length)}><ChevronLeft size={12} /></ActionIcon>
+            <Text size="xs" c="dimmed" style={{ whiteSpace: 'nowrap' }}>
+              jeu {(shownTwin.grading as Record<string, any>)?.twin?.jeu}{twinInfo && twinInfo.dispositions > 1 ? `, disp. ${(shownTwin.grading as Record<string, any>)?.twin?.disposition}` : ''}
+            </Text>
+            <ActionIcon size="xs" variant="subtle" aria-label="Jumelle suivante"
+              onClick={() => setTwinIndex(i => (i + 1) % family.length)}><ChevronRight size={12} /></ActionIcon>
+          </Group>}
           <Text size="xs" c="dimmed" style={{ whiteSpace: 'nowrap' }}>{ex.bareme_points != null ? `${formatPoints(ex.bareme_points)} pt` : 'Barème —'}</Text>
         </Group>
         <Group gap={6} wrap="nowrap" style={{ flexShrink: 0 }}>

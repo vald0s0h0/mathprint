@@ -484,6 +484,13 @@ def after_llm_grading(db: Session, batch: ScanBatch) -> int:
     trancher. Partagée par le pipeline et la commande vague (services.vague)."""
     audit_automatic_decisions(db, batch.assessment_id)
     n_review = open_reviews(db, batch.assessment_id)
+    # L'ordre de ramassage de ce lot devient l'ordre de la classe (voisins de table).
+    try:
+        from . import distribution
+        distribution.reorder_class_from_scan(db, batch.id)
+    except Exception:  # noqa: BLE001 — un confort d'anti-triche ne bloque jamais une correction
+        import logging
+        logging.getLogger(__name__).exception("ordre de la classe non mis à jour (lot %s)", batch.id)
     _set_status(db, batch, "graded")
     if n_review:
         _set_status(db, batch, "review_pending", pending=n_review)

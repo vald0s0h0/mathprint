@@ -151,3 +151,47 @@ def test_twin_for_serves_the_sibling_of_the_seat_and_history_counts_the_family()
     assert [(r.twin_jeu, r.twin_disposition) for r in served] == [(1, 1), (2, 1), (1, 2), (2, 2)]
     assert distribution.twin_for(db, lone, 3) is lone
     assert distribution.family_heads(db, [rows[(2, 2)].id, lone.id]) == {rows[(2, 2)].id: head.id}
+
+
+def test_the_class_list_follows_the_last_scanned_batch():
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from app.db import Base
+    from app.models import Assessment, Copy, DocumentPage, ScanBatch, ScannedPage, SchoolClass, Student
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine)()
+    room = SchoolClass(name="3e A", grade_level="3e")
+    db.add(room)
+    db.flush()
+    names = ["Awa", "Bintou", "Cédric", "Désiré", "Esther"]
+    students = [Student(class_id=room.id, name=n, order_index=i, llm_pseudonym=f"p{i}")
+                for i, n in enumerate(names)]
+    db.add_all(students)
+    assessment = Assessment(title="Devoir", class_id=room.id)
+    db.add(assessment)
+    db.flush()
+    batch = ScanBatch(assessment_id=assessment.id)
+    db.add(batch)
+    db.flush()
+
+    def scan(order, start=0):
+        for index, name in enumerate(order, start):
+            student = next(s for s in students if s.name == name)
+            copy = Copy(assessment_id=assessment.id, student_id=student.id)
+            db.add(copy)
+            db.flush()
+            page = DocumentPage(copy_id=copy.id, page_no=1)
+            db.add(page)
+            db.flush()
+            db.add(ScannedPage(batch_id=batch.id, source_index=index, page_id=page.id))
+        db.flush()
+
+    scan(["Désiré", "Awa"])                      # moins de la moitié : rien ne bouge
+    assert distribution.reorder_class_from_scan(db, batch.id) == 0
+    scan(["Esther"], start=2)
+    assert distribution.reorder_class_from_scan(db, batch.id) > 0
+    roster = db.query(Student).order_by(Student.order_index).all()
+    assert [s.name for s in roster] == ["Désiré", "Awa", "Esther", "Bintou", "Cédric"]
+    assert distribution.reorder_class_from_scan(db, batch.id) == 0      # déjà à jour
