@@ -1,0 +1,5 @@
+{"nom": "nom-sur-un-cote",
+ "constat": "Un nom de point posé au milieu d'un côté au lieu d'être à côté de lui.",
+ "type": "figure",
+ "tikz": "\\begin{tikzpicture}[x=0.85cm,y=0.85cm]\n\\coordinate (A) at (2.7,4.2); \\coordinate (B) at (0,0); \\coordinate (C) at (7,0);\n\\filldraw[trait,aplat] (A)--(B)--(C)--cycle;\n\\Nom{(A)}{A}{above} \\Nom{(B)}{B}{below left} \\Nom{(C)}{C}{below right} \\Nom{(3.5,0)}{M}{}\n\\end{tikzpicture}",
+ "attendu": ["« M » est posé sur un trait"]}

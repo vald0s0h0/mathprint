@@ -168,11 +168,8 @@ def _compile_error(log: str) -> str:
     return " / ".join(tail)[:300] or "compilation impossible"
 
 
-def compile_png(body: str, binary: str) -> bytes:
-    """PDF puis PNG à 300 dpi (taille physique portée par les métadonnées)."""
-    import fitz
-    from PIL import Image
-
+def compile_pdf(body: str, binary: str) -> bytes:
+    """Le PDF vectoriel de la figure, à sa taille réelle."""
     with tempfile.TemporaryDirectory(prefix="kn-tikz-") as tmp:
         work = Path(tmp)
         charte = CHARTE_PATH.read_text(encoding="utf-8").replace("@FONTS@", str(FONTS_DIR))
@@ -187,7 +184,19 @@ def compile_png(body: str, binary: str) -> bytes:
         pdf = work / "figure.pdf"
         if proc.returncode != 0 or not pdf.exists():
             fail("tikz", _compile_error(proc.stderr + "\n" + proc.stdout))
-        doc = fitz.open(pdf)
+        return pdf.read_bytes()
+
+
+def compile_png(body: str, binary: str) -> bytes:
+    """PDF puis PNG à 300 dpi (taille physique portée par les métadonnées)."""
+    return rasterize(compile_pdf(body, binary))
+
+
+def rasterize(data: bytes) -> bytes:
+    import fitz
+    from PIL import Image
+
+    with fitz.open(stream=data, filetype="pdf") as doc:
         page = doc[0]
         w_mm, h_mm = page.rect.width / 72 * 25.4, page.rect.height / 72 * 25.4
         if w_mm > MAX_WIDTH_MM + 2 or h_mm > MAX_HEIGHT_MM + 2:
@@ -209,7 +218,9 @@ def render(params: dict, *, dry: bool = False) -> bytes:
     if binary is None:
         fail("tikz", "figure absente de la réserve pré-rendue et TeX indisponible ici : "
                      "les figures TikZ se compilent sur le Mac (scripts/tikz_prerender.py)")
-    png = compile_png(body, binary)
+    pdf = compile_pdf(body, binary)
+    png = rasterize(pdf)
+    _store_inspection(body, pdf)
     try:
         STORE_DIR.mkdir(parents=True, exist_ok=True)
         tmp = cached.with_suffix(".tmp")
@@ -218,6 +229,42 @@ def render(params: dict, *, dry: bool = False) -> bytes:
     except OSError:
         pass  # dossier en lecture seule : la figure reste servie depuis le cache disque
     return png
+
+
+def _inspection_path(body: str) -> Path:
+    from ..config import settings
+    return Path(settings.data_dir) / "tikzlint" / f"{figure_key(body)}.json"
+
+
+def _store_inspection(body: str, pdf: bytes) -> list[str]:
+    import json
+
+    from . import figlint
+    problems = figlint.inspect_pdf(pdf)
+    try:
+        path = _inspection_path(body)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(problems, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        pass
+    return problems
+
+
+def inspect(params: dict) -> list[str]:
+    """Défauts géométriques de la figure compilée (texte sur un trait, textes qui se
+    recouvrent), en phrases pour l'auteur. Résultat gardé par figure ; sans TeX et sans
+    résultat gardé, rien n'est signalé : le contrôle se fait là où l'on génère."""
+    import json
+    body = lint(params)
+    path = _inspection_path(body)
+    try:
+        return list(json.loads(path.read_text(encoding="utf-8")))
+    except (OSError, ValueError):
+        pass
+    binary = tectonic_binary()
+    if binary is None:
+        return []
+    return _store_inspection(body, compile_pdf(body, binary))
 
 
 def validate(params: dict) -> dict:
@@ -242,5 +289,5 @@ def iter_bodies(obj):
             yield from iter_bodies(value)
 
 
-__all__ = ["render", "validate", "lint", "store_path", "figure_key", "tectonic_binary",
+__all__ = ["render", "validate", "lint", "inspect", "compile_pdf", "rasterize", "store_path", "figure_key", "tectonic_binary",
            "iter_bodies", "CHARTE_VERSION", "FigureSpecError", "PALETTE"]

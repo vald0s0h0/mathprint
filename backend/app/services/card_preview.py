@@ -250,6 +250,20 @@ def render(ex: dict, guides: bool = True, show_answers: bool = False) -> bytes:
 
 @lru_cache(maxsize=96)
 def _render(key: str, guides: bool, show_answers: bool) -> bytes:
+    pdf, clip_h = _card_pdf(key, guides, show_answers)
+    with fitz.open(stream=pdf, filetype='pdf') as doc:
+        clip = fitz.Rect(0, 0, pdfgen.COL_W + 4, clip_h)
+        return doc[0].get_pixmap(dpi=180, clip=clip).tobytes('png')
+
+
+def render_pdf(ex: dict, guides: bool = True) -> tuple[bytes, float]:
+    """(PDF vectoriel de la carte, hauteur utile en points) : ce que lit le contrôle
+    géométrique, qui juge les objets de la page et non une image."""
+    with _LOCK:
+        return _card_pdf(canonical_key(ex), guides, False)
+
+
+def _card_pdf(key: str, guides: bool, show_answers: bool) -> tuple[bytes, float]:
     ex = json.loads(key)
     item = shape(ex, guides)
     tpl = pdfgen.DEFAULT_TEMPLATES['exercise']
@@ -280,11 +294,9 @@ def _render(key: str, guides: bool, show_answers: bool) -> bytes:
             _answers(c, meta, item['expected'], item['response_type'],
                      zone, item['grading'], item['inline'])
     c.save()
-    with fitz.open(stream=buf.getvalue(), filetype='pdf') as doc:
-        # Retire seulement la bande invisible de correction, jamais le contenu.
-        strip_h = cl['strip']['height'] if composite else strip['height']
-        clip = fitz.Rect(0, 0, pdfgen.COL_W + 4, height + 4 - strip_h - pdfgen.STRIP_GAP)
-        return doc[0].get_pixmap(dpi=180, clip=clip).tobytes('png')
+    # Retire seulement la bande invisible de correction, jamais le contenu.
+    strip_h = cl['strip']['height'] if composite else strip['height']
+    return buf.getvalue(), height + 4 - strip_h - pdfgen.STRIP_GAP
 
 
 # ------------------------------------------------------------- écriture simulée

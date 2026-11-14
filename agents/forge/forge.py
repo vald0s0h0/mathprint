@@ -981,7 +981,12 @@ def _figure_problems(figure) -> list[str]:
         return [f"figure : kind {figure.get('kind')!r} ; toute figure s'écrit en tikz, dans la "
                 "charte (schema.md, section Figures) — jamais de découpe d'une page de manuel"]
     error = figures.figure_error(figure_to_json(figure))
-    return [error] if error else []
+    if error:
+        return [error]
+    # La figure compile : reste ce que l'œil verrait de travers (nom sur un trait, textes
+    # qui se recouvrent). Jugé sur les objets du PDF, donc sans appel : la carte est refusée.
+    from app.services import tikzfig
+    return [f"figure : {problem}" for problem in tikzfig.inspect(figure.get("spec") or {})]
 
 
 _LABELLED_BLANK_RE = re.compile(r"[^\s{}.?!]\s*:\s*\{\{blank\}\}")
@@ -1743,6 +1748,7 @@ def render(db, run: Path) -> dict:
     field_whitespace: dict = {}
     traces: dict = {}
     leading: list[str] = []
+    geometry: dict = {}
     for key, contract in contracts.items():
         exercise, slot = exercises[key], grid[key]
         ex = preview_exercise(contract, exercise, slot)
@@ -1770,6 +1776,12 @@ def render(db, run: Path) -> dict:
         tight = [f["problem"] for f in fields if f and f["problem"]]
         if tight:
             writing[key] = tight
+        # Contrôle géométrique : les objets de la page, pas une impression d'ensemble.
+        from app.services import figlint
+        card_pdf, clip_h = card_preview.render_pdf(ex)
+        defects = figlint.inspect_card(card_pdf, clip_h, (2, pdfgen.COL_W + 2))
+        if defects:
+            geometry[key] = defects
         if ex["response_type"] != COMPOSITE:
             fs = float(pdfgen.DEFAULT_TEMPLATES["exercise"].get("font_size", 9))
             if pdfgen.broken_leading(pdfgen._exercise_layout(card_preview.shape(ex), fs, fs)[0]):
@@ -1795,6 +1807,7 @@ def render(db, run: Path) -> dict:
     from app.services.exercise_review import fingerprint
     summary = {"inputs": {k: fingerprint({"exercise": exercises[k], "contract": v}) for k, v in contracts.items()}, "cards": cards, "size_gaps": size_gaps, "simulation": simulation,
                "writing": writing, "field_whitespace": field_whitespace, "leading": leading, "traces": traces,
+               "geometry": geometry,
                "too_tall": [k for k, c in cards.items() if not c["fits_column"]],
                "excess": {k: c["excess"] for k, c in cards.items() if c["excess"]},
                "complete": len(contracts) == len(grid)}
@@ -1821,6 +1834,8 @@ def lot_hints(summary: dict, kind: str) -> list[str]:
         hints.append(f"ÉCRITURE TROP SERRÉE {key} : " + " ; ".join(problems))
     for key, problems in summary.get("traces", {}).items():
         hints.append(f"TRACÉ MAL LU {key} : " + " ; ".join(problems))
+    for key, problems in summary.get("geometry", {}).items():
+        hints.append(f"MISE EN PAGE {key} : " + " ; ".join(problems))
     if summary.get("leading"):
         hints.append("INTERLIGNE CASSÉ par une case dans une phrase repliée : "
                      + ", ".join(summary["leading"]) + " (mets la phrase à trous sur sa propre ligne)")
@@ -1908,7 +1923,8 @@ def persist(db, run: Path, *, replace: bool = False, slots: list[str] | None = N
     # Une reprise ciblée ne doit ni remplacer ni être bloquée par une autre carte.
     # Sans sélection explicite, toutes les cartes restent contrôlées.
     refused = (set(rendered["writing"]) | set(rendered.get("leading") or [])
-               | set(rendered.get("traces") or [])) & set(slots or contracts)
+               | set(rendered.get("traces") or []) | set(rendered.get("geometry") or [])
+               ) & set(slots or contracts)
     if refused:
         raise SystemExit("Cartes refusées à la mise en page : " + ", ".join(
             sorted(refused)))

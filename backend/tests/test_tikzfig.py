@@ -154,3 +154,68 @@ def test_oversized_figure_is_refused(store):
 def test_balance_macro_compiles(store):
     png = tikzfig.render(_pic(r"\Balance[gauche]{$3(2x+1)$}{$2x+10$}"))
     assert Image.open(io.BytesIO(png)).width / 300 * 25.4 < 80
+
+
+# ------------------------------------------------------- contrôle géométrique
+@needs_tex
+def test_a_name_on_a_line_and_overlapping_names_are_reported(store):
+    problems = tikzfig.inspect(_pic(
+        r"\coordinate (A) at (2.7,4.2); \coordinate (B) at (0,0); \coordinate (C) at (7,0);"
+        r"\filldraw[trait,aplat] (A)--(B)--(C)--cycle;"
+        r"\Nom{(A)}{A}{above} \Nom{(3.5,0)}{M}{} \Nom{(6,3)}{K}{} \Nom{(6.08,3)}{L}{}"))
+    assert any("« M » est posé sur un trait" in p for p in problems)
+    assert any("se recouvrent" in p for p in problems)
+    assert not any("« A »" in p for p in problems)
+
+
+@needs_tex
+def test_a_clean_figure_and_its_dimension_line_raise_nothing(store):
+    # La cote est posée sur sa propre ligne de cote, très claire : ce n'est pas un défaut.
+    assert tikzfig.inspect({"tikz": SIMPLE}) == []
+
+
+@needs_tex
+def test_schema_examples_have_no_geometric_defect(store):
+    md = (ROOT / "agents" / "forge" / "schema.md").read_text(encoding="utf-8")
+    for body in re.findall(r"```latex\n(.*?)\n```", md, re.S):
+        assert tikzfig.inspect({"tikz": body}) == [], body[:60]
+
+
+@needs_tex
+def test_the_inspection_is_kept_per_figure(store, monkeypatch):
+    first = tikzfig.inspect({"tikz": SIMPLE})
+    monkeypatch.setattr(tikzfig, "tectonic_binary", lambda: None)
+    assert tikzfig.inspect({"tikz": SIMPLE}) == first
+
+
+def _card_pdf(draw) -> bytes:
+    from reportlab.pdfgen import canvas
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=(300, 200))
+    c.setFont("Helvetica", 10)
+    draw(c)
+    c.save()
+    return buf.getvalue()
+
+
+def test_card_inspection_reports_text_on_a_rule_overlap_and_overflow():
+    from app.services import figlint
+
+    def clean(c):
+        c.rect(20, 100, 120, 30)
+        c.drawString(30, 111, "Dans sa case")
+        c.drawString(30, 60, "Une ligne")
+        c.drawString(30, 48, "puis la suivante, serrée")
+
+    def broken(c):
+        c.rect(20, 100, 60, 30)
+        c.drawString(30, 111, "Texte trop long pour la case")
+        c.drawString(30, 60, "Premier")
+        c.drawString(32, 59, "Second")
+        c.drawString(270, 20, "Dehors")
+
+    assert figlint.inspect_card(_card_pdf(clean), 200, (2, 298)) == []
+    problems = figlint.inspect_card(_card_pdf(broken), 200, (2, 298))
+    assert any("touche un trait" in p for p in problems)
+    assert any("se recouvrent" in p for p in problems)
+    assert any("sort du cadre" in p for p in problems)

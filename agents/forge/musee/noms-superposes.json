@@ -1,0 +1,5 @@
+{"nom": "noms-superposes",
+ "constat": "Deux noms de points presque confondus écrits l'un sur l'autre.",
+ "type": "figure",
+ "tikz": "\\begin{tikzpicture}\n\\draw[trait] (0,0)--(5,0);\n\\Nom{(2,1)}{K}{} \\Nom{(2.08,1)}{L}{}\n\\end{tikzpicture}",
+ "attendu": ["se recouvrent"]}

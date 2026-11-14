@@ -1,0 +1,5 @@
+{"nom": "cote-sur-une-arete",
+ "constat": "Une cote placée sur le côté qu'elle mesure : la valeur masque le trait (silo et pavé de 3e C4, reprise du 2026-11-08).",
+ "type": "figure",
+ "tikz": "\\begin{tikzpicture}\n\\coordinate (A) at (0,0); \\coordinate (B) at (6,0); \\coordinate (C) at (6,3); \\coordinate (D) at (0,3);\n\\draw[trait] (A)--(B)--(C)--(D)--cycle;\n\\Cote{(A)}{(B)}{6 cm}{0mm}\n\\end{tikzpicture}",
+ "attendu": ["est posé sur un trait"]}

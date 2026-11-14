@@ -1,0 +1,12 @@
+{"nom": "lignes-en-suite-logique",
+ "constat": "Les lignes d'un tableau qui se suivent logiquement étaient mélangées d'une copie à l'autre : l'élève ne suivait plus le raisonnement (signalé le 2026-11-14).",
+ "type": "melange",
+ "shape": {"response_type": "table_fill", "statement": "Complète.",
+           "grading": {"comparator": "table_cells", "col_labels": ["Résultat"],
+                       "row_labels": ["On pose l'équation", "On isole le terme en x", "On divise", "On conclut"],
+                       "cells": [[{"type": "integer", "value": 1}], [{"type": "integer", "value": 2}],
+                                 [{"type": "integer", "value": 3}], [{"type": "integer", "value": 4}]]},
+           "expected": {"type": "table", "rows": 4, "cols": 1,
+                        "cells": [[{"type": "integer", "value": 1}], [{"type": "integer", "value": 2}],
+                                  [{"type": "integer", "value": 3}], [{"type": "integer", "value": 4}]]}},
+ "attendu": "inchangé"}
