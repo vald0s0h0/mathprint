@@ -179,6 +179,9 @@ export default function ExerciseCatalogCard({ exercise: head, admin, onPreferenc
             {['Facile', 'Moyen', 'Difficile'][level - 1] ?? 'Moyen'}
           </Badge>
           {admin && routes(ex).map(route => <Badge key={route} size="xs" variant="light" color="blue">{route}</Badge>)}
+          {admin && raw.review_sample && !head.review_verdict && <Tooltip label={`À relire : ${raw.review_sample}`}>
+            <Badge size="xs" variant="filled" color="orange">À relire</Badge>
+          </Tooltip>}
           {twinInfo && <Tooltip label="Anti-triche : deux voisins reçoivent la même carte avec d'autres valeurs et une autre place des réponses">
             <Badge size="xs" variant="light" color="grape">
               {twinInfo.jeux} jeux{twinInfo.dispositions > 1 ? ` · ${twinInfo.dispositions} dispositions` : ''}

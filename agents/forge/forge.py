@@ -2073,6 +2073,11 @@ def persist(db, run: Path, *, replace: bool = False, slots: list[str] | None = N
     db.add(extraction)
     db.flush()
     flagged = {k for k, v in (goldfish.get("verdicts") or {}).items() if v.get("flag")}
+    # Échantillon de relecture : la part dépend de la confiance acquise par chaque format.
+    import confiance
+    to_review = confiance.sample(
+        run.name, {k: c["response_type"] for k, c in contracts.items() if "." not in k},
+        flagged, confiance.streaks(db, payload["subject"]), bool(payload.get("pilot")))
     written = []
     for order, key in enumerate(sorted(contracts)):
         if f"{run.name}/{key}" not in targets:
@@ -2140,8 +2145,11 @@ def persist(db, run: Path, *, replace: bool = False, slots: list[str] | None = N
             "competencies": slot.get("competencies") or [code],
             "figure_spec": figure,
             "quality": {"goldfish": (goldfish.get("verdicts") or {}).get(key)},
+            "subject": payload["subject"],
             "review_notes": [*((goldfish.get("verdicts") or {}).get(key, {}).get("notes") or []),
                              *(str(flag) for flag in exercise.get("review_flags") or [])],
+            # carte tirée dans l'échantillon de relecture, et pourquoi (pastille dans l'onglet)
+            "review_sample": to_review.get(key.split(".", 1)[0]),
             "review_blocking": [], "adapted": True}
         old = previous.get(row.source_number)
         if old:
@@ -2157,8 +2165,7 @@ def persist(db, run: Path, *, replace: bool = False, slots: list[str] | None = N
                                     "review_comment": old["snapshot"]["comment"]}
         written.append(f"{key} → {row.id}")
     extraction.stats_json = {"pipeline": PIPELINE, "version": VERSION, "exercises": len(written),
-                             "run": run.name, "review": review_sample(
-                                 run, flagged, sorted(contracts), bool(payload.get("pilot")))}
+                             "run": run.name, "review": sorted(to_review)}
     db.commit()
     return {"extraction_id": extraction.id, "written": written,
             "review": extraction.stats_json["review"]}

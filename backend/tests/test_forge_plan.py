@@ -127,3 +127,15 @@ def test_no_exercises_without_the_lesson_sheet(db, capsys):  # noqa: F811
     fiche.write_text("# Fiche\n")
     assert cli._cmd_prepare(args, db) == 0
     assert "2 famille(s) à écrire (amorce" in capsys.readouterr().out
+
+
+def test_trust_is_earned_per_format_and_lost_on_a_defect():
+    import confiance
+    assert [confiance.rate(n) for n in (0, 29, 30, 99, 100, 299, 300)] == [1, 1, .25, .25, .10, .10, .05]
+    cards = {f"s{i:02d}": "qcm_single" for i in range(1, 21)} | {"s21": "table_fill"}
+    known = {"qcm_single": {"rate": 0.25}}
+    picked = confiance.sample("run", cards, {"s03"}, known)
+    assert picked["s03"] == "signalée par le lecteur" and "s21" in picked       # format jamais relu
+    assert sum(1 for k in picked if k not in ("s03", "s21")) == 5              # 25 % de 19, arrondi au-dessus
+    assert picked == confiance.sample("run", cards, {"s03"}, known)
+    assert len(confiance.sample("run", cards, set(), known, pilot=True)) == 21

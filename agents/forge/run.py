@@ -285,6 +285,21 @@ def _cmd_exhaustion(args, db):
     return 0
 
 
+def _cmd_trust(args, db):
+    """Indice de confiance par format : ce qui a été relu, et ce qu'il reste à relire."""
+    import confiance
+    known = confiance.streaks(db, args.matiere)
+    print(f"Confiance des formats ({args.matiere}). Un format jamais relu est relu en entier.")
+    for rtype in forge.LEAF_TYPES + (forge.COMPOSITE,):
+        entry = known.get(rtype)
+        if entry:
+            print(f"  {rtype:<17} {entry['reviewed']:>4} relue(s), {entry['streak']:>4} acceptée(s) "
+                  f"d'affilée → {round(entry['rate'] * 100)} % à relire")
+        else:
+            print(f"  {rtype:<17}    0 relue → 100 % à relire")
+    return 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="forge", description="Pipeline forge.")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -327,6 +342,8 @@ def main(argv=None) -> int:
     cal.add_argument("--semaines", type=int, default=3, help="Horizon, en semaines")
     cal.add_argument("--rentree", help="Date de la rentrée, AAAA-MM-JJ")
     sub.add_parser("epuisement", help="Compétences dont une classe n'a plus d'inédits.")
+    trust = sub.add_parser("confiance", help="Part des cartes à relire, par format.")
+    trust.add_argument("--matiere", default=forge.SUBJECT_DEFAULT)
     ecartes = sub.add_parser("ecartes", help="Liste les cartes au pouce baissé.")
     ecartes.add_argument("filtre", nargs="?", default="", help="Morceau du run, ex. fr-3e-A4")
     for option in ("programme", "cycle", "domaine", "matiere"):
@@ -338,7 +355,8 @@ def main(argv=None) -> int:
         return {"prepare": _cmd_prepare, "suivant": _cmd_next, "check": _cmd_check,
                 "render": _cmd_render, "goldfish": _cmd_goldfish, "persist": _cmd_persist,
                 "reprendre": _cmd_resume, "ecartes": _cmd_disliked,
-                "calendrier": _cmd_calendar, "epuisement": _cmd_exhaustion}[args.cmd](args, db) or 0
+                "calendrier": _cmd_calendar, "epuisement": _cmd_exhaustion,
+                "confiance": _cmd_trust}[args.cmd](args, db) or 0
     finally:
         db.close()
 
