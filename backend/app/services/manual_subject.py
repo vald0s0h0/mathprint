@@ -38,7 +38,7 @@ from ..models import (
     Assessment, Competency, Copy, DocumentPage, ExercisePreference, FileObject, GeneratedExercise,
     Job, ResponseZone, SchoolClass, StudentLevel,
 )
-from . import answer_mix, card_preview, exercise_gen, generation, pdfgen, scoring, sheet_engine, student_history
+from . import answer_mix, card_preview, distribution, exercise_gen, generation, pdfgen, scoring, sheet_engine, student_history
 from .runtime_settings import doc_templates
 from .security import sign_page
 
@@ -439,6 +439,7 @@ def generate_manual_job(db: Session, assessment: Assessment, job: Job | None = N
                 blueprint.get("variant_kind", "none"), guide_mode, len(students))
 
     ranks = shuffled_ranks(len(students), base_seed)
+    twin_cache: dict = {}
     for s_idx, student in enumerate(students):
         generation._set_progress(
             db, job, round(5 + 90 * s_idx / max(1, len(students))),
@@ -465,7 +466,9 @@ def generate_manual_job(db: Session, assessment: Assessment, job: Job | None = N
             quota = (student_history.GuideQuota(student_history.guide_ratio(level, guide_reach))
                      if guides_by_level else None)
             render_items, placement = _engine_copy(
-                db, chosen=[rows[s["exercise_id"]] for s in _ordered_slots(variant, max_pages)],
+                # anti-triche : la jumelle de chaque carte dépend de la place de l'élève
+                db, chosen=[distribution.twin_for(db, rows[s["exercise_id"]], s_idx, twin_cache)
+                            for s in _ordered_slots(variant, max_pages)],
                 catalog_refs=catalog_refs, copy_id=copy.id,
                 rng=random.Random(f"{base_seed}:{student.id}:{variant.get('key')}"),
                 pages=max_pages, guide_mode=guide_mode, measures=measures, quota=quota,
@@ -473,7 +476,7 @@ def generate_manual_job(db: Session, assessment: Assessment, job: Job | None = N
             total_non_qcm += sum(1 for r in render_items if not r["response_type"].startswith("qcm"))
         else:
             for seq, slot in enumerate(_ordered_slots(variant, max_pages), start=1):
-                row = rows[slot["exercise_id"]]
+                row = distribution.twin_for(db, rows[slot["exercise_id"]], s_idx, twin_cache)
                 render = generation.build_render_item(
                     db, row=row, copy_id=copy.id,
                     catalog_id=catalog_refs[row.competency_id].id, seq=seq,

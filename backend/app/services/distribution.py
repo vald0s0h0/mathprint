@@ -64,6 +64,63 @@ def variant_seed(base_seed: int, personalization_mode: str, student_index: int) 
     return base_seed + student_index + 1
 
 
+# ---------------------------------------------------------------- jumelles
+TWIN_STATUS = "twin"
+
+
+def twin_choice(position: int, jeux: int, dispositions: int) -> tuple[int, int]:
+    """(jeu, disposition) de l'élève à cette place dans la liste de la classe, qui
+    est l'ordre de distribution : deux voisins n'ont jamais le même jeu de valeurs.
+
+    - 3 jeux, 2 dispositions : deux copies identiques sont à 6 places au moins ;
+    - 2 jeux, 2 dispositions : le jeu alterne, la disposition change toutes les
+      deux places ; deux copies identiques sont à 4 places ;
+    - 1 disposition : les jeux se suivent."""
+    jeux, dispositions = max(1, jeux), max(1, dispositions)
+    jeu = position % jeux
+    if dispositions == 1:
+        return jeu + 1, 1
+    if jeux % 2:
+        return jeu + 1, position % 2 + 1
+    return jeu + 1, (position // jeux) % 2 + 1
+
+
+def twin_for(db: Session, row: GeneratedExercise, position: int,
+             cache: dict | None = None) -> GeneratedExercise:
+    """La jumelle de `row` pour l'élève à cette place. `row` est la carte choisie
+    (la seule active de sa famille) ; sans jumelles, elle est rendue telle quelle."""
+    if not row.twin_group:
+        return row
+    cache = cache if cache is not None else {}
+    siblings = cache.get(row.twin_group)
+    if siblings is None:
+        siblings = {(r.twin_jeu, r.twin_disposition): r
+                    for r in db.query(GeneratedExercise).filter(
+                        GeneratedExercise.twin_group == row.twin_group,
+                        GeneratedExercise.status.in_(("active", TWIN_STATUS))).all()}
+        cache[row.twin_group] = siblings
+    jeux = max((j for j, _d in siblings), default=1)
+    dispositions = max((d for _j, d in siblings), default=1)
+    return siblings.get(twin_choice(position, jeux, dispositions), row)
+
+
+def family_heads(db: Session, exercise_ids) -> dict[str, str]:
+    """{jumelle servie → carte active de sa famille}. Pour l'historique d'un élève :
+    avoir vu une jumelle, c'est avoir vu la carte."""
+    ids = [i for i in exercise_ids if i]
+    if not ids:
+        return {}
+    twins = (db.query(GeneratedExercise.id, GeneratedExercise.twin_group)
+             .filter(GeneratedExercise.id.in_(ids), GeneratedExercise.status == TWIN_STATUS).all())
+    groups = {group for _id, group in twins if group}
+    if not groups:
+        return {}
+    heads = dict(db.query(GeneratedExercise.twin_group, GeneratedExercise.id)
+                 .filter(GeneratedExercise.twin_group.in_(groups),
+                         GeneratedExercise.status == "active").all())
+    return {twin_id: heads[group] for twin_id, group in twins if group in heads}
+
+
 def exercise_bucket(row: GeneratedExercise) -> str:
     if row.response_type.startswith("qcm"):
         return "qcm"

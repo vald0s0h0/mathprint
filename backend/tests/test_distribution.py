@@ -103,3 +103,51 @@ def test_pick_balanced_exercise_falls_back_when_everything_excluded():
         [row], {}, {"application": 1.0}, seed=0,
         exclude_keys={distribution.exercise_identity(row)})
     assert picked is row
+
+
+# ------------------------------------------------------------------ jumelles (anti-triche)
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize("jeux,dispositions,period", [(3, 2, 6), (2, 2, 4), (3, 1, 3), (2, 1, 2)])
+def test_neighbours_never_share_values_and_identical_copies_are_far_apart(jeux, dispositions, period):
+    seats = [distribution.twin_choice(i, jeux, dispositions) for i in range(60)]
+    assert all(a[0] != b[0] for a, b in zip(seats, seats[1:]))            # voisins : autres valeurs
+    assert set(seats) == {(j, d) for j in range(1, jeux + 1) for d in range(1, dispositions + 1)}
+    for i, seat in enumerate(seats):
+        again = next((k for k in range(i + 1, 60) if seats[k] == seat), None)
+        assert again is None or again - i >= period
+
+
+def test_twin_for_serves_the_sibling_of_the_seat_and_history_counts_the_family():
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from app.db import Base
+    from app.models import Competency, CompetencyFramework
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine)()
+    framework = CompetencyFramework(grade_level="3e", name="Test")
+    db.add(framework)
+    db.flush()
+    comp = Competency(framework_id=framework.id, code="Z1.1", label="Test")
+    db.add(comp)
+    db.flush()
+    rows = {}
+    for jeu in (1, 2):
+        for disposition in (1, 2):
+            head = (jeu, disposition) == (1, 1)
+            row = GeneratedExercise(competency_id=comp.id, difficulty_level=1, statement=f"j{jeu}d{disposition}",
+                                    status="active" if head else "twin", twin_group="run/s01",
+                                    twin_jeu=jeu, twin_disposition=disposition)
+            db.add(row)
+            rows[(jeu, disposition)] = row
+    lone = GeneratedExercise(competency_id=comp.id, difficulty_level=1, statement="seule")
+    db.add(lone)
+    db.flush()
+    head = rows[(1, 1)]
+    served = [distribution.twin_for(db, head, seat) for seat in range(4)]
+    assert [(r.twin_jeu, r.twin_disposition) for r in served] == [(1, 1), (2, 1), (1, 2), (2, 2)]
+    assert distribution.twin_for(db, lone, 3) is lone
+    assert distribution.family_heads(db, [rows[(2, 2)].id, lone.id]) == {rows[(2, 2)].id: head.id}

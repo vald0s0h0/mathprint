@@ -333,6 +333,13 @@ class GeneratedExercise(Base):
     # (source="sesamaths" uniquement), avant adaptation — affichage
     # "avant/après" en banque (cf. services.sesamaths._to_candidate)
     raw_extract_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Jumelles de la forge : même carte, autre jeu de valeurs ou autre disposition des
+    # réponses (anti-triche). Une seule jumelle est active ; les autres portent le statut
+    # "twin" : invisibles de la banque et du tirage, servies à l'impression selon la
+    # place de l'élève (cf. services.distribution.twin_for).
+    twin_group: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    twin_jeu: Mapped[int] = mapped_column(Integer, default=0)
+    twin_disposition: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class ExerciseCompetency(Base):

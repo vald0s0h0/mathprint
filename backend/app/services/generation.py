@@ -414,6 +414,7 @@ def generate_assessment_job(db: Session, assessment: Assessment,
     # quand la page est pleine (la hauteur des cartes n'est pas connue d'avance).
     MAX_FILL_ROUNDS = 6
     total_non_qcm = 0
+    twin_cache: dict = {}
 
     for s_idx, student in enumerate(students):
         _set_progress(db, job, round(5 + 90 * s_idx / max(1, len(students))),
@@ -533,6 +534,9 @@ def generate_assessment_job(db: Session, assessment: Assessment,
             identity = distribution.exercise_identity(row)
             picked_keys.add(identity)
             sheet.add(row)
+            # Anti-triche : la carte est choisie sur la famille, la jumelle servie
+            # dépend de la place de l'élève (deux voisins n'ont pas les mêmes valeurs).
+            row = distribution.twin_for(db, row, s_idx, twin_cache)
             if draw_rules.is_remediation(row, student_draw):
                 student_draw.remediation_left -= 1
             # les cartes de remplissage ne passent pas par le tirage équilibré

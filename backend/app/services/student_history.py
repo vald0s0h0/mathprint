@@ -98,8 +98,11 @@ def exercise_log(db: Session, student_id: str) -> dict[str, Seen]:
                     # une colonne ajoutée par ALTER TABLE peut porter la chaîne
                     # vide : « pas d'exercice », pas un exercice nommé ""
                     CopyItem.generated_exercise_id != "").all())
+    # Une jumelle servie compte pour la carte de sa famille : c'est elle que le tirage voit.
+    from . import distribution
+    heads = distribution.family_heads(db, {ex_id for ex_id, _at in rows})
     for ex_id, generated_at in rows:
-        seen = log.setdefault(ex_id, Seen())
+        seen = log.setdefault(heads.get(ex_id, ex_id), Seen())
         seen.attempts += 1
         at = _utc(generated_at)
         if at and (seen.last_at is None or at > seen.last_at):
@@ -109,8 +112,9 @@ def exercise_log(db: Session, student_id: str) -> dict[str, Seen]:
                .filter(CopyItemResult.student_id == student_id,
                        CopyItemResult.generated_exercise_id.isnot(None),
                        CopyItemResult.generated_exercise_id != "").all())
+    heads.update(distribution.family_heads(db, {r.generated_exercise_id for r in results}))
     for r in results:
-        seen = log.setdefault(r.generated_exercise_id, Seen())
+        seen = log.setdefault(heads.get(r.generated_exercise_id, r.generated_exercise_id), Seen())
         seen.graded = True
         seen.best_ratio = max(seen.best_ratio, r.success_ratio or 0.0)
         at = _utc(r.occurred_at)

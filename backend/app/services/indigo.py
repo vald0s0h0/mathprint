@@ -2979,7 +2979,11 @@ def _seed_record(db, data: dict, rec: dict, figs) -> bool:
                 if procedural.get("type") in figures.DECLARATIVE_TYPES else None)
     if fig_json is None and rec.get("figure_file"):
         fig_json = {"type": "image", "params": {"path": str(figs / rec["figure_file"])}}
+    # Jumelles de la forge : une seule est active, les autres attendent l'impression.
+    twin = (rec.get("grading") or {}).get("twin") or {}
     db.add(GeneratedExercise(
+        twin_group=twin.get("group"), twin_jeu=int(twin.get("jeu") or 0),
+        twin_disposition=int(twin.get("disposition") or 0),
         id=rec["id"], competency_id=comp.id,
         difficulty_level=_published_level(data, rec), variant=0,
         statement=rec.get("statement", ""), correction=rec.get("correction_guide", ""),
@@ -2990,7 +2994,7 @@ def _seed_record(db, data: dict, rec: dict, figs) -> bool:
         estimated_seconds=int(rec.get("estimated_seconds") or 0),
         quality_json=rec.get("quality") or {},
         kind="probleme" if rec.get("badge_type") in ("probleme", "enigme") else "application",
-        status="active", figure_json=fig_json,
+        status="twin" if twin and not twin.get("principal") else "active", figure_json=fig_json,
         raw_extract_json={rec.get("source") or "indigo": {k: rec.get(k) for k in (
             "badge_type", "difficulty", "title", "tags",
             "correction_solution", "crop_file", "source_number",

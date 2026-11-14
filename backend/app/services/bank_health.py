@@ -57,8 +57,11 @@ def _seen_by_student(db: Session) -> dict[str, set[str]]:
             .join(CopyItem, CopyItem.copy_id == Copy.id)
             .filter(CopyItem.generated_exercise_id.isnot(None),
                     CopyItem.generated_exercise_id != "").all())
+    # avoir reçu une jumelle, c'est avoir vu la carte de sa famille
+    from . import distribution
+    heads = distribution.family_heads(db, {exercise_id for _s, exercise_id in rows})
     for student_id, exercise_id in rows:
-        out.setdefault(student_id, set()).add(exercise_id)
+        out.setdefault(student_id, set()).add(heads.get(exercise_id, exercise_id))
     return out
 
 
