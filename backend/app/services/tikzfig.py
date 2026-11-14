@@ -41,6 +41,34 @@ MAX_WIDTH_MM, MAX_HEIGHT_MM = 93.0, 90.0
 COMPILE_TIMEOUT_S = 180       # le premier usage de Tectonic télécharge ses paquets
 
 
+# Kits par matière : chargés seulement par les figures qui s'en servent, pour ne
+# ralentir ni changer les autres (leur clé ne dépend que de la charte commune).
+EXTENSIONS = {
+    "kn-supports.tex": re.compile(r"\\(Calculatrice|Ticket|Copie|Bulle|Mascotte)\b"),
+    # `to[` : un composant de circuitikz (R, battery, lamp…)
+    "kn-pc.tex": re.compile(r"\bto\s*\[|\\(chemfig|chemmove|schemestart|ce|pu|ctikzset|Becher|Erlenmeyer|"
+                            r"Eprouvette|TubeEssai|Burette|Ballon|Support|Force|PlanIncline|Solide)\b"),
+    "kn-svt.tex": re.compile(r"\\(BrinADN|Echiquier|Legende)\b"),
+    "kn-hg.tex": re.compile(r"\\(Frise|Evenement|Periode)\b"),
+}
+MASCOTTE_DIR = _APP_DIR / "assets" / "mascotte"
+
+
+def extensions_for(body: str) -> list[str]:
+    return [name for name, pattern in EXTENSIONS.items() if pattern.search(body)]
+
+
+def _extensions_version(body: str) -> str:
+    names = extensions_for(body)
+    if not names:
+        return ""
+    digest = hashlib.sha256()
+    for name in names:
+        path = CHARTE_PATH.with_name(name)
+        digest.update(name.encode() + (path.read_bytes() if path.exists() else b""))
+    return digest.hexdigest()[:16]
+
+
 def _charte_version() -> str:
     data = CHARTE_PATH.read_bytes() if CHARTE_PATH.exists() else b""
     return hashlib.sha256(ENGINE.encode() + data).hexdigest()[:16]
@@ -128,11 +156,35 @@ def lint(params) -> str:
         fail("tikz", f"couleur {m.group(1)!r} hors charte ; utilise la palette (repA…repE, accent…)")
     for m in _TEXTCOLOR.finditer(code):
         _check_color(m.group(1), "tikz : \\textcolor")
+    _check_mascotte(code)
     return text
 
 
+_MASCOTTE_CALL = re.compile(r"\\Mascotte\s*(?:\[[^\]]*\])?\s*\{([^}]*)\}\s*\{([^}]*)\}")
+
+
+def _check_mascotte(code: str) -> None:
+    """\\Mascotte{nom}{pose} n'est accepté que si la planche des personnages le déclare."""
+    import json
+    calls = _MASCOTTE_CALL.findall(code)
+    if not calls and "\\Mascotte" not in code:
+        return
+    path = MASCOTTE_DIR / "planche.json"
+    try:
+        poses = json.loads(path.read_text(encoding="utf-8")).get("personnages", {})
+    except (OSError, ValueError, AttributeError):
+        fail("tikz", "\\Mascotte indisponible : la planche des personnages n'est pas encore fournie "
+                     "(assets/mascotte/planche.json) ; n'emploie pas de mascotte")
+    for name, pose in calls:
+        if pose.strip() not in (poses.get(name.strip()) or []):
+            known = ", ".join(f"{n} ({'/'.join(p)})" for n, p in poses.items()) or "aucun"
+            fail("tikz", f"\\Mascotte{{{name}}}{{{pose}}} : personnage ou pose absent de la planche ; "
+                         f"disponibles : {known}")
+
+
 def figure_key(body: str) -> str:
-    return hashlib.sha256(f"{CHARTE_VERSION}\n{body}".encode()).hexdigest()
+    extra = _extensions_version(body)
+    return hashlib.sha256(f"{CHARTE_VERSION}{extra}\n{body}".encode()).hexdigest()
 
 
 def store_path(body: str) -> Path:
@@ -151,8 +203,8 @@ def tectonic_binary() -> str | None:
 _HEADER = "\\documentclass[border=1mm]{standalone}\n\\input{kn-figures.tex}\n\\begin{document}\n"
 
 
-def _compile_error(log: str) -> str:
-    offset = _HEADER.count("\n")
+def _compile_error(log: str, header: str = _HEADER) -> str:
+    offset = header.count("\n")   # lignes ajoutées avant la figure (kits compris)
     for line in log.splitlines():
         m = re.match(r"error: (?:.*/)?([\w.-]+\.tex):(\d+): (.+)", line)
         if m:
@@ -174,7 +226,13 @@ def compile_pdf(body: str, binary: str) -> bytes:
         work = Path(tmp)
         charte = CHARTE_PATH.read_text(encoding="utf-8").replace("@FONTS@", str(FONTS_DIR))
         (work / "kn-figures.tex").write_text(charte, encoding="utf-8")
-        (work / "figure.tex").write_text(_HEADER + body + "\n\\end{document}\n", encoding="utf-8")
+        header = _HEADER
+        for name in extensions_for(body):
+            kit = (CHARTE_PATH.with_name(name).read_text(encoding="utf-8")
+                   .replace("@FONTS@", str(FONTS_DIR)).replace("@MASCOTTE@", str(MASCOTTE_DIR)))
+            (work / name).write_text(kit, encoding="utf-8")
+            header = header.replace("\\begin{document}", f"\\input{{{name}}}\n\\begin{{document}}")
+        (work / "figure.tex").write_text(header + body + "\n\\end{document}\n", encoding="utf-8")
         try:
             proc = subprocess.run(
                 [binary, "-X", "compile", "--untrusted", "figure.tex"], cwd=work,
@@ -183,7 +241,7 @@ def compile_pdf(body: str, binary: str) -> bytes:
             fail("tikz", f"compilation de plus de {COMPILE_TIMEOUT_S} s : figure trop lourde")
         pdf = work / "figure.pdf"
         if proc.returncode != 0 or not pdf.exists():
-            fail("tikz", _compile_error(proc.stderr + "\n" + proc.stdout))
+            fail("tikz", _compile_error(proc.stderr + "\n" + proc.stdout, header))
         return pdf.read_bytes()
 
 

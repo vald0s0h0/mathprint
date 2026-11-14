@@ -1,0 +1,62 @@
+% Kit « supports imprimés » : calculatrice, ticket, copie d'élève, bulle, mascotte.
+% Chargé après kn-figures.tex, seulement par les figures qui emploient ces macros.
+% Toute modification change la clé de ces figures (et d'elles seules).
+\usepackage{graphicx,varwidth}
+\usetikzlibrary{shapes.callouts}
+\setmonofont{lmmono10-regular}[Extension=.otf,BoldFont=lmmonolt10-bold]
+\newfontfamily\knmanu{PatrickHand-Regular}[Path=@FONTS@/,Extension=.ttf]
+\definecolor{lcdc}{HTML}{D3DDCB}     % écran de calculatrice
+
+% \Calculatrice{ligne du haut}{ligne du bas} : écran à cristaux, ligne du bas à droite
+\newcommand{\Calculatrice}[2]{%
+  \filldraw[trait,fill=lcdc,rounded corners=2mm] (0,0) rectangle (4.6,1.5);
+  \draw[constr,rounded corners=1.2mm] (0.12,0.12) rectangle (4.48,1.38);
+  \node[anchor=west,inner sep=0pt,font=\ttfamily\fontsize{9}{10}\selectfont,text=ink!80] at (0.3,1.07) {#1};
+  \node[anchor=east,inner sep=0pt,font=\ttfamily\fontsize{14}{16}\selectfont\bfseries] at (4.3,0.5) {#2};}
+
+% \Ticket{titre}{libellé/prix,libellé/prix}{total} : ticket de caisse étroit
+\newcommand{\Ticket}[3]{%
+  \xdef\knN{0}%
+  \foreach \l/\p [count=\i] in {#2}{\xdef\knN{\i}}%
+  \pgfmathsetmacro{\knH}{1.15+0.42*\knN+0.9}%
+  \filldraw[trait,fill=white] (0,0) -- (0,-\knH) -- (4.2,-\knH) -- (4.2,0) -- cycle;
+  \node[font=\fontsize{10}{11}\selectfont\bfseries,inner sep=0pt] at (2.1,-0.45) {#1};
+  \draw[cache] (0.25,-0.85) -- (3.95,-0.85);
+  \foreach \l/\p [count=\i] in {#2}{%
+    \node[anchor=west,inner sep=0pt] at (0.25,-0.85-0.42*\i+0.1) {\l};
+    \node[anchor=east,inner sep=0pt] at (3.95,-0.85-0.42*\i+0.1) {\p};}
+  \pgfmathsetmacro{\knY}{-1.0-0.42*\knN}%
+  \draw[trait] (0.25,\knY) -- (3.95,\knY);
+  \node[anchor=west,inner sep=0pt,font=\fontsize{10}{11}\selectfont\bfseries] at (0.25,\knY-0.4) {TOTAL};
+  \node[anchor=east,inner sep=0pt,font=\fontsize{10}{11}\selectfont\bfseries] at (3.95,\knY-0.4) {#3};}
+
+% \Copie[Prénom]{ligne\\ligne} : feuille d'élève, texte manuscrit violet foncé (ni noir ni bleu).
+% Le texte est composé dans un nœud (hors nœud, TikZ n'a pas de police) ; le cadre et les
+% lignes se dessinent ensuite sur le calque du fond, d'après la hauteur mesurée.
+\makeatletter
+\newcommand{\Copie}[2][]{%
+  \node[anchor=base west,inner sep=0pt,text width=5.1cm,align=left,text=repC!70!ink,
+    font=\knmanu\fontsize{13}{17}\selectfont] (knt) at (0.75,-1.5) {#2};
+  \pgfpointdiff{\pgfpointanchor{knt}{south}}{\pgfpointanchor{knt}{north}}%
+  \pgfmathtruncatemacro{\knn}{ceil(\the\pgf@y/17pt)}%
+  \pgfmathsetmacro{\knB}{-1.5-0.5997*(\knn-1)-0.4}%
+  \begin{pgfonlayer}{fond}
+  \filldraw[trait,fill=white] (0,0) rectangle (6,\knB);
+  \foreach \k in {1,...,\knn}{\draw[rappel] (0.15,-1.5-0.12-0.5997*\k+0.5997) -- (5.85,-1.5-0.12-0.5997*\k+0.5997);}
+  \draw[repE!45,line width=0.4pt] (0.55,-0.75) -- (0.55,\knB);
+  \end{pgfonlayer}
+  \node[anchor=west,inner sep=0pt,font=\fontsize{9}{10}\selectfont\bfseries] at (0.3,-0.4) {\ifstrempty{#1}{Copie}{Copie de #1}};
+  \draw[constr] (0.3,-0.75) -- (5.7,-0.75);}
+\makeatother
+
+% \Bulle{texte} : bulle de message à pointe, 4,4 cm de texte au plus
+\newcommand{\Bulle}[1]{%
+  \node[draw=ink,line width=0.6pt,rounded corners=2.5mm,fill=fillA,inner xsep=3mm,inner ysep=2mm,
+    align=left] (knbul) {\begin{varwidth}{4.4cm}#1\end{varwidth}};
+  \coordinate (knp) at ($(knbul.south west)+(0.8,0)$);
+  \fill[fillA] ($(knp)+(-0.18,0.05)$) -- ($(knp)+(0.32,0.05)$) -- ($(knp)+(-0.25,-0.45)$) -- cycle;
+  \draw[trait] ($(knp)+(-0.18,0)$) -- ($(knp)+(-0.25,-0.45)$) -- ($(knp)+(0.32,0)$);}
+
+% \Mascotte[x,y]{nom}{pose} : personnage de la planche, 14 mm de haut (planche fournie à part)
+\newcommand{\Mascotte}[3][0,0]{%
+  \node[inner sep=0pt] at (#1) {\includegraphics[height=14mm]{@MASCOTTE@/#2-#3.pdf}};}

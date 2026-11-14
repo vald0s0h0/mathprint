@@ -219,3 +219,127 @@ def test_card_inspection_reports_text_on_a_rule_overlap_and_overflow():
     assert any("touche un trait" in p for p in problems)
     assert any("se recouvrent" in p for p in problems)
     assert any("sort du cadre" in p for p in problems)
+
+
+# ------------------------------------------------------- kits par matière
+KITS = {
+    "kn-supports.tex": [
+        r"\Calculatrice{2,9999999}{1.5E-4}",
+        r"\Ticket{Marché}{Riz 5 kg/3 500,Huile 1 L/1 200}{4 700 F}",
+        r"\Copie[Awa]{3x + 2 = 11\\3x = 9}",
+        r"\Bulle{Je pense que $x=4$.}",
+    ],
+    "kn-pc.tex": [
+        r"\Becher{(0,0)}{0.6}{$100$ mL} \Erlenmeyer{(2.6,0)}{0.5}{} \Eprouvette{(4.5,0)}{0.7}{}",
+        r"\TubeEssai{(0,0)}{0.5}{} \Ballon{(2,0)}{0.4}{} \Burette{(4,0)}{0.8}{} \Support{(5.5,0)}{4}",
+        r"\PlanIncline{30}{4} \Solide{(3,0.3)}{$m$} \Force{(1,1)}{60}{1.2}{$\vec{F}$}",
+        r"\draw (0,0) to[R,l=$R$] (2,0) to[lamp] (2,-2) -- (0,-2) to[battery1] (0,0);",
+        r"\node {\ce{H2O} \chemfig{H-O-H}};",
+    ],
+    "kn-svt.tex": [
+        r"\BrinADN{ATGCCGTA}",
+        r"\BrinADN[simple]{ATGC}",
+        r"\Echiquier{AB,ab}{Ab,aB}",
+        r"\draw[trait] (0,0) circle (0.8); \Legende{(0.3,0.2)}{(1.6,1)}{1}",
+    ],
+    "kn-hg.tex": [
+        "\\Frise{1900}{2000}{25}\n\\Evenement{1914}{Guerre}\n\\Periode{1939}{1945}{Guerre}",
+    ],
+}
+
+
+def _tikz(inner: str) -> dict:
+    return _pic(inner)
+
+
+@pytest.mark.parametrize("kit, inner", [(k, i) for k, items in KITS.items() for i in items])
+def test_each_kit_macro_loads_its_kit(kit, inner):
+    assert tikzfig.extensions_for(_tikz(inner)["tikz"]) == [kit]
+    tikzfig.lint(_tikz(inner))
+
+
+@needs_tex
+@pytest.mark.parametrize("kit, inner", [(k, i) for k, items in KITS.items() for i in items])
+def test_each_kit_macro_compiles_without_defect(store, kit, inner):
+    params = _tikz(inner)
+    png = tikzfig.render(params)
+    assert Image.open(io.BytesIO(png)).width / 300 * 25.4 < 95
+    assert tikzfig.inspect(params) == []
+
+
+def test_a_figure_without_kit_macro_keeps_its_key():
+    import hashlib
+    assert tikzfig.extensions_for(SIMPLE) == []
+    assert tikzfig.figure_key(SIMPLE) == hashlib.sha256(
+        f"{tikzfig.CHARTE_VERSION}\n{SIMPLE}".encode()).hexdigest()
+    assert tikzfig.figure_key(_tikz(KITS["kn-hg.tex"][0])["tikz"]) != hashlib.sha256(
+        f"{tikzfig.CHARTE_VERSION}\n{_tikz(KITS['kn-hg.tex'][0])['tikz']}".encode()).hexdigest()
+
+
+def test_kit_patterns_do_not_catch_neighbouring_names():
+    assert tikzfig.extensions_for(r"\Nom{(0,0)}{A}{} \Cote{(A)}{(B)}{3}{4mm} \cell \centering") == []
+    assert tikzfig.extensions_for(r"\draw (A) to[bend left] (B);") == ["kn-pc.tex"]
+
+
+def test_mascotte_is_refused_without_a_sheet_and_accepted_with_one(tmp_path, monkeypatch):
+    params = _tikz(r"\Mascotte{kiro}{doute}")
+    monkeypatch.setattr(tikzfig, "MASCOTTE_DIR", tmp_path)
+    with pytest.raises(FigureSpecError, match="planche"):
+        tikzfig.lint(params)
+    (tmp_path / "planche.json").write_text(json.dumps({"personnages": {"kiro": ["idee"]}}), encoding="utf-8")
+    with pytest.raises(FigureSpecError, match="kiro.*doute|doute"):
+        tikzfig.lint(params)
+    with pytest.raises(FigureSpecError, match="nina"):
+        tikzfig.lint(_tikz(r"\Mascotte[1,0]{nina}{idee}"))
+    (tmp_path / "planche.json").write_text(json.dumps({"personnages": {"kiro": ["doute", "idee"]}}),
+                                           encoding="utf-8")
+    assert tikzfig.lint(params) == params["tikz"].strip()
+
+
+@needs_tex
+def test_mascotte_with_a_dummy_sheet_compiles(tmp_path, monkeypatch, store):
+    from reportlab.pdfgen import canvas
+    monkeypatch.setattr(tikzfig, "MASCOTTE_DIR", tmp_path)
+    c = canvas.Canvas(str(tmp_path / "kiro-doute.pdf"), pagesize=(40, 56))
+    c.circle(20, 28, 18, fill=1)
+    c.save()
+    (tmp_path / "planche.json").write_text(json.dumps({"personnages": {"kiro": ["doute"]}}), encoding="utf-8")
+    png = tikzfig.render(_tikz(r"\Mascotte{kiro}{doute}"))
+    im = Image.open(io.BytesIO(png))
+    assert abs(im.height / 300 * 25.4 - 16) < 1.0     # 14 mm de haut + bordure
+
+
+@needs_tex
+def test_complementary_strand_is_right_and_simple_leaves_empty_boxes():
+    import fitz
+    pdf = tikzfig.compile_pdf(_tikz(r"\BrinADN{ATGCCGTA}")["tikz"], tikzfig.tectonic_binary())
+    with fitz.open(stream=pdf, filetype="pdf") as doc:
+        words = [(w[1], w[4]) for w in doc[0].get_text("words")]
+    rows = {}
+    for y, ch in words:
+        rows.setdefault(round(y), []).append(ch)
+    top, bottom = sorted(rows)
+    assert "".join(rows[top]) == "ATGCCGTA" and "".join(rows[bottom]) == "TACGGCAT"
+    pdf = tikzfig.compile_pdf(_tikz(r"\BrinADN[simple]{ATGC}")["tikz"], tikzfig.tectonic_binary())
+    with fitz.open(stream=pdf, filetype="pdf") as doc:
+        assert doc[0].get_text().split() == list("ATGC")
+
+
+@needs_tex
+def test_punnett_square_fills_its_cells():
+    import fitz
+    pdf = tikzfig.compile_pdf(_tikz(r"\Echiquier{A,a}{A,a}")["tikz"], tikzfig.tectonic_binary())
+    with fitz.open(stream=pdf, filetype="pdf") as doc:
+        assert sorted(doc[0].get_text().split()) == sorted(["A", "a", "A", "a", "AA", "Aa", "Aa", "aa"])
+
+
+@needs_tex
+def test_error_line_stays_the_authors_with_kits():
+    body = _tikz("\\Calculatrice{1}{2}\n\\draw (0,0) -- (1,0);\n\\Ptt{(0,0)}{A}{above}")["tikz"]
+    assert tikzfig.extensions_for(body) == ["kn-supports.tex"]
+    with pytest.raises(FigureSpecError, match=r"ligne 4 : .*Undefined control sequence"):
+        tikzfig.compile_pdf(body, tikzfig.tectonic_binary())
+    body = _tikz("\\Becher{(0,0)}{0.5}{}\n\\Pt{(0,0)}{A}{above}\n\\Ptt{(0,0)}{A}{above}")["tikz"]
+    assert len(tikzfig.extensions_for(body)) == 1
+    with pytest.raises(FigureSpecError, match=r"ligne 4 : .*Undefined control sequence"):
+        tikzfig.compile_pdf(body, tikzfig.tectonic_binary())

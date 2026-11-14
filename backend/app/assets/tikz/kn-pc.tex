@@ -1,0 +1,94 @@
+% Kit « physique-chimie » : circuits (circuitikz européen), formules (chemfig, mhchem),
+% verrerie et mécanique. Chargé seulement par les figures qui s'en servent.
+% Les dimensions des macros sont en cm réels ; garde l'unité de la figure à 1 cm.
+\usepackage[european]{circuitikz}
+\usepackage{chemfig}
+\usepackage[version=4]{mhchem}
+% fils et composants à 0,6 pt, comme `trait`
+\tikzset{every picture/.append style={line width=0.6pt}}
+\ctikzset{bipoles/thickness=1}
+\tikzset{
+ liquide/.style={fill=repA!25,draw=none},
+ verre/.style={trait,line cap=round,line join=round},
+ graduation/.style={line width=0.4pt,draw=ink},
+}
+
+% Chaque pièce de verrerie se pose par son point bas, au centre : \Becher{(x,y)}{niveau 0..1}{étiquette}
+% L'étiquette (facultative : {}) se place sous la pièce.
+\newcommand{\knEtiq}[1]{\ifstrempty{#1}{}{\node[petit,below=2pt] at (0,0) {#1};}}
+
+% Bécher : 1,7 cm de large, 2 cm de haut
+\newcommand{\Becher}[3]{\begin{scope}[shift={#1},x=1cm,y=1cm]
+  \fill[liquide] (-0.85,0) rectangle (0.85,#2*1.8);
+  \draw[trait] (-0.85,0) -- (0.85,0);
+  \draw[verre] (-0.95,2.05) -- (-0.85,1.95) -- (-0.85,0) -- (0.85,0) -- (0.85,1.95) -- (0.95,2.05);
+  \draw[graduation] (0.85,0.5) -- ++(-0.18,0) (0.85,1.0) -- ++(-0.28,0) (0.85,1.5) -- ++(-0.18,0);
+  \knEtiq{#3}\end{scope}}
+
+% Erlenmeyer : col de 0,6 cm, base de 1,8 cm, 2,3 cm de haut ; niveau = fraction du corps conique
+\newcommand{\Erlenmeyer}[3]{\begin{scope}[shift={#1},x=1cm,y=1cm]
+  \pgfmathsetmacro{\knh}{#2*1.5}\pgfmathsetmacro{\knx}{0.9-0.6*\knh/1.5}
+  \fill[liquide] (-0.9,0) -- (0.9,0) -- (\knx,\knh) -- (-\knx,\knh) -- cycle;
+  \draw[verre] (-0.4,2.3) -- (-0.3,2.2) -- (-0.3,1.5) -- (-0.9,0) -- (0.9,0) -- (0.3,1.5) -- (0.3,2.2) -- (0.4,2.3);
+  \knEtiq{#3}\end{scope}}
+
+% Éprouvette graduée : 0,7 cm de large, 3,2 cm de haut, pied évasé
+\newcommand{\Eprouvette}[3]{\begin{scope}[shift={#1},x=1cm,y=1cm]
+  \fill[liquide] (-0.3,0.18) rectangle (0.3,0.18+#2*2.9);
+  \filldraw[verre,fill=fillA] (-0.65,0) -- (0.65,0) -- (0.65,0.07) -- (0.3,0.18) -- (-0.3,0.18) -- (-0.65,0.07) -- cycle;
+  \fill[liquide] (-0.3,0.18) rectangle (0.3,0.18+#2*2.9);
+  \draw[verre] (-0.4,3.2) -- (-0.3,3.1) -- (-0.3,0.18) (0.4,3.2) -- (0.3,3.1) -- (0.3,0.18);
+  \foreach \t in {1,...,9}{\draw[graduation] (0.3,0.18+0.3*\t) -- ++(-0.12,0);}
+  \foreach \t in {2,4,6,8}{\draw[graduation] (0.3,0.18+0.3*\t) -- ++(-0.22,0);}
+  \knEtiq{#3}\end{scope}}
+
+% Tube à essai : 0,6 cm de large, 2,2 cm de haut, fond arrondi
+\newcommand{\TubeEssai}[3]{\begin{scope}[shift={#1},x=1cm,y=1cm]
+  \ifdim#2pt>0pt
+    \pgfmathsetmacro{\knh}{0.3+#2*1.8}
+    \fill[liquide] (-0.3,0.3) arc (180:360:0.3) -- (0.3,\knh) -- (-0.3,\knh) -- cycle;
+  \fi
+  \draw[verre] (-0.38,2.2) -- (-0.3,2.15) -- (-0.3,0.3) arc (180:360:0.3) -- (0.3,2.15) -- (0.38,2.2);
+  \knEtiq{#3}\end{scope}}
+
+% Ballon à fond rond : sphère de 2 cm, col de 0,5 cm, 2,8 cm de haut
+\newcommand{\Ballon}[3]{\begin{scope}[shift={#1},x=1cm,y=1cm]
+  \begin{scope}\clip (-1.1,0) rectangle (1.1,#2*2);\fill[liquide] (0,1) circle (1);\end{scope}
+  \draw[verre] (-0.35,2.8) -- (-0.25,2.7) -- (-0.25,1.968) arc (104.48:435.52:1) -- (0.25,2.7) -- (0.35,2.8);
+  \knEtiq{#3}\end{scope}}
+
+% Burette graduée verticale à robinet : 0,4 cm de large, 3,9 cm de haut
+\newcommand{\Burette}[3]{\begin{scope}[shift={#1},x=1cm,y=1cm]
+  \fill[liquide] (-0.2,0.85) rectangle (0.2,0.85+#2*2.9);
+  \draw[verre] (-0.25,3.9) -- (-0.2,3.85) -- (-0.2,0.85) (0.25,3.9) -- (0.2,3.85) -- (0.2,0.85);
+  \draw[verre] (-0.2,0.85) -- (-0.07,0.6) -- (-0.04,0.18) -- (0,0) -- (0.04,0.18) -- (0.07,0.6) -- (0.2,0.85);
+  \filldraw[trait,fill=fillB] (-0.3,0.52) rectangle (0.3,0.62);
+  \filldraw[trait,fill=fillB] (-0.04,0.45) rectangle (0.04,0.69);
+  \foreach \t in {1,...,9}{\draw[graduation] (-0.2,0.85+0.3*\t) -- ++(0.1,0);}
+  \foreach \t in {2,4,6,8}{\draw[graduation] (-0.2,0.85+0.3*\t) -- ++(0.18,0);}
+  \knEtiq{#3}\end{scope}}
+
+% Support (potence) : socle de 2,2 cm, tige verticale de la hauteur donnée (en cm)
+\newcommand{\Support}[2]{\begin{scope}[shift={#1},x=1cm,y=1cm]
+  \filldraw[trait,fill=fillB] (-1.1,0) rectangle (1.1,0.15);
+  \filldraw[trait,fill=fillA] (-0.07,0.15) rectangle (0.07,#2);
+  \end{scope}}
+
+% ------------------------------------------------------------------ mécanique
+% \Force{(point)}{angle en degrés}{longueur en cm}{étiquette} : vecteur-force, couleur repD
+\newcommand{\Force}[4]{%
+  \draw[draw=repD,line width=1.1pt,-{Stealth[length=5pt,width=4pt]}] #1 -- ++(#2:#3 cm) coordinate (knft);
+  \node[etiq,text=repD] at ($(knft)+(#2:4.2mm)$) {#4};}
+
+% \PlanIncline{angle}{longueur de la pente en cm} : plan incliné, angle en bas à gauche
+\newcommand{\PlanIncline}[2]{%
+  \pgfmathsetmacro{\knpx}{#2*cos(#1)}\pgfmathsetmacro{\knpy}{#2*sin(#1)}
+  \coordinate (knpO) at (0,0); \coordinate (knpX) at (\knpx cm,0); \coordinate (knpT) at (\knpx cm,\knpy cm);
+  \filldraw[trait,aplat] (knpO) -- (knpX) -- (knpT) -- cycle;
+  \AngMark{knpX}{knpO}{knpT}{#1°}{1}
+  \AngDroit{knpT}{knpX}{knpO}}
+
+% \Solide{(x,y)}{étiquette} : bloc de 1,1 × 0,7 cm posé par le milieu de sa base
+\newcommand{\Solide}[2]{\begin{scope}[shift={#1},x=1cm,y=1cm]
+  \filldraw[trait,fill=fillB] (-0.55,0) rectangle (0.55,0.7);
+  \node[petit,font=\fontsize{9}{10}\selectfont] at (0,0.35) {#2};\end{scope}}

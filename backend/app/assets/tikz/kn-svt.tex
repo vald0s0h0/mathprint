@@ -1,0 +1,48 @@
+% Kit « SVT » : brins d'ADN, échiquier de croisement, légende numérotée de schéma.
+% Une couleur de la palette par base : A bleu, T orange, G vert, C violet.
+% test d'égalité développable (\ifstrequal ne l'est pas dans un \edef)
+\newcommand{\knEq}[4]{\ifnum\strcmp{#1}{#2}=0 #3\else#4\fi}
+\newcommand{\knBaseCol}[1]{\knEq{#1}{A}{repA}{\knEq{#1}{T}{repD}{\knEq{#1}{G}{repB}{repC}}}}
+\newcommand{\knComp}[1]{\knEq{#1}{A}{T}{\knEq{#1}{T}{A}{\knEq{#1}{G}{C}{G}}}}
+% liaisons hydrogène entre bases : 2 pour A-T, 3 pour C-G
+\newcommand{\knBonds}[1]{\knEq{#1}{A}{-0.06,0.06}{\knEq{#1}{T}{-0.06,0.06}{-0.1,0,0.1}}}
+% découpe « ATGC » en liste « A,T,G,C » (dans \knlist)
+\def\knSplitA#1{\ifx#1\relax\else\ifx\knlist\empty\xdef\knlist{#1}\else\xdef\knlist{\knlist,#1}\fi\expandafter\knSplitA\fi}
+\tikzset{case/.style={draw=ink,line width=0.6pt,minimum size=5mm,inner sep=0pt,font=\fontsize{9.5}{10}\selectfont\bfseries}}
+
+% \BrinADN{ATGCCGTA} : brin donné en haut, brin complémentaire (A-T, C-G) calculé en face.
+% \BrinADN[simple]{…} : le brin du bas est laissé en cases vides, à compléter.
+\newcommand{\BrinADN}[2][complet]{%
+  \let\knlist\empty \knSplitA#2\relax
+  \foreach \b [count=\i from 0] in \knlist {%
+    \edef\knc{\knBaseCol{\b}}\edef\knd{\knComp{\b}}\edef\kne{\knBaseCol{\knd}}%
+    \node[case,fill=\knc!30] at (0.56*\i,0.55) {\b};
+    \ifstrequal{#1}{simple}{%
+      \node[case,fill=white] at (0.56*\i,-0.55) {};
+      \draw[constr] (0.56*\i,0.3) -- (0.56*\i,-0.3);}{%
+      \node[case,fill=\kne!30] at (0.56*\i,-0.55) {\knd};
+      \edef\knbd{\knBonds{\b}}\foreach \o in \knbd{\draw[trait] (0.56*\i+\o,0.3) -- (0.56*\i+\o,-0.3);}}}}
+
+% \Echiquier{A,a}{A,a} : échiquier de croisement ; gamètes d'un parent en colonnes, de l'autre
+% en lignes ; allèles dominants (majuscules) d'abord, une paire d'allèles par gène (1 ou 2 gènes).
+\def\knSplitG#1#2#3\relax{\def\knGa{#1}\def\knGb{#2}}
+\def\knNone{\relax}
+\def\knPairA#1#2{\ifnum`#1=\uccode`#1 #1#2\else\ifnum`#2=\uccode`#2 #2#1\else#1#2\fi\fi}
+\newcommand{\knGeno}[2]{%
+  \expandafter\knSplitG#1\relax\relax \let\knP\knGa \let\knQ\knGb
+  \expandafter\knSplitG#2\relax\relax
+  \edef\knx{\noexpand\knPairA\knP\knGa}\knx
+  \ifx\knQ\knNone\else\edef\knx{\noexpand\knPairA\knQ\knGb}\knx\fi}
+\newcommand{\Echiquier}[2]{%
+  \foreach \g [count=\j] in {#1}{\node[case,minimum width=11mm,minimum height=7mm,fill=fillB] at (1.1*\j,0) {\g};}
+  \foreach \h [count=\i] in {#2}{%
+    \node[case,minimum width=11mm,minimum height=7mm,fill=fillB] at (0,-0.7*\i) {\h};
+    \foreach \g [count=\j] in {#1}{\node[case,minimum width=11mm,minimum height=7mm,fill=white,
+      font=\fontsize{9.5}{10}\selectfont] at (1.1*\j,-0.7*\i) {\knGeno{\g}{\h}};}}}
+
+% \Legende{(point)}{(position du numéro)}{numéro} : flèche fine vers le point du schéma,
+% terminée par un numéro cerclé
+\newcommand{\Legende}[3]{%
+  \node[draw=ink,line width=0.5pt,circle,fill=white,inner sep=0.9pt,minimum size=4mm,
+    font=\fontsize{8}{9}\selectfont\bfseries] (knleg) at #2 {#3};
+  \draw[line width=0.4pt,draw=ink,-{Stealth[length=2.6pt,width=2pt]}] (knleg) -- #1;}

@@ -1,0 +1,38 @@
+% Kit « histoire-géographie » : frise chronologique à l'échelle (9 cm au total).
+% \Frise fixe l'échelle ; \Evenement et \Periode calculent leur position d'après les années.
+\newcounter{knper}
+
+% \Frise{année début}{année fin}{pas} : axe gradué de 9 cm, les années au pas donné
+\newcommand{\Frise}[3]{%
+  \pgfmathsetmacro{\knFa}{#1}\pgfmathsetmacro{\knFb}{#2}
+  \pgfmathsetmacro{\knFx}{0.4}\pgfmathsetmacro{\knFk}{(8.2-0.4)/(#2-#1)}
+  \setcounter{knper}{0}
+  \pgfmathtruncatemacro{\knFs}{#1+#3}
+  \draw[axe] (0,0) -- (9,0);
+  \foreach \a in {#1,\knFs,...,#2}{\draw[trait] ({\knFx+(\a-#1)*\knFk},-2.5pt) -- ({\knFx+(\a-#1)*\knFk},2.5pt);
+    \node[petit,below=3pt] at ({\knFx+(\a-#1)*\knFk},0) {$\a$};}}
+
+% \Evenement[niveau]{année}{texte} : repère sur l'axe, texte au-dessus (niveau 1, 2… pour
+% éloigner deux textes voisins)
+\newcommand{\Evenement}[3][0]{%
+  \pgfmathsetmacro{\knEx}{\knFx+(#2-\knFa)*\knFk}
+  \pgfmathsetmacro{\knEh}{0.5+0.95*#1}
+  \draw[trait] (\knEx,0) -- (\knEx,\knEh);
+  \filldraw[fill=accent,draw=accent] (\knEx,0) circle (1.3pt);
+  \ifdim\knEx pt<1.3pt
+    \node[petit,anchor=south west,inner sep=1.5pt,text width=2.3cm,align=left] at (\knEx-0.02,\knEh) {#3};
+  \else\ifdim\knEx pt>7.7pt
+    \node[petit,anchor=south east,inner sep=1.5pt,text width=2.3cm,align=right] at (\knEx+0.02,\knEh) {#3};
+  \else
+    \node[petit,anchor=south,inner sep=1.5pt,text width=2.3cm,align=center] at (\knEx,\knEh) {#3};
+  \fi\fi}
+
+% \Periode[rang]{début}{fin}{texte} : bande colorée sous l'axe ; une couleur par appel ;
+% rang 1, 2… pour empiler des périodes qui se chevauchent
+\newcommand{\Periode}[4][0]{%
+  \stepcounter{knper}%
+  \pgfmathsetmacro{\knPa}{\knFx+(#2-\knFa)*\knFk}\pgfmathsetmacro{\knPb}{\knFx+(#3-\knFa)*\knFk}
+  \pgfmathsetmacro{\knPy}{-0.95-0.55*#1}
+  \ifcase\value{knper}\or\def\knpc{repA}\or\def\knpc{repD}\or\def\knpc{repB}\or\def\knpc{repC}\or\def\knpc{repE}\else\def\knpc{repA}\fi
+  \filldraw[draw=\knpc!75!ink,fill=\knpc!25,line width=0.6pt] (\knPa,\knPy) rectangle (\knPb,\knPy+0.45);
+  \node[petit,font=\fontsize{8}{9}\selectfont,inner sep=0pt] at ({(\knPa+\knPb)/2},\knPy+0.225) {#4};}

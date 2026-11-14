@@ -404,6 +404,123 @@ Courbe dans un repère (pgfplots) :
 `check` compile chaque figure et renvoie l'erreur avec son numéro de ligne (« tikz : ligne 4 : Undefined control sequence »). Il refuse aussi une figure trop grande ou un réglage hors charte. Regarde la carte rendue : aucun nom ni aucune valeur ne doit chevaucher un trait.
 
 
+### Kits par matière
+
+Un kit est chargé **seulement** si ta figure emploie une de ses macros (la clé et le temps de compilation des autres figures ne changent pas). Les palettes, styles et polices sont ceux de la charte ; les interdits de `check` valent pour ton dessin, pas pour les kits. Les dimensions des macros de verrerie et de mécanique sont en cm réels : garde l'unité de la figure à 1 cm.
+
+**Supports imprimés** (`kn-supports.tex`)
+
+| Macro | Effet |
+|---|---|
+| `\Calculatrice{haut}{bas}` | écran de calculatrice (4,6 cm), police à chasse fixe, ligne du bas à droite : `2,9999999`, `1.5E-4` |
+| `\Ticket{titre}{Riz 5 kg/3 500,Huile 1 L/1 200}{4 700 F}` | ticket de caisse de 4,2 cm : une ligne `libellé/prix` par article (séparées par des virgules, pas de virgule dans un libellé), TOTAL en bas |
+| `\Copie[Awa]{3x + 2 = 11\\3x = 9}` | feuille d'élève de 6 cm, lignes de cahier, « Copie de Awa » ; texte manuscrit violet foncé, qui n'est ni le noir de l'imprimé ni le bleu de l'élève. Écris les calculs en texte simple : un `$…$` reprend la police mathématique |
+| `\Bulle{texte}` | bulle de message à pointe, 4,4 cm de texte au plus ; se pose en `(0,0)` |
+| `\Mascotte[x,y]{kiro}{doute}` | personnage de la planche, 14 mm de haut ; refusé tant que la planche n'est pas fournie ou si le personnage ou la pose n'y figure pas |
+
+```latex
+\begin{tikzpicture}
+\Ticket{Marché de Cocody}{Riz 5 kg/3 500,Huile 1 L/1 200,Sucre 2 kg/1 600}{6 300 F}
+\begin{scope}[yshift=-5.1cm]
+\Calculatrice{6 300 ÷ 3 =}{2 100}
+\end{scope}
+\end{tikzpicture}
+```
+
+**Physique-chimie** (`kn-pc.tex`) : charge circuitikz (symboles européens), chemfig et mhchem 4. Un kit se déclenche dès qu'une figure contient `to[` (composant de circuit), `\ce`, `\chemfig` ou une macro ci-dessous. Fils et composants sont à 0,6 pt comme `trait`.
+
+| Macro | Effet |
+|---|---|
+| `\Becher{(x,y)}{0.6}{étiquette}` | bécher posé par son point bas au centre ; niveau de liquide de 0 à 1 ; étiquette facultative (`{}`), placée dessous |
+| `\Erlenmeyer`, `\Eprouvette`, `\TubeEssai`, `\Ballon` | mêmes arguments (point, niveau, étiquette) |
+| `\Burette{(x,y)}{0.7}{étiquette}` | burette verticale graduée à robinet ; son point bas est la pointe |
+| `\Support{(x,y)}{6}` | potence : socle de 2,2 cm au point donné, tige de la hauteur donnée (en cm) |
+| `\Force{(point)}{angle}{longueur}{$\vec{P}$}` | vecteur-force `repD`, angle en degrés, longueur en cm, étiquette au bout |
+| `\PlanIncline{30}{5}` | plan incliné (angle en bas à gauche, longueur de la pente en cm) |
+| `\Solide{(x,y)}{étiquette}` | bloc de 1,1 × 0,7 cm posé par le milieu de sa base ; étiquette vide `{}` si une force part de son centre ; sur une pente, dans `\begin{scope}[rotate=30]` |
+| `\draw (0,0) to[battery1,l=$E$] (0,2) to[R,l=$R$] (3,2) to[lamp] (3,0) -- (0,0);` | circuit (composants de circuitikz) |
+| `\ce{H2O}`, `\chemfig{H-C(-[2]H)(-[6]H)-O-H}` | formules et schémas de molécules. La flèche `->` de `\ce` est dessinée avec des tirets qui se recouvrent : le contrôle géométrique la signale à tort |
+
+```latex
+\begin{tikzpicture}
+\Support{(2.2,0)}{6.6}
+\draw[trait] (0,5.4) -- (2.2,5.4);
+\Burette{(0,2.6)}{0.7}{}
+\Becher{(0,0)}{0.4}{\ce{HO-}}
+\end{tikzpicture}
+```
+
+Circuit :
+
+```latex
+\begin{tikzpicture}
+\draw (0,0) to[battery1,l=$E$] (0,2) to[R,l=$R$] (3,2) to[lamp] (3,0) -- (0,0);
+\end{tikzpicture}
+```
+
+Mécanique :
+
+```latex
+\begin{tikzpicture}
+\PlanIncline{30}{5}
+\begin{scope}[rotate=30]
+\Solide{(3,0)}{}
+\Force{(3,0.7)}{90}{1.3}{$\vec{R}$}
+\end{scope}
+\Force{(2.42,1.8)}{-90}{1.1}{$\vec{P}$}
+\end{tikzpicture}
+```
+
+**SVT** (`kn-svt.tex`)
+
+| Macro | Effet |
+|---|---|
+| `\BrinADN{ATGCCGTA}` | deux brins face à face, le complémentaire calculé (A-T, C-G), une case et une couleur par base, liaisons à 2 ou 3 traits |
+| `\BrinADN[simple]{ATGCCGTA}` | un seul brin, cases vides en face à compléter |
+| `\Echiquier{A,a}{A,a}` | échiquier de croisement ; gamètes en en-têtes (colonnes puis lignes), génotypes calculés, allèle dominant en premier ; un ou deux gènes (`AB,Ab,aB,ab`) |
+| `\Legende{(point)}{(numéro)}{1}` | flèche fine vers le point d'un schéma, terminée par un numéro cerclé |
+
+```latex
+\begin{tikzpicture}
+\BrinADN[simple]{ATGCCGTA}
+\begin{scope}[yshift=-3.6cm]
+\Echiquier{A,a}{A,a}
+\end{scope}
+\end{tikzpicture}
+```
+
+Légendes d'un schéma :
+
+```latex
+\begin{tikzpicture}
+\draw[trait,aplat] (0,0) ellipse (1.5 and 0.9);
+\draw[trait,aplat] (0.3,0.1) circle (0.4);
+\Legende{(0.3,0.1)}{(2.2,1.2)}{1}
+\Legende{(-1.2,-0.3)}{(-2,-1.2)}{2}
+\end{tikzpicture}
+```
+
+**Histoire-géographie** (`kn-hg.tex`)
+
+| Macro | Effet |
+|---|---|
+| `\Frise{1789}{1815}{5}` | axe gradué de 9 cm à l'échelle, une graduation tous les 5 ans (choisis une fin multiple du pas, depuis le début) ; à écrire en premier |
+| `\Evenement{1789}{texte}` | repère sur l'axe et texte au-dessus ; `\Evenement[1]{…}{…}` éloigne le texte (niveau 1, 2…) pour deux dates voisines |
+| `\Periode{1789}{1799}{texte}` | bande colorée sous l'axe, une couleur par appel ; `\Periode[1]{…}{…}{…}` l'empile sous la précédente |
+
+```latex
+\begin{tikzpicture}
+\Frise{1789}{1819}{5}
+\Evenement{1789}{Prise de la Bastille}
+\Evenement[1]{1799}{Coup d'État de Bonaparte}
+\Evenement{1804}{Sacre de Napoléon}
+\Evenement{1815}{Waterloo}
+\Periode{1789}{1799}{Révolution}
+\Periode{1799}{1815}{Consulat et Empire}
+\end{tikzpicture}
+```
+
+
 ## Contraintes de rendu et de reprise
 
 - `rework_summary` : résumé concret de ce qui a été corrigé ; apparaît dans l’historique admin après une reprise.
