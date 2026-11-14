@@ -16,6 +16,9 @@ import { CYCLES, useAppState } from '../state/AppState'
 import { masteryColor } from '../utils/mastery'
 import { mathPlain } from '../utils/mathPlain'
 import MathText, { MathAnswer } from '../components/MathText'
+import {
+  ClassFamilyReportsModal, ClassReadinessModal, StudentFamilyReport, StudentReadinessPanel,
+} from '../components/StudentFollowup'
 
 type Cls = ClassRow
 type StudentRow = {
@@ -92,6 +95,8 @@ export default function Students() {
   const { cycle, matches, subject } = useAppState()
 
   const [wizardOpen, setWizardOpen] = useState(false)
+  const [readinessOpen, setReadinessOpen] = useState(false)
+  const [familyOpen, setFamilyOpen] = useState(false)
   const [editingClass, setEditingClass] = useState<ClassRow | null>(null)
   const [params] = useSearchParams()
   function openWizard() { setEditingClass(null); setWizardOpen(true) }
@@ -213,9 +218,17 @@ export default function Students() {
             <Stack gap="xs">
               <Group justify="space-between">
                 <Group><Title order={4}>{selClass.name}</Title><Button size="compact-xs" variant="subtle" onClick={() => { setEditingClass(selClass); setWizardOpen(true) }}>Modifier la classe</Button></Group>
-                <Button size="xs" variant="light" onClick={() => setBatchOpen(true)}>
-                  Ajouter des élèves
-                </Button>
+                <Group gap="xs">
+                  <Button size="xs" variant="subtle" onClick={() => setReadinessOpen(true)}>
+                    Prêt pour l'examen
+                  </Button>
+                  <Button size="xs" variant="subtle" onClick={() => setFamilyOpen(true)}>
+                    Bilans famille
+                  </Button>
+                  <Button size="xs" variant="light" onClick={() => setBatchOpen(true)}>
+                    Ajouter des élèves
+                  </Button>
+                </Group>
               </Group>
               <Table highlightOnHover verticalSpacing={6}>
                 <Table.Thead>
@@ -343,6 +356,8 @@ export default function Students() {
                   <Tabs.Tab value="historique">
                     Historique {history.length > 0 && `(${history.length})`}
                   </Tabs.Tab>
+                  <Tabs.Tab value="examen">Examen</Tabs.Tab>
+                  <Tabs.Tab value="famille">Bilan famille</Tabs.Tab>
                   <Tabs.Tab value="rapports">Comptes rendus</Tabs.Tab>
                 </Tabs.List>
                 <Tabs.Panel value="comp" pt="sm">
@@ -476,6 +491,12 @@ export default function Students() {
                     </ScrollArea.Autosize>
                   )}
                 </Tabs.Panel>
+                <Tabs.Panel value="examen" pt="sm">
+                  <StudentReadinessPanel studentId={detail.id} subject={subject} />
+                </Tabs.Panel>
+                <Tabs.Panel value="famille" pt="sm">
+                  <StudentFamilyReport studentId={detail.id} subject={subject} />
+                </Tabs.Panel>
                 <Tabs.Panel value="rapports" pt="sm">
                   <Button size="xs" onClick={makeReport} mb="sm">Générer un compte rendu</Button>
                   {reports.map((r) => (
@@ -506,6 +527,10 @@ export default function Students() {
         )}
       </Grid>
 
+      <ClassReadinessModal classId={selClass?.id ?? null} subject={subject} opened={readinessOpen}
+        onClose={() => setReadinessOpen(false)} />
+      <ClassFamilyReportsModal classId={selClass?.id ?? null} subject={subject} opened={familyOpen}
+        onClose={() => setFamilyOpen(false)} />
       <ClassEditor opened={wizardOpen} onClose={() => setWizardOpen(false)} onSaved={refreshClasses} editing={editingClass} />
 
       <Modal opened={batchOpen} onClose={() => setBatchOpen(false)}

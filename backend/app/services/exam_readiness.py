@@ -152,6 +152,7 @@ PLAN_MAX_LINES = 24
 
 
 def revision_plan_pdf(data: dict) -> bytes:
+    from reportlab.lib.units import mm
     from . import followup_pdf as fp
     exam = data.get("exam")
 

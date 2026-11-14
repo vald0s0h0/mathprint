@@ -3,13 +3,14 @@ import {
   Text, Title, Tooltip,
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
-import { Copy } from 'lucide-react'
+import { Copy, Users } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../api'
 import CompactClassSelector, {
   sortClassChoices, type ClassChoice,
 } from '../components/CompactClassSelector'
 import { useAppState } from '../state/AppState'
+import { NeedGroupsModal } from '../components/StudentFollowup'
 
 type GradeValue = {
   note: number | null; note_raw: number | null; note_base: number
@@ -49,6 +50,7 @@ export default function Grades() {
   const [view, setView] = useState<GradeView>('all')
   const [gradebook, setGradebook] = useState<Gradebook | null>(null)
   const [loading, setLoading] = useState(false)
+  const [needGroups, setNeedGroups] = useState<string | null>(null)
   const { cycle, matches, subject } = useAppState()
 
   useEffect(() => {
@@ -176,7 +178,7 @@ export default function Grades() {
                               <Tooltip label={`${training ? 'Entraînement' : 'Note'} /${assessment.note_base}`}>
                                 <Box style={{
                                   writingMode: 'vertical-rl', transform: 'rotate(180deg)',
-                                  maxHeight: 145, overflow: 'hidden', whiteSpace: 'nowrap',
+                                  maxHeight: 120, overflow: 'hidden', whiteSpace: 'nowrap',
                                 }}>
                                   <Text size="xs" fw={650}>{assessment.title}</Text>
                                 </Box>
@@ -187,6 +189,13 @@ export default function Grades() {
                                   aria-label={`Copier les notes de ${assessment.title}`}
                                   onClick={() => copyAssessment(assessment.id)}>
                                   <Copy size={14} />
+                                </ActionIcon>
+                              </Tooltip>
+                              <Tooltip label="Groupes de besoin et erreurs à reprendre au tableau">
+                                <ActionIcon size="sm" variant="subtle" color="gray"
+                                  aria-label={`Groupes de besoin de ${assessment.title}`}
+                                  onClick={() => setNeedGroups(assessment.id)}>
+                                  <Users size={14} />
                                 </ActionIcon>
                               </Tooltip>
                               <Tooltip label="Notes saisies dans Pronote">
@@ -267,6 +276,7 @@ export default function Grades() {
           )}
         </Grid.Col>
       </Grid>
+      <NeedGroupsModal assessmentId={needGroups} onClose={() => setNeedGroups(null)} />
     </Stack>
   )
 }

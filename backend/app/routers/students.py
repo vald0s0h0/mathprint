@@ -1,5 +1,5 @@
 """Écran Élève (§9.4) : synthèse, compétences, oubli, niveau, rapports."""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -12,7 +12,7 @@ from ..models import (
 from ..services.forgetting import (
     compute_student_level, due_competencies, priority, recall_probability, strength,
 )
-from ..services import providers
+from ..services import exam_readiness, family_report, providers
 from ..services.education import require_student_subject
 
 router = APIRouter(prefix="/api/students", tags=["students"],
@@ -176,6 +176,7 @@ def recompute_level(student_id: str, db: Session = Depends(get_db), subject_id: 
 @router.get("/{student_id}/reports")
 def list_reports(student_id: str, db: Session = Depends(get_db), subject_id: str = "math"):
     rows = (db.query(StudentReport).filter_by(student_id=student_id, subject_id=subject_id)
+            .filter(StudentReport.prompt_version != family_report.FAMILY_VERSION)
             .order_by(StudentReport.created_at.desc()).all())
     return [{"id": r.id, "period": r.period, "content": r.content,
              "status": r.status, "created_at": str(r.created_at)} for r in rows]
@@ -227,3 +228,168 @@ def update_report(report_id: str, body: ReportUpdateIn, db: Session = Depends(ge
             r.approved_by = user.id
     db.commit()
     return {"ok": True}
+
+
+# ------------------------------------------------- prêt pour l'examen (élève)
+
+def _pdf(content: bytes, name: str) -> Response:
+    return Response(content, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+def _student(db: Session, student_id: str, subject_id: str) -> Student:
+    s = db.get(Student, student_id)
+    if not s:
+        raise HTTPException(404)
+    require_student_subject(db, s, subject_id)
+    return s
+
+
+@router.get("/{student_id}/exam-readiness")
+def student_exam_readiness(student_id: str, db: Session = Depends(get_db), subject_id: str = "math"):
+    _student(db, student_id, subject_id)
+    return exam_readiness.student_readiness(db, student_id, subject_id)
+
+
+@router.get("/{student_id}/revision-plan.pdf")
+def revision_plan(student_id: str, db: Session = Depends(get_db), subject_id: str = "math"):
+    _student(db, student_id, subject_id)
+    data = exam_readiness.student_readiness(db, student_id, subject_id)
+    return _pdf(exam_readiness.revision_plan_pdf(data), "plan-de-revision.pdf")
+
+
+# ------------------------------------------------- bilan pour la famille
+
+def _period(period: str | None) -> str:
+    period = period or family_report.current_period()
+    try:
+        family_report.period_bounds(period)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return period
+
+
+def _require_class_subject(db: Session, class_id: str, subject_id: str) -> SchoolClass:
+    from ..models import ClassTeaching, Subject
+    cls = db.get(SchoolClass, class_id)
+    if not cls or not db.get(Subject, subject_id):
+        raise HTTPException(404, "Classe ou matière inconnue")
+    if db.info.get("teacher_scope") and not db.query(ClassTeaching).filter_by(
+            class_id=class_id, subject_id=subject_id).first():
+        raise HTTPException(404, "Enseignement inaccessible")
+    return cls
+
+
+@router.get("/{student_id}/family-report")
+def get_family_report(student_id: str, period: str | None = None, db: Session = Depends(get_db),
+                      subject_id: str = "math"):
+    """Le bilan enregistré de la période s'il existe, sinon un aperçu calculé
+    (rien n'est écrit)."""
+    _student(db, student_id, subject_id)
+    period = _period(period)
+    report = family_report.find(db, student_id, subject_id, period)
+    if report:
+        return family_report.read(report)
+    return {**family_report.compute(db, student_id, subject_id, period), "report_id": None, "status": None}
+
+
+@router.post("/{student_id}/family-report")
+def prepare_family_report(student_id: str, period: str | None = None, db: Session = Depends(get_db),
+                          subject_id: str = "math"):
+    _student(db, student_id, subject_id)
+    try:
+        report = family_report.prepare(db, student_id, subject_id, _period(period))
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    db.commit()
+    return family_report.read(report)
+
+
+class FamilyReportIn(BaseModel):
+    to_work_label: str | None = None
+    gesture: str | None = None
+    teacher_note: str | None = None
+    status: str | None = None
+
+
+def _family_row(db: Session, report_id: str) -> StudentReport:
+    r = db.get(StudentReport, report_id)
+    if not r or r.prompt_version != family_report.FAMILY_VERSION:
+        raise HTTPException(404)
+    return r
+
+
+@router.patch("/family-reports/{report_id}")
+def update_family_report(report_id: str, body: FamilyReportIn, db: Session = Depends(get_db),
+                         user: User = Depends(current_user)):
+    r = _family_row(db, report_id)
+    edits = body.model_dump(exclude={"status"}, exclude_none=True)
+    if edits:
+        if r.status != "draft":
+            raise HTTPException(409, "Bilan validé : repassez-le en brouillon pour le modifier")
+        family_report.edit(r, edits)
+    if body.status in ("draft", "approved"):
+        r.status = body.status
+        r.approved_by = user.id if body.status == "approved" else None
+    db.commit()
+    return family_report.read(r)
+
+
+@router.get("/family-reports/{report_id}/sheet.pdf")
+def family_report_sheet(report_id: str, db: Session = Depends(get_db)):
+    r = _family_row(db, report_id)
+    if r.status == "draft":
+        raise HTTPException(409, "Le bilan doit être validé avant impression")
+    content = family_report.pdf([family_report.read(r)])
+    r.status = "exported"
+    db.commit()
+    return _pdf(content, "bilan-famille.pdf")
+
+
+def _class_reports(db: Session, class_id: str, subject_id: str, period: str):
+    students = (db.query(Student).filter_by(class_id=class_id, active=True)
+                .order_by(Student.order_index, Student.id).all())
+    return [(s, family_report.find(db, s.id, subject_id, period)) for s in students]
+
+
+@router.get("/by-class/{class_id}/family-reports")
+def class_family_reports(class_id: str, period: str | None = None, db: Session = Depends(get_db),
+                         subject_id: str = "math"):
+    _require_class_subject(db, class_id, subject_id)
+    period = _period(period)
+    return {"period": period, "period_label": family_report.period_label(period),
+            "students": [{"id": s.id, "name": s.name, "report_id": r.id if r else None,
+                          "status": r.status if r else None}
+                         for s, r in _class_reports(db, class_id, subject_id, period)]}
+
+
+@router.post("/by-class/{class_id}/family-reports")
+def prepare_class_family_reports(class_id: str, period: str | None = None,
+                                 db: Session = Depends(get_db), subject_id: str = "math"):
+    """Prépare les brouillons manquants ou encore en brouillon ; ne touche jamais
+    un bilan déjà validé."""
+    _require_class_subject(db, class_id, subject_id)
+    period = _period(period)
+    prepared = 0
+    for s, r in _class_reports(db, class_id, subject_id, period):
+        if r is None or r.status == "draft":
+            family_report.prepare(db, s.id, subject_id, period)
+            prepared += 1
+    db.commit()
+    return {"prepared": prepared}
+
+
+@router.get("/by-class/{class_id}/family-reports.pdf")
+def class_family_reports_pdf(class_id: str, period: str | None = None,
+                             db: Session = Depends(get_db), subject_id: str = "math"):
+    """Un PDF, une page par élève, avec les seuls bilans validés."""
+    _require_class_subject(db, class_id, subject_id)
+    rows = [r for _s, r in _class_reports(db, class_id, subject_id, _period(period))
+            if r is not None and r.status in ("approved", "exported")]
+    if not rows:
+        raise HTTPException(409, "Aucun bilan validé pour cette période")
+    content = family_report.pdf([family_report.read(r) for r in rows])
+    for r in rows:
+        r.status = "exported"
+    db.commit()
+    return _pdf(content, "bilans-famille.pdf")

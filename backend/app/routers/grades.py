@@ -2,7 +2,7 @@
 from collections import defaultdict
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -12,7 +12,7 @@ from ..models import (
     Assessment, CompetencyEvidence, CompetencyStateHistory, Copy, CopyItemResult,
     CopyResult, SchoolClass, Student, StudentLevel,
 )
-from ..services import scoring
+from ..services import exam_readiness, need_groups, scoring
 
 router = APIRouter(prefix="/api/grades", tags=["grades"],
                    dependencies=[Depends(current_user)])
@@ -187,3 +187,45 @@ def class_gradebook(
         } for assessment in assessments],
         "values": values,
     }
+
+
+# ------------------------------------------------- groupes de besoin
+
+def _corrected(db: Session, assessment_id: str) -> Assessment:
+    assessment = db.get(Assessment, assessment_id)
+    if not assessment:
+        raise HTTPException(404, "Évaluation inconnue")
+    if not db.query(CopyResult).filter_by(assessment_id=assessment_id).first():
+        raise HTTPException(409, "Aucune copie corrigée pour ce devoir")
+    return assessment
+
+
+@router.get("/assessments/{assessment_id}/need-groups")
+def assessment_need_groups(assessment_id: str, db: Session = Depends(get_db)):
+    _corrected(db, assessment_id)
+    return need_groups.need_groups(db, assessment_id)
+
+
+@router.get("/assessments/{assessment_id}/need-groups/{index}/sheet.pdf")
+def need_group_sheet(assessment_id: str, index: int, db: Session = Depends(get_db)):
+    _corrected(db, assessment_id)
+    data = need_groups.need_groups(db, assessment_id)
+    group = next((g for g in data["groups"] if g["index"] == index), None)
+    if group is None:
+        raise HTTPException(404, "Groupe inconnu")
+    return Response(need_groups.group_sheet_pdf(data, group), media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="groupe-{index}.pdf"'})
+
+
+# ------------------------------------------------- prêt pour l'examen (classe)
+
+@router.get("/classes/{class_id}/exam-readiness")
+def class_exam_readiness(class_id: str, db: Session = Depends(get_db), subject_id: str = "math"):
+    from ..models import ClassTeaching
+    school_class = db.get(SchoolClass, class_id)
+    if not school_class:
+        raise HTTPException(404, "Classe inconnue")
+    if db.info.get("teacher_scope") and not db.query(ClassTeaching).filter_by(
+            class_id=class_id, subject_id=subject_id).first():
+        raise HTTPException(404, "Enseignement inaccessible")
+    return exam_readiness.class_readiness(db, class_id, subject_id)
