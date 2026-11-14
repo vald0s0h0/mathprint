@@ -12,6 +12,7 @@
     backend/.venv/bin/python agents/forge/run.py persist [RUN] [--replace] [--slots s03 s07]
     backend/.venv/bin/python agents/forge/run.py reprendre
     backend/.venv/bin/python agents/forge/run.py ecartes [fr-3e-A4]
+    backend/.venv/bin/python agents/forge/run.py fiche fr 3e C2 [--matiere svt] [--sources cours.md]
 
 RUN = identifiant ou dossier du run (défaut : le plus récent). Procédure :
 agents/forge/FORGE.md. Sorties courtes volontairement : ce texte entre dans le
@@ -300,6 +301,52 @@ def _cmd_trust(args, db):
     return 0
 
 
+def _read_sources(paths: list[str]) -> list[str]:
+    """Textes des sources (.md, .txt) ; un dossier est lu en entier. Un chemin relatif
+    se lit depuis le dossier de lancement, car ce script se place dans backend/."""
+    texts = []
+    for raw in paths or []:
+        path = Path(raw).expanduser()
+        if not path.is_absolute():
+            base = Path(os.environ.get("PWD") or _HERE.parents[1])
+            path = base / path if (base / path).exists() else _HERE.parents[1] / path
+        if not path.exists():
+            raise SystemExit(f"Source introuvable : {raw}")
+        files = sorted(path.rglob("*")) if path.is_dir() else [path]
+        for item in files:
+            if item.is_file() and item.suffix.lower() in (".md", ".txt", ".markdown"):
+                texts.append(item.read_text(encoding="utf-8", errors="replace"))
+            elif item == path:
+                print(f"Source ignorée (ni .md ni .txt) : {raw}")
+    return texts
+
+
+def _cmd_fiche(args, db):
+    """Contrôle par script de la fiche d'une leçon et de ses fiches-idées."""
+    import contexte
+    target = forge.resolve_target(db, args.programme, args.cycle, args.lecon, args.matiere, args.serie)
+    chapter = target["chapter"][0].chapter_code
+    fiche = forge.fiche_path(args.programme, args.cycle, chapter, args.matiere, args.serie)
+    if not fiche.exists():
+        print(f"FICHE ABSENTE : {fiche}")
+        return 1
+    codes = [forge.comp_code(c) for c in target["chapter"]]
+    sources = _read_sources(args.sources)
+    if args.matiere == forge.SUBJECT_DEFAULT and args.programme == "fr":
+        indigo, _ = forge.source_text(args.cycle, chapter)
+        if indigo:
+            sources.append(indigo)
+    problems = contexte.fiche_problems(fiche.read_text(encoding="utf-8"), codes, sources)
+    ideas = fiche.with_suffix(".idees.yaml")
+    if ideas.exists():
+        problems += contexte.idees_problems(ideas.read_text(encoding="utf-8"), codes, sources)
+    print(f"{fiche} ({', '.join(codes)}, {len(sources)} source(s))")
+    for problem in problems:
+        print(f"  {problem}")
+    print(f"{len(problems)} problème(s)." if problems else "Fiche conforme.")
+    return 1 if problems else 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="forge", description="Pipeline forge.")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -349,6 +396,13 @@ def main(argv=None) -> int:
     for option in ("programme", "cycle", "domaine", "matiere"):
         ecartes.add_argument("--" + option)
     ecartes.add_argument("--export", type=Path, help="Exporte un manifeste de reprise")
+    fiche = sub.add_parser("fiche", help="Contrôle la fiche d'une leçon (forge contexte).")
+    fiche.add_argument("programme", help="Programme, ex. fr")
+    fiche.add_argument("cycle", help="Niveau, ex. 3e")
+    fiche.add_argument("lecon", help="Leçon (C2) ou une de ses compétences")
+    fiche.add_argument("--serie", help="Série du lycée ivoirien : A, A1, A2, C, D")
+    fiche.add_argument("--matiere", default=forge.SUBJECT_DEFAULT)
+    fiche.add_argument("--sources", nargs="*", default=[], help="Sources texte ou Markdown")
     args = parser.parse_args(argv)
     db = SessionLocal()
     try:
@@ -356,7 +410,7 @@ def main(argv=None) -> int:
                 "render": _cmd_render, "goldfish": _cmd_goldfish, "persist": _cmd_persist,
                 "reprendre": _cmd_resume, "ecartes": _cmd_disliked,
                 "calendrier": _cmd_calendar, "epuisement": _cmd_exhaustion,
-                "confiance": _cmd_trust}[args.cmd](args, db) or 0
+                "confiance": _cmd_trust, "fiche": _cmd_fiche}[args.cmd](args, db) or 0
     finally:
         db.close()
 

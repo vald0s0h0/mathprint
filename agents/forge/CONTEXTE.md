@@ -96,6 +96,8 @@ Relis ta fiche comme si tu ne connaissais pas la leçon :
 - aucune phrase n'est reprise d'une source ;
 - la fiche fait 8 Ko au plus.
 
+Puis lance `backend/.venv/bin/python agents/forge/run.py fiche <programme> <niveau> <leçon> [--serie S] [--matiere M] [--sources <sources texte ou Markdown lues>]` et corrige la fiche (et les idées) jusqu'à « Fiche conforme ».
+
 ## Bilan
 
 Pour chaque leçon : fichiers écrits, nombre de faits, nombre d'idées, sources lues. Puis, sans rien adoucir :

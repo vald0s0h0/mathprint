@@ -671,6 +671,127 @@
      }
     ]
    }
+  },
+  {
+   "niveau": 2,
+   "pourquoi": "ERR : la copie contient une seule erreur réelle, et la question porte sur la ligne à corriger. Chaque proposition fausse est une autre erreur, calculée.",
+   "exercice": {
+    "archetype": "ERR",
+    "response_type": "qcm_single",
+    "statement": "Bintou calcule $A = 7 - 2 \\times (5 - 8)$. Elle écrit $A = 5 \\times (5 - 8) = -15$ : son résultat est faux.\nQuelle expression aurait-elle dû écrire juste après $A =$ ?",
+    "estimated_seconds": 75,
+    "micro_skill": "Repérer une erreur de priorité dans un calcul avec parenthèses et relatifs",
+    "family_id": "priorite-copie-erreur",
+    "figure": null,
+    "leak_keys": [
+     "valeur:13"
+    ],
+    "gives": [
+     "valeur:-15"
+    ],
+    "choices": [
+     {
+      "id": "a",
+      "text": "$7 - 2 \\times (-3)$",
+      "correct": true
+     },
+     {
+      "id": "b",
+      "text": "$5 \\times (-3)$",
+      "correct": false,
+      "calc": "(7-2)*(5-8)",
+      "error": "math.calc.priorite_operations",
+      "feedback": "C'est la ligne de Bintou : elle a soustrait avant de multiplier. Calcule d'abord la parenthèse."
+     },
+     {
+      "id": "c",
+      "text": "$7 - 2 \\times 3$",
+      "correct": false,
+      "calc": "7-2*(8-5)",
+      "error": "math.calc.signe",
+      "feedback": "Tu as calculé $8 - 5$ : or $5 - 8 = -3$, car on enlève plus qu'on n'a."
+     },
+     {
+      "id": "d",
+      "text": "$7 - 2 \\times 5 - 8$",
+      "correct": false,
+      "calc": "7-2*5-8",
+      "error": "math.calc.parentheses",
+      "feedback": "Tu as enlevé les parenthèses : $(5 - 8)$ se calcule d'abord, comme un seul nombre."
+     }
+    ],
+    "answer_expr": "7-2*(5-8)",
+    "correct_feedback": "Oui : la parenthèse d'abord, puis la multiplication, et $A = 13$.",
+    "blank_feedback": "Calcule d'abord la parenthèse, puis la multiplication, avant la soustraction.",
+    "fallback_feedback": "Ordre des calculs : parenthèses, puis multiplications, puis additions et soustractions.",
+    "guides": [
+     {
+      "text": "Cherche ce qu'il faut calculer en premier dans l'expression de départ.",
+      "position": "apres_question"
+     }
+    ]
+   }
+  },
+  {
+   "niveau": 2,
+   "pourquoi": "QUI : deux résultats plausibles, l'erreur n'est pas annoncée. Chaque proposition donne la valeur qui la justifie, et chaque valeur fausse vient d'une erreur réelle, calculée.",
+   "exercice": {
+    "archetype": "QUI",
+    "response_type": "qcm_single",
+    "statement": "Pour $x = -3$, Koffi et Aya calculent $B = 2x^2$. Koffi trouve $36$ et Aya trouve $18$.\nQui a raison ?",
+    "estimated_seconds": 70,
+    "micro_skill": "Substituer une valeur négative dans une expression avec un carré",
+    "family_id": "substitution-carre-qui",
+    "figure": null,
+    "leak_keys": [
+     "valeur:18"
+    ],
+    "gives": [
+     "valeur:36",
+     "valeur:18"
+    ],
+    "choices": [
+     {
+      "id": "a",
+      "text": "Aya, car $B = 18$",
+      "correct": true
+     },
+     {
+      "id": "b",
+      "text": "Koffi, car $B = 36$",
+      "correct": false,
+      "calc": "(2*(-3))**2",
+      "error": "math.calc.priorite_operations",
+      "feedback": "Le carré ne porte que sur $x$ : calcule $(-3) \\times (-3)$, puis multiplie par $2$."
+     },
+     {
+      "id": "c",
+      "text": "Aucun des deux, car $B = -18$",
+      "correct": false,
+      "calc": "-2*3**2",
+      "error": "math.lit.substitution",
+      "feedback": "Remplace $x$ par $(-3)$ avec ses parenthèses : un carré n'est jamais négatif."
+     },
+     {
+      "id": "d",
+      "text": "Aucun des deux, car $B = -12$",
+      "correct": false,
+      "calc": "2*(-3)*2",
+      "error": "math.calc.puissance_produit",
+      "feedback": "Le carré de $x$ est $x \\times x$, et non $x \\times 2$."
+     }
+    ],
+    "answer_expr": "2*(-3)**2",
+    "correct_feedback": "Oui : $(-3) \\times (-3) = 9$, puis $2 \\times 9 = 18$.",
+    "blank_feedback": "Remplace $x$ par $(-3)$, puis calcule le carré avant de multiplier.",
+    "fallback_feedback": "Calcule le carré avant la multiplication.",
+    "guides": [
+     {
+      "text": "Écris l'expression en remplaçant $x$ par $(-3)$, avec ses parenthèses.",
+      "position": "apres_question"
+     }
+    ]
+   }
   }
  ]
 }
