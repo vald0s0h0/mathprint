@@ -11,13 +11,14 @@ calculée sans LLM au moment de composer le sujet, sur l'historique réel
 """
 from sqlalchemy.orm import Session
 
+from ..config import settings
 from ..models import Competency, CompetencyEvidence, CompetencyStateHistory, Copy, CopyItem, Student
 from . import forgetting, providers
 from .runtime_settings import appreciation_synthesis_enabled
 
 MAX_COMPETENCIES = 3
 
-_SYSTEM = (
+SYSTEM = (
     "Tu produis, pour une copie de mathématiques corrigée, un JSON strict à un "
     "seul champ. \"synthesis\" : une phrase courte et encourageante (1 "
     "phrase, 25 mots maximum), fondée uniquement sur les progrès de "
@@ -71,23 +72,30 @@ def compute_competency_progress(db: Session, assessment_id: str, student_id: str
     return out[:MAX_COMPETENCIES]
 
 
+def synthesis_wanted(db: Session, progress: list[dict], due: list[dict]) -> bool:
+    """Une phrase de synthèse est-elle à rédiger ? Désactivée par défaut
+    (Paramètres > Pédagogie) : la partie déterministe de l'appréciation
+    (progrès de compétences) reste affichée sans elle."""
+    return appreciation_synthesis_enabled(db) and bool(progress or due)
+
+
+def synthesis_payload(student: Student, progress: list[dict], due: list[dict]) -> dict:
+    """Ce que voit le rédacteur : le pseudonyme, jamais le nom (RM-010). Les
+    compétences dues permettent d'encourager sur ce qui vient."""
+    return {"pseudonym": student.llm_pseudonym, "progress": progress,
+            "due_competencies": due[:5]}
+
+
 def _build_synthesis(db: Session, student: Student, progress: list[dict],
                      due: list[dict]) -> str:
     """Un seul appel Claude Haiku (JSON) : la phrase de la zone Appréciation.
-
-    Les compétences dues restent transmises : ce sont elles qui permettent
-    d'encourager sur ce qui vient, pas seulement sur ce qui est acquis.
-    Désactivée par défaut (Paramètres > Pédagogie) : la partie déterministe
-    de l'appréciation (progrès de compétences) reste affichée sans elle."""
-    if not appreciation_synthesis_enabled(db):
+    Chemin api seulement : en mode commande, la phrase est rédigée plus tard
+    par `vague apprecier` (cf. build_appreciation)."""
+    if not synthesis_wanted(db, progress, due):
         return ""
-    if not progress and not due:
-        return ""
-    payload = {"pseudonym": student.llm_pseudonym, "progress": progress,
-              "due_competencies": due[:5]}
     try:
         result = providers.claude_json(
-            db, "appreciation_synthesis", _SYSTEM, payload,
+            db, "appreciation_synthesis", SYSTEM, synthesis_payload(student, progress, due),
             max_tokens=250, correlation_id=student.llm_pseudonym)
     except Exception:
         return ""
@@ -95,8 +103,13 @@ def _build_synthesis(db: Session, student: Student, progress: list[dict],
 
 
 def build_appreciation(db: Session, assessment_id: str, student: Student) -> dict:
-    """Payload complet {progress, synthesis} pour l'overlay et le cache Copy."""
+    """Payload complet {progress, synthesis} pour l'overlay et le cache Copy.
+    En mode commande, `synthesis_pending` marque la phrase à rédiger par la
+    commande vague ; l'overlay part sans elle et sera régénéré ensuite."""
     progress = compute_competency_progress(db, assessment_id, student.id)
     due = forgetting.due_competencies(db, student.id)
+    if settings.correction_mode != "api":
+        return {"progress": progress, "synthesis": "",
+                **({"synthesis_pending": True} if synthesis_wanted(db, progress, due) else {})}
     return {"progress": progress,
             "synthesis": _build_synthesis(db, student, progress, due)}

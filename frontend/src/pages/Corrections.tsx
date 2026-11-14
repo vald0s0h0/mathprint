@@ -38,6 +38,7 @@ type Batch = {
   // (« Affiner la correction », backend services.refine), et sa régénération
   overlay_stale: boolean; overlay_rebuilding: boolean
   error: string | null; pending_reviews: number; pending_ocr: number; pending_llm: number
+  pending_llm_queued?: number
   // lecture locale sur le Mac (mode cascade) : découpes lues / total, worker joignable ?
   ocr_local?: { decided: number; total: number; worker_online: boolean; waiting_hours?: number; timeout_hours?: number; overdue?: boolean } | null
   // élèves jamais revenus à la finalisation (jamais pénalisés, cf. services
@@ -745,6 +746,7 @@ export default function Corrections() {
     return {
       batchId: b.id, assessmentId: b.assessment_id,
       pendingLlm: isMain ? b.pending_llm : 0,
+      pendingLlmQueued: isMain ? (b.pending_llm_queued ?? 0) : 0,
       onPreview: () => setPreview({ id: b.id, wave: (b.late_jobs ?? []).length ? lot.wave : undefined }),
       onOcr: () => openOcr(scoped),
       onCorrect: (s) => openCorrection(scoped, s),
@@ -1135,6 +1137,11 @@ export default function Corrections() {
                     cellIndex={cur.mode === 'cells' ? cur.cellIndex : null} />
                   {cur.mode !== 'cells' && curItem.reason_code && (
                     <Text size="xs" c="dimmed" mt={6}>Motif : {curItem.reason_code}</Text>
+                  )}
+                  {curItem.flagged && curItem.reason_code === 'llm_queued' && (
+                    <Text size="xs" c="var(--mp-text-orange-strong)" mt={6} fw={600}>
+                      Correction en attente de la commande vague : notez-la vous-même, ou attendez la prochaine vague.
+                    </Text>
                   )}
                   {curItem.flagged && curItem.reason_code === 'llm_low_confidence' && (
                     <Text size="xs" c="var(--mp-text-orange-strong)" mt={6} fw={600}>

@@ -475,8 +475,15 @@ def grade_stored_responses(db: Session, batch: ScanBatch) -> int:
     # celui-ci conserve ensuite son regroupement par exercice à travers élèves.
     queue.extend(llm_grader.requeue_unavailable(db, assessment.id))
     _grade_with_llm(db, queue, batch)
-    audit_automatic_decisions(db, assessment.id)
-    n_review = open_reviews(db, assessment.id)
+    return after_llm_grading(db, batch)
+
+
+def after_llm_grading(db: Session, batch: ScanBatch) -> int:
+    """Suite de la correction LLM d'un lot : audit, recomptage des revues, puis
+    finalisation (résultats, journal d'erreurs, overlays) s'il ne reste rien à
+    trancher. Partagée par le pipeline et la commande vague (services.vague)."""
+    audit_automatic_decisions(db, batch.assessment_id)
+    n_review = open_reviews(db, batch.assessment_id)
     _set_status(db, batch, "graded")
     if n_review:
         _set_status(db, batch, "review_pending", pending=n_review)

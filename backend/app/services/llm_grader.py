@@ -48,7 +48,8 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..models import (
-    Copy, CopyItem, GradingDecision, ManualReview, OcrAttempt, StudentResponse,
+    Assessment, Copy, CopyItem, GradingDecision, ManualReview, OcrAttempt, Program,
+    SchoolClass, StudentResponse, Subject,
 )
 from . import grading as grader
 from . import forge_contract, providers, scoring
@@ -146,6 +147,11 @@ class Task:
     decision_id: str | None = None
     brief: dict | None = None     # dossier rédigé pour le correcteur, jamais imprimé
     messages: list | None = None  # micro-corrections prévues, à choisir plutôt qu'à écrire
+    context: dict | None = None   # matière, niveau, programme (cf. exercise_context)
+    assessment_id: str | None = None
+    feedback_lines: int = 0       # budget de la micro-correction imprimée (0 : aucune)
+    engine: str = ""              # moteur de la commande vague qui a corrigé
+    queued: bool = False          # mise en attente de la commande vague (mode commande)
 
 
 def _cell_label(grading: dict, index: int) -> str:
@@ -222,10 +228,13 @@ def plan(item, verdict: dict, *, ocr_text: str = "",
     forced = grading.get("route") == forge_contract.ROUTE_LLM
     bareme = scoring.item_bareme(grading, item.response_type)
     key = f"{item.catalog_id}|{hashlib.sha1(item.statement.encode()).hexdigest()[:8]}"
+    feedback = grading.get("feedback")
     task = Task(exercise_key=key, statement=item.statement,
                 correction=item.correction or "", max_score=max_score,
                 base_score=0.0, fields=[],
-                brief=grading.get("llm_brief"), messages=_grader_messages(grading))
+                brief=grading.get("llm_brief"), messages=_grader_messages(grading),
+                feedback_lines=(int(feedback.get("lines") or 0)
+                                if isinstance(feedback, dict) else 0))
 
     # --- raisonnement rédigé : TOUJOURS le LLM (décision utilisateur du 03/08).
     # Une rubrique de mots-clés ne sait pas lire un raisonnement, et la confiance
@@ -302,24 +311,35 @@ def plan(item, verdict: dict, *, ocr_text: str = "",
     return task
 
 
-def requeue_unavailable(db: Session, assessment_id: str) -> list[Task]:
-    """Réponses d'un sujet laissées au professeur faute de correcteur (budget
-    quotidien atteint, délai dépassé) : reconstruit leur tâche à partir de ce
-    qui est déjà en base (texte OCR, cases lues), sans repasser par Mathpix.
+# Réponses qui attendent un correcteur : en attente de la commande vague (mode
+# commande), ou laissées faute de correcteur (budget, délai, en mode api).
+PENDING_REASONS = ("llm_queued", "llm_unavailable")
 
-    Appelé au début de `pipeline.process_batch` : un lot relancé retente donc
-    la correction au lieu d'exiger une reprise à la main. Ne rattrape QUE les
-    échecs du correcteur — jamais une revue que le professeur doit trancher
-    (case illisible, double coche, tracé)."""
-    rows = (db.query(GradingDecision, StudentResponse, CopyItem)
-            .join(StudentResponse, GradingDecision.response_id == StudentResponse.id)
-            .join(CopyItem, StudentResponse.copy_item_id == CopyItem.id)
-            .join(Copy, CopyItem.copy_id == Copy.id)
-            .filter(Copy.assessment_id == assessment_id,
-                    GradingDecision.status == "review_pending",
-                    GradingDecision.reason_code == "llm_unavailable").all())
+
+def pending_tasks(db: Session, *, assessment_id: str | None = None,
+                  class_id: str | None = None) -> list[Task]:
+    """Réponses laissées au professeur faute de correcteur, ou en attente de la
+    commande vague : reconstruit leur tâche à partir de ce qui est déjà en base
+    (texte OCR, cases lues), sans repasser par Mathpix. C'est la file durable du
+    correcteur : la décision `review_pending` porte le motif `llm_queued`.
+
+    Ne rattrape QUE celles-là, jamais une revue que le professeur doit trancher
+    (case illisible, double coche, tracé). Une réponse que le professeur a notée
+    entre-temps n'est plus `review_pending` : elle sort de la file."""
+    q = (db.query(GradingDecision, StudentResponse, CopyItem, Copy)
+         .join(StudentResponse, GradingDecision.response_id == StudentResponse.id)
+         .join(CopyItem, StudentResponse.copy_item_id == CopyItem.id)
+         .join(Copy, CopyItem.copy_id == Copy.id)
+         .filter(GradingDecision.status == "review_pending",
+                 GradingDecision.reason_code.in_(PENDING_REASONS)))
+    if assessment_id:
+        q = q.filter(Copy.assessment_id == assessment_id)
+    if class_id:
+        q = q.join(Assessment, Copy.assessment_id == Assessment.id).filter(
+            Assessment.class_id == class_id)
     tasks = []
-    for decision, resp, item in rows:
+    contexts: dict[str, dict] = {}
+    for decision, resp, item, copy in q.order_by(Copy.assessment_id, CopyItem.sequence).all():
         ocr = (db.query(OcrAttempt).filter_by(zone_id=resp.zone_id)
                .order_by(OcrAttempt.created_at.desc()).first()) if resp.zone_id else None
         cell_texts = (ocr.raw_json or {}).get("cells") if ocr else None
@@ -330,16 +350,79 @@ def requeue_unavailable(db: Session, assessment_id: str) -> list[Task]:
             continue
         task.decision_id = decision.id
         task.zone_id = resp.zone_id
+        task.assessment_id = copy.assessment_id
+        if copy.assessment_id not in contexts:
+            contexts[copy.assessment_id] = assessment_context(db, copy.assessment_id)
+        task.context = contexts[copy.assessment_id]
         tasks.append(task)
     return tasks
 
 
+def requeue_unavailable(db: Session, assessment_id: str) -> list[Task]:
+    """File du correcteur d'un sujet, reprise au début de `pipeline.process_batch` :
+    un lot relancé retente la correction (mode api) ou la remet en attente
+    (mode commande) au lieu d'exiger une reprise à la main."""
+    return pending_tasks(db, assessment_id=assessment_id)
+
+
+# ----------------------------------------------------------------- contexte
+
+_COLLEGE = ("6e", "5e", "4e", "3e")
+_LYCEE = ("2nde", "2de", "seconde", "1re", "1ere", "premiere", "tle", "terminale")
+
+
+def assessment_context(db: Session, assessment_id: str | None) -> dict:
+    """Matière, niveau et programme d'un sujet, pour composer le prompt."""
+    assessment = db.get(Assessment, assessment_id) if assessment_id else None
+    cls = db.get(SchoolClass, assessment.class_id) if assessment else None
+    subject = db.get(Subject, assessment.subject_id) if assessment else None
+    program = db.get(Program, cls.program_id) if cls and cls.program_id else None
+    return {"matiere": subject.name if subject else "Mathématiques",
+            "niveau": cls.grade_level if cls else "",
+            "programme": program.name if program else (
+                "Programme ivoirien" if cls and cls.program_id == "ci" else "Programme français")}
+
+
+def _fill_context(db: Session, tasks: list[Task]) -> None:
+    """Contexte des tâches mises en file par le pipeline (plan() ne voit que la carte)."""
+    for task in tasks:
+        if task.context is not None or not task.decision_id:
+            continue
+        row = (db.query(Copy.assessment_id)
+               .join(CopyItem, CopyItem.copy_id == Copy.id)
+               .join(StudentResponse, StudentResponse.copy_item_id == CopyItem.id)
+               .join(GradingDecision, GradingDecision.response_id == StudentResponse.id)
+               .filter(GradingDecision.id == task.decision_id).first())
+        task.assessment_id = task.assessment_id or (row[0] if row else None)
+        task.context = assessment_context(db, task.assessment_id)
+
+
 # ------------------------------------------------------------------- prompt
 
-SYSTEM = (
-    "Tu es professeur de mathématiques au collège (France) et tu corriges des "
-    "réponses d'élèves déjà lues par un OCR. Tu attribues des POINTS.\n"
-    "\n"
+def _stage(level: str) -> str:
+    key = "".join(c for c in unicodedata.normalize("NFKD", (level or "").lower())
+                  if not unicodedata.combining(c) and not c.isspace())
+    if key in _COLLEGE:
+        return "collège"
+    if key in _LYCEE:
+        return "lycée"
+    return ""
+
+
+def _head(context: dict | None) -> str:
+    """Première phrase du prompt : la matière, le niveau et le programme de
+    l'exercice, jamais un « collège (France) » figé."""
+    context = context or {}
+    subject = str(context.get("matiere") or "Mathématiques").strip()
+    level = str(context.get("niveau") or "").strip()
+    program = str(context.get("programme") or "Programme français").strip()
+    stage = _stage(level)
+    where = ", ".join(p for p in (f"en {level}" if level else "", stage, program.lower()) if p)
+    return (f"Tu es professeur de {subject.lower()} ({where}) et tu corriges des "
+            "réponses d'élèves déjà lues par un OCR. Tu attribues des POINTS.\n\n")
+
+
+_BODY = (
     "ON TE DONNE, en JSON : une liste d'exercices (énoncé, corrigé, parfois les "
     "étapes attendues) et une liste de réponses d'élèves. Chaque réponse porte "
     "son identifiant, l'exercice dont elle vient, la réponse ATTENDUE et le "
@@ -365,7 +448,7 @@ SYSTEM = (
     "tranche juste ou faux.\n"
     "\n"
     "── Ce qui vaut tous les points ──\n"
-    "Tu corriges les MATHÉMATIQUES, pas l'orthographe, la présentation ni la "
+    "Tu corriges le FOND de la discipline, pas l'orthographe, la présentation ni la "
     "propreté de l'écriture. Une réponse mathématiquement équivalente à celle "
     "attendue est JUSTE, même écrite autrement :\n"
     "• « 6/8 » pour 3/4, « 0,75 » pour 3/4, « 0,5 » pour 1/2 (sauf si l'énoncé "
@@ -426,6 +509,9 @@ SYSTEM = (
     "juste, 2.\n"
     "0,375 -> « 8 » -> « /\\_/\\ ?? » -> illisible, 0.\n"
     "\n"
+)
+
+_MESSAGES_API = (
     "── \"dossier\" et \"messages\", quand l'exercice en porte ──\n"
     "\"dossier\" est écrit pour toi : objectif, étapes, autres méthodes valables, "
     "erreurs attendues, ce qu'il ne faut pas pénaliser. Suis-le pour noter.\n"
@@ -435,6 +521,34 @@ SYSTEM = (
     "ou deux phrases adressées à l'élève (« Tu as… »), 200 caractères au plus, qui "
     "disent ce qu'il a fait et ce qu'il faut faire. Sans \"messages\", n'ajoute rien.\n"
 )
+
+_MESSAGES_VAGUE = (
+    "── \"dossier\" ──\n"
+    "\"dossier\", quand l'exercice en porte, est écrit pour toi : objectif, étapes, "
+    "autres méthodes valables, erreurs attendues, ce qu'il ne faut pas pénaliser. "
+    "Suis-le pour noter.\n"
+    "\n"
+    "── \"message\" : la micro-correction imprimée sous la réponse ──\n"
+    "Si la réponse n'a pas tous les points et qu'elle porte \"message_max\", ajoute "
+    "\"message\" : une ou deux phrases adressées à l'élève, au tutoiement, qui disent "
+    "ce qu'il a fait puis ce qu'il doit faire, à partir de ce qu'il a ÉCRIT. "
+    "\"message_max\" caractères au plus. Ne donne JAMAIS la réponse attendue ni le "
+    "résultat ; ne cite ni lettre, ni numéro, ni position (« la proposition B », "
+    "« la case 2 », « la ligne 3 »). Exemple : « Tu as multiplié par 3 au lieu de "
+    "diviser : pour isoler x, fais l'opération inverse. »\n"
+    "Les \"messages\" prévus de l'exercice donnent le ton et la longueur ; si l'un "
+    "décrit exactement l'erreur, ajoute aussi son identifiant dans \"message_id\". "
+    "Sans \"message_max\", n'ajoute pas de message.\n"
+)
+
+
+def system_prompt(context: dict | None = None, *, vague: bool = False) -> str:
+    """Prompt du correcteur, composé pour la matière, le niveau et le programme.
+    `vague` : le correcteur rédige lui-même la micro-correction."""
+    return _head(context) + _BODY + (_MESSAGES_VAGUE if vague else _MESSAGES_API)
+
+
+SYSTEM = system_prompt()
 
 
 _VERDICT_ALIASES = {
@@ -627,6 +741,18 @@ def grade_tasks(db: Session, tasks: list[Task], correlation_id: str | None = Non
     for i, (_task, field) in enumerate(pairs):
         field.key = f"r{i + 1}"
 
+    # Mode commande (défaut, décision du 14/11) : aucun appel ici. La réponse
+    # reste « correction en attente » (revue professeur, motif llm_queued) et la
+    # commande vague la corrigera depuis le Mac ; le professeur peut aussi la
+    # noter lui-même avant.
+    if settings.correction_mode != "api":
+        for task in tasks:
+            task.queued = True
+            for field in task.fields:
+                field.error = "Correction en attente de la commande vague"
+        return apply_results(db, tasks)
+
+    _fill_context(db, tasks)
     # Sans clé DeepSeek, ces réponses vont au professeur — JAMAIS au repli
     # hors-ligne. Un repli qui simule une correction produirait de vraies notes
     # inventées sur de vraies copies ; c'est exactement pour cette raison que le
@@ -636,14 +762,14 @@ def grade_tasks(db: Session, tasks: list[Task], correlation_id: str | None = Non
             field.error = ("Aucune clé DeepSeek configurée : les réponses "
                            "rédigées restent à corriger à la main "
                            "(Paramètres → API).")
-        return sum(1 for task in tasks if _apply(db, task))
+        return apply_results(db, tasks)
 
     size = max(1, int(settings.correction_batch_size))
     for batch in _batches(pairs, size):
         payload = _payload(batch)
         try:
             out = providers.deepseek_json(
-                db, "answer_grading", SYSTEM, payload,
+                db, "answer_grading", system_prompt(batch[0][0].context), payload,
                 # Confiance + motif + JSON : marge généreuse pour ne jamais perdre
                 # un paquet à cause d'une fin tronquée.
                 max_tokens=min(4000, 240 * len(batch) + 600),
@@ -673,6 +799,13 @@ def grade_tasks(db: Session, tasks: list[Task], correlation_id: str | None = Non
             results = {}
         for _task, field in batch:
             field.result = results.get(field.key)
+    return apply_results(db, tasks)
+
+
+def apply_results(db: Session, tasks: list[Task]) -> int:
+    """Réécrit les décisions à partir des verdicts posés sur les champs. Seul
+    chemin d'écriture, que les verdicts viennent de l'API ou de la commande
+    vague. Retourne le nombre de réponses qui restent au professeur."""
     return sum(1 for task in tasks if _apply(db, task))
 
 
@@ -806,20 +939,23 @@ def _apply(db: Session, task: Task) -> bool:
                       "verdict": verdict or "indisponible",
                       "motif": str(result.get("motif") or "")[:120] or f.error,
                       **({"message_id": result["message_id"]} if result.get("message_id") else {}),
-                      **({"message_libre": result["message_libre"]} if result.get("message_libre") else {})})
+                      **({"message_libre": result["message_libre"]} if result.get("message_libre") else {}),
+                      **({"message_redige": result["message_redige"]} if result.get("message_redige") else {})})
 
     decision.score = max(0.0, min(task.max_score, score))
     decision.source = "deepseek" if graded else "deterministic"
     decision.confidence = (min(accepted_confidences) if graded and not needs_review else 0.5)
     decision.tier = "D" if needs_review else "C"
-    decision.reason_code = ("llm_unavailable" if unavailable
+    decision.reason_code = ("llm_queued" if unavailable and task.queued
+                           else "llm_unavailable" if unavailable
                            else "llm_low_confidence" if low_confidence
                            else "llm_unreadable" if needs_review
                            else "llm_full" if decision.score >= task.max_score
                            else "llm_partial" if decision.score > 0 else "llm_wrong")
     decision.status = "review_pending" if needs_review else "auto"
     decision.evidence_json = {**(decision.evidence_json or {}),
-                              "llm": notes, "llm_base_score": task.base_score}
+                              "llm": notes, "llm_base_score": task.base_score,
+                              **({"llm_engine": task.engine} if task.engine and graded else {})}
 
     # Crédits par case joints à la copie : ce sont eux qui dessinent les ✓/✗ de
     # l'overlay (cf. grading.cell_marks) — sans ça, une case créditée par le LLM

@@ -39,6 +39,8 @@ export type LotHandlers = {
   assessmentId: string
   /** Réponses DeepSeek indisponibles (lot principal seulement). */
   pendingLlm?: number
+  /** Réponses « correction en attente » de la commande vague (lot principal seulement). */
+  pendingLlmQueued?: number
   onPreview: () => void
   onOcr: () => void
   onCorrect: (scope: 'flagged' | 'all') => void
@@ -139,6 +141,13 @@ export default function ScanLotRow({ lot, h }: { lot: Lot; h: LotHandlers }) {
             <Button size="xs" color="orange" leftSection={<RefreshCw size={14} />} onClick={h.onRetry}>
               Relancer
             </Button>
+          )}
+          {lot.stage === 'review' && (h.pendingLlmQueued ?? 0) > 0 && (
+            <Tooltip multiline maw={300} label="Réponses rédigées en attente de la commande vague, lancée depuis le Mac. Aucune note n'est finale avant : vous pouvez aussi les corriger vous-même.">
+              <Badge size="lg" variant="light" color="gray" radius="sm" tt="none" data-testid="llm-queued">
+                Correction en attente ({h.pendingLlmQueued})
+              </Badge>
+            </Tooltip>
           )}
           {lot.stage === 'review' && (
             <Button size="xs" color="orange" leftSection={<ScanLine size={14} />}

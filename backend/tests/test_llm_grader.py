@@ -577,6 +577,7 @@ def _stub_llm(db, monkeypatch, state=None):
     de note inventée par un repli hors ligne) — et l'appel HTTP remplacé par un
     verdict canné. Retourne la liste des charges utiles envoyées."""
     state = state if state is not None else {}
+    monkeypatch.setattr(cfg, "correction_mode", "api")   # l'ancien chemin, gardé en repli
     db.add(ProviderConfig(provider="deepseek-flash", model="deepseek-v4-flash",
                           encrypted_secret="clé-de-test", active=True))
     db.commit()
@@ -693,6 +694,7 @@ def test_without_a_deepseek_key_no_note_is_invented(db, tmp_path, monkeypatch):
     correction simulée sur de vraies copies tromperait le professeur — même
     raison qui fait déjà refuser le dépôt d'un scan sans clé Mathpix."""
     monkeypatch.setattr(cfg, "data_dir", tmp_path)
+    monkeypatch.setattr(cfg, "correction_mode", "api")
     _fixed_ocr(monkeypatch)
     a = _seed_reasoning(db)                 # aucun ProviderConfig : hors ligne
     batch = scan_intake.get_or_create_batch(db, a.id, None)

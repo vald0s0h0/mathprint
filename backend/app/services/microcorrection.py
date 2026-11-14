@@ -5,7 +5,8 @@ d'overlay, jamais stockée comme une note. Elle dit aussi quelles erreurs types 
 réponse révèle, pour le journal de l'élève (services.error_journal).
 
 Priorité du message : non-réponse, comptage (case ou lien en trop, manquant),
-option choisie ou message retenu par le correcteur LLM, puis message générique.
+message rédigé par la commande vague, option choisie ou message retenu par le
+correcteur LLM, puis message générique.
 """
 from __future__ import annotations
 
@@ -200,6 +201,15 @@ def _select_llm(feedback: dict, decision, selection: Selection) -> None:
     texte libre est contrôlé ici : trop long, c'est le message générique."""
     lines = feedback.get("lines", 4)
     notes = ((decision.evidence_json or {}).get("llm") or [])
+    # Rédigé par la commande vague pour CETTE réponse (plan forge2 §10.2) : il
+    # passe avant le message prévu, s'il tient dans la bande. Le message prévu
+    # éventuellement désigné ne sert alors qu'au journal d'erreurs.
+    for note in notes:
+        written = str(note.get("message_redige") or "").strip()
+        if written and not selection.text and _fits(written, lines):
+            selection.text, selection.kind = written, "llm"
+            if not _option(feedback, note.get("message_id")).get("error"):
+                selection.errors.append(("autre", None))
     for note in notes:
         option = _option(feedback, note.get("message_id"))
         if option.get("text"):

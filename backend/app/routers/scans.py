@@ -438,7 +438,7 @@ def _awaiting_scan_rows(db: Session) -> list[dict]:
             "class_name": cls.name if cls else "?", "class_id": cls.id if cls else None,
             "grade_level": cls.grade_level if cls else "", "page_count": 0,
             "error": None, "pending_reviews": 0, "pending_ocr": 0,
-            "pending_llm": 0, "absent_count": 0,
+            "pending_llm": 0, "pending_llm_queued": 0, "absent_count": 0,
             "ocr_threshold": ocr_confidence_threshold(db), "segments": [],
             "overlay_printed": False, "overlay_distributed": False,
             "overlay_stale": False, "overlay_rebuilding": False,
@@ -546,6 +546,9 @@ def _batch_view(db: Session, b: ScanBatch) -> dict:
         pending = _pending_reviews_query(db, b.assessment_id).count()
     pending_llm = (_pending_reviews_query(db, b.assessment_id)
                    .filter(GradingDecision.reason_code == "llm_unavailable").count())
+    # réponses « correction en attente » de la commande vague (mode commande)
+    pending_llm_queued = (_pending_reviews_query(db, b.assessment_id)
+                          .filter(GradingDecision.reason_code == "llm_queued").count())
     pending_ocr = sum(pending_ocr_units(db, b.assessment_id).values()) if (
         b.status == "ocr_review_pending") else 0
     stale = refine.overlay_stale(b)
@@ -559,7 +562,7 @@ def _batch_view(db: Session, b: ScanBatch) -> dict:
         # correction) : le lot principal garde l'état de sa première pile.
         pending = max(0, pending - sum(j["pending_reviews"] for j in late_jobs))
         pending_ocr = max(0, pending_ocr - sum(j["pending_ocr"] for j in late_jobs))
-        pending_llm = 0
+        pending_llm = pending_llm_queued = 0
         main_progress = {k: True for k in ("uploaded", "split", "ocr_complete", "ocr_confirmed",
                                            "graded", "finalized", "overlay_ready")}
         segments = _business_steps("overlay_ready", main_progress, 0, 0, None,
@@ -595,7 +598,8 @@ def _batch_view(db: Session, b: ScanBatch) -> dict:
             "pending_reviews": pending, "pending_ocr": pending_ocr,
             # lecture locale (mode cascade) : avancement sur le Mac et présence du worker
             "ocr_local": (ocr_cascade.local_progress(db, b) if b.status == "ocr_local_pending" else None),
-            "pending_llm": pending_llm, "absent_count": absent_count,
+            "pending_llm": pending_llm, "pending_llm_queued": pending_llm_queued,
+            "absent_count": absent_count,
             "ocr_threshold": ocr_confidence_threshold(db), "segments": segments,
             "overlay_printed": b.overlay_printed, "overlay_distributed": b.overlay_distributed,
             "overlay_stale": stale, "overlay_rebuilding": rebuilding,

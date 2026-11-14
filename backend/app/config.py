@@ -68,6 +68,20 @@ class Settings(BaseSettings):
     # le professeur. Au-dessus, un verdict/points cohérent est appliqué sans
     # encombrer l'assistant manuel.
     correction_confidence_min: float = 0.90
+    # Décision du 14/11 (plan forge2 §10) : plus d'API de LLM pour corriger.
+    #   • commande : les réponses à faire trancher restent « correction en
+    #     attente » ; la commande `vague` (scripts/vague.py), lancée à la main
+    #     depuis le Mac sur abonnement, les corrige ensuite ;
+    #   • api : l'ancien chemin DeepSeek (correction_model), gardé en repli.
+    # Vaut aussi pour la synthèse de l'appréciation (Claude Haiku par API).
+    correction_mode: str = "commande"
+    # Moteurs de la commande `vague` : modèle passé à `claude -p` (haiku) ou à
+    # `codex exec` (luna, terra). L'identifiant de Luna n'est pas encore connu :
+    # à régler par MATHPRINT_VAGUE_MODEL_LUNA avant de choisir ce moteur.
+    vague_model_haiku: str = "haiku"
+    vague_model_luna: str = ""
+    vague_model_terra: str = "gpt-6.1-terra"
+    vague_timeout_s: int = 300
     claude_model: str = "claude-haiku-4-5-20251001"
     # extraction Sésamaths (lecture fidèle des pages de manuel) : Mistral OCR,
     # moteur de reconnaissance de document dédié (pas un modèle de chat) —
