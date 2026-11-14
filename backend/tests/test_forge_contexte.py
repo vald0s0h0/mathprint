@@ -121,7 +121,9 @@ def test_fiche_command(db, capsys, tmp_path):  # noqa: F811
     assert "Fiche conforme." in capsys.readouterr().out
     fiche.with_suffix(".idees.yaml").write_text(IDEES.replace("Z1.1", "Z7.7"), encoding="utf-8")
     source = tmp_path / "cours.md"
-    source.write_text("Rappel : la somme de deux nombres pairs est paire, toujours.", encoding="utf-8")
+    # un fait (ligne F…) peut reprendre une définition officielle ; le reste se reformule
+    source.write_text("Rappel : la somme de deux nombres pairs est paire, toujours. "
+                      "Les erreurs fréquentes : oublier une retenue dans le calcul posé.", encoding="utf-8")
     assert cli._cmd_fiche(_args(sources=[str(source)]), db) == 1
     out = capsys.readouterr().out
-    assert "1 source(s)" in out and "Z7.7" in out and "8 mots" in out and "2 problème(s)." in out
+    assert "1 source(s)" in out and "Z7.7" in out and "8 mots" not in out and "1 problème(s)." in out
