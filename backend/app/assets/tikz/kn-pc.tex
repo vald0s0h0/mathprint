@@ -60,6 +60,10 @@
 % Burette graduée verticale à robinet : 0,4 cm de large, 3,9 cm de haut
 \newcommand{\Burette}[3]{\begin{scope}[shift={#1},x=1cm,y=1cm]
   \fill[liquide] (-0.2,0.85) rectangle (0.2,0.85+#2*2.9);
+  % partie conique pleine jusqu'au robinet dès que la burette contient du liquide ;
+  % sous le robinet, le bec reste vide
+  \pgfmathtruncatemacro{\knburfull}{#2>0}
+  \ifnum\knburfull>0 \fill[liquide] (-0.2,0.85) -- (-0.075,0.62) -- (0.075,0.62) -- (0.2,0.85) -- cycle;\fi
   \draw[verre] (-0.25,3.9) -- (-0.2,3.85) -- (-0.2,0.85) (0.25,3.9) -- (0.2,3.85) -- (0.2,0.85);
   \draw[verre] (-0.2,0.85) -- (-0.07,0.6) -- (-0.04,0.18) -- (0,0) -- (0.04,0.18) -- (0.07,0.6) -- (0.2,0.85);
   \filldraw[trait,fill=fillB] (-0.3,0.52) rectangle (0.3,0.62);

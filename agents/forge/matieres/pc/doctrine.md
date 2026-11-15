@@ -49,7 +49,10 @@ Un protocole, les étapes d'une mesure, l'ordre des appareils dans une boucle s�
 ## Formats
 
 - **Bien lus** : QCM, vrai-faux en grille, relier, tableau de nombres, réponse numérique courte.
-- **Une réponse numérique** s'écrit sans son unité : l'unité s'imprime après la case, ou l'énoncé dit dans quelle unité répondre. Quand le choix de l'unité est la compétence, fais-le cocher.
+- **L'unité d'une réponse numérique.** Elle n'est pas imprimée par principe : décide d'après le savoir-faire évalué.
+  - Quand trouver l'unité **fait partie de l'exercice** (choisir l'unité d'une grandeur, convertir, reconnaître l'unité d'un résultat), l'élève l'écrit lui-même : une case pour la valeur, **une case à part pour l'unité** (`table_fill` ou `multi_blank`), avec les écritures acceptées déclarées (`V`, `volt`, `volts`). Une unité écrite dans la case de la valeur n'est pas notée : le correcteur l'ignore. Pour une unité difficile à lire à la main (Ω, µ), fais plutôt cocher.
+  - Quand l'unité n'est pas en jeu (le savoir-faire est le calcul), imprime-la après la case ou dis dans l'énoncé dans quelle unité répondre : sinon l'élève perd des points sur ce qui n'est pas évalué.
+  - Varie : sur une même compétence, toutes les cartes ne donnent pas l'unité.
 - **À éviter en réponse écrite** : une formule chimique, un ion, une équation de réaction (indices et charges mal lus) ; fais-les choisir ou compléter dans un tableau de coefficients entiers.
 - **Mot écrit** : seulement pour un schéma à légender ou un terme de la fiche sans variante.
 - **Rédaction courte** (`multiline_text`, 2 à 4 lignes) : une justification ou une interprétation de mesure, avec un dossier du correcteur qui liste les idées attendues. Pas de compte rendu complet.
