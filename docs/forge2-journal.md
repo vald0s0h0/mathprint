@@ -27,8 +27,18 @@ Plan : [idees/forge-refonte-plan.md](idees/forge-refonte-plan.md). Branche `forg
 
 ## Non construit
 
-- Repérage de la copie après coup (§13.7) : en attente de confirmation (question 43).
+- Repérage de la copie après coup (§13.7) : abandonné (décision du 2026-11-15).
 - Corrigé par jeu de valeurs pour le professeur.
 - File de nuit automatique (décision : à la main d'abord).
 - Rédaction longue (reportée), enseignement technologique.
 - Découpage de `forge.py` et contrats Pydantic : écarté pour l'instant, les nouveautés vivent dans des modules à part (`familles.py`, `plan.py`, `confiance.py`, `contexte.py`).
+
+## Décisions du 2026-11-15
+
+- Repérage de la copie après coup : non construit, abandonné.
+- Étalons des autres matières : écrits au moment d'ouvrir chaque matière, pas avant.
+- Ligne « Ton objectif » : code gardé tel quel (imprimée sur les sujets individuels quand la place le permet) ; une appréciation complète par Haiku, sans doute au verso, la remplacera plus tard.
+- Découpage de `forge.py` et contrats Pydantic : abandonnés.
+- `vague --nas` : le Mac relève la file de correction du NAS par SSH.
+- Physique-chimie : l'unité n'est imprimée que si elle n'est pas évaluée ; sinon, case à part.
+- Livraison de `forge2` : demandée le 2026-11-15.

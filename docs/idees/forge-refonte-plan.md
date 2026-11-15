@@ -1,6 +1,6 @@
 # Forge 2 : plan de refonte du pipeline de génération
 
-- **Statut** : plan validé le 2026-11-14, implémentation en cours sur la branche `forge2` (journal : [forge2-journal.md](../forge2-journal.md)). Déjà fait : le correctif du mélange des lignes (§13.1) et la commande `forge contexte` (§6.2).
+- **Statut** : plan validé le 2026-11-14, implémenté et livré le 2026-11-15 (branche `forge2` fusionnée) (journal : [forge2-journal.md](../forge2-journal.md)). Déjà fait : le correctif du mélange des lignes (§13.1) et la commande `forge contexte` (§6.2).
 - **Date** : 2026-11-14
 - **Périmètre** : génération des exercices (toutes matières, programme ivoirien 6e → Tle, programme français conservé), correction des réponses écrites, suivi des élèves.
 - **Reprend** : [forge-qualite-generation.md](forge-qualite-generation.md) (archétypes, fiches-idées, socle par verbe, chaîne de confiance). Ce qui y est dit reste valable sauf mention contraire ici.
@@ -703,7 +703,7 @@ Les propositions non commentées sont acceptées. Les réponses qui les modifien
 
 ### À préciser
 
-- **N° 43** : « non, retirer ». Je comprends : retirer le repérage de la copie après coup (§13.7). Il n'est pas construit tant que tu ne l'as pas confirmé.
+- **N° 43** : repérage de la copie après coup (§13.7) abandonné le 2026-11-15.
 
 ### Que je ne peux pas trancher seul
 
