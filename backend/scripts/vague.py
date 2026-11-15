@@ -3,6 +3,7 @@
 Usage (depuis la racine du dépôt, sur le Mac) :
     backend/.venv/bin/python backend/scripts/vague.py [corriger] [apprecier] [tout]
         [--moteur haiku|luna|terra] [--devoir ID] [--classe ID] [--essai]
+        [--nas [--hote UTILISATEUR@HOTE]]
 
     corriger   réponses écrites « correction en attente », par exercice, avec leur
                micro-correction rédigée ;
@@ -11,6 +12,7 @@ Usage (depuis la racine du dépôt, sur le Mac) :
 
 `--essai` montre les paquets sans appeler le moteur ni rien écrire. Une vague
 interrompue se relance telle quelle : un paquet écrit n'est jamais refait.
+`--nas` relève la file du NAS (SSH, voir docs/vague.md) au lieu de la base locale.
 Voir docs/vague.md.
 """
 import argparse
@@ -24,7 +26,7 @@ if "__file__" in globals():
     sys.path.insert(0, str(BACKEND))
 
 from app.db import SessionLocal  # noqa: E402
-from app.services import cli_llm, vague  # noqa: E402
+from app.services import cli_llm, vague, vague_distante  # noqa: E402
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -34,7 +36,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--devoir", help="identifiant du devoir (assessment)")
     parser.add_argument("--classe", help="identifiant de la classe")
     parser.add_argument("--essai", action="store_true", help="montrer sans rien écrire")
+    parser.add_argument("--nas", action="store_true", help="relever la file du NAS par SSH")
+    parser.add_argument("--hote", default=vague_distante.HOTE, help="hôte SSH du NAS")
     args = parser.parse_args(argv)
+    if args.nas:
+        bilan = vague_distante.run(args.taches, hote=args.hote, moteur=args.moteur,
+                                   devoir=args.devoir, classe=args.classe, essai=args.essai)
+        print("\n" + ("Essai : rien n'a été écrit.\n" if args.essai else "") + bilan.texte())
+        return 1 if bilan.arret else 0
     db = SessionLocal()
     try:
         bilan = vague.run(db, args.taches, moteur=args.moteur, devoir=args.devoir,

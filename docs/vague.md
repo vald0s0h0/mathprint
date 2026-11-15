@@ -20,6 +20,7 @@ Depuis la racine du dépôt, sur le Mac :
 ```
 backend/.venv/bin/python backend/scripts/vague.py [corriger] [apprecier] [tout]
     [--moteur haiku|luna|terra] [--devoir ID] [--classe ID] [--essai]
+    [--nas [--hote UTILISATEUR@HOTE]]
 ```
 
 - `corriger` : les réponses en attente, **par exercice** (énoncé et dossier du
@@ -52,5 +53,35 @@ Les appels se font sans outil, depuis un dossier vide, clés d'API retirées de
 l'environnement. `MATHPRINT_CORRECTION_MODE=api` rétablit l'ancien chemin DeepSeek /
 Claude par API (désactivé par défaut).
 
-Sur le NAS, rien ne se lance : ses copies restent en attente ou sont notées par le
-professeur (§10.2, à décider).
+## Relever la file du NAS
+
+Le NAS n'a pas de moteur : ses réponses restent « en attente » jusqu'à ce que le Mac les
+relève.
+
+```
+backend/.venv/bin/python backend/scripts/vague.py tout --nas --essai   # d'abord : liste seulement
+backend/.venv/bin/python backend/scripts/vague.py tout --nas
+```
+
+`--nas` marche avec `tout`, `corriger` et `apprecier` ; `--hote` change l'hôte (défaut
+`Etienne@fabre.tail428d1a.ts.net`) ; `--devoir`, `--classe` et `--moteur` s'appliquent.
+
+Déroulement, en trois temps : (1) le Mac **exporte** par SSH les paquets du NAS (prompt
+composé, réponses pseudonymisées : aucun nom d'élève) ; (2) le moteur local répond, paquet
+par paquet ; (3) le Mac **importe** par SSH, par lots de 5 paquets, donc une coupure ne
+perd que le lot en cours. Le NAS revalide tout (champs retrouvés en base et inchangés,
+barème, longueur et forme des messages, seuil de confiance) et n'écrit que sur des
+réponses encore « en attente » : une réponse notée entre-temps par le professeur n'est
+jamais écrasée. Une vague coupée se relance telle quelle. Si le NAS est injoignable, le
+message l'indique et la commande sort en erreur.
+
+Aucun port, secret ni route nouveaux : le Mac exécute `docker exec -i mathprint-api-1
+python -` sur le NAS, le script (`app.services.vague_distante`) et les données passant par
+l'entrée standard, jamais dans une ligne de commande.
+
+Prérequis :
+
+- le NAS tourne une version qui contient `app/services/vague_distante.py` (sinon l'export
+  répond « version sans vague_distante ») ;
+- la clé SSH du Mac est acceptée par `Etienne@fabre.tail428d1a.ts.net` (Tailscale actif) ;
+- la règle sudo du NAS autorise `sudo -n /usr/local/bin/docker` sans mot de passe.
