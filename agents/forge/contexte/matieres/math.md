@@ -1,0 +1,47 @@
+# Contexte matière : mathématiques
+
+Comment le bon exercice s'écrit en mathématiques, et les règles qui valent dans toutes les leçons. Une leçon ne les répète pas : elle dit seulement ce qui lui est propre.
+
+## Les archétypes
+
+| Code | Ce que fait l'élève | Comment l'écrire |
+|---|---|---|
+| `CALC` | Il applique directement le savoir-faire | Consigne courte. C'est l'exercice de révision : pas de situation forcée |
+| `REPR` | Il passe d'une représentation à une autre | Tableau, graphique, formule, figure, phrase : donne l'une, demande l'autre |
+| `ERR` | Il trouve et corrige l'erreur d'une copie | Montre le travail d'un élève, avec **une** erreur réelle de la taxonomie. Chaque ligne fausse est calculée (`calc`). La question porte sur l'erreur, pas sur le résultat seul |
+| `QUI` | Il tranche entre deux élèves | Deux réponses, deux méthodes ; une seule est juste, ou les deux le sont pour une raison à dire. L'erreur est provoquée, pas annoncée |
+| `CONTRE` | Il dit vrai ou faux et le justifie | Des affirmations générales ; une fausse se réfute par un contre-exemple |
+| `INVERSE` | Il retrouve la donnée à partir du résultat | Le résultat est donné : « quel nombre de départ ? », « quelle longueur manque ? » |
+| `ESTIM` | Il juge un ordre de grandeur | Sans calcul exact : ce résultat est-il possible ? Lequel est le plus proche ? |
+| `DOC` | Il lit un document | Ticket, facture, horaires, étiquette, relevé : les données y sont, avec au moins une donnée inutile |
+| `DECIDE` | Il prend une décision | Deux offres, deux trajets, deux forfaits : la réponse est un choix, justifié par un calcul |
+
+Dans `ERR` et `QUI`, les élèves portent des prénoms du contexte pays. Aucun n'est toujours celui qui se trompe.
+
+## Contre-sens interdits
+
+- Conclure d'après l'apparence d'une figure.
+- Un piège qui repose sur une notion d'une classe supérieure ou d'une leçon pas encore vue.
+- Une égalité fausse écrite sans être présentée comme le travail d'un élève.
+- Une unité oubliée dans une réponse attendue, ou deux unités mêlées sans conversion demandée.
+- Une « situation » où le nombre demandé n'a aucun sens (un prix négatif, 3,7 élèves).
+
+## Règles valables dans toutes les leçons
+
+- **Sans calculatrice.** Tout calcul se fait de tête ou posé en peu de temps. Les valeurs sont choisies pour que les calculs tombent juste : division par un entier à un chiffre ou par un décimal qui se ramène à un entier ($0{,}5$, $2{,}5$), carrés et racines de carrés parfaits, triplets pythagoriciens ($3$, $4$, $5$ ; $5$, $12$, $13$ ; $8$, $15$, $17$ et leurs multiples) quand Pythagore intervient.
+- **Forme des réponses écrites.** Aucune réponse écrite attendue sous forme de radical ($\sqrt{7}$) ni de fraction négative : l'écriture manuscrite est mal lue. Une telle écriture peut figurer dans un énoncé, une proposition de QCM ou un élément à relier. Dis la forme attendue quand elle compte : fraction irréductible, décimal, unité, arrondi. Une valeur approchée n'est demandée que sur un moyen ou un difficile, avec le mot « arrondi » et la précision (`exact_decimal`).
+- **Apparence.** L'élève ne conclut jamais d'après la figure. Ce qui fonde la réponse est dit dans le texte ou codé sur la figure : alignements dits, parallélisme dit ou déduit d'un codage, angles droits et égalités codés, longueurs cotées, polygone dit régulier, sommets « sur les nœuds du quadrillage » écrits dans l'énoncé. Une figure qui n'est pas à l'échelle le dit.
+- **Désignation.** Une droite, une figure, un point se désigne par son nom ou un numéro écrit à côté, jamais par sa couleur ni sa position (« la droite rouge », « le triangle de gauche »).
+- **Notations.** $(AB)$ la droite, $[AB]$ le segment, $AB$ la longueur ; $\widehat{ABC}$ l'angle de sommet $B$ ; l'image d'un point $A$ se note $A'$. Coordonnées avec point-virgule : $(2 ; 3)$. Virgule décimale. Longueurs en cm ou en m, angles en degrés.
+- **Figures exactes.** Une figure part de coordonnées exactes : ses longueurs affichées sont celles de ses coordonnées. Un triangle se construit à partir de côtés entiers ou d'un triplet, puis se met à l'échelle ; une configuration de proportionnalité s'obtient par $M = A + k(B - A)$. Les longueurs respectent l'inégalité triangulaire.
+- **Tracer.** Seule une carte `geo_construction` demande de tracer ou de construire. Ailleurs, l'élève reconnaît, choisit, calcule ou relie.
+
+## Charte d'écriture
+
+- **Écriture.** Toute formule, tout nombre utilisé dans un calcul et toute unité composée vont dans `$...$`. Virgule décimale française : `$3{,}5$`. Multiplication : `\times`, jamais `*`. Fractions : `\dfrac{a}{b}`.
+- **Justesse.** Si un résultat se calcule, donne le calcul à vérifier (`calc`).
+- **Vocabulaire.** Celui enseigné à ce niveau, d'après la leçon. Une notion du programme d'une classe supérieure n'apparaît pas, même en piège.
+
+## Exemples validés
+
+`contexte/exemples/math.json` contient des cartes relues et validées, une ou deux par format, chacune avec la raison de sa qualité. Ce sont des modèles de qualité : n'en reprends ni les situations ni les valeurs.

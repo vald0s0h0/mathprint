@@ -7,7 +7,7 @@ import { api } from '../api'
 import { useAppState } from '../state/AppState'
 import CompetencyHierarchy, { type CompetencyHierarchyColumn } from './CompetencyHierarchy'
 import GradeSelectionRequired from './GradeSelectionRequired'
-import ExerciseCatalogCard, { exerciseDifficulty, type CatalogExercise, type ReviewVerdict, type Twin } from './ExerciseCatalogCard'
+import ExerciseCatalogCard, { exerciseDifficulty, type CatalogExercise, type ReviewCause, type ReviewVerdict, type Twin } from './ExerciseCatalogCard'
 import ExerciseMasonry from './ExerciseMasonry'
 import MathText from './MathText'
 import { DURATION_HINT, formatHours, formatMinutes } from '../utils/duration'
@@ -283,13 +283,13 @@ export default function ExerciseCatalog({ admin = false }: { admin?: boolean }) 
     const update = (items: CatalogExercise[] | null) => items?.map(e => e.id === id ? { ...e, preference: value } : e) ?? null
     setExercises(update); setProblems(update)
   }
-  const changeReview = async (id: string, value: ReviewVerdict | null, comment?: string) => {
-    const saved = await api.put<Pick<CatalogExercise, 'review_comment' | 'review_history' | 'needs_review'>>(`/api/indigo/exercises/${id}/review-verdict`, { value, comment })
+  const changeReview = async (id: string, value: ReviewVerdict | null, comment?: string, cause?: ReviewCause | null) => {
+    const saved = await api.put<Pick<CatalogExercise, 'review_comment' | 'review_cause' | 'review_history' | 'needs_review'>>(`/api/indigo/exercises/${id}/review-verdict`, { value, comment, cause: cause ?? undefined })
     // l'avis d'une carte vaut pour ses jumelles : le serveur l'a posé sur toute la famille
     const group = [...(exercises ?? []), ...(problems ?? [])].find(e => e.id === id)?.grading?.twin?.group
     const update = (items: CatalogExercise[] | null) => items?.map(e =>
       e.id === id ? { ...e, ...saved, review_verdict: value }
-        : group && e.grading?.twin?.group === group ? { ...e, review_verdict: value, review_comment: saved.review_comment } : e) ?? null
+        : group && e.grading?.twin?.group === group ? { ...e, review_verdict: value, review_comment: saved.review_comment, review_cause: saved.review_cause } : e) ?? null
     setExercises(update); setProblems(update)
     try { setSummary(await api.get<Summary[]>(`${endpoint}/summary?${scope}`)) }
     catch { notifications.show({ color: 'red', message: 'Avis enregistré. Actualisez la page pour mettre les compteurs à jour.' }) }
@@ -358,7 +358,7 @@ export default function ExerciseCatalog({ admin = false }: { admin?: boolean }) 
         </Group>
         <ExerciseMasonry>{group.map(ex => <ExerciseCatalogCard key={ex.id} exercise={ex} admin={admin} twins={twinsOf(ex)}
           onPreference={admin ? undefined : value => changePreference(ex.id, value)}
-          onReview={admin ? (value, comment) => changeReview(ex.id, value, comment) : undefined} />)}</ExerciseMasonry>
+          onReview={admin ? (value, comment, cause) => changeReview(ex.id, value, comment, cause) : undefined} />)}</ExerciseMasonry>
       </Stack>
     })}</Stack>
       : <Text c="dimmed" size="sm">Aucun exercice disponible pour cette sélection.</Text>

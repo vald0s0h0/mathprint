@@ -2,7 +2,7 @@
 
 Le modèle (Opus ou GPT Sol, en session d'agent) lit le contexte préparé ici et
 écrit un fichier JSON par emplacement. Tout le reste est déterministe et gratuit :
-aucun appel à un modèle dans ce module. Voir FORGE.md et schema.md.
+aucun appel à un modèle dans ce module. Voir CONSIGNE-EXERCICES.md et contexte/formats/.
 """
 from __future__ import annotations
 
@@ -171,20 +171,20 @@ _TRACE_LINE_RE = re.compile(r"^\W*trac[ée]s\W*:\W*(central|partiel|aucun)\b", r
 _TRACE_LABEL_RE = re.compile(r"\b(construi|trac|transform|reprodui)", re.IGNORECASE)
 
 
-def _fiche_section(text: str, code: str) -> str:
-    """Section `## <code> …` d'une fiche, jusqu'au titre de même niveau suivant."""
+def _lesson_section(text: str, code: str) -> str:
+    """Section `## <code> …` d'une leçon, jusqu'au titre de même niveau suivant."""
     match = re.search(rf"^##\s+{re.escape(code)}\b.*?(?=^##\s|\Z)", text, re.MULTILINE | re.DOTALL)
     return match.group(0) if match else ""
 
 
-def trace_profile(fiche: Path | None, code: str, label: str = "") -> tuple[str, str]:
-    """(profil de tracés, origine). La fiche le déclare par une ligne
+def trace_profile(lesson: Path | None, code: str, label: str = "") -> tuple[str, str]:
+    """(profil de tracés, origine). La leçon le déclare par une ligne
     « Tracés : central | partiel | aucun » dans la section de la compétence ; sans
     déclaration, le libellé le devine (« construire », « transformer », « tracer »)."""
-    if fiche is not None and fiche.exists():
-        match = _TRACE_LINE_RE.search(_fiche_section(fiche.read_text(encoding="utf-8"), code))
+    if lesson is not None and lesson.exists():
+        match = _TRACE_LINE_RE.search(_lesson_section(lesson.read_text(encoding="utf-8"), code))
         if match:
-            return match.group(1).lower(), "fiche"
+            return match.group(1).lower(), "leçon"
     return ("central" if _TRACE_LABEL_RE.search(fold(label)) else "aucun"), "libellé"
 
 
@@ -391,14 +391,39 @@ def lesson_tag(programme: str, cycle: str, code: str, serie: str | None = None) 
     return "-".join(x for x in (programme, cycle, serie, code) if x)
 
 
-def fiche_path(programme: str, cycle: str, code: str, subject: str = SUBJECT_DEFAULT,
+def lecon_path(programme: str, cycle: str, code: str, subject: str = SUBJECT_DEFAULT,
                serie: str | None = None) -> Path:
-    """Fiche de la leçon, écrite par `forge contexte` : un sous-dossier par matière,
-    sauf pour les maths."""
-    folder = data_dir() / "fiches"
-    if subject != SUBJECT_DEFAULT:
-        folder = folder / subject
-    return folder / f"{lesson_tag(programme, cycle, code, serie)}.md"
+    """Contexte de la leçon, écrit par `forge lecon` : toujours rangé par matière, pour
+    que deux matières ou deux séries ne partagent jamais un fichier."""
+    return data_dir() / "lecons" / subject / f"{lesson_tag(programme, cycle, code, serie)}.md"
+
+
+CONTEXT_DIR = HERE / "contexte"
+
+
+def stable_context(subject: str, programme: str) -> list[Path]:
+    """Ce que lit tout agent d'exercices d'une matière et d'un pays, du plus général au
+    plus spécifique : universel, formats, figures, matière, pays. Cet ordre ne varie
+    pas d'un run à l'autre, pour que le cache le resserve."""
+    return [HERE / "CONSIGNE-EXERCICES.md",
+            CONTEXT_DIR / "exercice.md",
+            CONTEXT_DIR / "formats" / "commun.md",
+            CONTEXT_DIR / "formats" / "courants.md",
+            CONTEXT_DIR / "figures" / "commun.md",
+            CONTEXT_DIR / "matieres" / f"{subject}.md",
+            CONTEXT_DIR / "exemples" / f"{subject}.json",
+            CONTEXT_DIR / "figures" / f"{subject}.md",
+            REPO / "backend" / "app" / "data" / "misconceptions" / f"{subject}.json",
+            CONTEXT_DIR / "pays" / f"{programme}.md"]
+
+
+def upper_levels(subject: str, programme: str) -> list[Path]:
+    """Les niveaux au-dessus d'une leçon : ce qu'elle ne doit pas répéter."""
+    return [p for p in stable_context(subject, programme)[1:] + [CONTEXT_DIR / "formats" / "geo_construction.md"]
+            if p.suffix == ".md" and p.exists()]
+
+
+GEO_CONTEXT = CONTEXT_DIR / "formats" / "geo_construction.md"
 
 
 def progression(chapter_comps: list, all_comps: list) -> str:
@@ -424,12 +449,14 @@ def progression(chapter_comps: list, all_comps: list) -> str:
 def build_context(run: Path, *, programme: str, cycle: str, subject: str, chapter_comps: list,
                   competency, problems: bool, serie: str | None = None,
                   all_comps: list | None = None) -> dict:
-    """Écrit le contexte du run, du plus stable au plus variable. Les blocs
-    réutilisés vivent hors du run pour rester identiques d'un run à l'autre.
+    """Écrit le contexte du run, du plus général au plus spécifique. Les blocs
+    réutilisés vivent hors du run pour rester identiques d'un run à l'autre ; seul
+    l'extrait de la leçon (en-tête, section de la compétence, fin) est propre au run.
 
     Aucun texte de manuel n'entre dans ce contexte : un manuel ne sert qu'à l'étape
-    précédente (`forge contexte`), qui en tire la fiche et les fiches-idées. Le texte
-    d'Indigo n'est gardé que pour le contrôle anti-copie, jamais lu par le rédacteur."""
+    précédente (`forge lecon`). Le texte d'Indigo n'est gardé que pour le contrôle
+    anti-copie, jamais lu par le rédacteur."""
+    import lecon
     code = chapter_comps[0].chapter_code
     base = data_dir()
     tag = lesson_tag(programme, cycle, code, serie)
@@ -438,29 +465,38 @@ def build_context(run: Path, *, programme: str, cycle: str, subject: str, chapte
     # même code est une autre leçon.
     text, stats = source_text(cycle, code) if programme == "fr" and subject == SUBJECT_DEFAULT else ("", {"pages": 0})
     write_stable(source_path, text)
+    referential_path = base / "sources" / f"{tag}-referentiel.md"
+    write_stable(referential_path, referential_text(programme, cycle, serie, chapter_comps, all_comps))
+    lesson = lecon_path(programme, cycle, code, subject, serie)
+    lesson.parent.mkdir(parents=True, exist_ok=True)
+    codes = [comp_code(c) for c in chapter_comps]
+    own = None if (problems or competency is None) else comp_code(competency)
+    # Hors du run, et réécrit seulement s'il change : le même extrait pour tous les runs
+    # d'une compétence, que le cache resert.
+    extract_path = base / "sources" / f"{tag}-{own or 'lecon'}-extrait.md"
+    facts: list[str] | None = None        # None : pas de leçon, rien à citer
+    if lesson.exists():
+        part = lecon.extract(lesson.read_text(encoding="utf-8"), codes, own)
+        write_stable(extract_path, part)
+        facts = sorted(lecon.facts(part), key=lambda f: int(f[1:]))
+    stable = stable_context(subject, programme)
+    # Un fichier absent n'est pas cité : le rédacteur ne lit que ce qui existe.
+    read_order = [str(p) for p in stable if p.exists()] + [str(referential_path), str(extract_path)]
+    return {"read_order": read_order, "fiche": str(lesson), "lecon": str(extract_path),
+            "fiche_ready": lesson.exists(), "faits": facts,
+            "source": str(source_path), "source_stats": stats, "figure_images": [],
+            "referential": str(referential_path)}
+
+
+def referential_text(programme: str, cycle: str, serie: str | None, chapter_comps: list,
+                     all_comps: list | None = None) -> str:
+    """Les compétences de la leçon, mot pour mot, et la progression de l'année."""
     referential = "\n".join(
         f"- {comp_code(c)} — {c.label}" + (f" : {c.description}" if c.description else "")
         for c in chapter_comps)
-    referential_path = base / "sources" / f"{tag}-referentiel.md"
-    write_stable(referential_path,
-                 f"# Référentiel {programme} {cycle}{' ' + serie if serie else ''} — "
-                 f"{chapter_comps[0].chapter_name}\n{referential}\n"
-                 + progression(chapter_comps, all_comps or chapter_comps))
-    fiche = fiche_path(programme, cycle, code, subject, serie)
-    fiche.parent.mkdir(parents=True, exist_ok=True)
-    ideas = fiche.with_suffix(".idees.yaml")
-    stable = [HERE / "FORGE.md", HERE / "schema.md",
-              HERE / "matieres" / subject / "doctrine.md",
-              HERE / "matieres" / subject / "charte.md",
-              REPO / "backend" / "app" / "data" / "misconceptions" / f"{subject}.json",
-              HERE / "matieres" / subject / "etalons.json",
-              HERE / "programmes" / f"{programme}.md"]
-    # Un fichier absent n'est pas cité : le rédacteur ne lit que ce qui existe.
-    read_order = [str(p) for p in stable if p.exists()] + [str(referential_path), str(fiche)]
-    return {"read_order": read_order, "fiche": str(fiche), "fiche_ready": fiche.exists(),
-            "ideas": str(ideas) if ideas.exists() else None,
-            "source": str(source_path), "source_stats": stats, "figure_images": [],
-            "referential": str(referential_path)}
+    return (f"# Référentiel {programme} {cycle}{' ' + serie if serie else ''} — "
+            f"{chapter_comps[0].chapter_name}\n{referential}\n"
+            + progression(chapter_comps, all_comps or chapter_comps))
 
 
 def _new_run_dir(name: str) -> Path:
@@ -593,7 +629,8 @@ def prepare(db, programme: str, cycle: str, target: str, *, model: str, problems
                                         figures=share, traces=profile[0],
                                         count=(total - first) if suite else first,
                                         skip=first if suite else 0)
-                grid = plan.assign_ideas(grid, plan.load_ideas(Path(context["ideas"] or "")),
+                grid = plan.assign_ideas(grid, plan.load_ideas(Path(context["fiche"]),
+                                                               [comp_code(c) for c in chapter_comps]),
                                          comp_code(comp))
             else:
                 grid = exercise_grid(comp_code(comp), round(20 * share), profile[0])
@@ -604,6 +641,9 @@ def prepare(db, programme: str, cycle: str, target: str, *, model: str, problems
                                   db, [c.id for c in chapter_comps] if problems else [comp.id], problems))
                               + "\n", encoding="utf-8")
             context["read_order"].append(str(memory))
+        if any(s.get("response_type") in DRAW_TYPES for s in grid) and GEO_CONTEXT.exists():
+            # Le contrat des tracés n'est lu que par les runs qui en ont : juste avant la leçon.
+            context["read_order"].insert(context["read_order"].index(context["referential"]), str(GEO_CONTEXT))
         dump_json(run / "grid.json", grid)
         dump_json(run / "payload.json", {
             "run_id": run.name, "programme": programme, "cycle": cycle, "subject": subject,
@@ -611,6 +651,8 @@ def prepare(db, programme: str, cycle: str, target: str, *, model: str, problems
             "model": model, "version": VERSION, "prompt_version": PROMPT_VERSION,
             "mode": "problems" if problems else "exercises", "pilot": pilot,
             "complement": bool(complement or traces), "traces": traces or 0,
+            # Avec une leçon, faits cités et relecture pédagogique sont exigés.
+            "relecture": bool(context["fiche_ready"]),
             "trace_profile": ({"profile": profile[0], "source": profile[1]} if profile else None),
             "chapter": {"code": chapter_comps[0].chapter_code, "name": chapter_comps[0].chapter_name},
             "competency": comp_code(comp) if comp else None,
@@ -640,7 +682,7 @@ def resolve_run(run: str | None) -> Path:
 
 
 def refresh_grid(run: Path) -> str | None:
-    """La fiche s'écrit souvent après `prepare` : tant qu'aucun emplacement n'est
+    """La leçon s'écrit parfois après `prepare` : tant qu'aucun emplacement n'est
     écrit, la grille suit le profil de tracés qu'elle déclare. Renvoie un message
     si la grille a changé."""
     payload = load_json(run / "payload.json")
@@ -656,8 +698,15 @@ def refresh_grid(run: Path) -> str | None:
     if (profile, source) == (current["profile"], current["source"]):
         return None
     grid = load_json(run / "grid.json")
-    dump_json(run / "grid.json", exercise_grid(code, sum(bool(s.get("figure")) for s in grid), profile))
+    grid = exercise_grid(code, sum(bool(s.get("figure")) for s in grid), profile)
+    dump_json(run / "grid.json", grid)
     payload["trace_profile"] = {"profile": profile, "source": source}
+    order = payload["context"]["read_order"]
+    if any(s.get("response_type") in DRAW_TYPES for s in grid) and str(GEO_CONTEXT) not in order:
+        order.insert(max(0, len(order) - 2), str(GEO_CONTEXT))
+        dump_json(run / "payload.json", payload)
+        return (f"Grille refaite : profil de tracés « {profile} » ({source}). "
+                f"Lis aussi {GEO_CONTEXT} avant d'écrire.")
     dump_json(run / "payload.json", payload)
     return f"Grille refaite : profil de tracés « {profile} » ({source})."
 
@@ -1055,7 +1104,7 @@ def _figure_problems(figure) -> list[str]:
         return ["figure : objet attendu"]
     if figure.get("kind") not in NEW_FIGURE_KINDS:
         return [f"figure : kind {figure.get('kind')!r} ; toute figure s'écrit en tikz, dans la "
-                "charte (schema.md, section Figures) — jamais de découpe d'une page de manuel"]
+                "charte (contexte/figures/commun.md) — jamais de découpe d'une page de manuel"]
     error = figures.figure_error(figure_to_json(figure))
     if error:
         return [error]
@@ -1157,7 +1206,7 @@ def _construction_problems(leaf: dict, extra: dict) -> list[str]:
     se distinguent du tracé juste. Le banc complet tourne au rendu."""
     from app.services import construction
     if not isinstance(leaf.get("construction"), dict):
-        return ["construction obligatoire pour geo_construction (voir schema.md)"]
+        return ["construction obligatoire pour geo_construction (voir contexte/formats/geo_construction.md)"]
     problems = construction.problems(extra.get("construction"))
     problems += _diagonal_axis_problems(leaf["construction"])
     if leaf.get("figure"):
@@ -1375,7 +1424,7 @@ def _slot_problems(exercise: dict, slot: dict, payload: dict) -> list[str]:
     wanted_archetype = slot.get("archetype")
     if wanted_archetype and exercise.get("archetype") != wanted_archetype and not swap.get("reason"):
         problems.append(f"archetype {exercise.get('archetype')!r} au lieu de {wanted_archetype} "
-                        "(doctrine de la matière) sans slot_swap.reason")
+                        "(grille du run) sans slot_swap.reason")
     mode = slot.get("trace_mode")
     if mode and exercise.get("response_type") in DRAW_TYPES and not swap.get("reason"):
         found = construction_mode(exercise)
@@ -1408,6 +1457,15 @@ def _slot_problems(exercise: dict, slot: dict, payload: dict) -> list[str]:
                 problems.append(f"figure_constraints.{name} invalide")
     if not exercise.get("micro_skill"):
         problems.append("micro_skill obligatoire")
+    known_facts = (payload.get("context") or {}).get("faits")
+    if payload.get("relecture") and known_facts is not None:
+        cited = exercise.get("faits")
+        if not isinstance(cited, list) or not cited:
+            problems.append("faits obligatoire : les faits de la leçon que la carte mobilise, ex. [\"F3\"]")
+        else:
+            unknown = [str(f) for f in cited if f not in known_facts]
+            if unknown:
+                problems.append("fait(s) cité(s) absent(s) de l'extrait de la leçon : " + ", ".join(unknown))
     if not exercise.get("family_id"):
         problems.append("family_id obligatoire")
     if slot["kind"] == "problem" and not exercise.get("title"):
@@ -1993,7 +2051,7 @@ def disliked(db, filtre: str = "", *, programme: str | None = None, cycle: str |
             continue
         out.append({"run": run, "slot": slot, "forge": raw.get("pipeline") == PIPELINE,
                     "competency": competency.short_id if competency else "", "status": row.status,
-                    "comment": raw.get("review_comment", ""),
+                    "comment": raw.get("review_comment", ""), "cause": raw.get("review_cause"),
                     "goldfish": (raw.get("quality") or {}).get("goldfish"),
                     "notes": list(raw.get("review_notes") or []), "ref": row.source_number or row.id})
     return sorted(out, key=lambda card: card["ref"])
@@ -2015,8 +2073,20 @@ def persist(db, run: Path, *, replace: bool = False, slots: list[str] | None = N
         raise SystemExit(f"Run incomplet : {sorted(set(grid) - set(contracts))}")
     if slots and set(slots) - set(contracts):
         raise SystemExit(f"Emplacements inconnus : {sorted(set(slots) - set(contracts))}")
+    # Relecture pédagogique : une famille bloquée deux fois est écartée et n'est pas
+    # écrite ; une carte non relue ou bloquée une première fois arrête tout.
+    dropped: set[str] = set()
+    review: dict = {}
+    if payload.get("relecture"):
+        import relecture
+        pending = [p for p in relecture.problems(run) if not slots or p.split(" ", 1)[0] in slots]
+        if pending:
+            raise SystemExit("Relecture pédagogique incomplète : " + " | ".join(pending))
+        dropped = relecture.ecartees(run)
+        review = relecture.load_state(run)["verdicts"]
     # Un emplacement choisi emporte ses jumelles : une famille se remplace entière.
-    selected = [k for k in contracts if not slots or k.split(".", 1)[0] in slots]
+    selected = [k for k in contracts if (not slots or k.split(".", 1)[0] in slots)
+                and k.split(".", 1)[0] not in dropped]
     targets = {f"{run.name}/{key}" for key in selected}
     replace = replace or bool(slots)
     rendered = load_json(run / "render.json") if (run / "render.json").exists() else {}
@@ -2075,9 +2145,11 @@ def persist(db, run: Path, *, replace: bool = False, slots: list[str] | None = N
     flagged = {k for k, v in (goldfish.get("verdicts") or {}).items() if v.get("flag")}
     # Échantillon de relecture : la part dépend de la confiance acquise par chaque format.
     import confiance
-    to_review = confiance.sample(
-        run.name, {k: c["response_type"] for k, c in contracts.items() if "." not in k},
-        flagged, confiance.streaks(db, payload["subject"]), bool(payload.get("pilot")))
+    flagged |= {k for k, v in review.items() if v.get("remarques")}
+    families = {k: (c["response_type"], exercises[k].get("archetype") or grid[k].get("archetype"))
+                for k, c in contracts.items() if "." not in k and k not in dropped}
+    to_review = confiance.sample(run.name, families, flagged, confiance.streaks(db, payload["subject"]),
+                                 bool(payload.get("pilot")))
     written = []
     for order, key in enumerate(sorted(contracts)):
         if f"{run.name}/{key}" not in targets:
@@ -2144,10 +2216,15 @@ def persist(db, run: Path, *, replace: bool = False, slots: list[str] | None = N
             "leak_keys": exercise.get("leak_keys") or [], "gives": exercise.get("gives") or [],
             "competencies": slot.get("competencies") or [code],
             "figure_spec": figure,
-            "quality": {"goldfish": (goldfish.get("verdicts") or {}).get(key)},
+            "archetype": exercise.get("archetype") or slot.get("archetype"),
+            "faits": list(exercise.get("faits") or []),
+            "quality": {"goldfish": (goldfish.get("verdicts") or {}).get(key),
+                        "relecture": _review_summary(review.get(key.split(".", 1)[0]))},
             "subject": payload["subject"],
             "review_notes": [*((goldfish.get("verdicts") or {}).get(key, {}).get("notes") or []),
-                             *(str(flag) for flag in exercise.get("review_flags") or [])],
+                             *(str(flag) for flag in exercise.get("review_flags") or []),
+                             *([f"Relecture : {review[key.split('.', 1)[0]]['remarques']}"]
+                               if (review.get(key.split(".", 1)[0]) or {}).get("remarques") else [])],
             # carte tirée dans l'échantillon de relecture, et pourquoi (pastille dans l'onglet)
             "review_sample": to_review.get(key.split(".", 1)[0]),
             "review_blocking": [], "adapted": True}
@@ -2165,8 +2242,17 @@ def persist(db, run: Path, *, replace: bool = False, slots: list[str] | None = N
                                     "review_comment": old["snapshot"]["comment"]}
         written.append(f"{key} → {row.id}")
     extraction.stats_json = {"pipeline": PIPELINE, "version": VERSION, "exercises": len(written),
-                             "run": run.name, "review": sorted(to_review)}
+                             "run": run.name, "review": sorted(to_review), "ecartees": sorted(dropped)}
     db.commit()
     return {"extraction_id": extraction.id, "written": written,
-            "review": extraction.stats_json["review"]}
+            "review": extraction.stats_json["review"], "ecartees": sorted(dropped)}
+
+
+def _review_summary(entry: dict | None) -> dict | None:
+    """Ce que la banque garde de la relecture pédagogique : le verdict, pas l'image."""
+    if not entry:
+        return None
+    return {"attempts": entry.get("attempts"), "notes": entry.get("notes") or [],
+            "remarques": entry.get("remarques") or "", "reader": entry.get("reader"),
+            "history": entry.get("history") or []}
 

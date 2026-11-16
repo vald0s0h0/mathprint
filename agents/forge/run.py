@@ -9,13 +9,16 @@
     backend/.venv/bin/python agents/forge/run.py check   [RUN]
     backend/.venv/bin/python agents/forge/run.py render  [RUN]
     backend/.venv/bin/python agents/forge/run.py goldfish [RUN] [--slots s03 s07]
+    backend/.venv/bin/python agents/forge/run.py relecture [RUN] [--slots s03 s07]
     backend/.venv/bin/python agents/forge/run.py persist [RUN] [--replace] [--slots s03 s07]
+    backend/.venv/bin/python agents/forge/run.py bilan [RUN]
+    backend/.venv/bin/python agents/forge/run.py qualite [--matiere math]
     backend/.venv/bin/python agents/forge/run.py reprendre
     backend/.venv/bin/python agents/forge/run.py ecartes [fr-3e-A4]
-    backend/.venv/bin/python agents/forge/run.py fiche fr 3e C2 [--matiere svt] [--sources cours.md]
+    backend/.venv/bin/python agents/forge/run.py lecon fr 3e C2 [--verifier] [--accepter F3] [--sources cours.md]
 
 RUN = identifiant ou dossier du run (défaut : le plus récent). Procédure :
-agents/forge/FORGE.md. Sorties courtes volontairement : ce texte entre dans le
+agents/forge/CONSIGNE-EXERCICES.md et CONSIGNE-LECON.md. Sorties courtes volontairement : ce texte entre dans le
 contexte du modèle, et chaque ligne se relit à chaque envoi.
 """
 from __future__ import annotations
@@ -53,15 +56,11 @@ def _cmd_prepare(args, db):
         levels = {1: args.facile or 0, 2: args.moyen or 0, 3: args.difficile or 0}
         complement = ({k: v for k, v in levels.items() if v} if any(levels.values())
                       else forge.split_complement(args.complement))
-    # La fiche de la leçon s'écrit avant, par `forge contexte` : sans elle, pas d'exercices.
+    # La leçon s'écrit avant, par `forge lecon` : sans leçon conforme et vérifiée,
+    # pas d'exercices.
     target = forge.resolve_target(db, args.programme, args.cycle, args.cible, args.matiere, args.serie)
-    fiche = forge.fiche_path(args.programme, args.cycle, target["chapter"][0].chapter_code,
-                             args.matiere, args.serie)
-    if not fiche.exists():
-        serie = f" --serie {args.serie}" if args.serie else ""
-        matiere = f" --matiere {args.matiere}" if args.matiere != forge.SUBJECT_DEFAULT else ""
-        print(f"FICHE ABSENTE : {fiche}\nÉcris-la d'abord, dans une session à part :\n"
-              f"  forge contexte {args.programme} {args.cycle} {target['chapter'][0].chapter_code}{serie}{matiere}")
+    blocked = _lesson_gate(args, target)
+    if blocked:
         return 1
     runs = forge.prepare(db, args.programme, args.cycle, args.cible, model=args.modele,
                          problems=args.problemes, subject=args.matiere, pilot=args.pilote,
@@ -76,7 +75,7 @@ def _cmd_prepare(args, db):
         context = payload["context"]
         print(f"Run : {run.name}")
         grid = forge.load_json(run / "grid.json")
-        print(f"  Fiche : {context['fiche']}")
+        print(f"  Leçon : {context['lecon']} ({len(context.get('faits') or [])} faits)")
         print(f"  {len(grid)} famille(s) à écrire" + (" (suite du socle)" if payload.get("suite") else
               (" (amorce : `--suite` pour le reste du socle)" if payload.get("volume") == "formule" else "")))
         profile = payload.get("trace_profile")
@@ -172,6 +171,104 @@ def _cmd_goldfish(args, db):
     return 0
 
 
+def _cmd_review(args, db):
+    import goldfish
+    import relecture
+    run = forge.resolve_run(args.run)
+    state = relecture.run(run, slots=args.slots, session_dir=args.session_dir, model=args.modele)
+    if state.get("pending"):
+        print("Relecture en attente de réponses indépendantes : " + ", ".join(state["pending"]))
+        return 2
+    lines = []
+    for key in sorted(state["verdicts"]):
+        entry = state["verdicts"][key]
+        if args.slots and key not in args.slots:
+            continue
+        if entry.get("ecartee"):
+            lines.append(f"{key} ÉCARTÉE (bloquée {entry['attempts']} fois) : {entry.get('critique')}")
+        elif entry.get("blocked"):
+            lines.append(f"{key} BLOQUÉE, à réécrire une fois : {entry.get('critique')}"
+                         + (f" [{' ; '.join(entry['notes'])}]" if entry.get("notes") else ""))
+        elif entry.get("remarques"):
+            lines.append(f"{key} remarque pour l'humain : {entry['remarques']}")
+    _print_limited(lines)
+    blocked = sum(1 for v in state["verdicts"].values() if v.get("blocked") and not v.get("ecartee"))
+    print(f"{len(state['verdicts'])} famille(s) relue(s), {blocked} bloquée(s), "
+          f"{len(relecture.ecartees(run))} écartée(s).")
+    return 1 if blocked else 0
+
+
+def _tokens_line(label: str, usage: list[dict]) -> str:
+    import mesure
+    total = mesure.total(usage)
+    return (f"  {label} : {total['calls']} appel(s), entrée {total['input']:,} + cache lu {total['cache_read']:,}"
+            f" + cache écrit {total['cache_write']:,}, sortie {total['output']:,}").replace(",", " ")
+
+
+def _cmd_report(args, db):
+    """Bilan d'un run : ce qui est écrit, écarté, à relire, et ce que le run a consommé."""
+    import mesure
+    import relecture
+    run = forge.resolve_run(args.run)
+    grid = forge.load_json(run / "grid.json")
+    review = relecture.load_state(run) if relecture.state_path(run).exists() else {"verdicts": {}, "usage": []}
+    gold = forge.load_json(run / "goldfish.json") if (run / "goldfish.json").exists() else {}
+    dropped = sorted(k for k, v in review["verdicts"].items() if v.get("ecartee"))
+    print(f"{run.name} : {len(grid)} famille(s) prévue(s), {len(forge.remaining_slots(run))} à écrire, "
+          f"{len(dropped)} écartée(s).")
+    for key in dropped:
+        print(f"  écartée {key} : {review['verdicts'][key].get('critique')}")
+    for key, entry in sorted(review["verdicts"].items()):
+        if entry.get("remarques") and not entry.get("ecartee"):
+            print(f"  à regarder {key} : {entry['remarques']}")
+    proposed = [p for ex in forge.load_slots(run).values() for p in ex.get("proposed_errors") or []]
+    for item in proposed:
+        print(f"  code proposé : {item.get('code')} — {item.get('label')}")
+    print("Tokens :")
+    print(_tokens_line("goldfish", gold.get("usage") or []))
+    print(_tokens_line("relecture", review.get("usage") or []))
+    author = mesure.author_usage(run.name)
+    if author["calls"]:
+        print(_tokens_line(f"rédacteur ({author['files']} transcription(s) de sous-agent)", author["usage"]))
+    else:
+        print("  rédacteur : aucune transcription de sous-agent ne cite ce run")
+    return 0
+
+
+def _cmd_quality(args, db):
+    """Lot 0 : les avis humains sur les cartes de la forge, par cause et par format."""
+    import confiance
+    from app.models import IndigoExercise
+    by_cause: dict[str, int] = {}
+    by_format: dict[str, list[int]] = {}
+    for row in db.query(IndigoExercise).all():
+        raw = row.raw_ocr_json or {}
+        if raw.get("pipeline") != forge.PIPELINE or (raw.get("subject") or "math") != args.matiere:
+            continue
+        twin = (row.grading_json or {}).get("twin")
+        if twin and not twin.get("principal"):
+            continue
+        verdict = raw.get("review_verdict")
+        if verdict not in ("like", "dislike"):
+            continue
+        counts = by_format.setdefault(row.response_type, [0, 0])
+        counts[0 if verdict == "like" else 1] += 1
+        if verdict == "dislike":
+            cause = raw.get("review_cause") or "sans cause"
+            by_cause[cause] = by_cause.get(cause, 0) + 1
+    print(f"Avis humains sur la forge ({args.matiere}), une famille comptée une fois :")
+    for rtype, (likes, dislikes) in sorted(by_format.items()):
+        total = likes + dislikes
+        print(f"  {rtype:<17} {total:>4} relue(s), {dislikes:>3} refusée(s) ({round(100 * dislikes / total)} %)")
+    print("Refus par cause :")
+    for cause, count in sorted(by_cause.items(), key=lambda item: -item[1]):
+        label = confiance.CAUSES.get(cause, (cause, ""))
+        print(f"  {label[0]} : {count}" + (f" → corriger {label[1]}" if label[1] else ""))
+    if not by_cause:
+        print("  aucun")
+    return 0
+
+
 def _record_failure(args, db, reason):
     from app.models import IndigoExercise
     import rework
@@ -193,6 +290,8 @@ def _cmd_persist(args, db):
     print(f"{len(result['written'])} brouillon(s) dans l'onglet Exercices "
           f"(extraction {result['extraction_id']}).")
     print("À relire : " + ", ".join(result["review"]))
+    if result.get("ecartees"):
+        print("Écartées par la relecture pédagogique, non écrites : " + ", ".join(result["ecartees"]))
     rendered = forge.load_json(run / "render.json") if (run / "render.json").exists() else {}
     for line in forge.trace_lines(rendered):
         print(line)
@@ -210,6 +309,10 @@ def _cmd_disliked(args, db):
         origin = "" if card["forge"] else " [hors forge : à reprendre à la main]"
         note = " | ".join(card["notes"]) or "aucun signalement"
         print(f"{card['ref']} ({card['competency']}, {card['status']}){origin} : {note}")
+        if card.get("cause"):
+            import confiance
+            label, level = confiance.CAUSES.get(card["cause"], (card["cause"], ""))
+            print(f"  Cause : {label}" + (f" → corriger aussi {level}" if level else ""))
         if card["comment"]:
             print("  Commentaire admin : " + card["comment"])
         if card["goldfish"]:
@@ -252,7 +355,7 @@ def _cmd_calendar(args, db):
             if comp.chapter_code in seen or comp.chapter_week is None:
                 continue
             seen.add(comp.chapter_code)
-            fiche = forge.fiche_path(args.programme, framework.grade_level, comp.chapter_code,
+            fiche = forge.lecon_path(args.programme, framework.grade_level, comp.chapter_code,
                                      args.matiere, serie)
             lessons.append({"level": framework.grade_level, "serie": serie, "code": comp.chapter_code,
                             "name": comp.chapter_name, "week": comp.chapter_week,
@@ -262,7 +365,7 @@ def _cmd_calendar(args, db):
     rows = plan.upcoming(lessons, week, args.semaines)
     for lesson in rows:
         serie = f" {lesson['serie']}" if lesson["serie"] else ""
-        state = "fiche prête" if lesson["fiche"] else "FICHE À ÉCRIRE"
+        state = "leçon prête" if lesson["fiche"] else "LEÇON À ÉCRIRE"
         active = f"{lesson['classes']} classe(s)" if lesson["classes"] else "aucune classe"
         print(f"  sem. {lesson['week']:>2}  {lesson['level']}{serie} {lesson['code']} "
               f"{lesson['name']} — {active}, {state}")
@@ -287,10 +390,15 @@ def _cmd_exhaustion(args, db):
 
 
 def _cmd_trust(args, db):
-    """Indice de confiance par format : ce qui a été relu, et ce qu'il reste à relire."""
+    """Indice de confiance par format, et par format dans chaque archétype."""
     import confiance
     known = confiance.streaks(db, args.matiere)
     print(f"Confiance des formats ({args.matiere}). Un format jamais relu est relu en entier.")
+    for key in sorted(k for k in known if "/" in k):
+        entry = known[key]
+        print(f"  {key:<24} {entry['reviewed']:>4} relue(s), {entry['streak']:>4} acceptée(s) "
+              f"d'affilée → {round(entry['rate'] * 100)} % à relire")
+    print("Par format, tous archétypes :")
     for rtype in forge.LEAF_TYPES + (forge.COMPOSITE,):
         entry = known.get(rtype)
         if entry:
@@ -321,30 +429,91 @@ def _read_sources(paths: list[str]) -> list[str]:
     return texts
 
 
-def _cmd_fiche(args, db):
-    """Contrôle par script de la fiche d'une leçon et de ses fiches-idées."""
-    import contexte
+def _lesson_args(args) -> str:
+    serie = f" --serie {args.serie}" if args.serie else ""
+    matiere = f" --matiere {args.matiere}" if args.matiere != forge.SUBJECT_DEFAULT else ""
+    return serie + matiere
+
+
+def _lesson_gate(args, target) -> bool:
+    """Refuse un run sans leçon conforme : absente, à l'ancien format ou pas vérifiée."""
+    import lecon
+    chapter = target["chapter"][0].chapter_code
+    path = forge.lecon_path(args.programme, args.cycle, chapter, args.matiere, args.serie)
+    command = f"forge lecon {args.programme} {args.cycle} {chapter}{_lesson_args(args)}"
+    if not path.exists():
+        print(f"LEÇON ABSENTE : {path}\nÉcris-la d'abord, dans une session à part :\n  {command}")
+        return True
+    text = path.read_text(encoding="utf-8")
+    codes = [forge.comp_code(c) for c in target["chapter"]]
+    problems = lecon.structure_problems(text, codes, args.matiere)
+    if problems:
+        print(f"LEÇON À RÉÉCRIRE : {path}\n  " + "\n  ".join(problems)
+              + f"\nRéécris-la dans une session à part :\n  {command} --refaire")
+        return True
+    blocking = lecon.blocking_facts(text, lecon.load_verif(path))
+    if blocking:
+        print(f"LEÇON À VÉRIFIER : {path}\n  " + "\n  ".join(blocking)
+              + f"\nLance la vérification ou fais trancher l'humain :\n"
+              f"  backend/.venv/bin/python agents/forge/run.py lecon {args.programme} {args.cycle} {chapter}"
+              f"{_lesson_args(args)} --verifier")
+        return True
+    return False
+
+
+def _cmd_lesson(args, db):
+    """Contrôle par script d'une leçon, vérification de ses faits par un modèle neuf,
+    et accord de l'humain sur un fait contesté."""
+    import goldfish
+    import lecon
     target = forge.resolve_target(db, args.programme, args.cycle, args.lecon, args.matiere, args.serie)
     chapter = target["chapter"][0].chapter_code
-    fiche = forge.fiche_path(args.programme, args.cycle, chapter, args.matiere, args.serie)
-    if not fiche.exists():
-        print(f"FICHE ABSENTE : {fiche}")
+    path = forge.lecon_path(args.programme, args.cycle, chapter, args.matiere, args.serie)
+    if not path.exists():
+        print(f"LEÇON ABSENTE : {path}")
         return 1
+    if args.accepter:
+        done = lecon.accept(path, args.accepter)
+        print("Maintenu(s) par l'humain : " + (", ".join(done) or "aucun"))
     codes = [forge.comp_code(c) for c in target["chapter"]]
     sources = _read_sources(args.sources)
     if args.matiere == forge.SUBJECT_DEFAULT and args.programme == "fr":
         indigo, _ = forge.source_text(args.cycle, chapter)
         if indigo:
             sources.append(indigo)
-    problems = contexte.fiche_problems(fiche.read_text(encoding="utf-8"), codes, sources)
-    ideas = fiche.with_suffix(".idees.yaml")
-    if ideas.exists():
-        problems += contexte.idees_problems(ideas.read_text(encoding="utf-8"), codes, sources)
-    print(f"{fiche} ({', '.join(codes)}, {len(sources)} source(s))")
+    upper = [p.read_text(encoding="utf-8") for p in forge.upper_levels(args.matiere, args.programme)]
+    text = path.read_text(encoding="utf-8")
+    problems = lecon.lecon_problems(text, codes, sources, upper, args.matiere)
+    print(f"{path} ({', '.join(codes)}, {len(sources)} source(s))")
     for problem in problems:
         print(f"  {problem}")
-    print(f"{len(problems)} problème(s)." if problems else "Fiche conforme.")
-    return 1 if problems else 0
+    if problems:
+        print(f"{len(problems)} problème(s) : corrige la leçon avant de la faire vérifier.")
+        return 1
+    if args.verifier:
+        referential = forge.referential_text(args.programme, args.cycle, args.serie, target["chapter"],
+                                             target.get("all"))
+
+        def ask(system, prompt):
+            goldfish.USAGE.clear()
+            answer = goldfish.ask("claude", system, prompt, [], model=args.modele)
+            return answer, (goldfish.USAGE[-1] if goldfish.USAGE else {})
+        lecon.verify(path, referential, ask, model=args.modele)
+    status = lecon.fact_status(text, lecon.load_verif(path))
+    unsure = [k for k, f in status.items() if f["incertain"]]
+    contested = [(k, f) for k, f in status.items() if f["verdict"] not in (None, "juste", lecon.ACCEPTED)]
+    unverified = [k for k, f in status.items() if f["verdict"] is None]
+    print(f"{len(status)} fait(s), {len(unverified)} non vérifié(s), {len(contested)} contesté(s), "
+          f"{len(unsure)} incertain(s) selon l'auteur.")
+    for key, fact in contested:
+        print(f"  {key} {fact['verdict']} : {fact['raison']}\n      {fact['text']}")
+    if unsure:
+        print("  Incertains à relire : " + ", ".join(unsure))
+    if contested:
+        print("Corrige ces faits dans la leçon (puis --verifier), ou maintiens-les avec --accepter F…")
+    blocking = lecon.blocking_facts(text, lecon.load_verif(path))
+    print("Leçon conforme et vérifiée." if not blocking else "Leçon pas encore utilisable par la forge.")
+    return 1 if blocking else 0
 
 
 def main(argv=None) -> int:
@@ -368,7 +537,9 @@ def main(argv=None) -> int:
     prep.add_argument("--difficile", type=int, help="Second run : nombre de difficiles")
     for name, helptext in (("check", "Contrôles gratuits."), ("render", "Rendu réel et blanc."),
                            ("persist", "Écrit les brouillons."), ("suivant", "Prochain lot à écrire."),
-                           ("goldfish", "Relecture sans contexte.")):
+                           ("goldfish", "Lecture par un élève sans contexte."),
+                           ("relecture", "Relecture pédagogique indépendante."),
+                           ("bilan", "Bilan du run et tokens consommés.")):
         cmd = sub.add_parser(name, help=helptext)
         cmd.add_argument("run", nargs="?")
         if name == "persist":
@@ -377,13 +548,17 @@ def main(argv=None) -> int:
             cmd.add_argument("--slots", nargs="*", help="Remplace seulement ces emplacements")
         if name == "suivant":
             cmd.add_argument("--lot", type=int, default=5)
+        if name == "relecture":
+            cmd.add_argument("--slots", nargs="*")
+            cmd.add_argument("--session-dir", type=Path, help="Transport de session indépendante : requêtes/réponses JSON")
+            cmd.add_argument("--modele", default="opus", help="Modèle du relecteur (défaut : opus)")
         if name == "goldfish":
             cmd.add_argument("--slots", nargs="*")
             cmd.add_argument("--cli", choices=("claude", "codex"))
             cmd.add_argument("--session-dir", type=Path, help="Transport de session indépendante : requêtes/réponses JSON")
             cmd.add_argument("--modele", help="Modèle indépendant utilisé dans la session")
     sub.add_parser("reprendre", help="Liste les runs inachevés.")
-    cal = sub.add_parser("calendrier", help="Leçons qui commencent bientôt, et celles sans fiche.")
+    cal = sub.add_parser("calendrier", help="Leçons qui commencent bientôt, et celles sans contexte.")
     cal.add_argument("programme")
     cal.add_argument("--matiere", default=forge.SUBJECT_DEFAULT)
     cal.add_argument("--semaines", type=int, default=3, help="Horizon, en semaines")
@@ -396,13 +571,18 @@ def main(argv=None) -> int:
     for option in ("programme", "cycle", "domaine", "matiere"):
         ecartes.add_argument("--" + option)
     ecartes.add_argument("--export", type=Path, help="Exporte un manifeste de reprise")
-    fiche = sub.add_parser("fiche", help="Contrôle la fiche d'une leçon (forge contexte).")
-    fiche.add_argument("programme", help="Programme, ex. fr")
-    fiche.add_argument("cycle", help="Niveau, ex. 3e")
-    fiche.add_argument("lecon", help="Leçon (C2) ou une de ses compétences")
-    fiche.add_argument("--serie", help="Série du lycée ivoirien : A, A1, A2, C, D")
-    fiche.add_argument("--matiere", default=forge.SUBJECT_DEFAULT)
-    fiche.add_argument("--sources", nargs="*", default=[], help="Sources texte ou Markdown")
+    lesson = sub.add_parser("lecon", help="Contrôle et vérifie le contexte d'une leçon (forge lecon).")
+    lesson.add_argument("programme", help="Programme, ex. fr")
+    lesson.add_argument("cycle", help="Niveau, ex. 3e")
+    lesson.add_argument("lecon", help="Leçon (C2) ou une de ses compétences")
+    lesson.add_argument("--serie", help="Série du lycée ivoirien : A, A1, A2, C, D")
+    lesson.add_argument("--matiere", default=forge.SUBJECT_DEFAULT)
+    lesson.add_argument("--sources", nargs="*", default=[], help="Sources texte ou Markdown")
+    lesson.add_argument("--verifier", action="store_true", help="Fait juger les faits par un modèle neuf")
+    lesson.add_argument("--modele", default="opus", help="Modèle du vérificateur (défaut : opus)")
+    lesson.add_argument("--accepter", nargs="*", default=[], help="Faits contestés que l'humain maintient")
+    quality = sub.add_parser("qualite", help="Avis humains sur la forge, par cause et par format.")
+    quality.add_argument("--matiere", default=forge.SUBJECT_DEFAULT)
     args = parser.parse_args(argv)
     db = SessionLocal()
     try:
@@ -410,7 +590,8 @@ def main(argv=None) -> int:
                 "render": _cmd_render, "goldfish": _cmd_goldfish, "persist": _cmd_persist,
                 "reprendre": _cmd_resume, "ecartes": _cmd_disliked,
                 "calendrier": _cmd_calendar, "epuisement": _cmd_exhaustion,
-                "confiance": _cmd_trust, "fiche": _cmd_fiche}[args.cmd](args, db) or 0
+                "confiance": _cmd_trust, "lecon": _cmd_lesson, "relecture": _cmd_review,
+                "bilan": _cmd_report, "qualite": _cmd_quality}[args.cmd](args, db) or 0
     finally:
         db.close()
 

@@ -42,3 +42,22 @@ Plan : [idees/forge-refonte-plan.md](idees/forge-refonte-plan.md). Branche `forg
 - `vague --nas` : le Mac relève la file de correction du NAS par SSH.
 - Physique-chimie : l'unité n'est imprimée que si elle n'est pas évaluée ; sinon, case à part.
 - Livraison de `forge2` : demandée le 2026-11-15.
+
+## Forge à niveaux (2026-11-16, branche `forge-niveaux`)
+
+Objectif : des exercices justes et de grande qualité, publiés avec peu de relecture humaine. Chaque règle vit au niveau le plus général où elle est vraie ; on relit en amont (matière, leçon), on fait confiance en aval (exercices) grâce à des contrôles et à deux lecteurs indépendants. Schéma : artefact « Payload de la forge v2 ».
+
+| Lot | Contenu | État |
+|---|---|---|
+| 0 | `run.py bilan` (tokens des lecteurs et du rédacteur, lus dans les transcriptions des sous-agents), `run.py qualite` (refus par cause et par format) | fait |
+| 1 | `FORGE.md` → `CONSIGNE-EXERCICES.md` (procédure seule) + `contexte/exercice.md` (le bon exercice, universel) ; `schema.md` découpé en `contexte/formats/{commun,courants,geo_construction}.md` et `contexte/figures/{commun,pc,svt,hg}.md` ; doctrine + charte → `contexte/matieres/<m>.md` ; `programmes/` → `contexte/pays/` ; étalons → `contexte/exemples/math.json` ; `goldfish_prompts/` → `prompts/` | fait |
+| 1 | `CONTEXTE.md` → `CONSIGNE-LECON.md`, `contexte.py` → `lecon.py`, commande `forge lecon` (`run.py lecon`) ; leçons dans `data/forge/lecons/<matière>/` ; idées en blocs ```` ```yaml idees ```` ; l'agent ne lit que l'en-tête, la section de sa compétence et la fin (extrait stable hors du run) ; `geo_construction.md` lu seulement si la grille a des tracés | fait |
+| 1 | règles de maths recopiées dans les fiches remontées dans `contexte/matieres/math.md` ; `run.py lecon` refuse une leçon qui recopie un niveau au-dessus | fait |
+| 2 | faits `F…` obligatoires dans la leçon, cités par chaque famille (`faits`), contrôlés par `check` ; vérificateur de faits (`run.py lecon --verifier`, Opus, seuls les faits modifiés rejugés ; `--accepter` pour l'humain) ; `prepare` refuse une leçon absente, à l'ancien format ou non vérifiée | fait |
+| 2 | relecteur pédagogique (`run.py relecture`, Opus, grille juste / utile / distracteurs / niveau / programme) : bloquée → réécrite une fois → écartée, `persist` la laisse de côté | fait |
+| 3 | cause obligatoire sur un pouce baissé (onglet Exercices) ; confiance par format et par format × archétype, remise à zéro selon la cause ; `ecartes` affiche la cause et le niveau à corriger | fait |
+| 4 | autres matières | non ouvert (décision du 2026-11-16 : maths seulement) |
+
+Décisions du 2026-11-16 : publication par clic groupé (inchangé) ; Opus pour tout (pas d'abonnement Fable) ; carte bloquée réécrite une fois puis écartée ; les exercices déjà publiés ne citent pas de faits ; 3e C entièrement publiée, à remplacer plus tard par la nouvelle forge ; rien n'est déployé.
+
+Reste : les 7 anciennes fiches (`data/forge/lecons/math/`) sont à réécrire avec `forge lecon --refaire` avant tout nouveau run sur ces leçons ; aucun run réel de bout en bout avec relecture pédagogique n'a encore tourné.

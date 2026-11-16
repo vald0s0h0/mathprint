@@ -1928,6 +1928,7 @@ def exercise_out(db, ex: IndigoExercise) -> dict:
         # Avis de l'admin sur la carte : « like », « dislike » (à reprendre en CLI) ou rien.
         "review_verdict": (ex.raw_ocr_json or {}).get("review_verdict"),
         "review_comment": (ex.raw_ocr_json or {}).get("review_comment", ""),
+        "review_cause": (ex.raw_ocr_json or {}).get("review_cause"),
         "review_history": (ex.raw_ocr_json or {}).get("review_history", []),
         "needs_review": needs_review(ex),
         # Rattachement à la compétence non confirmé : exercice à ranger.
@@ -2375,10 +2376,16 @@ def validate_exercise(db, ex: IndigoExercise, user_id: str | None) -> IndigoExer
     return ex
 
 
+REVIEW_CAUSES = ("fait_faux", "regle_matiere", "format_rendu", "consigne", "pedagogie")
+
+
 def set_review_verdict(db, ex: IndigoExercise, value: str | None,
-                       comment: str | None = None) -> IndigoExercise:
+                       comment: str | None = None, cause: str | None = None) -> IndigoExercise:
     """Avis de relecture de l'admin. `updated_at` ne bouge pas : il versionne l'URL
-    de la figure, et un avis ne change rien à la carte imprimée."""
+    de la figure, et un avis ne change rien à la carte imprimée. Un refus porte sa
+    cause : elle désigne le niveau de la forge à corriger et la confiance à retirer."""
+    if cause is not None and cause not in REVIEW_CAUSES:
+        raise ValueError(f"cause inconnue : {cause}")
     from . import exercise_review
     # Les jumelles d'une carte (autres valeurs, autre disposition) partagent son avis :
     # une famille se publie ou se reprend entière.
@@ -2386,6 +2393,10 @@ def set_review_verdict(db, ex: IndigoExercise, value: str | None,
         raw = {k: v for k, v in (row.raw_ocr_json or {}).items() if k != "review_verdict"}
         if comment is not None:
             raw["review_comment"] = comment.strip()
+        if value != "dislike":
+            raw.pop("review_cause", None)
+        elif cause is not None:
+            raw["review_cause"] = cause
         row.raw_ocr_json = {**raw, "review_verdict": value} if value else raw
         exercise_review.append(row, exercise_review.event(
             "accepted" if value == "like" else "disliked" if value == "dislike" else "unrated",

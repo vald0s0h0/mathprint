@@ -96,7 +96,7 @@ def test_the_writer_reads_no_manual_and_sees_the_year_progression(db):  # noqa: 
     assert context["fiche"].endswith("ci-tle-D-E2.md") and context["figure_images"] == []
     assert Path(context["source"]).read_text() == ""       # jamais les pages françaises
     assert not any("sources/ci-tle-D-E2.md" in p or "/packs/" in p for p in context["read_order"])
-    assert all(Path(p).exists() or p == context["fiche"] for p in context["read_order"])
+    assert all(Path(p).exists() or p == context["lecon"] for p in context["read_order"])
     referential = Path(context["referential"]).read_text()
     assert "Pas encore vu" in referential and "E1 Triangle rectangle" in referential
     grid = forge.load_json(run / "grid.json")
@@ -114,19 +114,31 @@ def test_the_declared_archetype_must_match_the_slot():
     assert not any("archetype" in p for p in forge._slot_problems({**base, "archetype": "ERR"}, slot, {}))
 
 
-def test_no_exercises_without_the_lesson_sheet(db, capsys):  # noqa: F811
+def test_no_exercises_without_a_checked_lesson(db, capsys):  # noqa: F811
+    import lecon
     _lycee(db)
     args = cli.argparse.Namespace(programme="ci", cycle="tle", cible="E2.1", modele="m", matiere="math",
                                   serie="D", problemes=False, pilote=False, complement=None, traces=None,
                                   facile=None, moyen=None, difficile=None, suite=False, vingt=False)
     assert cli._cmd_prepare(args, db) == 1
     out = capsys.readouterr().out
-    assert "FICHE ABSENTE" in out and "forge contexte ci tle E2 --serie D" in out
-    fiche = forge.fiche_path("ci", "tle", "E2", "math", "D")
-    fiche.parent.mkdir(parents=True, exist_ok=True)
-    fiche.write_text("# Fiche\n")
+    assert "LEÇON ABSENTE" in out and "forge lecon ci tle E2 --serie D" in out
+    path = forge.lecon_path("ci", "tle", "E2", "math", "D")
+    assert path.parts[-2:] == ("math", "ci-tle-D-E2.md")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("# Fiche\n")                       # ancien format : sans faits
+    assert cli._cmd_prepare(args, db) == 1
+    assert "LEÇON À RÉÉCRIRE" in capsys.readouterr().out
+    codes = [forge.comp_code(c) for c in forge.resolve_target(db, "ci", "tle", "E2", "math", "D")["chapter"]]
+    body = "# Leçon\n\n- **F1** : un fait commun.\n\n" + "".join(
+        f"## {code} : compétence\n\n**Tracés : aucun.**\n\n" for code in codes)
+    path.write_text(body)
+    assert cli._cmd_prepare(args, db) == 1
+    assert "LEÇON À VÉRIFIER" in capsys.readouterr().out and True
+    lecon.accept(path, ["F1"])
     assert cli._cmd_prepare(args, db) == 0
-    assert "2 famille(s) à écrire (amorce" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "2 famille(s) à écrire (amorce" in out and "(1 faits)" in out
 
 
 def test_trust_is_earned_per_format_and_lost_on_a_defect():
@@ -135,7 +147,7 @@ def test_trust_is_earned_per_format_and_lost_on_a_defect():
     cards = {f"s{i:02d}": "qcm_single" for i in range(1, 21)} | {"s21": "table_fill"}
     known = {"qcm_single": {"rate": 0.25}}
     picked = confiance.sample("run", cards, {"s03"}, known)
-    assert picked["s03"] == "signalée par le lecteur" and "s21" in picked       # format jamais relu
+    assert picked["s03"] == "signalée par un lecteur" and "s21" in picked       # format jamais relu
     assert sum(1 for k in picked if k not in ("s03", "s21")) == 5              # 25 % de 19, arrondi au-dessus
     assert picked == confiance.sample("run", cards, {"s03"}, known)
     assert len(confiance.sample("run", cards, set(), known, pilot=True)) == 21

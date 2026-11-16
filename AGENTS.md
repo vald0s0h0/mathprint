@@ -30,22 +30,26 @@ Quand l'utilisateur écrit `forge <programme> <cycle> <cible>` (ex. `forge fr 3e
 `forge fr 3e C1.2 --traces 4`, `forge reprendre`, `forge ecartes fr-3e-A4`), ou demande de
 lancer la pipeline forge :
 
-1. lis **entièrement** `agents/forge/FORGE.md` puis `agents/forge/schema.md` ;
-2. suis la procédure de FORGE.md de bout en bout, jusqu'au bilan final.
+1. lis **entièrement** `agents/forge/CONSIGNE-EXERCICES.md` ;
+2. lance `prepare`, puis lis les contextes dans l'ordre qu'il affiche ;
+3. suis la procédure de CONSIGNE-EXERCICES.md de bout en bout, jusqu'au bilan final.
 
 Si le programme ou le cycle manque, demande-le avant toute chose. Ne modifie pas le
 code de l'application pendant un run : ton travail est dans les fichiers du run.
 
-## Commande « forge contexte »
+## Commande « forge lecon »
 
-Quand l'utilisateur écrit `forge contexte <programme> <niveau> <leçon…>` (ex.
-`forge contexte ci 3e E2`, `forge contexte fr 3e C2`,
-`forge contexte ci tle E1 --serie D --matiere svt --sources ~/Manuels/svt-tle.pdf --pages 40-61`),
-ou demande d'écrire la fiche ou le contexte d'une leçon :
+Quand l'utilisateur écrit `forge lecon <programme> <niveau> <leçon…>` (ex.
+`forge lecon ci 3e E2`, `forge lecon fr 3e C2`, `forge lecon fr 3e C2 --refaire`,
+`forge lecon ci tle E1 --serie D --sources ~/Manuels/maths-tle.pdf --pages 40-61`),
+ou demande d'écrire le contexte d'une leçon :
 
-1. lis **entièrement** `agents/forge/CONTEXTE.md` ;
-2. suis sa procédure jusqu'au bilan. Ce n'est pas un run forge : ne lis ni FORGE.md ni
-   schema.md, et n'écris aucun exercice.
+1. lis **entièrement** `agents/forge/CONSIGNE-LECON.md` ;
+2. suis sa procédure jusqu'au bilan. Ce n'est pas un run forge : ne lis pas
+   CONSIGNE-EXERCICES.md, et n'écris aucun exercice.
+
+Seules les mathématiques sont ouvertes : n'écris de leçon dans une autre matière que si
+l'utilisateur le demande explicitement.
 
 Ce fichier est la seule source d'instructions du dépôt : ne crée pas de `CLAUDE.md`,
 car Claude Code cesserait alors de lire `AGENTS.md`.

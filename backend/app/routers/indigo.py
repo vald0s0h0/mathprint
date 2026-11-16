@@ -689,6 +689,7 @@ def validate_exercise(exercise_id: str, db: Session = Depends(get_db),
 class ReviewVerdictIn(BaseModel):
     value: Literal["like", "dislike"] | None = None
     comment: str | None = Field(default=None, max_length=5000)
+    cause: Literal["fait_faux", "regle_matiere", "format_rendu", "consigne", "pedagogie"] | None = None
 
 
 @router.put("/exercises/{exercise_id}/review-verdict")
@@ -696,9 +697,10 @@ def set_review_verdict(exercise_id: str, body: ReviewVerdictIn, db: Session = De
     ex = db.get(IndigoExercise, exercise_id)
     if ex is None:
         raise HTTPException(404, "Exercice introuvable")
-    indigo.set_review_verdict(db, ex, body.value, body.comment)
+    indigo.set_review_verdict(db, ex, body.value, body.comment, body.cause)
     return {"id": exercise_id, "review_verdict": body.value,
             "review_comment": (ex.raw_ocr_json or {}).get("review_comment", ""),
+            "review_cause": (ex.raw_ocr_json or {}).get("review_cause"),
             "review_history": (ex.raw_ocr_json or {}).get("review_history", []),
             "needs_review": indigo.needs_review(ex)}
 

@@ -35,7 +35,7 @@ def _json_sources():
     root = Path(__file__).resolve().parents[2]
     for path in (tikzfig._APP_DIR / "data" / "indigo" / "exercises.json",
                  settings.data_dir / "indigo" / "published" / "exercises.json",
-                 *sorted((root / "agents" / "forge" / "matieres").glob("*/etalons.json"))):
+                 *sorted((root / "agents" / "forge" / "contexte" / "exemples").glob("*.json"))):
         if path.is_file():
             yield str(path), json.loads(path.read_text(encoding="utf-8"))
 

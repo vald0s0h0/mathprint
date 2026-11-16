@@ -39,7 +39,8 @@ def store(tmp_path, monkeypatch):
 
 
 def test_schema_examples_pass_the_lint():
-    md = (ROOT / "agents" / "forge" / "schema.md").read_text(encoding="utf-8")
+    md = "\n".join(p.read_text(encoding="utf-8")
+                   for p in sorted((ROOT / "agents" / "forge" / "contexte").rglob("*.md")))
     bodies = re.findall(r"```latex\n(.*?)\n```", md, re.S)
     assert len(bodies) >= 4
     for body in bodies:
@@ -118,7 +119,7 @@ def test_every_shipped_tikz_figure_is_prerendered():
     """Le NAS ne compile pas : une figure TikZ publiée ou d'étalon sans image dans
     app/data/tikz casserait l'impression. Lancer backend/scripts/tikz_prerender.py."""
     sources = [tikzfig._APP_DIR / "data" / "indigo" / "exercises.json",
-               *sorted((ROOT / "agents" / "forge" / "matieres").glob("*/etalons.json"))]
+               *sorted((ROOT / "agents" / "forge" / "contexte" / "exemples").glob("*.json"))]
     missing = []
     for path in sources:
         if path.is_file():
@@ -176,7 +177,8 @@ def test_a_clean_figure_and_its_dimension_line_raise_nothing(store):
 
 @needs_tex
 def test_schema_examples_have_no_geometric_defect(store):
-    md = (ROOT / "agents" / "forge" / "schema.md").read_text(encoding="utf-8")
+    md = "\n".join(p.read_text(encoding="utf-8")
+                   for p in sorted((ROOT / "agents" / "forge" / "contexte").rglob("*.md")))
     for body in re.findall(r"```latex\n(.*?)\n```", md, re.S):
         assert tikzfig.inspect({"tikz": body}) == [], body[:60]
 

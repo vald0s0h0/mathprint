@@ -7,7 +7,7 @@ Le script décide ce que le modèle n'a pas à deviner :
   - le **format** et le **niveau** de chaque emplacement ;
   - l'**archétype** de chaque emplacement (application, erreur à corriger, deux
     élèves en désaccord…), pour que la banque ne soit pas une suite de « Calcule » ;
-  - l'**idée** donnée à certains emplacements, quand la leçon en a (fiches-idées).
+  - l'**idée** donnée à certains emplacements, quand la leçon en a (blocs `yaml idees`).
 
 Un emplacement est une famille : il s'imprime en 4 ou 6 jumelles.
 """
@@ -138,16 +138,14 @@ def problem_slots(codes: list[str], count: int = PROBLEMS_PER_LESSON) -> list[di
 
 
 # ------------------------------------------------------------------ idées
-def load_ideas(path: Path) -> list[dict]:
-    """Fiches-idées d'une leçon (fichier `.idees.yaml` écrit par `forge contexte`)."""
-    if not path.is_file():
+def load_ideas(lesson: Path, codes: list[str]) -> list[dict]:
+    """Idées d'une leçon : les blocs ```yaml idees``` de ses sections de compétence,
+    écrits par `forge lecon`."""
+    if not lesson.is_file():
         return []
-    import yaml
-    try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or []
-    except yaml.YAMLError:
-        return []
-    return [i for i in data if isinstance(i, dict) and i.get("id") and i.get("mecanisme")]
+    import lecon
+    return [i for i in lecon.ideas(lesson.read_text(encoding="utf-8"), codes)
+            if i.get("id") and i.get("mecanisme")]
 
 
 def assign_ideas(grid: list[dict], ideas: list[dict], code: str) -> list[dict]:

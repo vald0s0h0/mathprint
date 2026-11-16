@@ -27,7 +27,7 @@ from app.db import Base  # noqa: E402
 from app.models import Competency, CompetencyFramework, IndigoExercise  # noqa: E402
 from app.services import card_preview, figures, forge_contract as fc, generation, pdfgen, scoring, typography  # noqa: E402
 
-ETALONS = json.loads((REPO / "agents" / "forge" / "matieres" / "math" / "etalons.json")
+ETALONS = json.loads((REPO / "agents" / "forge" / "contexte" / "exemples" / "math.json")
                      .read_text(encoding="utf-8"))["cartes"]
 
 
@@ -770,7 +770,7 @@ def test_agents_md_is_the_only_instruction_source():
     assert not (REPO / "CLAUDE.md").exists()
     assert not (REPO / ".agents").exists()
     text = (REPO / "AGENTS.md").read_text(encoding="utf-8")
-    assert "agents/forge/FORGE.md" in text
+    assert "agents/forge/CONSIGNE-EXERCICES.md" in text
 
 
 def test_taxonomy_has_unique_codes_under_the_subject():
@@ -1247,7 +1247,7 @@ def test_trace_profile_comes_from_the_fiche_then_from_the_label(tmp_path):
     fiche = tmp_path / "fiche.md"
     fiche.write_text("# Fiche\n\n## C1.1 : Symétries\n\n**Tracés : partiel.** Raison.\n\n"
                      "## C1.2 : Rotation\n\nRien.\n", encoding="utf-8")
-    assert forge.trace_profile(fiche, "C1.1", "Transformer une figure") == ("partiel", "fiche")
+    assert forge.trace_profile(fiche, "C1.1", "Transformer une figure") == ("partiel", "leçon")
     assert forge.trace_profile(fiche, "C1.2", "Transformer une figure par rotation") == ("central", "libellé")
     assert forge.trace_profile(fiche, "C1.3", "Calculer des volumes") == ("aucun", "libellé")
     assert forge.trace_profile(None, "C4.3", "Construire des sections") == ("central", "libellé")

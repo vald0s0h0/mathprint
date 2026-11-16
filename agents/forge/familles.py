@@ -7,7 +7,7 @@ L'auteur écrit `familles/<emplacement>.json` :
      "carte": { …une carte au contrat habituel, avec des valeurs à remplir… }}
 
 - `jeux` : 2 ou 3 jeux de valeurs. Mêmes noms dans chaque jeu ; un nombre ou un texte.
-- `carte` : le contrat de `schema.md`, où `<<a>>` reprend une valeur et `<<a*b>>` un
+- `carte` : le contrat de `contexte/formats/`, où `<<a>>` reprend une valeur et `<<a*b>>` un
   calcul (SymPy). Le script calcule : une réponse ou un distracteur ne se recopie pas.
 - `dispositions`, sur une question à réponses cochées, reliées ou en tableau : deux
   ordres des réponses, **écrits par l'auteur**. Aucun script ne mélange une réponse.

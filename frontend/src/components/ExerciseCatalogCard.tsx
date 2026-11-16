@@ -1,4 +1,4 @@
-import { ActionIcon, Badge, Box, Button, Group, Paper, Stack, Text, Textarea, Tooltip, UnstyledButton } from '@mantine/core'
+import { ActionIcon, Badge, Box, Button, Group, Paper, Select, Stack, Text, Textarea, Tooltip, UnstyledButton } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
 import { ChevronLeft, ChevronRight, Copy, ThumbsDown, ThumbsUp } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
@@ -18,6 +18,7 @@ export type CatalogExercise = PrintableExercise & {
   status?: string
   review_notes?: string[]
   review_comment?: string
+  review_cause?: ReviewCause | null
   review_verdict?: ReviewVerdict | null
   needs_review?: boolean
   needs_update?: boolean
@@ -26,6 +27,15 @@ export type CatalogExercise = PrintableExercise & {
 // Jumelle d'une carte de la forge : même énoncé, autre jeu de valeurs ou autre disposition.
 export type Twin = { group: string; jeu: number; disposition: number; jeux: number; dispositions: number; principal: boolean }
 export type ReviewVerdict = 'like' | 'dislike'
+// Cause d'un refus : elle dit quel niveau de la forge corriger, et quelle confiance retirer.
+export type ReviewCause = 'fait_faux' | 'regle_matiere' | 'format_rendu' | 'consigne' | 'pedagogie'
+export const REVIEW_CAUSES: { value: ReviewCause; label: string }[] = [
+  { value: 'fait_faux', label: 'Fait faux ou imprécis' },
+  { value: 'regle_matiere', label: 'Règle de la matière non respectée' },
+  { value: 'format_rendu', label: 'Format, figure ou rendu' },
+  { value: 'consigne', label: 'Consigne de la forge mal suivie' },
+  { value: 'pedagogie', label: 'Pédagogie faible' },
+]
 export const exerciseDifficulty = (ex: CatalogExercise) => Math.max(1, Math.min(3, ex.difficulty ?? ex.level ?? 2))
 export const formatPoints = (v: number) => v.toLocaleString('fr-FR', { maximumFractionDigits: 3 })
 
@@ -80,9 +90,9 @@ function routes(ex: CatalogExercise): string[] {
 
 /** Relecture admin : ce qu'il faut vérifier, puis l'avis. Rouge clair tant que rien n'est
  * tranché, sans rouge une fois la carte acceptée, rouge fort si elle est à reprendre. */
-function ReviewPanel({ notes, verdict, comment = '', onChange }: {
-  notes: string[]; verdict?: ReviewVerdict | null; comment?: string
-  onChange: (value: ReviewVerdict | null, comment?: string) => Promise<void>
+function ReviewPanel({ notes, verdict, comment = '', cause = null, onChange }: {
+  notes: string[]; verdict?: ReviewVerdict | null; comment?: string; cause?: ReviewCause | null
+  onChange: (value: ReviewVerdict | null, comment?: string, cause?: ReviewCause | null) => Promise<void>
 }) {
   const [busy, setBusy] = useState(false)
   const [draft, setDraft] = useState(comment)
@@ -94,6 +104,12 @@ function ReviewPanel({ notes, verdict, comment = '', onChange }: {
     setBusy(true)
     try { await onChange(verdict === value ? null : value, draft) }
     catch (error) { notifications.show({ color: 'red', message: error instanceof Error ? error.message : 'Avis non enregistré.' }) }
+    finally { setBusy(false) }
+  }
+  const chooseCause = async (value: ReviewCause | null) => {
+    setBusy(true)
+    try { await onChange('dislike', draft, value) }
+    catch (error) { notifications.show({ color: 'red', message: error instanceof Error ? error.message : 'Cause non enregistrée.' }) }
     finally { setBusy(false) }
   }
   const saveComment = async () => {
@@ -119,6 +135,10 @@ function ReviewPanel({ notes, verdict, comment = '', onChange }: {
     </Group>
   </Group>
     {strong && <Stack gap={6}>
+      <Select label="Cause" placeholder="Choisir la cause du refus" data={REVIEW_CAUSES} value={cause}
+        description="Elle dit quoi corriger dans la forge, et ce qui perd la confiance."
+        error={cause ? undefined : 'Choisissez une cause.'} disabled={busy} allowDeselect={false}
+        onChange={value => value && chooseCause(value as ReviewCause)} />
       <Textarea label="Pourquoi reprendre cet exercice ?" placeholder="Décrivez le problème et la correction souhaitée…"
         description="Ce commentaire sera transmis à l’agent avec le retour Goldfish."
         autosize minRows={2} maxLength={5000} value={draft} disabled={busy}
@@ -137,7 +157,7 @@ export default function ExerciseCatalogCard({ exercise: head, admin, onPreferenc
   twins?: CatalogExercise[]
   onPreference?: (value: 'like' | 'dislike' | null) => Promise<void>
   // avis de relecture, côté admin
-  onReview?: (value: ReviewVerdict | null, comment?: string) => Promise<void>
+  onReview?: (value: ReviewVerdict | null, comment?: string, cause?: ReviewCause | null) => Promise<void>
   // encadrés d'aide affichés sur la carte (false : sujet sans guides)
   guides?: boolean
   // ligne de contexte au-dessus de la carte, quand les compétences sont mélangées
@@ -149,7 +169,7 @@ export default function ExerciseCatalogCard({ exercise: head, admin, onPreferenc
   // la jumelle affichée ; l'avis, la préférence et l'historique restent ceux de la carte
   const shownTwin = family?.[Math.min(twinIndex, family.length - 1)]
   const ex = shownTwin ? { ...shownTwin, preference: head.preference, review_verdict: head.review_verdict,
-    review_comment: head.review_comment, review_notes: head.review_notes, review_history: head.review_history } : head
+    review_comment: head.review_comment, review_cause: head.review_cause, review_notes: head.review_notes, review_history: head.review_history } : head
   const twinInfo: Twin | undefined = (head.grading as Record<string, any> | undefined)?.twin
   const level = exerciseDifficulty(ex)
   const raw = ex.raw_ocr ?? ex.raw ?? {}
@@ -224,7 +244,7 @@ export default function ExerciseCatalogCard({ exercise: head, admin, onPreferenc
           <Text component="summary" size="xs" fw={600} style={{ cursor: 'pointer' }}>Micro-corrections</Text>
           <Box pt={8}><Feedback grading={grading} /></Box>
         </Box>}
-        {onReview && <ReviewPanel notes={ex.review_notes ?? []} verdict={ex.review_verdict} comment={ex.review_comment} onChange={onReview} />}
+        {onReview && <ReviewPanel notes={ex.review_notes ?? []} verdict={ex.review_verdict} comment={ex.review_comment} cause={ex.review_cause} onChange={onReview} />}
         {admin && !!ex.review_history?.length && <Stack gap={6} mt="sm" pt="xs" style={{ borderTop: '1px solid var(--mantine-color-default-border)' }}>
           <Text size="xs" fw={650}>Historique de correction et de reprise</Text>
           {[...ex.review_history].reverse().map((entry, i) => <Box key={i}>

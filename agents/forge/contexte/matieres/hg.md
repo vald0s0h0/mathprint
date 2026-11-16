@@ -1,4 +1,4 @@
-# Doctrine : histoire-géographie
+# Contexte matière : histoire-géographie
 
 Ce qui fait un bon exercice ici, et les archétypes que la grille te demande. Le périmètre est la connaissance des repères, le raisonnement (cause, conséquence, comparaison, localisation) et l'étude de documents. Ni la composition ni le croquis complet ne sont produits ici.
 
@@ -58,3 +58,14 @@ Une carte chiffrée (données, durées, échelles) a ses jeux de valeurs, toutes
 - Une cause unique présentée comme la seule quand la fiche en donne plusieurs.
 - Un jugement moral imposé, un stéréotype sur un peuple, une religion, une région.
 - Le vocabulaire, les repères ou les frontières d'un autre programme que celui de la fiche.
+
+## Charte d'écriture
+
+- **Dates.** Années en chiffres sans espace (1960), siècles en chiffres romains suivis d'un « e » en exposant (XIXᵉ siècle), « av. J.-C. » et « apr. J.-C. » quand il y a ambiguïté. Une date complète : 7 août 1960.
+- **Nombres et unités.** Virgule décimale française, espace entre les milliers (25 000 000 ou 25 millions), unités et années des données toujours dites (« habitants en 2021 »).
+- **Noms.** Noms de lieux et d'acteurs dans la graphie de la fiche, la même dans toute la carte ; le nom de l'époque pour un lieu historique, avec le nom actuel entre parenthèses si la fiche le donne.
+- **Citations.** Un extrait authentique est recopié exactement, avec sa nature, son auteur et sa date ; une coupure se marque `[…]`. Un texte écrit pour l'exercice est signalé « Texte écrit pour l'exercice ». Jamais un faux document attribué à un acteur réel.
+- **Justesse.** Toute date, tout acteur, tout chiffre vient d'un fait de la fiche ; une donnée garde sa source et son année. Une carte, une frise sont vraies : échelle, localisations, ordre.
+- **Réponses manuscrites.** Une année, un numéro de zone ou de ligne, un mot de la fiche aux formes déclarées.
+- **Vocabulaire.** Celui de la fiche et du programme, sans jugement ni stéréotype ; les notions d'un autre programme n'apparaissent pas.
+- **Figures.** Macros des kits de la charte seulement (`kn-hg`) ; aucune image produite par une IA.

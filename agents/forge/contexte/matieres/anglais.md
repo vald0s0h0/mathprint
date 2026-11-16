@@ -1,4 +1,4 @@
-# Doctrine : anglais
+# Contexte matière : anglais
 
 Ce qui fait un bon exercice ici, et les archétypes que la grille te demande. Le périmètre est la langue (grammaire, lexique, orthographe) et la compréhension de l'écrit. Ni l'oral ni la production écrite longue ne sont produits ici.
 
@@ -61,3 +61,13 @@ Il n'y a pas de nombres : un jeu change les phrases. Les phrases des jeux ont **
 - Une notion d'une classe supérieure, même en piège (*past perfect* avant la leçon qui l'introduit).
 - Un fait culturel absent de la fiche, un stéréotype sur un pays ou ses habitants.
 - Une question *Not mentioned* dont la réponse se trouve en fait dans le texte, ou se déduit sans ambiguïté.
+
+## Charte d'écriture
+
+- **Écriture.** Typographie anglaise dans le texte anglais : pas d'espace avant `:`, `;`, `?`, `!`, guillemets “ ”, apostrophe droite des contractions (*don't*). Typographie française dans les consignes et les messages en français. Un mot cité en italique.
+- **Variantes.** Anglais britannique par défaut, de façon cohérente dans une carte ; une variante américaine correcte est toujours acceptée dans une réponse (déclare-la).
+- **Phonétique.** Seulement si la fiche l'enseigne : alphabet phonétique international entre barres obliques (/ˈwɔːtə/), avec les symboles de la fiche.
+- **Justesse.** Règles, listes de verbes irréguliers et faits culturels viennent des faits de la fiche. Un texte est écrit pour l'exercice et signalé « Text written for this exercise. », vient du domaine public ou d'une source officielle ; jamais un faux document attribué à un auteur, un journal ou une marque réels.
+- **Réponses manuscrites.** Un numéro de ligne, ou un mot court aux formes déclarées. Une contraction, une majuscule ou une apostrophe qui sont la compétence évaluée se font choisir, pas écrire.
+- **Vocabulaire.** Celui de la fiche et du niveau ; la terminologie grammaticale en français dans les messages (« prétérit », « present perfect », « auxiliaire »), la même partout.
+- **Registre.** Phrases naturelles, adaptées à l'âge ; aucun ton enfantin ni personnage au lycée.

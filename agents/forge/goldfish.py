@@ -90,7 +90,18 @@ def _parse(text: str) -> dict:
         raise GoldfishError(f"JSON illisible : {exc}") from exc
 
 
-def _ask_claude(system: str, text: str, images: list[Path]) -> dict:
+USAGE: list[dict] = []     # consommation de chaque appel CLI, relevée par l'appelant
+
+
+def _usage(event: dict, model: str) -> dict:
+    usage = event.get("usage") or {}
+    return {"model": model, "input": int(usage.get("input_tokens") or 0),
+            "cache_read": int(usage.get("cache_read_input_tokens") or 0),
+            "cache_write": int(usage.get("cache_creation_input_tokens") or 0),
+            "output": int(usage.get("output_tokens") or 0)}
+
+
+def _ask_claude(system: str, text: str, images: list[Path], model: str | None = None) -> dict:
     binary = claude_binary()
     if not binary:
         raise GoldfishError("`claude` introuvable.")
@@ -100,7 +111,7 @@ def _ask_claude(system: str, text: str, images: list[Path]) -> dict:
     content.append({"type": "text", "text": text})
     message = {"type": "user", "message": {"role": "user", "content": content}}
     cmd = [binary, "-p", "--input-format", "stream-json", "--output-format", "stream-json",
-           "--verbose", "--model", MODEL_BY_CLI["claude"], "--system-prompt", system, "--tools", "",
+           "--verbose", "--model", model or MODEL_BY_CLI["claude"], "--system-prompt", system, "--tools", "",
            "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
            "--setting-sources", "", "--no-session-persistence"]
     with tempfile.TemporaryDirectory() as empty:
@@ -116,6 +127,7 @@ def _ask_claude(system: str, text: str, images: list[Path]) -> dict:
         if event.get("type") == "result":
             if event.get("is_error"):
                 raise GoldfishError(f"claude : {str(event.get('result'))[:400]}")
+            USAGE.append(_usage(event, model or MODEL_BY_CLI["claude"]))
             return _parse(str(event.get("result") or ""))
     raise GoldfishError("claude n'a rendu aucun résultat (version trop ancienne ?)")
 
@@ -134,12 +146,14 @@ def _ask_codex(system: str, text: str, images: list[Path]) -> dict:
     return _parse(proc.stdout)
 
 
-def ask(cli: str, system: str, text: str, images: list[Path]) -> dict:
-    return (_ask_claude if cli == "claude" else _ask_codex)(system, text, images)
+def ask(cli: str, system: str, text: str, images: list[Path], model: str | None = None) -> dict:
+    if cli == "claude":
+        return _ask_claude(system, text, images, model)
+    return _ask_codex(system, text, images)
 
 
 def _prompt(name: str) -> str:
-    return (HERE / "goldfish_prompts" / f"{name}.md").read_text(encoding="utf-8")
+    return (HERE / "prompts" / f"{name}.md").read_text(encoding="utf-8")
 
 
 def _correct_answers(leaf: dict) -> list[str]:
@@ -302,6 +316,7 @@ def run(run_dir: Path, *, slots: list[str] | None = None, cli: str | None = None
     system_student = _prompt("eleve")
     system_reader = _prompt("correction")
     pending = []
+    USAGE.clear()
     for start in range(0, len(todo), size):
         pack = todo[start:start + size]
         images = [run_dir / "cards" / f"{k}.png" for k in pack]
@@ -364,6 +379,8 @@ def run(run_dir: Path, *, slots: list[str] | None = None, cli: str | None = None
             entry["complete"] = True
             state["verdicts"][key] = entry
             state["attempts"][key] = entry["attempts"]
+        state.setdefault("usage", []).extend(USAGE)
+        USAGE.clear()
         forge.dump_json(state_path, state)
     state["pending"] = pending
     return state
