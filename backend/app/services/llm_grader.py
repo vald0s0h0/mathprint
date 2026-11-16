@@ -147,6 +147,8 @@ class Task:
     decision_id: str | None = None
     brief: dict | None = None     # dossier rédigé pour le correcteur, jamais imprimé
     messages: list | None = None  # micro-corrections prévues, à choisir plutôt qu'à écrire
+    # erreurs types attribuables quand aucun message prévu ne décrit l'erreur
+    taxonomy: list | None = None
     context: dict | None = None   # matière, niveau, programme (cf. exercise_context)
     assessment_id: str | None = None
     feedback_lines: int = 0       # budget de la micro-correction imprimée (0 : aucune)
@@ -207,6 +209,15 @@ def _grader_messages(grading: dict) -> list[dict]:
             if isinstance(node, dict) and node.get("text")]
 
 
+def _planned_codes(grading: dict) -> list[str]:
+    """Codes d'erreur que l'exercice prévoit, options et réponses fausses comprises."""
+    feedback = grading.get("feedback")
+    if not isinstance(feedback, dict):
+        return []
+    nodes = list((feedback.get("options") or {}).values()) + list(feedback.get("wrong_answers") or [])
+    return [n.get("error") for n in nodes if isinstance(n, dict) and n.get("error")]
+
+
 def plan(item, verdict: dict, *, ocr_text: str = "",
          cell_texts: list[str] | None = None) -> Task | None:
     """Ce qui, dans cette réponse, mérite un correcteur LLM — ou None si le
@@ -233,6 +244,7 @@ def plan(item, verdict: dict, *, ocr_text: str = "",
                 correction=item.correction or "", max_score=max_score,
                 base_score=0.0, fields=[],
                 brief=grading.get("llm_brief"), messages=_grader_messages(grading),
+                taxonomy=forge_contract.taxonomy_for(_planned_codes(grading)),
                 feedback_lines=(int(feedback.get("lines") or 0)
                                 if isinstance(feedback, dict) else 0))
 
@@ -522,6 +534,15 @@ _MESSAGES_API = (
     "disent ce qu'il a fait et ce qu'il faut faire. Sans \"messages\", n'ajoute rien.\n"
 )
 
+_ERROR_CODES = (
+    "── \"erreurs_types\" : le suivi de l'élève ──\n"
+    "Si la réponse n'a pas tous les points et qu'aucun message prévu ne décrit son "
+    "erreur, ajoute \"code_erreur\" : le code de la liste \"erreurs_types\" de "
+    "l'exercice qui décrit le mieux ce que l'élève a fait. N'invente jamais de code ; "
+    "si aucun ne convient vraiment, n'en mets pas. Une erreur bien nommée sert au "
+    "suivi de l'élève ; une erreur mal nommée le trompe.\n"
+)
+
 _MESSAGES_VAGUE = (
     "── \"dossier\" ──\n"
     "\"dossier\", quand l'exercice en porte, est écrit pour toi : objectif, étapes, "
@@ -545,7 +566,7 @@ _MESSAGES_VAGUE = (
 def system_prompt(context: dict | None = None, *, vague: bool = False) -> str:
     """Prompt du correcteur, composé pour la matière, le niveau et le programme.
     `vague` : le correcteur rédige lui-même la micro-correction."""
-    return _head(context) + _BODY + (_MESSAGES_VAGUE if vague else _MESSAGES_API)
+    return _head(context) + _BODY + (_MESSAGES_VAGUE if vague else _MESSAGES_API) + _ERROR_CODES
 
 
 SYSTEM = system_prompt()
@@ -657,6 +678,7 @@ def _normalize_grading_response(raw, batch: list[tuple[Task, Field]]) -> dict:
             "motif": str(row.get("motif") or row.get("raison") or row.get("reason") or "")[:120],
             **({"message_id": str(row["message_id"])} if row.get("message_id") else {}),
             **({"message_libre": str(row["message_libre"])[:400]} if row.get("message_libre") else {}),
+            **({"code_erreur": str(row["code_erreur"])[:80]} if row.get("code_erreur") else {}),
         })
     missing = sorted(set(expected) - seen)
     if missing:
@@ -693,6 +715,8 @@ def _payload(batch: list[tuple[Task, Field]]) -> dict:
                 ex["dossier"] = task.brief
             if task.messages:
                 ex["messages"] = task.messages
+            if task.taxonomy:
+                ex["erreurs_types"] = task.taxonomy
             if task.steps:
                 ex["etapes_attendues"] = [
                     {"description": s.get("description"),
@@ -940,7 +964,11 @@ def _apply(db: Session, task: Task) -> bool:
                       "motif": str(result.get("motif") or "")[:120] or f.error,
                       **({"message_id": result["message_id"]} if result.get("message_id") else {}),
                       **({"message_libre": result["message_libre"]} if result.get("message_libre") else {}),
-                      **({"message_redige": result["message_redige"]} if result.get("message_redige") else {})})
+                      **({"message_redige": result["message_redige"]} if result.get("message_redige") else {}),
+                      # code attribué par le correcteur, seulement s'il est dans la liste reçue
+                      **({"code_erreur": result["code_erreur"]}
+                         if result.get("code_erreur") and verdict in ("partiel", "faux")
+                         and result["code_erreur"] in {e["code"] for e in task.taxonomy or []} else {})})
 
     decision.score = max(0.0, min(task.max_score, score))
     decision.source = "deepseek" if graded else "deterministic"

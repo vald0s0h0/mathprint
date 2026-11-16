@@ -88,6 +88,32 @@ def error_codes(subject: str = "math") -> frozenset[str]:
     return frozenset(e["code"] for e in _taxonomy_file(subject)["errors"]) | {OTHER_ERROR}
 
 
+# Toujours proposés au correcteur, quel que soit le domaine de l'exercice : une
+# erreur de calcul ou de raisonnement peut se glisser dans n'importe quelle carte.
+ALWAYS_DOMAINS = ("calc", "raison")
+
+
+def error_label(code: str) -> str | None:
+    subject = code.split(".", 1)[0] if "." in code else ""
+    return next((e["label"] for e in _taxonomy_file(subject)["errors"] if e["code"] == code), None) \
+        if subject else None
+
+
+def taxonomy_for(codes, subject: str | None = None) -> list[dict]:
+    """Les erreurs types que le correcteur peut attribuer à une réponse : celles des
+    domaines des erreurs prévues par l'exercice (`math.eq.…` → tout `math.eq`), plus
+    le calcul et le raisonnement. Sans erreur prévue, toute la matière. Un code
+    rendu hors de cette liste est ignoré."""
+    codes = [c for c in codes or [] if isinstance(c, str) and c.count(".") >= 2]
+    subject = subject or (codes[0].split(".", 1)[0] if codes else "math")
+    errors = _taxonomy_file(subject)["errors"]
+    domains = {c.split(".")[1] for c in codes if c.startswith(subject + ".")}
+    if domains:
+        domains |= set(ALWAYS_DOMAINS)
+        errors = [e for e in errors if e["code"].split(".")[1] in domains]
+    return [{"code": e["code"], "libelle": e["label"]} for e in errors]
+
+
 def form_problem(statement: str, answer_form: str | None) -> str | None:
     """Refuse une consigne et un champ `answer_form` qui se contredisent."""
     form = answer_form or "any"

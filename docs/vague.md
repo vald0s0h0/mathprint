@@ -30,6 +30,12 @@ backend/.venv/bin/python backend/scripts/vague.py [corriger] [apprecier] [tout]
   refusé (vide, trop long, sans tutoiement, qui cite une position ou la réponse) laisse
   imprimer le message prévu par la carte. Sous le seuil de confiance (Paramètres >
   Pédagogie), la réponse reste au professeur.
+  Quand aucun message prévu ne décrit l'erreur, le moteur choisit un `code_erreur` dans
+  les erreurs types des domaines de l'exercice : il entre au suivi de l'élève (un code
+  hors de la liste est ignoré). `corriger` relève ensuite le **diagnostic** des réponses
+  écrites fausses que l'exercice n'avait pas prévues : le moteur ne les note pas, il
+  nomme seulement leur erreur type (`services/diagnostic.py`). En mode api, le pipeline
+  le fait aussitôt.
 - `apprecier` : la synthèse des copies finalisées qui l'attendent (seulement si la
   synthèse est activée dans Paramètres > Pédagogie). L'overlay est ensuite marqué « à
   régénérer ».

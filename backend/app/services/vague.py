@@ -4,7 +4,9 @@ depuis le Mac, sur abonnement.
     corriger  : les réponses écrites en attente (motif `llm_queued`, ou
                 `llm_unavailable` laissé par l'ancien chemin api), regroupées par
                 exercice : l'énoncé et le dossier du correcteur une fois, puis les
-                réponses pseudonymisées de la classe, par paquets ;
+                réponses pseudonymisées de la classe, par paquets ; puis le
+                diagnostic des réponses fausses imprévues (services.diagnostic) :
+                l'erreur type de chacune, sans toucher à sa note ;
     apprecier : la phrase de synthèse des copies finalisées qui l'attendent.
 
 La vague tient en trois temps, qui se séparent pour relever aussi la file du NAS
@@ -31,7 +33,7 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..models import Assessment, Copy, CopyResult, GradingDecision, ScanBatch, Student
-from . import appreciation, cli_llm, forgetting, llm_grader, microcorrection, refine
+from . import appreciation, cli_llm, diagnostic, forgetting, llm_grader, microcorrection, refine
 
 # budget annoncé au moteur : 2 lignes ≈ 100 caractères, 4 lignes ≈ 200. La
 # mesure qui fait foi reste celle de la bande imprimée (microcorrection._fits).
@@ -278,6 +280,64 @@ def importer_corriger(db: Session, paquet: dict, raw, *, moteur: str,
         _refresh(db, assessment_id)
 
 
+# ----------------------------------------------------------------- diagnostiquer
+
+def exporter_diagnostiquer(db: Session, *, devoir: str | None = None,
+                           classe: str | None = None) -> list[dict]:
+    """Les réponses fausses imprévues, par paquets d'un même devoir."""
+    entries = diagnostic.pending(db, assessment_id=devoir, class_id=classe)
+    by_assessment: dict[str, list[dict]] = {}
+    for entry in entries:
+        by_assessment.setdefault(entry["assessment_id"], []).append(entry)
+    size = max(1, int(settings.correction_batch_size))
+    out = []
+    for assessment_id, group in by_assessment.items():
+        context = llm_grader.assessment_context(db, assessment_id)
+        for start in range(0, len(group), size):
+            pack = group[start:start + size]
+            data, keys = diagnostic.payload(pack)
+            if not keys:
+                continue
+            text = (json.dumps(data, ensure_ascii=False)
+                    + "\n\nRends uniquement le JSON {\"diagnostics\":[...]}, un objet par id reçu.")
+            out.append({"id": _pid("diagnostiquer", [[k["decision"], k["champ"], k["sig"]] for k in keys]),
+                        "type": "diagnostiquer", "devoir": assessment_id,
+                        "titre": f"diagnostic · {len(keys)} réponse(s) fausse(s) imprévue(s), devoir {assessment_id}",
+                        "system": diagnostic.system_prompt(context), "text": text, "champs": keys})
+    return out
+
+
+def importer_diagnostiquer(db: Session, paquet: dict, raw, *, moteur: str,
+                           log: Callable[[str], None], bilan: Bilan) -> None:
+    """Revalide contre la base (réponse inchangée depuis l'export), puis écrit."""
+    head = paquet.get("titre") or paquet.get("id")
+    keys = paquet.get("champs")
+    if not isinstance(keys, list) or not keys or not paquet.get("devoir"):
+        bilan.echecs += 1
+        log(f"{head} : paquet illisible")
+        return
+    entries = diagnostic.pending(db, assessment_id=str(paquet["devoir"]))
+    _data, current = diagnostic.payload(entries)
+    live = {(k["decision"], k["champ"]): k["sig"] for k in current}
+    kept = [k for k in keys if live.get((k.get("decision"), k.get("champ"))) == k.get("sig")]
+    if not kept:
+        log(f"{head} : déjà traité")
+        return
+    try:
+        wanted = {k["cle"] for k in kept}
+        rows = raw.get("diagnostics") if isinstance(raw, dict) else raw
+        rows = [r for r in rows or [] if isinstance(r, dict) and str(r.get("id")) in wanted]
+        results = diagnostic.normalize({"diagnostics": rows}, kept)
+    except (ValueError, TypeError, AttributeError) as e:
+        bilan.echecs += 1
+        log(f"{head} : réponse refusée ({e})")
+        return
+    coded = diagnostic.apply(db, entries, kept, results, engine=moteur)
+    db.commit()
+    bilan.paquets += 1
+    log(f"{head} : {coded} erreur(s) nommée(s) sur {len(kept)}")
+
+
 def demander(paquet: dict, call: Ask):
     """Le moteur sur un paquet exporté : aucune base. Lève CliError."""
     return call(paquet["system"], paquet["text"])
@@ -286,7 +346,8 @@ def demander(paquet: dict, call: Ask):
 def importer_paquet(db: Session, paquet: dict, raw, *, moteur: str = "haiku",
                     log: Callable[[str], None] = print, bilan: Bilan | None = None) -> Bilan:
     bilan = bilan or Bilan()
-    fn = importer_apprecier if paquet.get("type") == "apprecier" else importer_corriger
+    fn = {"apprecier": importer_apprecier, "diagnostiquer": importer_diagnostiquer}.get(
+        paquet.get("type"), importer_corriger)
     fn(db, paquet, raw, moteur=moteur, log=log, bilan=bilan)
     return bilan
 
@@ -332,6 +393,12 @@ def corriger(db: Session, *, moteur: str = "haiku", devoir: str | None = None,
     paquets = exporter_corriger(db, devoir=devoir, classe=classe)
     log(f"{sum(len(p['champs']) for p in paquets)} réponse(s) en attente, {len(paquets)} paquet(s).")
     executer(db, paquets, moteur=moteur, essai=essai, ask=ask, log=log, bilan=bilan)
+    if not bilan.arret:
+        paquets = exporter_diagnostiquer(db, devoir=devoir, classe=classe)
+        if paquets:
+            log(f"{sum(len(p['champs']) for p in paquets)} réponse(s) fausse(s) imprévue(s) à "
+                f"diagnostiquer, {len(paquets)} paquet(s).")
+            executer(db, paquets, moteur=moteur, essai=essai, ask=ask, log=log, bilan=bilan)
     return bilan
 
 
@@ -454,6 +521,7 @@ def exporter(db: Session, taches: list[str], *, devoir: str | None = None,
     out = []
     if "corriger" in taches or "tout" in taches:
         out += exporter_corriger(db, devoir=devoir, classe=classe)
+        out += exporter_diagnostiquer(db, devoir=devoir, classe=classe)
     if "apprecier" in taches or "tout" in taches:
         out += exporter_apprecier(db, devoir=devoir, classe=classe)
     return out

@@ -173,6 +173,7 @@ def _select_matching(item, feedback: dict, pairs: list, selection: Selection) ->
 
 
 def _select_written(item, feedback: dict, decision, response, reading, selection: Selection) -> None:
+    from . import diagnostic
     policy = item.grading_json or {}
     raw = (reading.raw_json or {}) if reading else {}
     if policy.get("comparator") == "table_cells":
@@ -187,30 +188,53 @@ def _select_written(item, feedback: dict, decision, response, reading, selection
                 selection.errors.append((wrong.get("error"), None))
                 if not selection.text:
                     selection.text, selection.kind = wrong.get("text", ""), "option"
+            else:
+                selection.errors += [(code, None) for code in diagnostic.codes(decision, index)]
         return
     wrong = _wrong_answer(feedback, str((response.final_text if response else "") or ""))
     if wrong:
         selection.errors.append((wrong.get("error"), None))
         selection.text, selection.kind = wrong.get("text", ""), "option"
-    elif decision.reason_code == "form_mismatch":
+        return
+    # Réponse fausse imprévue : l'erreur type trouvée par le diagnostic, s'il y en a une.
+    selection.errors += [(code, None) for code in diagnostic.codes(decision)]
+    if decision.reason_code == "form_mismatch":
         selection.text, selection.kind = FORM_MISMATCH_TEXT, "generic"
+
+
+def _llm_code(note: dict) -> str | None:
+    """Code d'erreur choisi par le correcteur dans la taxonomie, s'il y est vraiment."""
+    from .forge_contract import error_label
+    code = str(note.get("code_erreur") or "")
+    return code if code and error_label(code) else None
 
 
 def _select_llm(feedback: dict, decision, selection: Selection) -> None:
     """Le correcteur a choisi un message prévu ou, à défaut, en a écrit un. Le
-    texte libre est contrôlé ici : trop long, c'est le message générique."""
+    texte libre est contrôlé ici : trop long, c'est le message générique.
+
+    Pour le journal de l'élève : le code du message prévu, sinon le code que le
+    correcteur a choisi dans la taxonomie, sinon `autre`."""
     lines = feedback.get("lines", 4)
     notes = ((decision.evidence_json or {}).get("llm") or [])
+    coded: set[int] = set()
+
+    def unplanned(index: int, note: dict) -> None:
+        if index in coded:
+            return
+        coded.add(index)
+        selection.errors.append((_llm_code(note) or "autre", None))
+
     # Rédigé par la commande vague pour CETTE réponse (plan forge2 §10.2) : il
     # passe avant le message prévu, s'il tient dans la bande. Le message prévu
     # éventuellement désigné ne sert alors qu'au journal d'erreurs.
-    for note in notes:
+    for index, note in enumerate(notes):
         written = str(note.get("message_redige") or "").strip()
         if written and not selection.text and _fits(written, lines):
             selection.text, selection.kind = written, "llm"
             if not _option(feedback, note.get("message_id")).get("error"):
-                selection.errors.append(("autre", None))
-    for note in notes:
+                unplanned(index, note)
+    for index, note in enumerate(notes):
         option = _option(feedback, note.get("message_id"))
         if option.get("text"):
             if option.get("error"):
@@ -221,9 +245,11 @@ def _select_llm(feedback: dict, decision, selection: Selection) -> None:
             continue
         free = str(note.get("message_libre") or "").strip()
         if free:
-            selection.errors.append(("autre", None))
+            unplanned(index, note)
             if not selection.text and _fits(free, lines):
                 selection.text, selection.kind = free, "llm"
+        elif _llm_code(note):
+            unplanned(index, note)
 
 
 def select(item, decision, response=None, reading=None) -> Selection | None:
@@ -278,6 +304,9 @@ def select(item, decision, response=None, reading=None) -> Selection | None:
                 selection.text, selection.kind = measured, "measure"
     elif (decision.evidence_json or {}).get("llm"):
         _select_llm(feedback, decision, selection)
+        # cases courtes d'un tableau dont d'autres cases sont parties au correcteur
+        from . import diagnostic
+        selection.errors += [(code, None) for code in diagnostic.all_codes(decision)]
     else:
         _select_written(item, feedback, decision, response, reading, selection)
     if not selection.text:

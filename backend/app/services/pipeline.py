@@ -323,6 +323,11 @@ def _decide_existing(db: Session, *, resp: StudentResponse, item: CopyItem,
         status="auto" if verdict["tier"] in ("A", "B", "C") else "review_pending",
         evidence_json={"contract_issue": contract_issue} if contract_issue else {},
     )
+    # Réponse écrite fausse que l'exercice n'avait pas prévue : son erreur type est
+    # cherchée à part, sans toucher à la note (services.diagnostic).
+    from . import diagnostic
+    diagnostic.mark(decision, diagnostic.fields_for(item, verdict, ocr_text=ocr_text or "",
+                                                    cell_texts=cell_texts))
     db.add(decision)
     db.flush()
     if task is not None:
@@ -940,10 +945,14 @@ def _grade_with_llm(db: Session, queue: list, batch: ScanBatch) -> None:
     donc les réponses d'un même exercice partent dans le même appel (§ économie
     de tokens). Les réponses qu'il tranche voient leur revue provisoire retirée
     — d'où le recomptage des revues ouvertes par `process_batch`."""
-    if not queue:
-        return
-    llm_grader.grade_tasks(db, queue, correlation_id=batch.id[:8])
-    db.commit()
+    if queue:
+        llm_grader.grade_tasks(db, queue, correlation_id=batch.id[:8])
+        db.commit()
+    # Mode api : les erreurs imprévues sont diagnostiquées dans la foulée ; en mode
+    # commande, la vague les relève avec les corrections.
+    from . import diagnostic
+    if diagnostic.run_api(db, batch.assessment_id, correlation_id=batch.id[:8]):
+        db.commit()
 
 
 # ----------------------------------------------- chemin sans scan (tests)
