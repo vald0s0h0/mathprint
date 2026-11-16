@@ -85,7 +85,7 @@ const FLOWS: Flow[] = [
   },
   {
     title: "2. Écrire le contexte d'une leçon",
-    lead: 'Commande forge lecon, une fois par leçon, écrite par Opus. Les exercices n\'ont pas d\'autre source de contenu : un fait faux ici donnerait des centaines d\'exercices faux.',
+    lead: 'Commande forge lecon, une fois par leçon, écrite par Opus ou Codex Sol. Les exercices n\'ont pas d\'autre source de contenu : un fait faux ici donnerait des centaines d\'exercices faux.',
     inputs: [
       { cap: 'Consigne', name: 'Consigne de rédaction d\'une leçon', where: 'agents/forge/CONSIGNE-LECON.md', tone: 'data', docs: [DOC.consigneLecon],
         def: 'Un en-tête court, puis une section par compétence : faits numérotés, erreurs, supports, idées, attendus.' },
@@ -95,7 +95,7 @@ const FLOWS: Flow[] = [
       { cap: 'Sources', name: 'Manuel, livre du professeur, annales', where: 'PDF, pages choisies', size: 'facultatif', tone: 'data' },
     ],
     steps: [
-      { name: 'Opus', def: 'Écrit la leçon. Chaque fait porte un identifiant et dit s\'il est incertain.' },
+      { name: 'Opus ou Codex Sol', def: 'Écrit la leçon. Chaque fait porte un identifiant et dit s\'il est incertain.' },
       { name: 'Contrôle par script (run.py lecon)', def: 'Une section par compétence, extrait de 10 Ko au plus, idées valides, anti-copie, aucune règle déjà écrite plus haut.' },
       { name: 'Vérificateur de faits, contexte neuf', def: 'Opus juge chaque fait : juste, faux, hors programme ou ambigu. Seuls les faits modifiés sont rejugés.', docs: [DOC.verificateur], added: true },
       { name: 'Vous', def: 'Seulement les faits contestés et les faits incertains (--accepter pour maintenir).', human: true },
@@ -127,7 +127,7 @@ const FLOWS: Flow[] = [
         def: 'Chaque emplacement porte son format, son niveau et son archétype avec sa définition.' },
     ],
     steps: [
-      { name: 'Opus', def: 'Écrit les familles. Chaque famille cite les faits qu\'elle mobilise et le code d\'erreur de chaque piège.' },
+      { name: 'Opus ou Codex Sol', def: 'Écrit les familles. Chaque famille cite les faits qu\'elle mobilise et le code d\'erreur de chaque piège.' },
       { name: 'Contrôles par script', def: 'Calculs, rendu PDF, géométrie, jumelles par SymPy, archétype, faits cités, anti-copie.' },
       { name: 'Lecteur sans contexte (goldfish)', def: 'Voit la carte rendue, la paraphrase et la résout.', docs: [DOC.eleve, DOC.correction] },
       { name: 'Relecteur pédagogique, contexte neuf', def: 'Opus : juste, utile, distracteurs, niveau, programme. Bloquée → réécrite une fois → écartée.', docs: [DOC.relecteur], added: true },
@@ -310,7 +310,7 @@ function Commands() {
     prompt = `forge ${programme} ${niveau} ${target}${serieOpt}${extra}${opt(pilote, '--pilote')}`
   } else if (action === 'ecartes') prompt = `forge ecartes ${programme}-${niveau}-${cible.split('.')[0]}`
   else if (action === 'reprendre') prompt = 'forge reprendre'
-  const terminal = tool === 'claude' ? `cd ~/MathPrint && claude --model opus "${prompt}"` : `cd ~/MathPrint && codex "${prompt}"`
+  const terminal = tool === 'claude' ? `cd ~/MathPrint && claude --model opus "${prompt}"` : `cd ~/MathPrint && codex -m gpt-6.1-sol "${prompt}"`
   const lesson = cible.split('.')[0]
   const scripts: [string, string][] = [
     ['Contrôler une leçon', `backend/.venv/bin/python agents/forge/run.py lecon ${programme} ${niveau} ${lesson}${serieOpt}`],
@@ -354,7 +354,7 @@ function Commands() {
         <CommandLine label="Depuis un terminal" command={terminal} />
       </SimpleGrid>
       {tool === 'codex' && <Alert color="yellow" variant="light">
-        Codex n'est pas installé sur ce Mac pour l'instant. {action === 'lecon' && 'La consigne de leçon demande Opus : Codex s\'arrêtera et demandera confirmation avant d\'écrire.'}
+        Codex n'est pas installé sur ce Mac pour l'instant. {action === 'lecon' && 'La consigne de leçon accepte Codex Sol, jugé équivalent à Opus.'}
       </Alert>}
       {action === 'exercices' && <Text size="xs" c="dimmed">Une leçon par session, trois sous-agents au plus en parallèle. La forge refuse une leçon absente, à l'ancien format ou dont les faits ne sont pas vérifiés : commencez alors par « Leçon ».</Text>}
     </>}

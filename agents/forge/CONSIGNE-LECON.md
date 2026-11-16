@@ -21,7 +21,7 @@ S'il manque le programme, le niveau ou la leçon, demande-le avant toute chose. 
 
 ## Avant d'écrire
 
-1. **Ton modèle.** Opus. Si tu es un autre modèle, dis-le à l'utilisateur et arrête-toi, sauf s'il confirme.
+1. **Ton modèle.** Opus (Claude Code) ou Codex Sol (`gpt-6.1-sol`), jugés équivalents. Si tu es un autre modèle, dis-le à l'utilisateur et arrête-toi, sauf s'il confirme. Note ton modèle exact dans le fichier `.sources.yaml`.
 2. **Les niveaux au-dessus**, pour ne pas les répéter : `agents/forge/contexte/exercice.md` (le bon exercice), `contexte/matieres/<matière>.md` (règles valables dans toutes les leçons de la matière), `contexte/pays/<programme>.md`, et la taxonomie `backend/app/data/misconceptions/<matière>.json`. Ce qui y est déjà écrit n'a pas sa place dans la leçon : calculatrice, forme des réponses, notations générales, désignation des figures, recettes de figures exactes, contraintes d'un format. `run.py lecon` refuse une leçon qui en recopie une phrase.
 3. **Le programme officiel de la leçon**, obligatoire :
    - maths `ci` : `docs/programmes/ci/<niveau>[-<série>].md` (contenus, ordre, heures, semaine de début) ;
