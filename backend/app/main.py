@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 from .config import settings
 from .db import Base, SessionLocal, engine, run_migrations
 from .routers import (
-    assessments, auth, connectors, content, data_admin, grades,
+    assessments, auth, connectors, content, data_admin, forge_docs, grades,
     indigo as indigo_router, misc, org, printing, scans, setup, students, system,
     users_admin, operations, ocr_worker,
 )
@@ -29,7 +29,7 @@ for r in (setup.router, auth.router, org.router, assessments.router, scans.route
           students.router, misc.router, printing.router, system.router,
           connectors.router, content.router, data_admin.router, grades.router,
           indigo_router.router, users_admin.router, operations.router,
-          ocr_worker.router):
+          ocr_worker.router, forge_docs.router):
     app.include_router(r)
 
 

@@ -4,7 +4,7 @@ import {
 } from '@mantine/core'
 import {
   BookOpenCheck, ClipboardList, Factory, GraduationCap, LayoutDashboard, Library, LogOut,
-  Building2, Moon, ScanLine, ScanText, Settings as SettingsIcon, SlidersHorizontal, Sun, Target, Users, UserCog, FileText,
+  Building2, Moon, ScanLine, ScanText, Settings as SettingsIcon, SlidersHorizontal, Sun, Target, Users, UserCog, FileText, Hammer,
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
@@ -24,6 +24,7 @@ import Grades from './pages/Grades'
 import Establishments from './pages/Establishments'
 import Atelier from './pages/Atelier'
 import OcrReport from './pages/OcrReport'
+import ForgeAdmin from './pages/ForgeAdmin'
 import AtelierPrinters from './pages/AtelierPrinters'
 import CalibrationPanel from './components/CalibrationPanel'
 import UsersAdmin from './pages/UsersAdmin'
@@ -54,6 +55,7 @@ const NAV_ADMIN: NavItem[] = [
   { to: '/admin/utilisateurs', label: 'Utilisateurs', icon: UserCog },
   { to: '/exercices', label: 'Exercices', icon: BookOpenCheck },
   { to: '/admin/lecture-ocr', label: 'Lecture OCR', icon: ScanText },
+  { to: '/admin/forge', label: 'Forge', icon: Hammer },
   { to: '/admin/parametres', label: 'Paramètres admin', icon: SlidersHorizontal },
 ]
 
@@ -238,6 +240,7 @@ export default function App() {
             <Route path="/admin/utilisateurs" element={<UsersAdmin centre={centre} />} />
             <Route path="/exercices" element={<Exercices />} />
             <Route path="/admin/lecture-ocr" element={<OcrReport />} />
+            <Route path="/admin/forge" element={<ForgeAdmin />} />
             <Route path="/admin/parametres" element={<SettingsPage scope="admin" />} />
           </>}
 
