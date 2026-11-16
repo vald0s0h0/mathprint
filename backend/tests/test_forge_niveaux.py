@@ -40,7 +40,8 @@ def test_read_order_goes_from_general_to_specific(db):
     expected = ["agents/forge/CONSIGNE-EXERCICES.md", "agents/forge/contexte/exercice.md",
                 "agents/forge/contexte/formats/commun.md", "agents/forge/contexte/formats/courants.md",
                 "agents/forge/contexte/figures/commun.md", "agents/forge/contexte/matieres/math.md",
-                "agents/forge/contexte/exemples/math.json", "backend/app/data/misconceptions/math.json",
+                "agents/forge/contexte/exemples/math.json", "agents/forge/contexte/figures/math.md",
+                "backend/app/data/misconceptions/math.json",
                 "agents/forge/contexte/pays/fr.md"]
     assert names[:len(expected)] == expected
     assert names[len(expected):] == ["fr-3e-Z1-referentiel.md", "fr-3e-Z1-Z1.1-extrait.md"]

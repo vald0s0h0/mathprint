@@ -50,7 +50,7 @@ const DOC = {
 }
 const MATIERES: Doc[] = SUBJECTS.map(([id, label]) => ({ label: `${label} (${id}.md)`, path: F(`contexte/matieres/${id}.md`) }))
 const ERREURS: Doc[] = SUBJECTS.map(([id, label]) => ({ label: `Erreurs types, ${label.toLowerCase()} (${id}.json)`, path: `erreurs/${id}.json` }))
-const KITS: Doc[] = [['pc', 'Physique-chimie'], ['svt', 'SVT'], ['hg', 'Histoire-géographie']]
+const KITS: Doc[] = [['math', 'Mathématiques'], ['pc', 'Physique-chimie'], ['svt', 'SVT'], ['hg', 'Histoire-géographie']]
   .map(([id, label]) => ({ label: `${label} (${id}.md)`, path: F(`contexte/figures/${id}.md`) }))
 const PAYS: Doc[] = [{ label: 'France (fr.md)', path: F('contexte/pays/fr.md') }, { label: "Côte d'Ivoire (ci.md)", path: F('contexte/pays/ci.md') }]
 const PROGRAMMES: Doc[] = CI_LEVELS.map(level => ({ label: `Côte d'Ivoire, ${level}`, path: `programmes/ci/${level}.md` }))
@@ -78,7 +78,7 @@ const FLOWS: Flow[] = [
       { cap: 'Contexte matière', name: 'Contexte matière, valable pour tous les pays', where: 'contexte/matieres/<m>.md', size: '4 à 10 Ko', tone: 'know', docs: MATIERES,
         def: 'Archétypes de la matière, contre-sens, règles valables dans toutes les leçons, charte d\'écriture.' },
       { cap: 'Exemples', name: 'Cartes validées de la matière', where: 'contexte/exemples/<m>.json', tone: 'know', docs: [DOC.exemples] },
-      { cap: 'Contexte de format', name: 'Kit de figures de la matière', where: 'contexte/figures/<m>.md', tone: 'tool', docs: KITS, tag: 'aucun kit propre aux maths' },
+      { cap: 'Contexte de format', name: 'Kit de figures de la matière', where: 'contexte/figures/<m>.md', tone: 'tool', docs: KITS },
       { cap: 'Erreurs types', name: 'Liste fermée des erreurs d\'élèves', where: 'backend/app/data/misconceptions/<m>.json', tone: 'know', docs: ERREURS },
       { cap: 'Contexte pays', name: 'Mots officiels, monnaie, lieux, registres d\'âge', where: 'contexte/pays/<pays>.md', size: '1 à 3 Ko', tone: 'know', docs: PAYS },
     ],
@@ -114,7 +114,7 @@ const FLOWS: Flow[] = [
       { cap: 'Consigne', name: 'Procédure de la commande forge', where: 'agents/forge/CONSIGNE-EXERCICES.md', tone: 'data', docs: [DOC.consigneExercices] },
       { cap: 'Universel', name: 'Le bon exercice, familles et jumelles', where: 'contexte/exercice.md', tone: 'know', docs: [DOC.exercice] },
       { cap: 'Contexte de format', name: 'Socle commun et formats courants', where: 'contexte/formats/', tone: 'tool', docs: [DOC.formatsCommun, DOC.formatsCourants] },
-      { cap: 'Contexte de format', name: 'Charte des figures', where: 'contexte/figures/commun.md', tone: 'tool', docs: [DOC.figures] },
+      { cap: 'Contexte de format', name: 'Charte des figures et kit de la matière', where: 'contexte/figures/commun.md + <m>.md', tone: 'tool', docs: [DOC.figures, KITS[0]] },
       'Pays et matière',
       { cap: 'Matière', name: 'Contexte matière, exemples validés, erreurs types', where: 'matieres/<m>.md · exemples/<m>.json · misconceptions', tone: 'know',
         docs: [MATIERES[0], DOC.exemples, ERREURS[0]] },
