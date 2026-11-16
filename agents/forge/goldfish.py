@@ -368,9 +368,9 @@ def run(run_dir: Path, *, slots: list[str] | None = None, cli: str | None = None
                 if not isinstance(verdict.get("comprend"), bool) or not isinstance(verdict.get("aide"), bool):
                     raise GoldfishError("Verdict de micro-correction incomplet")
                 if verdict.get("comprend") is False or verdict.get("aide") is False:
+                    # Une micro-correction perfectible est une remarque, pas un défaut de
+                    # la carte : elle ne l'envoie pas en relecture humaine.
                     entry = staged[key]
-                    entry["flag"] = True
-                    entry["severity"] = entry["severity"] or "major"
                     entry["notes"].append(f"micro-correction « {target['message'][:70]} » : "
                                           f"{verdict.get('probleme') or 'peu claire'}")
             for key in staged:

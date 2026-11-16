@@ -19,27 +19,50 @@ from test_forge import db  # noqa: E402,F401
 
 
 @pytest.mark.parametrize("label,kind,count", [
-    ("Connaître la définition d'une racine carrée", "savoir", 1),
-    ("Identifier un triangle rectangle", "savoir", 1),
-    ("Calculer une longueur avec la propriété de Thalès", "savoir_faire", 5),
-    ("Démontrer que deux droites sont parallèles", "raisonnement", 3),
+    ("Connaître la définition d'une racine carrée", "savoir", 2),
+    ("Identifier un triangle rectangle", "savoir", 2),
+    ("Calculer une longueur avec la propriété de Thalès", "savoir_faire", 6),
+    ("Démontrer que deux droites sont parallèles", "raisonnement", 4),
     ("Traiter une situation faisant appel à Thalès", "situation", 0),
-    ("Fractions : additionner", "savoir_faire", 5),
+    ("Fractions : additionner", "savoir_faire", 6),
 ])
 def test_volume_follows_the_verb(label, kind, count):
     assert plan.nature(label) == kind and plan.family_count(label) == count
 
 
-def test_duration_scales_a_skill_and_the_first_batch_is_a_part_of_it():
+def test_duration_scales_a_skill_and_the_grid_is_varied():
     label = "Calculer une longueur"
-    assert [plan.family_count(label, m) for m in (10, 25, 45)] == [4, 5, 6]
-    assert [plan.first_batch(n) for n in (0, 1, 3, 5, 6)] == [0, 1, 2, 2, 3]
-    first = plan.family_grid("E2.3", label, 45, count=3)
-    rest = plan.family_grid("E2.3", label, 45, count=3, skip=3)
-    assert [s["slot"] for s in first + rest] == ["s01", "s02", "s03", "s04", "s05", "s06"]
-    assert first == plan.family_grid("E2.3", label, 45, count=3)          # déterministe
-    assert {s["archetype"] for s in first + rest} >= {"CALC", "ERR", "QUI"}
-    assert first[0]["level"] == 1 and first[0]["response_type"] == "qcm_single"
+    assert [plan.family_count(label, m) for m in (10, 25, 45)] == [5, 6, 7]
+    grid = plan.family_grid("E2.3", label, 45)
+    assert [s["slot"] for s in grid] == [f"s0{i}" for i in range(1, 8)]
+    assert grid == plan.family_grid("E2.3", label, 45)                    # déterministe
+    archetypes = [s["archetype"] for s in grid]
+    assert len(set(archetypes)) == 6 and not {"ERR", "QUI"} & set(archetypes)   # varié, sans élève fictif
+    assert grid[0]["level"] == 1 and grid[0]["response_type"] == "qcm_single"
+
+
+def _lesson(n_skills=8, n_rappels=6):
+    return ([(f"E1.{i + 1}", "Connaître une définition", 25) for i in range(n_rappels)]
+            + [(f"E1.{i + 1 + n_rappels}", "Calculer une longueur", 25) for i in range(n_skills)])
+
+
+def test_fictional_students_are_spread_over_the_lesson():
+    debates = plan.lesson_debates(_lesson(), "ci-3e-E1")
+    assert len(debates) == 3 and sorted(debates.values()) == ["ERR", "ERR", "QUI"]
+    assert len({code for code, _rank in debates}) == 3                   # trois compétences
+    assert all(code not in {f"E1.{i}" for i in range(1, 7)} for code, _ in debates)   # pas un rappel
+    assert all(rank > 0 for _code, rank in debates)
+    assert debates == plan.lesson_debates(_lesson(), "ci-3e-E1")         # déterministe
+    assert len(plan.lesson_debates(_lesson(n_skills=3), "ci-3e-E2")) == 2
+    assert plan.lesson_debates(_lesson(n_skills=0), "ci-3e-E3") == {}
+    total = 0
+    for code, label, minutes in _lesson():
+        grid = plan.family_grid(code, label, minutes, debates=debates)
+        found = [s for s in grid if s["archetype"] in ("ERR", "QUI")]
+        total += len(found)
+        for s in found:
+            assert s["level"] >= 2 and s["response_type"] in ("qcm_single", "multiline_text")
+    assert total == 3
 
 
 def test_ideas_go_to_some_slots_only_and_never_to_a_direct_application():
@@ -95,15 +118,15 @@ def test_the_writer_reads_no_manual_and_sees_the_year_progression(db):  # noqa: 
     assert run.name.startswith("ci-tle-D-E2.1-") and payload["serie"] == "D"
     assert context["fiche"].endswith("ci-tle-D-E2.md") and context["figure_images"] == []
     assert Path(context["source"]).read_text() == ""       # jamais les pages françaises
-    assert not any("sources/ci-tle-D-E2.md" in p or "/packs/" in p for p in context["read_order"])
-    assert all(Path(p).exists() or p == context["lecon"] for p in context["read_order"])
+    assert "Manuel" not in Path(context["read_order"][0]).read_text()
+    assert all(Path(p).exists() for p in context["read_order"]) and len(context["read_order"]) == 1
     referential = Path(context["referential"]).read_text()
     assert "Pas encore vu" in referential and "E1 Triangle rectangle" in referential
     grid = forge.load_json(run / "grid.json")
-    assert len(grid) == 2 and all(s.get("archetype") for s in grid)      # amorce de 5 familles
+    assert len(grid) == 6 and all(s.get("archetype") for s in grid)      # toute la grille d'un coup
     rest = forge.prepare(db, "ci", "tle", "E2.1", model="m", serie="D", volume="formule", suite=True)[0]
-    assert [s["slot"] for s in forge.load_json(rest / "grid.json")] == ["s03", "s04", "s05"]
-    assert forge.load_json(rest / "payload.json")["context"]["read_order"][-1].endswith("existants.md")
+    bundle = forge.load_json(rest / "payload.json")["context"]["read_order"]
+    assert len(bundle) == 1 and "Banque existante" in Path(bundle[0]).read_text()
 
 
 def test_the_declared_archetype_must_match_the_slot():
@@ -138,12 +161,12 @@ def test_no_exercises_without_a_checked_lesson(db, capsys):  # noqa: F811
     lecon.accept(path, ["F1"])
     assert cli._cmd_prepare(args, db) == 0
     out = capsys.readouterr().out
-    assert "2 famille(s) à écrire (amorce" in out and "(1 faits)" in out
+    assert "famille(s) en tout" in out and "sans sous-agent" in out
 
 
 def test_trust_is_earned_per_format_and_lost_on_a_defect():
     import confiance
-    assert [confiance.rate(n) for n in (0, 29, 30, 99, 100, 299, 300)] == [1, 1, .25, .25, .10, .10, .05]
+    assert [confiance.rate(n) for n in (0, 9, 10, 29, 30, 99, 100, 299, 300)] == [1, 1, .5, .5, .25, .25, .10, .10, .05]
     cards = {f"s{i:02d}": "qcm_single" for i in range(1, 21)} | {"s21": "table_fill"}
     known = {"qcm_single": {"rate": 0.25}}
     picked = confiance.sample("run", cards, {"s03"}, known)

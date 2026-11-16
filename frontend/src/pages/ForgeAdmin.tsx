@@ -108,7 +108,7 @@ const FLOWS: Flow[] = [
   },
   {
     title: '3. Écrire les exercices',
-    lead: 'Une fois par compétence. L\'agent lit du plus général au plus spécifique, un ordre identique pour tous les runs d\'une matière, que le cache resert. Rien qui ne serve pas au lot.',
+    lead: 'Un seul agent par leçon, sans sous-agent. prepare compose un fichier de contexte unique, lu une fois : seulement les formats de la grille, un exemple par format, les erreurs types des domaines de la leçon, et les figures s\'il y en a.',
     inputs: [
       'Universel',
       { cap: 'Consigne', name: 'Procédure de la commande forge', where: 'agents/forge/CONSIGNE-EXERCICES.md', tone: 'data', docs: [DOC.consigneExercices] },
@@ -128,10 +128,10 @@ const FLOWS: Flow[] = [
     ],
     steps: [
       { name: 'Opus ou Codex Sol', def: 'Écrit les familles. Chaque famille cite les faits qu\'elle mobilise et le code d\'erreur de chaque piège.' },
-      { name: 'Contrôles par script', def: 'Calculs, rendu PDF, géométrie, jumelles par SymPy, archétype, faits cités, anti-copie.' },
+      { name: 'run.py valider', def: 'Enchaîne contrôles par script (calculs, rendu, géométrie, jumelles, archétype, faits cités), goldfish et relecture, et s\'arrête à la première étape qui demande d\'agir.' },
       { name: 'Lecteur sans contexte (goldfish)', def: 'Voit la carte rendue, la paraphrase et la résout.', docs: [DOC.eleve, DOC.correction] },
       { name: 'Relecteur pédagogique, contexte neuf', def: 'Opus : juste, utile, distracteurs, niveau, programme. Bloquée → réécrite une fois → écartée.', docs: [DOC.relecteur], added: true },
-      { name: 'Vous, sur échantillon', def: 'La part fixée par l\'indice de confiance, plus tout ce qu\'un lecteur a signalé. Puis « Tout publier ».', human: true },
+      { name: 'Vous, sur échantillon', def: 'La part fixée par l\'indice de confiance (100 % jusqu\'à 10 acceptées, puis 50 %, 25 %…), plus tout blocage du goldfish. Puis « Tout publier ».', human: true },
     ],
     outputs: [
       { cap: 'Familles', name: 'Énoncé à paramètres, deux dispositions', where: 'familles/<emplacement>.json', tone: 'data' },
@@ -342,7 +342,7 @@ function Commands() {
         <TextInput label={action === 'exercices' && mode !== 'problemes' ? 'Compétence ou leçon' : 'Leçon'} w={170} value={cible}
           onChange={e => setCible(e.currentTarget.value.trim())} placeholder={action === 'exercices' ? 'C2.1 ou C2' : 'C2'} />
         {action === 'exercices' && <Select label="Run" w={200} value={mode} onChange={v => v && setMode(v)} allowDeselect={false} data={[
-          { value: 'amorce', label: 'Amorce (défaut)' }, { value: 'suite', label: 'Suite du socle' },
+          { value: 'amorce', label: 'Grille complète (défaut)' }, { value: 'suite', label: 'Nouvelle série' },
           { value: 'complement', label: 'Complément' }, { value: 'traces', label: 'Tracés seulement' }, { value: 'problemes', label: 'Problèmes de la leçon' }]} />}
         {action === 'exercices' && (mode === 'complement' || mode === 'traces') && <NumberInput label="Nombre" w={100} min={1} max={40} value={count} onChange={setCount} />}
         {action === 'exercices' && <Checkbox label="Pilote (tout relire)" checked={pilote} onChange={e => setPilote(e.currentTarget.checked)} mb={8} />}
@@ -356,7 +356,7 @@ function Commands() {
       {tool === 'codex' && <Alert color="yellow" variant="light">
         Codex n'est pas installé sur ce Mac pour l'instant. {action === 'lecon' && 'La consigne de leçon accepte Codex Sol, jugé équivalent à Opus.'}
       </Alert>}
-      {action === 'exercices' && <Text size="xs" c="dimmed">Une leçon par session, trois sous-agents au plus en parallèle. La forge refuse une leçon absente, à l'ancien format ou dont les faits ne sont pas vérifiés : commencez alors par « Leçon ».</Text>}
+      {action === 'exercices' && <Text size="xs" c="dimmed">Un seul agent, sans sous-agent : il lit le contexte une fois et écrit toutes les compétences de la leçon. La forge refuse une leçon absente, à l'ancien format ou dont les faits ne sont pas vérifiés : commencez alors par « Leçon ».</Text>}
     </>}
     <Title order={4} mt="sm">Scripts utiles, depuis la racine du dépôt</Title>
     <SimpleGrid cols={{ base: 1, md: 2 }} spacing="sm">

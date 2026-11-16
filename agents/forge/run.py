@@ -70,21 +70,19 @@ def _cmd_prepare(args, db):
         print("Rien à générer pour cette cible : une compétence « Traiter une situation » se "
               "travaille par les problèmes de la leçon (--problemes).")
         return 0
+    total = 0
     for run in runs:
         payload = forge.load_json(run / "payload.json")
-        context = payload["context"]
-        print(f"Run : {run.name}")
         grid = forge.load_json(run / "grid.json")
-        print(f"  Leçon : {context['lecon']} ({len(context.get('faits') or [])} faits)")
-        print(f"  {len(grid)} famille(s) à écrire" + (" (suite du socle)" if payload.get("suite") else
-              (" (amorce : `--suite` pour le reste du socle)" if payload.get("volume") == "formule" else "")))
-        profile = payload.get("trace_profile")
-        if profile:
-            traces = sum(s["response_type"] in forge.DRAW_TYPES
-                         for s in forge.load_json(run / "grid.json"))
-            print(f"  Tracés : {profile['profile']} ({profile['source']}), {traces} sur {len(grid)}")
+        total += len(grid)
+        archetypes = " ".join(s.get("archetype") or "?" for s in grid)
+        traces = sum(s["response_type"] in forge.DRAW_TYPES for s in grid)
+        print(f"{run.name} : {len(grid)} famille(s) [{archetypes}]"
+              + (f", {traces} tracé(s)" if traces else ""))
     first = forge.load_json(runs[0] / "payload.json")["context"]
-    print("Lis dans cet ordre, sans rien modifier :")
+    print(f"{total} famille(s) en tout, {len(runs)} run(s). Un seul agent les écrit toutes, "
+          "compétence après compétence, sans sous-agent.")
+    print("Lis ce fichier une seule fois, en entier, sans le modifier :")
     for path in first["read_order"]:
         print(f"  {path}")
     return 0
@@ -196,6 +194,45 @@ def _cmd_review(args, db):
     print(f"{len(state['verdicts'])} famille(s) relue(s), {blocked} bloquée(s), "
           f"{len(relecture.ecartees(run))} écartée(s).")
     return 1 if blocked else 0
+
+
+def _cmd_validate(args, db):
+    """Contrôle, rendu, goldfish, relecture : la boucle de vérification en une
+    commande et une sortie courte. S'arrête à la première étape qui demande d'agir."""
+    import goldfish
+    import relecture
+    run = forge.resolve_run(args.run)
+    report, contracts = forge.check(db, run)
+    if not report.ok:
+        _print_limited([f"ERREUR {e}" for e in report.errors])
+        print(f"check : {len(report.errors)} erreur(s). Corrige ces familles, puis relance `valider`.")
+        return 1
+    summary = forge.render(db, run)
+    blocked = sorted(set(summary.get("writing") or []) | set(summary.get("leading") or [])
+                     | set(summary.get("traces") or []) | set(summary.get("geometry") or []))
+    hints = forge.lot_hints(summary, forge.load_json(run / "grid.json")[0]["kind"])
+    if blocked:
+        _print_limited(hints)
+        print(f"render : mise en page refusée pour {', '.join(blocked)}. Réécris ces cartes, puis relance `valider`.")
+        return 1
+    state = goldfish.run(run, slots=args.slots)
+    flagged = {k: v for k, v in state["verdicts"].items()
+               if v.get("severity") == "blocker" and (not args.slots or k.split(".")[0] in args.slots)}
+    if flagged:
+        _print_limited([f"{k} {'RÉÉCRIRE' if v.get('rewrite') else 'bloquée'} : " + " | ".join(v.get("notes") or [])
+                        for k, v in sorted(flagged.items())])
+        print("goldfish : corrige ces cartes (vérifie d'abord la réponse du lecteur), puis relance `valider`.")
+        return 1
+    relecture.run(run, slots=args.slots)
+    pending = relecture.problems(run)
+    if pending:
+        _print_limited(pending)
+        print("relecture : réécris une fois chaque carte bloquée avec sa critique, puis relance `valider`.")
+        return 1
+    dropped = relecture.ecartees(run)
+    print(f"{len(contracts)} carte(s) valides et relues"
+          + (f", écartée(s) : {', '.join(sorted(dropped))}" if dropped else "") + ". Lance `persist`.")
+    return 0
 
 
 def _tokens_line(label: str, usage: list[dict]) -> str:
@@ -526,7 +563,7 @@ def main(argv=None) -> int:
     prep.add_argument("--modele", required=True, help="Modèle réellement utilisé, ex. claude-opus-5-5")
     prep.add_argument("--matiere", default=forge.SUBJECT_DEFAULT)
     prep.add_argument("--serie", help="Série du lycée ivoirien : A, A1, A2, C, D")
-    prep.add_argument("--suite", action="store_true", help="Le reste du socle, après l'amorce")
+    prep.add_argument("--suite", action="store_true", help="Une nouvelle série, différente de la banque")
     prep.add_argument("--vingt", action="store_true", help="Ancienne grille fixe de 20 cartes")
     prep.add_argument("--problemes", action="store_true", help="Les 20 problèmes du chapitre")
     prep.add_argument("--pilote", action="store_true", help="Toutes les cartes à relire")
@@ -539,6 +576,7 @@ def main(argv=None) -> int:
                            ("persist", "Écrit les brouillons."), ("suivant", "Prochain lot à écrire."),
                            ("goldfish", "Lecture par un élève sans contexte."),
                            ("relecture", "Relecture pédagogique indépendante."),
+                           ("valider", "Contrôle, rendu, goldfish et relecture, d'une traite."),
                            ("bilan", "Bilan du run et tokens consommés.")):
         cmd = sub.add_parser(name, help=helptext)
         cmd.add_argument("run", nargs="?")
@@ -548,6 +586,8 @@ def main(argv=None) -> int:
             cmd.add_argument("--slots", nargs="*", help="Remplace seulement ces emplacements")
         if name == "suivant":
             cmd.add_argument("--lot", type=int, default=5)
+        if name == "valider":
+            cmd.add_argument("--slots", nargs="*")
         if name == "relecture":
             cmd.add_argument("--slots", nargs="*")
             cmd.add_argument("--session-dir", type=Path, help="Transport de session indépendante : requêtes/réponses JSON")
@@ -591,6 +631,7 @@ def main(argv=None) -> int:
                 "reprendre": _cmd_resume, "ecartes": _cmd_disliked,
                 "calendrier": _cmd_calendar, "epuisement": _cmd_exhaustion,
                 "confiance": _cmd_trust, "lecon": _cmd_lesson, "relecture": _cmd_review,
+                "valider": _cmd_validate,
                 "bilan": _cmd_report, "qualite": _cmd_quality}[args.cmd](args, db) or 0
     finally:
         db.close()

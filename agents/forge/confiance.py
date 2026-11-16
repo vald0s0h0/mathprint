@@ -16,7 +16,7 @@ import math
 import random
 
 # (cartes acceptées d'affilée, part à relire ensuite)
-STEPS = ((30, 1.0), (100, 0.25), (300, 0.10))
+STEPS = ((10, 1.0), (30, 0.5), (100, 0.25), (300, 0.10))
 FLOOR = 0.05
 
 CAUSES = {

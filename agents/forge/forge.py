@@ -499,6 +499,107 @@ def referential_text(programme: str, cycle: str, serie: str | None, chapter_comp
             + progression(chapter_comps, all_comps or chapter_comps))
 
 
+_SECTION_RE = re.compile(r"^### (.*)$", re.MULTILINE)
+_LESSON_CODE_RE = re.compile(r"\b([a-z]+)\.([a-z_]+)\.[a-z_]+\b")
+
+
+def _format_sections(text: str, formats: set[str]) -> str:
+    """`courants.md` réduit aux formats de la grille (et aux cellules mixtes s'il y a
+    un tableau)."""
+    marks = list(_SECTION_RE.finditer(text))
+    if not marks:
+        return text
+    out = [text[:marks[0].start()]]
+    for i, mark in enumerate(marks):
+        body = text[mark.start():marks[i + 1].start() if i + 1 < len(marks) else len(text)]
+        named = set(re.findall(r"`([a-z_]+)`", mark.group(1)))
+        if (named & formats) or ("Cellules mixtes" in mark.group(1) and "table_fill" in formats):
+            out.append(body)
+    return "".join(out).rstrip() + "\n"
+
+
+def _examples(subject: str, formats: set[str], archetypes: set[str]) -> str:
+    """Un exemple validé par format de la grille, plus ceux des élèves fictifs s'il y en a."""
+    path = CONTEXT_DIR / "exemples" / f"{subject}.json"
+    if not path.exists():
+        return ""
+    data = load_json(path)
+    picked, seen = [], set()
+    for card in data.get("cartes") or []:
+        ex = card.get("exercice") or {}
+        rtype, arch = ex.get("response_type"), ex.get("archetype")
+        if arch in ("ERR", "QUI"):
+            if arch in archetypes:
+                picked.append(card)
+            continue
+        if rtype in formats and rtype not in seen:
+            seen.add(rtype)
+            picked.append(card)
+    if not picked:
+        return ""
+    lines = [f"{data.get('usage', '')}".strip(), ""]
+    for card in picked:
+        lines += [f"### {card['exercice'].get('response_type')} · {card.get('pourquoi', '')}",
+                  "```json", json.dumps(card["exercice"], ensure_ascii=False), "```", ""]
+    return "\n".join(lines)
+
+
+def _error_list(subject: str, lesson_text: str) -> str:
+    """Les erreurs types des domaines que la leçon cite, plus calcul et raisonnement,
+    une ligne par code. Sans code cité, toute la matière."""
+    path = REPO / "backend" / "app" / "data" / "misconceptions" / f"{subject}.json"
+    if not path.exists():
+        return ""
+    errors = load_json(path)["errors"]
+    domains = {m.group(2) for m in _LESSON_CODE_RE.finditer(lesson_text) if m.group(1) == subject}
+    if domains:
+        domains |= {"calc", "raison"}
+        errors = [e for e in errors if e["code"].split(".")[1] in domains]
+    return ("Taxonomie fermée : chaque piège porte l'un de ces codes ; sinon `autre` et `proposed_errors`.\n\n"
+            + "\n".join(f"- `{e['code']}` — {e['label']}" for e in errors) + "\n")
+
+
+def compose_context(path: Path, *, subject: str, programme: str, grids: list[list[dict]],
+                    lesson_text: str, referential: Path, extras: list[Path] | None = None,
+                    whole_lesson: str | None = None) -> Path:
+    """Le contexte d'une préparation, en UN fichier lu une seule fois : seulement ce
+    qui sert à ces grilles, du plus général au plus spécifique."""
+    slots = [s for grid in grids for s in grid]
+    formats = {s.get("response_type") for s in slots}
+    archetypes = {s.get("archetype") for s in slots}
+    figures = any(s.get("figure") for s in slots) or bool(formats & set(DRAW_TYPES))
+    parts: list[tuple[str, str]] = []
+
+    def add(title: str, file: Path | None = None, text: str | None = None):
+        body = text if text is not None else (file.read_text(encoding="utf-8") if file and file.exists() else "")
+        if body.strip():
+            parts.append((title, body.strip()))
+
+    add("Le bon exercice", CONTEXT_DIR / "exercice.md")
+    add("Formats : socle commun", CONTEXT_DIR / "formats" / "commun.md")
+    add("Formats de cette préparation", text=_format_sections(
+        (CONTEXT_DIR / "formats" / "courants.md").read_text(encoding="utf-8"), formats))
+    if formats & set(DRAW_TYPES):
+        add("Géométrie à tracer", GEO_CONTEXT)
+    if figures:
+        add("Figures : charte commune", CONTEXT_DIR / "figures" / "commun.md")
+        add("Figures : kit de la matière", CONTEXT_DIR / "figures" / f"{subject}.md")
+    add("Contexte de la matière", CONTEXT_DIR / "matieres" / f"{subject}.md")
+    add("Exemples validés", text=_examples(subject, formats, archetypes))
+    # Les domaines viennent de la leçon entière : une compétence peut piéger sur une
+    # erreur citée dans la section d'une autre.
+    add("Erreurs types", text=_error_list(subject, whole_lesson or lesson_text))
+    add("Contexte du pays", CONTEXT_DIR / "pays" / f"{programme}.md")
+    add("Référentiel et progression", referential)
+    add("Leçon", text=lesson_text)
+    for extra in extras or []:
+        add(f"Banque existante ({extra.parent.name})", extra)
+    text = "".join(f"\n\n<!-- ===== {title} ===== -->\n\n{body}\n" for title, body in parts).lstrip()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
 def _new_run_dir(name: str) -> Path:
     """Dossier neuf, même pour deux préparations dans la même seconde."""
     root = data_dir() / "runs"
@@ -594,6 +695,10 @@ def prepare(db, programme: str, cycle: str, target: str, *, model: str, problems
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     targets = [None] if problems else ([competency] if competency else chapter_comps)
     runs = []
+    # Élèves fictifs : tirés sur toute la leçon, la même quelle que soit la cible.
+    debates = plan.lesson_debates(
+        [(comp_code(c), c.label, c.recommended_minutes) for c in chapter_comps],
+        lesson_tag(programme, cycle, chapter_comps[0].chapter_code, serie))
     for comp in targets:
         profile = None
         suffix = comp_code(comp) if comp else f"{chapter_comps[0].chapter_code}-problemes"
@@ -622,13 +727,9 @@ def prepare(db, programme: str, cycle: str, target: str, *, model: str, problems
             share = figure_share(cycle, comp_code(comp)) if programme == "fr" else 0.2
             profile = trace_profile(Path(context["fiche"]), comp_code(comp), comp.label)
             if volume == "formule":
-                # Amorce d'abord ; `suite` produit le reste du socle.
-                total = plan.family_count(comp.label, comp.recommended_minutes)
-                first = plan.first_batch(total)
+                # Toute la grille d'un coup : le contexte est lu une fois, autant qu'il serve.
                 grid = plan.family_grid(comp_code(comp), comp.label, comp.recommended_minutes,
-                                        figures=share, traces=profile[0],
-                                        count=(total - first) if suite else first,
-                                        skip=first if suite else 0)
+                                        figures=share, traces=profile[0], debates=debates)
                 grid = plan.assign_ideas(grid, plan.load_ideas(Path(context["fiche"]),
                                                                [comp_code(c) for c in chapter_comps]),
                                          comp_code(comp))
@@ -661,7 +762,36 @@ def prepare(db, programme: str, cycle: str, target: str, *, model: str, problems
             "context": context,
             "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds")})
         runs.append(run)
+    if runs:
+        _bundle_context(runs, programme=programme, cycle=cycle, subject=subject, serie=serie,
+                        chapter=chapter_comps[0].chapter_code, stamp=stamp)
     return runs
+
+
+def _bundle_context(runs: list[Path], *, programme: str, cycle: str, subject: str,
+                    serie: str | None, chapter: str, stamp: str) -> Path:
+    """Un seul fichier de contexte pour toute la préparation : un agent le lit une
+    fois, puis écrit toutes les compétences. Leçon entière si plusieurs runs, sinon
+    l'extrait de la compétence."""
+    payloads = [load_json(run / "payload.json") for run in runs]
+    first = payloads[0]["context"]
+    lesson = Path(first["fiche"])
+    if len(runs) > 1 and lesson.exists():
+        lesson_text = lesson.read_text(encoding="utf-8")
+    else:
+        extract = Path(first["lecon"])
+        lesson_text = extract.read_text(encoding="utf-8") if extract.exists() else ""
+    extras = [run / "existants.md" for run in runs if (run / "existants.md").exists()]
+    bundle = compose_context(
+        data_dir() / "contextes" / f"{lesson_tag(programme, cycle, chapter, serie)}-{stamp}.md",
+        subject=subject, programme=programme, grids=[load_json(run / "grid.json") for run in runs],
+        lesson_text=lesson_text, referential=Path(first["referential"]), extras=extras,
+        whole_lesson=lesson.read_text(encoding="utf-8") if lesson.exists() else None)
+    for run, payload in zip(runs, payloads):
+        payload["context"]["read_order"] = [str(bundle)]
+        payload["context"]["bundle"] = str(bundle)
+        dump_json(run / "payload.json", payload)
+    return bundle
 
 
 def resolve_run(run: str | None) -> Path:
@@ -2142,10 +2272,12 @@ def persist(db, run: Path, *, replace: bool = False, slots: list[str] | None = N
         log_text=f"Forge {VERSION} ({payload['model']}) — run {run.name}", created_at=now, updated_at=now)
     db.add(extraction)
     db.flush()
-    flagged = {k for k, v in (goldfish.get("verdicts") or {}).items() if v.get("flag")}
+    # Relecture humaine d'office : seulement un vrai blocage du lecteur. Ses autres
+    # remarques et celles du relecteur restent visibles sur la carte (review_notes).
+    flagged = {k.split(".", 1)[0] for k, v in (goldfish.get("verdicts") or {}).items()
+               if v.get("severity") == "blocker"}
     # Échantillon de relecture : la part dépend de la confiance acquise par chaque format.
     import confiance
-    flagged |= {k for k, v in review.items() if v.get("remarques")}
     families = {k: (c["response_type"], exercises[k].get("archetype") or grid[k].get("archetype"))
                 for k, c in contracts.items() if "." not in k and k not in dropped}
     to_review = confiance.sample(run.name, families, flagged, confiance.streaks(db, payload["subject"]),

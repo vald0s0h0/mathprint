@@ -5,8 +5,11 @@ Le script décide ce que le modèle n'a pas à deviner :
   - le **volume**, d'après le verbe de la compétence et sa durée (un savoir à
     restituer ne demande pas autant d'exercices qu'un savoir-faire) ;
   - le **format** et le **niveau** de chaque emplacement ;
-  - l'**archétype** de chaque emplacement (application, erreur à corriger, deux
-    élèves en désaccord…), pour que la banque ne soit pas une suite de « Calcule » ;
+  - l'**archétype** de chaque emplacement (application, représentation, ordre de
+    grandeur, document, décision…), pour que la banque ne soit pas une suite de
+    « Calcule ». Les élèves fictifs (une copie à corriger, deux élèves en désaccord)
+    se répartissent sur la LEÇON, 2 ou 3 en tout (`lesson_debates`) : trop nombreux,
+    ils fatiguent et embrouillent ;
   - l'**idée** donnée à certains emplacements, quand la leçon en a (blocs `yaml idees`).
 
 Un emplacement est une famille : il s'imprime en 4 ou 6 jumelles.
@@ -21,8 +24,9 @@ from datetime import date, timedelta
 from pathlib import Path
 
 LEVEL_NAMES = {1: "facile", 2: "moyen", 3: "difficile"}
-# Part du socle générée à la première demande ; le reste vient si la compétence est tirée.
-AMORCE = 0.4
+# Élèves fictifs par leçon : 2, et 3 à partir de ce nombre de compétences qui en accueillent.
+DEBATES = (2, 3)
+DEBATES_THIRD_FROM = 6
 # Au plus cette part des emplacements reçoit une idée tirée d'une source : au-delà,
 # un manuel dicterait toute la banque.
 IDEA_SHARE = 0.4
@@ -41,10 +45,11 @@ PLANS = {
     "savoir": ((1, "qcm_single", "XS", "CALC"), (1, "matching", "S", "REPR"),
                (2, "checkbox_grid", "M", "CONTRE")),
     "savoir_faire": ((1, "qcm_single", "XS", "CALC"), (2, "short_text", "S", "CALC"),
-                     (2, "qcm_multiple", "M", "ERR"), (3, "multiline_text", "L", "QUI"),
-                     (2, "table_fill", "L", "REPR"), (3, "table_fill", "XL", "INVERSE")),
-    "raisonnement": ((2, "qcm_multiple", "M", "ERR"), (3, "multiline_text", "L", "QUI"),
-                     (2, "checkbox_grid", "M", "CONTRE"), (3, "multiline_text", "L", "CALC")),
+                     (2, "table_fill", "L", "REPR"), (2, "qcm_single", "M", "ESTIM"),
+                     (3, "multiline_text", "L", "INVERSE"), (2, "short_text", "M", "DOC"),
+                     (3, "multiline_text", "L", "DECIDE")),
+    "raisonnement": ((2, "checkbox_grid", "M", "CONTRE"), (2, "qcm_single", "M", "REPR"),
+                     (3, "multiline_text", "L", "CALC"), (3, "multiline_text", "L", "INVERSE")),
 }
 ARCHETYPES = {
     "CALC": "application directe du savoir-faire",
@@ -79,25 +84,54 @@ def family_count(label: str, minutes: int | None = None) -> int:
     durée, la valeur médiane."""
     kind = nature(label)
     if kind == "savoir":
-        return 1
+        return 2
     if kind == "raisonnement":
-        return 3
+        return 4
     if kind == "situation":
         return 0                      # une situation se traite en problèmes, par leçon
     if minutes is None:
-        return 5
-    return 4 if minutes <= 15 else (5 if minutes <= 30 else 6)
+        return 6
+    return 5 if minutes <= 15 else (6 if minutes <= 30 else 7)
 
 
-def first_batch(count: int) -> int:
-    """Nombre de familles de l'amorce."""
-    return max(1, math.ceil(AMORCE * count)) if count else 0
+def lesson_debates(comps: list[tuple[str, str, int | None]], lesson: str) -> dict[tuple[str, int], str]:
+    """{(compétence, rang de l'emplacement): "ERR" ou "QUI"} pour toute la leçon.
+    `comps` : (code, libellé, minutes). Seuls un savoir-faire ou un raisonnement en
+    accueillent, sur un emplacement moyen ou difficile, jamais le premier ; une
+    compétence au plus chacune. Déterministe : la même leçon donne le même choix,
+    qu'on la prépare entière ou compétence par compétence."""
+    hosts = []
+    for code, label, minutes in comps:
+        if nature(label) not in ("savoir_faire", "raisonnement"):
+            continue
+        plan = PLANS[nature(label)][:family_count(label, minutes)]
+        ranks = [i for i, (level, _rtype, _size, _arch) in enumerate(plan) if i > 0 and level >= 2]
+        if ranks:
+            hosts.append((code, ranks))
+    if not hosts:
+        return {}
+    rng = random.Random(f"{lesson}/debats")
+    wanted = DEBATES[1] if len(hosts) >= DEBATES_THIRD_FROM else DEBATES[0]
+    picked = rng.sample(hosts, min(wanted, len(hosts)))
+    picked.sort(key=lambda h: [c for c, _l, _m in comps].index(h[0]))
+    return {(code, rng.choice(ranks)): ("ERR" if i % 2 == 0 else "QUI")
+            for i, (code, ranks) in enumerate(picked)}
+
+
+def debate_slot(slot: dict, archetype: str) -> dict:
+    """Un emplacement devenu « élève fictif » : un format où l'erreur se lit d'un coup
+    d'œil (QCM simple ou réponse courte), jamais un QCM multiple ni un tableau."""
+    rtype = "multiline_text" if slot["level"] == 3 else "qcm_single"
+    return {**slot, "archetype": archetype, "response_type": rtype,
+            "size": "L" if rtype == "multiline_text" else "M"}
 
 
 def family_grid(code: str, label: str, minutes: int | None, *, figures: float = 0.2,
-                traces: str = "aucun", count: int | None = None, skip: int = 0) -> list[dict]:
-    """Emplacements d'une compétence. `count` : nombre voulu (amorce), `skip` : rangs
-    déjà produits par un run précédent. Déterministe : même appel, même grille."""
+                traces: str = "aucun", count: int | None = None, skip: int = 0,
+                debates: dict[tuple[str, int], str] | None = None) -> list[dict]:
+    """Emplacements d'une compétence. `count`, `skip` : une partie seulement de la
+    grille. `debates` : les élèves fictifs de la leçon (`lesson_debates`).
+    Déterministe : même appel, même grille."""
     kind = nature(label)
     plan = list(PLANS.get(kind, PLANS["savoir_faire"]))
     total = family_count(label, minutes)
@@ -118,6 +152,8 @@ def family_grid(code: str, label: str, minutes: int | None, *, figures: float = 
                 "figure": i in with_figure and rtype != "geo_construction", "archetype": archetype}
         if rtype == "geo_construction":
             slot.update(trace_mode="quadrillage" if level == 1 else "libre", figure=False)
+        elif (code, skip + i) in (debates or {}):
+            slot = debate_slot(slot, debates[(code, skip + i)])
         grid.append(slot)
     return grid
 

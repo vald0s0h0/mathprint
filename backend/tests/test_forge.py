@@ -789,7 +789,7 @@ def test_complement_only_fills_what_is_missing(db):
     assert len({s["slot"] for s in grid}) == 6
     payload = forge.load_json(runs[0] / "payload.json")
     assert payload["complement"] is True
-    assert payload["context"]["read_order"][-1].endswith("existants.md")
+    assert "Banque existante" in Path(payload["context"]["read_order"][-1]).read_text(encoding="utf-8")
 
 
 def test_complement_keeps_the_usual_proportions_when_not_told_otherwise():

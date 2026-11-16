@@ -31,33 +31,46 @@ def _lesson(db, programme="fr", cycle="3e", chapter="Z1"):
     return path, codes
 
 
-def test_read_order_goes_from_general_to_specific(db):
-    _lesson(db)
+def test_one_context_file_holds_only_what_the_grids_need(db):
+    path, _codes = _lesson(db)
+    path.write_text(path.read_text(encoding="utf-8") + "\nErreur fréquente : `math.eq.transposition`.\n",
+                    encoding="utf-8")
     run = forge.prepare(db, "fr", "3e", "Z1.1", model="m")[0]
     context = forge.load_json(run / "payload.json")["context"]
-    names = [Path(p).relative_to(forge.REPO).as_posix() if str(p).startswith(str(forge.REPO)) else Path(p).name
-             for p in context["read_order"]]
-    expected = ["agents/forge/CONSIGNE-EXERCICES.md", "agents/forge/contexte/exercice.md",
-                "agents/forge/contexte/formats/commun.md", "agents/forge/contexte/formats/courants.md",
-                "agents/forge/contexte/figures/commun.md", "agents/forge/contexte/matieres/math.md",
-                "agents/forge/contexte/exemples/math.json", "agents/forge/contexte/figures/math.md",
-                "backend/app/data/misconceptions/math.json",
-                "agents/forge/contexte/pays/fr.md"]
-    assert names[:len(expected)] == expected
-    assert names[len(expected):] == ["fr-3e-Z1-referentiel.md", "fr-3e-Z1-Z1.1-extrait.md"]
-    assert "geo_construction.md" not in " ".join(names)                 # pas de tracé dans la grille
-    extract = Path(context["lecon"]).read_text(encoding="utf-8")
-    assert "un fait de Z1.1" in extract and "un fait de Z1.2" not in extract
+    assert len(context["read_order"]) == 1 and context["read_order"] == [context["bundle"]]
+    text = Path(context["bundle"]).read_text(encoding="utf-8")
+    titles = [t for t in ("Le bon exercice", "Formats : socle commun", "Formats de cette préparation",
+                          "Contexte de la matière", "Exemples validés", "Erreurs types", "Contexte du pays",
+                          "Référentiel et progression", "Leçon") if f"===== {t} =====" in text]
+    assert len(titles) == 9 and [text.index(f"===== {t} =====") for t in titles] == sorted(
+        text.index(f"===== {t} =====") for t in titles)                   # du général au spécifique
+    grid = forge.load_json(run / "grid.json")
+    formats = {s["response_type"] for s in grid}
+    assert "### `matching`" not in text or "matching" in formats            # formats de la grille seulement
+    assert "math.eq.transposition" in text and "math.calc.erreur_calcul" in text   # domaines de la leçon + calcul
+    assert "math.cplx." not in text and "math.lim." not in text
+    assert "Géométrie à tracer" not in text                               # pas de tracé dans la grille
+    if not any(s.get("figure") for s in grid):
+        assert "Figures : charte commune" not in text
+    assert "un fait de Z1.1" in text and "un fait de Z1.2" not in text     # extrait de la compétence
     assert context["faits"] == ["F1", "F2"]
     assert forge.load_json(run / "payload.json")["relecture"] is True
+
+
+def test_a_whole_lesson_shares_one_context_file(db):
+    _lesson(db)
+    runs = forge.prepare(db, "fr", "3e", "Z1", model="m")
+    bundles = {forge.load_json(r / "payload.json")["context"]["bundle"] for r in runs}
+    assert len(runs) >= 2 and len(bundles) == 1
+    text = Path(bundles.pop()).read_text(encoding="utf-8")
+    assert "un fait de Z1.1" in text and "un fait de Z1.2" in text           # la leçon entière
 
 
 def test_the_tracing_contract_is_read_only_with_traces(db):
     _lesson(db)
     run = forge.prepare(db, "fr", "3e", "Z1.1", model="m", traces=2)[0]
-    order = forge.load_json(run / "payload.json")["context"]["read_order"]
-    assert str(forge.GEO_CONTEXT) in order
-    assert order.index(str(forge.GEO_CONTEXT)) < len(order) - 2       # avant référentiel et leçon
+    text = Path(forge.load_json(run / "payload.json")["context"]["bundle"]).read_text(encoding="utf-8")
+    assert "===== Géométrie à tracer =====" in text and "Figures : charte commune" in text
 
 
 def test_cards_cite_facts_of_their_lesson_extract():

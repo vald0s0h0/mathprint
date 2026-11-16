@@ -16,7 +16,25 @@ Comment le bon exercice s'écrit en mathématiques, et les règles qui valent da
 | `DOC` | Il lit un document | Ticket, facture, horaires, étiquette, relevé : les données y sont, avec au moins une donnée inutile |
 | `DECIDE` | Il prend une décision | Deux offres, deux trajets, deux forfaits : la réponse est un choix, justifié par un calcul |
 
-Dans `ERR` et `QUI`, les élèves portent des prénoms du contexte pays. Aucun n'est toujours celui qui se trompe.
+**Élèves fictifs (`ERR`, `QUI`).** La grille en place 2 ou 3 par leçon, pas plus. Sur une feuille, ils doivent se lire d'un coup d'œil :
+
+- la copie tient en **une à trois lignes de calcul simple**, écrites comme un élève les écrirait, et contient **une seule** erreur, réelle, de la taxonomie ;
+- la question est directe et unique : « Quelle ligne est fausse ? », « Qui a raison ? », « Corrige le résultat ». Jamais « Coche les affirmations qui corrigent cette copie » ;
+- la situation n'ajoute aucune difficulté de lecture : pas de figure à décoder en plus de la copie, sauf si la figure est le sujet de l'erreur ;
+- si l'erreur ne se montre pas ainsi, écris un autre archétype et donne la raison dans `slot_swap.reason`.
+
+Les élèves portent des prénoms du contexte pays. Aucun n'est toujours celui qui se trompe.
+
+## Tracés
+
+Un tracé n'est pas un archétype : c'est un **format** (`geo_construction`), que la grille place d'après la ligne « Tracés » de la leçon (profil `central`, `partiel` ou `aucun`). Un tracé porte donc un archétype comme toute carte, le plus souvent :
+
+- `CALC` : construire directement (symétrique d'une figure, triangle de côtés donnés, parallèle passant par un point) ;
+- `REPR` : passer d'une description ou d'un codage à la figure (« trace un triangle ABC rectangle en A tel que… ») ;
+- `INVERSE` : retrouver l'élément caché (le centre d'une symétrie, l'axe, le point de départ d'une translation) ;
+- `DOC` : construire à partir d'un plan, d'une carte ou d'un schéma à l'échelle.
+
+Un bon tracé évalue la construction elle-même, pas le soin : les longueurs et les angles demandés se mesurent à la règle et au rapporteur (au millimètre, au degré), les instruments sont ceux du niveau, et l'énoncé dit ce qui doit rester visible (traits de construction, codage). Il tient dans la case ou le quadrillage prévus, sans que l'élève ait à deviner où commencer. Le contrat technique est dans `contexte/formats/geo_construction.md`.
 
 ## Contre-sens interdits
 

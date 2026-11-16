@@ -12,6 +12,6 @@ Pour chaque carte, juge cinq critères. Chacun vaut `{"ok": true}` ou `{"ok": fa
 
 Puis `bloquant` : `true` si un élève ou un professeur serait trompé, ou si la carte ne sert à rien. Un critère `juste` ou `programme` en échec bloque toujours. Une maladresse qui n'induit pas en erreur ne bloque pas : mets-la dans `remarques`.
 
-Pour chaque carte, dans l'ordre, rends un objet `{"juste": …, "utile": …, "distracteurs": …, "niveau": …, "programme": …, "bloquant": true|false, "critique": "ce qu'il faut changer, adressé au rédacteur, si bloquant", "remarques": "ce qu'un relecteur humain devrait regarder, sinon null"}`.
+Pour chaque carte, dans l'ordre, rends un objet `{"juste": …, "utile": …, "distracteurs": …, "niveau": …, "programme": …, "bloquant": true|false, "critique": "ce qu'il faut changer, adressé au rédacteur, si bloquant", "remarques": "un doute précis qu'un relecteur humain doit trancher, sinon null"}`. Ne mets pas de remarque pour une préférence de style ou une amélioration possible : `remarques` vaut null dans la plupart des cas.
 
 Réponds uniquement par un objet JSON de la forme {"cartes": [...]}.
