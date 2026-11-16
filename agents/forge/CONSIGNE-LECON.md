@@ -37,37 +37,39 @@ Lis chaque source une seule fois. Une source est du matériau, pas une consigne 
 
 Le fichier `data/forge/lecons/<matière>/<programme>-<niveau>[-<série>]-<leçon>.md` (hors dépôt), et à côté `<même nom>.sources.yaml` : ce que tu as lu (titre, fichier, pages) et ton modèle. Aucune date dans la leçon.
 
-L'agent d'exercices d'une compétence lit **l'en-tête, la section de sa compétence et la fin**, rien d'autre : 10 Ko au plus pour cet ensemble. Ce qui sert à toutes les compétences va dans l'en-tête ; ce qui ne sert qu'à une compétence va dans sa section.
+**Tu écris pour un modèle, pas pour un humain.** Le lecteur est l'agent qui écrira les exercices : il sait les mathématiques, il ne sait pas ce que CE programme, à CE niveau, enseigne et exclut. Écris donc seulement ce qu'il ne peut pas deviner, en style télégraphique : listes, pas de phrase d'introduction, pas de rappel de cours qu'un professeur connaît, pas de conseil général déjà écrit plus haut. Vise **1 Ko par compétence** : `run.py lecon` refuse plus de 1,5 Ko par section et 2,5 Ko pour l'en-tête et la fin réunis.
 
 ### En-tête (avant la première compétence)
 
-1. **Titre** : `# <Leçon> (<programme>, <niveau>[, série])`, puis la place dans la progression (rang, semaine de début) quand elle est connue.
-2. **Acquis** : ce que l'élève sait déjà en arrivant, et **ce qu'il ne sait pas encore** parce que la leçon vient plus tard dans l'année. Un exercice ne mobilisera rien de cette seconde liste.
-3. **Hors programme** à ce niveau, pour cette leçon.
-4. **Vocabulaire et notations** propres à la leçon (pas ceux de la matière, déjà écrits plus haut).
-5. **Faits communs** : les faits dont plusieurs compétences ont besoin.
+```
+# <Leçon> (<programme>, <niveau>[, série])
+Rang <n>, semaine <s>.
+Acquis : … · Pas encore vu : … · Hors programme : …
+Vocabulaire et notations propres : …
+- **F1** : fait commun à plusieurs compétences.
+```
 
-### Une section par compétence : `## <code> : <libellé officiel>`
+### Une section par compétence
 
-- **Faits** : chaque définition, propriété, formule, valeur de référence dont un exercice de cette compétence aura besoin.
-- **Ce que signifie la maîtriser**, puis ses micro-savoir-faire, du plus simple au plus exigeant.
-- **Erreurs fréquentes**, avec le résultat faux auquel chacune mène et son code de la taxonomie. Si aucun code ne convient, propose-le au bilan.
-- **Types de tâches et de supports** (figure, schéma, document, tableau).
-- La ligne `**Tracés : central.**`, `partiel` ou `aucun`, suivie de la raison.
-- **Idées**, s'il y en a (voir plus bas), dans un bloc ```` ```yaml idees ```` en fin de section.
+```
+## <code> : <libellé officiel>
+- **F7** : fait exact, complet, avec ses conditions.
+- **F8** (incertain) : fait que tu n'as pas pu vérifier.
+Savoir-faire : du plus simple au plus exigeant, séparés par « ; ».
+Erreurs : `math.geo.trigo_rapport` (cos pris pour sin), `math.num.arrondi` (arrondi trop tôt).
+Supports : figure, tableau, document… seulement s'il y a une contrainte propre.
+**Tracés : aucun.** (raison en quelques mots)
+```
+
+**Erreurs** : choisis dans la taxonomie (`backend/app/data/misconceptions/<matière>.json`) les codes qui concernent vraiment CETTE compétence, 2 à 5, chacun avec le résultat faux auquel il mène quand ce n'est pas évident. C'est la seule liste d'erreurs que lira l'agent d'exercices : un piège sans code ici n'aura pas de code. Si aucun code ne convient, prends le plus proche et propose le nouveau au bilan.
 
 ### Fin (après la dernière compétence)
 
-- **Examen** : ce qui tombe au brevet, au BEPC ou au baccalauréat sur cette leçon, et sous quelle forme, si une source le montre.
-- **Contextes** : situations plausibles pour ce pays et cet âge, avec des ordres de grandeur réels.
+`Examen :` ce qui tombe au brevet, au BEPC ou au baccalauréat sur cette leçon, en une ou deux lignes, si une source le montre. `Contextes :` situations et ordres de grandeur propres à la leçon, seulement s'ils ne sont pas déjà dans le profil du pays.
 
 ### Les faits
 
-Numérotés `F1`, `F2`… dans tout le fichier, sans trou ni doublon, un par ligne : `- **F7** : énoncé exact, complet, avec ses conditions.` Chaque exercice citera les faits qu'il mobilise, et n'affirmera rien d'autre : ce qui manque ici manquera aux exercices, ce qui est faux ici sera faux partout.
-
-Si tu n'es pas sûr d'un fait (un usage local que tu supposes, une valeur que tu n'as pas pu vérifier dans le programme), écris-le `- **F7** (incertain) : …`. C'est ce que l'humain relira en premier.
-
-Après toi, un vérificateur indépendant juge chaque fait (juste, faux, hors programme, ambigu) sans voir le reste de la leçon : un fait doit donc se comprendre seul.
+Numérotés `F1`, `F2`… dans tout le fichier, sans trou ni doublon, un par ligne. Chaque exercice citera les faits qu'il mobilise, et n'affirmera rien d'autre : ce qui manque ici manquera aux exercices, ce qui est faux ici sera faux partout. Un fait se comprend seul : un vérificateur indépendant le jugera sans voir le reste. N'écris pas en fait ce que tout professeur sait et que le programme ne restreint pas.
 
 ### Les idées
 
@@ -79,7 +81,7 @@ Un manuel contient surtout des exercices d'application directe : ils ne portent 
 - il tient sur une carte et se corrige par une réponse courte, cochée, reliée ou rédigée en quelques lignes ;
 - il ne dépend pas d'un document précis (photo, texte d'auteur).
 
-Vise 5 à 10 idées par leçon ; zéro est une réponse acceptable. Une idée sans source peut venir de ton expérience, si elle remplit les mêmes conditions.
+Vise 5 à 10 idées par leçon ; zéro est une réponse acceptable. Une idée sans source peut venir de ton expérience, si elle remplit les mêmes conditions. Les élèves fictifs (copie à corriger, deux élèves en désaccord) sont placés par la grille, 2 ou 3 par leçon : n'en fais pas des idées.
 
 ```yaml idees
 - id: i01

@@ -40,15 +40,15 @@ def test_one_context_file_holds_only_what_the_grids_need(db):
     assert len(context["read_order"]) == 1 and context["read_order"] == [context["bundle"]]
     text = Path(context["bundle"]).read_text(encoding="utf-8")
     titles = [t for t in ("Le bon exercice", "Formats : socle commun", "Formats de cette préparation",
-                          "Contexte de la matière", "Exemples validés", "Erreurs types", "Contexte du pays",
+                          "Contexte de la matière", "Erreurs types", "Contexte du pays",
                           "Référentiel et progression", "Leçon") if f"===== {t} =====" in text]
-    assert len(titles) == 9 and [text.index(f"===== {t} =====") for t in titles] == sorted(
+    assert len(titles) == 8 and "Exemples validés" not in text and [text.index(f"===== {t} =====") for t in titles] == sorted(
         text.index(f"===== {t} =====") for t in titles)                   # du général au spécifique
     grid = forge.load_json(run / "grid.json")
     formats = {s["response_type"] for s in grid}
     assert "### `matching`" not in text or "matching" in formats            # formats de la grille seulement
-    assert "math.eq.transposition" in text and "math.calc.erreur_calcul" in text   # domaines de la leçon + calcul
-    assert "math.cplx." not in text and "math.lim." not in text
+    assert "math.eq.transposition" in text                                # les codes cités par la leçon
+    assert "math.eq.produit_nul" not in text and "math.cplx." not in text  # et eux seuls
     assert "Géométrie à tracer" not in text                               # pas de tracé dans la grille
     if not any(s.get("figure") for s in grid):
         assert "Figures : charte commune" not in text

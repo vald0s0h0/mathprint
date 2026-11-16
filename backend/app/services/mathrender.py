@@ -68,7 +68,7 @@ _COMMAND_RE = re.compile(r"\\([a-zA-Z]+|[,;!:%{}])")
 _UNICODE_MAP = {
     "×": r"\times ", "÷": r"\div ", "·": r"\cdot ", "−": "-", "–": "-",
     "≤": r"\leq ", "≥": r"\geq ", "≠": r"\neq ", "≈": r"\approx ",
-    "π": r"\pi ", "²": "^2", "³": "^3", "°": r"^\circ ", "∞": r"\infty ",
+    "π": r"\pi ", "²": "^2", "³": "^3", "°": r"^{\circ}", "∞": r"\infty ",
     "→": r"\rightarrow ", "⇒": r"\Rightarrow ", "↔": r"\leftrightarrow ",
     "œ": "oe", " ": " ", " ": " ",
 }
@@ -131,7 +131,10 @@ def to_mathtext(s: str) -> str:
         inner = m.group(1).replace(" ", r"\ ")
         return r"\mathrm{%s}" % inner
     s = re.sub(r"\\text(?:bf)?\{([^{}]*)\}", _text_repl, s)
-    s = s.replace(r"\degree", r"^\circ").replace(r"\euro", r"\mathrm{€}")
+    s = s.replace(r"\degree", r"^{\circ}").replace(r"\euro", r"\mathrm{€}")
+    # « ^\circ » sans accolades : mathtext le traite en opérateur et l'entoure
+    # d'espace (« 45 ° »). Entre accolades, le degré reste collé au nombre.
+    s = re.sub(r"\^\s*\\circ(?![a-zA-Z])", r"^{\\circ}", s)
     s = re.sub(r"\\(?:,|;|!|:)", r"\\/", s)
     s = s.replace(r"\qquad", r"\ \ ").replace(r"\quad", r"\ ")
     s = s.replace(r"\dots", r"\ldots")

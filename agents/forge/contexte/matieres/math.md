@@ -60,7 +60,3 @@ Un bon tracé évalue la construction elle-même, pas le soin : les longueurs et
 - **Écriture.** Toute formule, tout nombre utilisé dans un calcul et toute unité composée vont dans `$...$`. Virgule décimale française : `$3{,}5$`. Multiplication : `\times`, jamais `*`. Fractions : `\dfrac{a}{b}`.
 - **Justesse.** Si un résultat se calcule, donne le calcul à vérifier (`calc`).
 - **Vocabulaire.** Celui enseigné à ce niveau, d'après la leçon. Une notion du programme d'une classe supérieure n'apparaît pas, même en piège.
-
-## Exemples validés
-
-`contexte/exemples/math.json` contient des cartes relues et validées, une ou deux par format, chacune avec la raison de sa qualité. Ce sont des modèles de qualité : n'en reprends ni les situations ni les valeurs.

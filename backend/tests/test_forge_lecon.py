@@ -25,6 +25,7 @@ L'élève sait additionner des entiers.
 - **F3** : une retenue se reporte au rang suivant.
 
 Les erreurs fréquentes : oublier une retenue (F3).
+Erreurs : `math.calc.erreur_calcul`.
 
 **Tracés : aucun.**
 
@@ -38,6 +39,7 @@ Les erreurs fréquentes : oublier une retenue (F3).
 
 ## Z1.2 : Multiplier
 F4. Un produit est nul si l'un de ses facteurs est nul.
+Erreurs : `math.eq.produit_nul`.
 
 **Tracés : aucun.**
 
@@ -78,9 +80,24 @@ def test_structure_problems():
     assert any("Z1.2 : ligne « **Tracés" in p for p in lecon.structure_problems(no_trace, CODES))
 
 
+def test_each_competency_names_its_errors_from_the_taxonomy():
+    assert lecon.error_codes(LECON.split("## Z1.2")[0]) == ["math.calc.erreur_calcul"]
+    missing = LECON.replace("Erreurs : `math.eq.produit_nul`.\n", "")
+    assert lecon.error_problems(missing, CODES) == [
+        "Z1.2 : aucune erreur type citée (ligne « Erreurs : `math.…` »)"]
+    invented = LECON.replace("math.eq.produit_nul", "math.eq.invente")
+    assert any("hors taxonomie : math.eq.invente" in p for p in lecon.error_problems(invented, CODES))
+
+
+def test_a_lesson_is_short():
+    long_section = LECON.replace("Erreurs : `math.eq.produit_nul`.", "Erreurs : `math.eq.produit_nul`.\n" + "x" * 1600)
+    assert any("Z1.2 : section trop longue" in p for p in lecon.size_problems(long_section, CODES))
+    long_frame = LECON.replace("## Acquis", "## Acquis\n" + "y" * 2600)
+    assert any("en-tête et fin trop longs" in p for p in lecon.size_problems(long_frame, CODES))
+    assert lecon.size_problems(LECON, CODES) == []
+
+
 def test_slice_size_dates_and_engines():
-    big = LECON.replace("Rien", "") + ("x" * (lecon.MAX_SLICE_BYTES + 1))
-    assert any("extrait trop long" in p for p in lecon.lecon_problems(big, CODES))
     for dated in ("Mise à jour le 12/11/2026.", "Écrit en novembre 2026."):
         assert any("date" in p for p in lecon.lecon_problems(LECON + dated, CODES)), dated
     assert lecon.lecon_problems(LECON + "L'armistice du 11 novembre 1918.", CODES) == []

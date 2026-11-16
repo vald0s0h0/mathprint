@@ -16,7 +16,10 @@ import re
 import unicodedata
 from pathlib import Path
 
-MAX_SLICE_BYTES = 10 * 1024
+MAX_SLICE_BYTES = 10 * 1024        # en-tête + section + fin, ce que lit l'agent d'exercices
+MAX_FRAME_BYTES = 2560             # en-tête et fin : ce qui sert à toutes les compétences
+MAX_SECTION_BYTES = 1536           # une compétence, idées comprises : écrite pour un modèle, pas pour un humain
+_CODE = re.compile(r"\b([a-z]+)\.([a-z_]+)\.([a-z_]+)\b")
 COPY_WORDS = 8
 IDEA_FIELDS = ("id", "mecanisme", "pourquoi_bon", "type", "ne_pas_reprendre")
 OPTIONAL_IDEA_FIELDS = ("competences",)
@@ -232,11 +235,59 @@ def idea_problems(text: str, codes: list[str], sources: list[str] | None = None)
     return problems
 
 
+def taxonomy_codes(subject: str) -> set[str]:
+    path = Path(__file__).resolve().parents[2] / "backend" / "app" / "data" / "misconceptions" / f"{subject}.json"
+    if not path.exists():
+        return set()
+    return {e["code"] for e in json.loads(path.read_text(encoding="utf-8"))["errors"]}
+
+
+def error_codes(section: str, subject: str = "math") -> list[str]:
+    """Codes d'erreur cités par une section, dans l'ordre."""
+    return list(dict.fromkeys(m.group(0) for m in _CODE.finditer(section) if m.group(1) == subject))
+
+
+def error_problems(text: str, codes: list[str], subject: str = "math",
+                   known: set[str] | None = None) -> list[str]:
+    """Chaque compétence cite ses erreurs types, toutes dans la taxonomie : c'est la
+    seule liste que lira l'agent d'exercices."""
+    known = taxonomy_codes(subject) if known is None else known
+    if not known:
+        return []
+    problems = []
+    _header, sections, _tail = split(text, codes)
+    for code, body in sections.items():
+        cited = error_codes(body, subject)
+        if not cited:
+            problems.append(f"{code} : aucune erreur type citée (ligne « Erreurs : `{subject}.…` »)")
+        unknown = [c for c in cited if c not in known]
+        if unknown:
+            problems.append(f"{code} : code(s) hors taxonomie : {', '.join(unknown)} ; prends le plus "
+                            "proche, et propose le nouveau au bilan")
+    return problems
+
+
+def size_problems(text: str, codes: list[str]) -> list[str]:
+    header, sections, tail = split(text, codes)
+    problems = []
+    frame = len((header + tail).encode("utf-8"))
+    if frame > MAX_FRAME_BYTES:
+        problems.append(f"en-tête et fin trop longs : {frame} octets pour {MAX_FRAME_BYTES} au plus")
+    for code, body in sections.items():
+        size = len(body.encode("utf-8"))
+        if size > MAX_SECTION_BYTES:
+            problems.append(f"{code} : section trop longue ({size} octets pour {MAX_SECTION_BYTES} au plus)")
+    return problems
+
+
 def lecon_problems(text: str, codes: list[str], sources: list[str] | None = None,
-                   upper: list[str] | None = None, subject: str = "math") -> list[str]:
+                   upper: list[str] | None = None, subject: str = "math",
+                   known_errors: set[str] | None = None) -> list[str]:
     """Problèmes d'une leçon ; liste vide si elle est conforme. `upper` : les textes des
     niveaux au-dessus (universel, formats, matière, pays), qu'une leçon ne répète pas."""
     problems = structure_problems(text, codes, subject)
+    problems += size_problems(text, codes)
+    problems += error_problems(text, codes, subject, known_errors)
     for code in codes:
         size = len(extract(text, codes, code).encode("utf-8"))
         if size > MAX_SLICE_BYTES:

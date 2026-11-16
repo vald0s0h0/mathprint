@@ -518,45 +518,21 @@ def _format_sections(text: str, formats: set[str]) -> str:
     return "".join(out).rstrip() + "\n"
 
 
-def _examples(subject: str, formats: set[str], archetypes: set[str]) -> str:
-    """Un exemple validé par format de la grille, plus ceux des élèves fictifs s'il y en a."""
-    path = CONTEXT_DIR / "exemples" / f"{subject}.json"
-    if not path.exists():
-        return ""
-    data = load_json(path)
-    picked, seen = [], set()
-    for card in data.get("cartes") or []:
-        ex = card.get("exercice") or {}
-        rtype, arch = ex.get("response_type"), ex.get("archetype")
-        if arch in ("ERR", "QUI"):
-            if arch in archetypes:
-                picked.append(card)
-            continue
-        if rtype in formats and rtype not in seen:
-            seen.add(rtype)
-            picked.append(card)
-    if not picked:
-        return ""
-    lines = [f"{data.get('usage', '')}".strip(), ""]
-    for card in picked:
-        lines += [f"### {card['exercice'].get('response_type')} · {card.get('pourquoi', '')}",
-                  "```json", json.dumps(card["exercice"], ensure_ascii=False), "```", ""]
-    return "\n".join(lines)
-
-
 def _error_list(subject: str, lesson_text: str) -> str:
-    """Les erreurs types des domaines que la leçon cite, plus calcul et raisonnement,
-    une ligne par code. Sans code cité, toute la matière."""
+    """Les erreurs types que la leçon attribue à ses compétences, une ligne par code.
+    Une leçon à l'ancien format, qui n'en cite pas, reçoit les domaines qu'elle évoque
+    (ou toute la matière)."""
     path = REPO / "backend" / "app" / "data" / "misconceptions" / f"{subject}.json"
     if not path.exists():
         return ""
     errors = load_json(path)["errors"]
-    domains = {m.group(2) for m in _LESSON_CODE_RE.finditer(lesson_text) if m.group(1) == subject}
-    if domains:
-        domains |= {"calc", "raison"}
-        errors = [e for e in errors if e["code"].split(".")[1] in domains]
+    cited = {m.group(0) for m in _LESSON_CODE_RE.finditer(lesson_text) if m.group(1) == subject}
+    chosen = [e for e in errors if e["code"] in cited]
+    if not chosen:
+        domains = {m.group(2) for m in _LESSON_CODE_RE.finditer(lesson_text) if m.group(1) == subject}
+        chosen = [e for e in errors if not domains or e["code"].split(".")[1] in domains | {"calc", "raison"}]
     return ("Taxonomie fermée : chaque piège porte l'un de ces codes ; sinon `autre` et `proposed_errors`.\n\n"
-            + "\n".join(f"- `{e['code']}` — {e['label']}" for e in errors) + "\n")
+            + "\n".join(f"- `{e['code']}` — {e['label']}" for e in chosen) + "\n")
 
 
 def compose_context(path: Path, *, subject: str, programme: str, grids: list[list[dict]],
@@ -566,7 +542,6 @@ def compose_context(path: Path, *, subject: str, programme: str, grids: list[lis
     qui sert à ces grilles, du plus général au plus spécifique."""
     slots = [s for grid in grids for s in grid]
     formats = {s.get("response_type") for s in slots}
-    archetypes = {s.get("archetype") for s in slots}
     figures = any(s.get("figure") for s in slots) or bool(formats & set(DRAW_TYPES))
     parts: list[tuple[str, str]] = []
 
@@ -585,7 +560,6 @@ def compose_context(path: Path, *, subject: str, programme: str, grids: list[lis
         add("Figures : charte commune", CONTEXT_DIR / "figures" / "commun.md")
         add("Figures : kit de la matière", CONTEXT_DIR / "figures" / f"{subject}.md")
     add("Contexte de la matière", CONTEXT_DIR / "matieres" / f"{subject}.md")
-    add("Exemples validés", text=_examples(subject, formats, archetypes))
     # Les domaines viennent de la leçon entière : une compétence peut piéger sur une
     # erreur citée dans la section d'une autre.
     add("Erreurs types", text=_error_list(subject, whole_lesson or lesson_text))

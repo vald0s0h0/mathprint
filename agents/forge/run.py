@@ -231,7 +231,17 @@ def _cmd_validate(args, db):
         return 1
     dropped = relecture.ecartees(run)
     print(f"{len(contracts)} carte(s) valides et relues"
-          + (f", écartée(s) : {', '.join(sorted(dropped))}" if dropped else "") + ". Lance `persist`.")
+          + (f", écartée(s) : {', '.join(sorted(dropped))}" if dropped else "") + ".")
+    if args.slots:
+        print("Reprise ciblée : lance `persist` avec --slots et --reprise.")
+        return 0
+    try:
+        result = forge.persist(db, run)
+    except SystemExit as error:
+        db.rollback()
+        print(f"persist : {error}")
+        return 1
+    print(f"{len(result['written'])} brouillon(s) écrits. À relire : " + (", ".join(result["review"]) or "aucune"))
     return 0
 
 
