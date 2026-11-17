@@ -428,6 +428,8 @@ def copy_is_blank(db: Session, copy: Copy) -> bool:
         if not response or not reading or reading.confidence < ocr_confidence_threshold(db):
             return False
         raw = reading.raw_json or {}
+        if raw.get("force_manual"):
+            return False
         if item.response_type.startswith("qcm"):
             if response.selected_choices: return False
         elif item.response_type == "checkbox_grid":
@@ -464,6 +466,15 @@ def grade_stored_responses(db: Session, batch: ScanBatch) -> int:
                 continue
             reading = effective_reading(db, resp.zone_id)
             raw = (reading.raw_json or {}) if reading else {}
+            if raw.get("force_manual"):
+                decision = GradingDecision(response_id=resp.id, source="deterministic",
+                    score=0, max_score=1, confidence=0, tier="D",
+                    reason_code="teacher_requested_manual", status="review_pending",
+                    evidence_json={})
+                db.add(decision)
+                db.flush()
+                db.add(ManualReview(decision_id=decision.id, category="ocr_ambigu"))
+                continue
             cells = raw.get("cells") if item.response_type in ("table_fill", "multi_blank") else None
             selected = resp.selected_choices if (item.response_type.startswith("qcm")
                                                    or item.response_type == "checkbox_grid") else None

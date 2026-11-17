@@ -24,6 +24,7 @@ import { type LateJob, lateJobNames } from '../components/LateJobs'
 import ScanLotRow, { type Lot, type LotHandlers, type LotStage } from '../components/ScanLotRow'
 import PrintButton from '../components/PrintButton'
 import OcrAssistant, { type OcrBatchRef } from '../components/OcrAssistant'
+import FeedbackEditor from '../components/FeedbackEditor'
 import RefineCorrectionModal from '../components/RefineCorrectionModal'
 import { useAppState } from '../state/AppState'
 
@@ -86,6 +87,7 @@ type Item = {
   group_key: string; group_label: string; response_type: string; sequence: number
   // correction manuelle : mode d'UI, réponse attendue lisible, détail par case
   grade_mode: GradeMode; expected_display: string; cells: Cell[]
+  feedback_options: string[]; feedback_text: string
   cell_confidences?: number[]
   ocr_controls?: {
     kind: 'text' | 'boxes' | 'matching'
@@ -383,7 +385,8 @@ export default function Corrections() {
   // null (à trancher) — set_cells exige des verdicts complets à l'envoi.
   const [units, setUnits] = useState<Unit[]>([])
   const [verdicts, setVerdicts] = useState<Record<string, (number | null)[]>>({})
-  const [scoreInput, setScoreInput] = useState<number | ''>('')
+  const [scoreInput, setScoreInput] = useState<number | string>('')
+  const [feedbackDrafts, setFeedbackDrafts] = useState<Record<string, string>>({})
   const [loaded, setLoaded] = useState(false)
   const [resetTarget, setResetTarget] = useState<Batch | null>(null)
   const [resetting, setResetting] = useState(false)
@@ -473,6 +476,7 @@ export default function Corrections() {
   const loadItems = useCallback(async (b: Batch, s: Scope) => {
     const rs = await api.get<Item[]>(`/api/scans/batches/${b.id}/items?scope=${s}${waveQuery(b)}`)
     setItems(rs)
+    setFeedbackDrafts({})
     setUnits(buildUnits(rs, s))
     // Une réponse SIGNALÉE doit être validée explicitement : ses crédits auto
     // restent affichés comme information (`auto_credit`) mais ne pré-cochent pas
@@ -534,10 +538,10 @@ export default function Corrections() {
   // note affichée en place (append-only côté serveur), puis passe à la suivante.
   async function gradeBlock(action: string, extra?: { ratio?: number }) {
     const u = units[idx]
-    if (!u || u.mode === 'cells') return
+    if (!u) return
     const rid = u.respId
     try {
-      await api.post(`/api/scans/responses/${rid}/resolve`, { action, ...extra })
+      await api.post(`/api/scans/responses/${rid}/resolve`, { action, ...extra, feedback: feedbackDrafts[rid] })
     } catch (e) {
       notifications.show({ color: 'red', message: (e as Error).message })
       return
@@ -550,7 +554,12 @@ export default function Corrections() {
             current_points: Math.round(r * x.bareme_points * 1000) / 1000 }
     )))
     setScoreInput('')
-    advance()
+    if (u.mode === 'cells') {
+      setIdx((i) => {
+        const next = units.findIndex((v, n) => n > i && v.respId !== rid)
+        return next < 0 ? units.length - 1 : next
+      })
+    } else advance()
   }
   const gradeRatio = (ratio: number) => gradeBlock('set_ratio', { ratio })
 
@@ -561,7 +570,7 @@ export default function Corrections() {
     const credits = arr.map((v) => Math.max(0, Math.min(1, v ?? 0)))
     try {
       await api.post(`/api/scans/responses/${rid}/resolve`,
-        { action: 'set_cells', cell_verdicts: credits })
+        { action: 'set_cells', cell_verdicts: credits, feedback: feedbackDrafts[rid] })
     } catch (e) {
       notifications.show({ color: 'red', message: (e as Error).message })
       return
@@ -599,7 +608,7 @@ export default function Corrections() {
     const u = units[idx]
     if (!reviewBatch || !u) return
     const h = (e: KeyboardEvent) => {
-      if ((e.target as HTMLElement).tagName === 'INPUT') return
+      if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement).tagName)) return
       const k = e.key.toLowerCase()
       if (e.key === 'ArrowRight') { setIdx((i) => Math.min(i + 1, units.length - 1)); return }
       if (e.key === 'ArrowLeft') { setIdx((i) => Math.max(i - 1, 0)); return }
@@ -781,6 +790,7 @@ export default function Corrections() {
   // unité courante + la réponse (fraîche) et la case dont elle dérive
   const cur = units[idx]
   const curItem = cur ? items.find((x) => x.response_id === cur.respId) ?? null : null
+  useEffect(() => { setScoreInput('') }, [cur?.key])
   const curCell = cur && cur.mode === 'cells' && curItem && cur.cellIndex != null
     ? curItem.cells[cur.cellIndex] ?? null : null
   // Un verdict LLM peut porter sur plusieurs cellules d'une même réponse. Dans
@@ -1278,13 +1288,6 @@ export default function Corrections() {
                     </Button>
                   </Group>
                   <Group>
-                    <NumberInput placeholder="points" w={120} min={0} max={curItem.bareme_points} step={0.125}
-                      decimalScale={3} value={scoreInput}
-                      onChange={(v) => setScoreInput(v === '' ? '' : Number(v))} />
-                    <Button variant="light" disabled={scoreInput === '' || !curItem.bareme_points}
-                      onClick={() => gradeRatio(Number(scoreInput) / curItem.bareme_points)}>
-                      Attribuer ces points
-                    </Button>
                     <Button variant={curItem.cancelled ? 'filled' : 'subtle'} color="gray"
                       aria-pressed={curItem.cancelled} onClick={() => gradeBlock('cancel_item')}>
                       Annuler la question
@@ -1292,6 +1295,19 @@ export default function Corrections() {
                   </Group>
                 </>
               )}
+              <FeedbackEditor options={curItem.feedback_options ?? []}
+                value={feedbackDrafts[curItem.response_id] ?? curItem.feedback_text ?? ''}
+                onChange={(value) => setFeedbackDrafts((prev) => ({ ...prev, [curItem.response_id]: value }))} />
+              <Group>
+                <NumberInput label="Points attribués" w={140} min={0} max={curItem.bareme_points} step={0.5}
+                  decimalScale={3} decimalSeparator="," value={scoreInput}
+                  onChange={setScoreInput} />
+                <Text size="sm">/ {fmtPts(curItem.bareme_points)}</Text>
+                <Button variant="light" disabled={scoreInput === '' || !Number.isFinite(Number(scoreInput)) || !curItem.bareme_points || Number(scoreInput) < 0 || Number(scoreInput) > curItem.bareme_points}
+                  onClick={() => gradeRatio(Number(scoreInput) / curItem.bareme_points)}>
+                  Attribuer ces points
+                </Button>
+              </Group>
               <Text size="xs" c="dimmed">
                 <Kbd>←</Kbd>/<Kbd>→</Kbd> pour naviguer{cur.mode === 'cells'
                   ? ' · chaque case validée est enregistrée automatiquement (0,5 pt/case juste)' : ''}.

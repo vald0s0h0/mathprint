@@ -104,7 +104,7 @@ def _hotspot(z: dict) -> dict:
     gauche de la page : la zone de réponse et sa bande de note."""
     x0, y0 = float(z["x_pt"]), float(z["y_pt"])
     x1, y1 = x0 + float(z["w_pt"]), y0 + float(z["h_pt"])
-    strip = z.get("strip")
+    strip = z.get("strip") or z.get("group_strip")
     if strip and strip.get("w_pt"):
         x0 = min(x0, float(strip["x_pt"]))
         y0 = min(y0, float(strip["y_pt"]))
@@ -333,6 +333,8 @@ def _record_teacher_decision(db: Session, resp: StudentResponse, *, score: float
     ._apply_resolution : la précédente passe « revised » et une revue encore
     ouverte sur la réponse est close."""
     old = _latest_decision(db, resp.id)
+    if old and "teacher_feedback" in (old.evidence_json or {}) and "teacher_feedback" not in evidence:
+        evidence["teacher_feedback"] = old.evidence_json["teacher_feedback"]
     decision = GradingDecision(
         response_id=resp.id, source="teacher", score=score, max_score=max_score,
         confidence=1.0, tier="D", reason_code=reason_code, status="validated",

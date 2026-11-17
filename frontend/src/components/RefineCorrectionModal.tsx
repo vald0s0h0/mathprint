@@ -35,6 +35,7 @@ import {
 } from 'react'
 import { api, getToken } from '../api'
 import MathText, { MathAnswer } from './MathText'
+import FeedbackEditor from './FeedbackEditor'
 
 type CopyEntry = {
   copy_id: string; student: string; note: string | null; points: string | null
@@ -80,6 +81,7 @@ type Detail = {
   expected_display: string; correction: string
   current_points: number; bareme_points: number; decision_source: string; cancelled: boolean
   reason_code: string
+  feedback_options: string[]; feedback_text: string
   ocr_text: string; ocr_latex: string
   choices: string[]
   grid: { rows: string[]; correct: (number | null)[]; cols: string[] } | null
@@ -585,12 +587,14 @@ function ResponsePanel({ responseId, label, onBack, onApplied, review = false }:
   const [feedback, setFeedback] = useState<{ uncertain: boolean; reason: string } | null>(null)
   const [points, setPoints] = useState<number | ''>('')
   const [showPoints, setShowPoints] = useState(false)
+  const [feedbackText, setFeedbackText] = useState('')
 
   const load = useCallback(async () => {
     const d = await api.get<Detail>(`${base}/${responseId}`)
     setDetail(d)
     setAnswer(d.answer)
     setPoints(d.current_points)
+    setFeedbackText(d.feedback_text ?? '')
     return d
   }, [responseId, base])
 
@@ -620,6 +624,17 @@ function ResponsePanel({ responseId, label, onBack, onApplied, review = false }:
     } finally {
       setBusy(false)
     }
+  }
+
+  async function submitFeedback() {
+    if (!detail || busy) return
+    setBusy(true); setError(null)
+    try {
+      const r = await api.post<ApplyResult>(`${base}/${responseId}/feedback`, { feedback: feedbackText })
+      onApplied(r, responseId)
+      await load()
+    } catch (e) { setError((e as Error).message) }
+    finally { setBusy(false) }
   }
 
   // Ctrl/Cmd + Entrée applique depuis n'importe où dans le panneau
@@ -706,6 +721,13 @@ function ResponsePanel({ responseId, label, onBack, onApplied, review = false }:
         )
       )}
       {error && <Alert color="red" variant="light" p="xs"><Text size="xs">{error}</Text></Alert>}
+
+      {!review && <>
+        <Divider />
+        <FeedbackEditor options={detail.feedback_options ?? []} value={feedbackText} onChange={setFeedbackText} />
+        <Button size="sm" variant="light" w="fit-content" loading={busy}
+          disabled={feedbackText === (detail.feedback_text ?? '')} onClick={submitFeedback}>Enregistrer la micro-correction</Button>
+      </>}
 
       {!review && <Divider />}
       {review ? null : pointsOnly || showPoints ? (

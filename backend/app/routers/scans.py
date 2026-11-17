@@ -22,7 +22,7 @@ from ..models import (
 )
 from ..services import grading
 from ..services import providers
-from ..services import refine
+from ..services import refine, microcorrection
 from ..services import sandbox as sandbox_service
 from ..services import late_copies, ocr_cascade, ocr_truth, review_log, scan_intake, scan_originals, scoring
 from ..services import skeleton as skeleton_service
@@ -863,8 +863,15 @@ def _review_unit(db: Session, resp: StudentResponse, item: CopyItem, copy: Copy,
             llm_confidences.append(confidence)
         llm_notes.append(note)
 
+    feedback = (item.grading_json or {}).get("feedback") or {}
+    options = [v.get("text", "") for v in (feedback.get("options") or {}).values() if isinstance(v, dict)]
+    options += [v.get("text", "") for v in (feedback.get("wrong_answers") or []) if isinstance(v, dict)]
+    options += [(feedback.get(k) or {}).get("text", "") for k in ("correct", "blank", "fallback")]
+    selection = microcorrection.select(item, decision, resp, reading_ocr) if decision else None
     return {
         "response_id": resp.id,
+        "feedback_options": list(dict.fromkeys(x for x in options if x)),
+        "feedback_text": selection.text if selection else "",
         "review_id": review.id if review else None,
         "flagged": review is not None,
         "category": review.category if review else None,
@@ -911,7 +918,7 @@ def _review_unit(db: Session, resp: StudentResponse, item: CopyItem, copy: Copy,
         "sequence": item.sequence,
         # correction manuelle : mode d'UI + réponse attendue LISIBLE (plus de
         # JSON brut), et le détail CASE PAR CASE pour les tableaux/cases à trous
-        "grade_mode": _grade_mode(item.response_type),
+        "grade_mode": "partial" if decision and decision.reason_code == "teacher_requested_manual" else _grade_mode(item.response_type),
         "expected_display": _expected_display(item),
         "cells": (_grid_units(item, ocr, decision, resp.selected_choices)
                   if item.response_type == "checkbox_grid"
@@ -1124,6 +1131,7 @@ def update_ocr_reading(response_id: str, body: OcrReadingIn,
     copy = db.get(Copy, item.copy_id) if item else None
     previous = effective_reading(db, resp.zone_id)
     raw = dict((previous.raw_json or {}) if previous else {})
+    raw.pop("force_manual", None)
     text = body.text if body.text is not None else (previous.text if previous else resp.final_text)
     latex = body.latex if body.latex is not None else (previous.latex if previous else text)
 
@@ -1185,6 +1193,25 @@ def update_ocr_reading(response_id: str, body: OcrReadingIn,
     db.commit()
     remaining = sum(pending_ocr_units(db, copy.assessment_id).values()) if copy else 0
     return {"ok": True, "remaining": remaining}
+
+
+@router.post("/responses/{response_id}/ocr/manual")
+def send_ocr_to_manual(response_id: str, db: Session = Depends(get_db),
+                       user: User = Depends(current_user)):
+    resp = db.get(StudentResponse, response_id)
+    if not resp or not resp.zone_id:
+        raise HTTPException(404, "Réponse scannée introuvable")
+    item = db.get(CopyItem, resp.copy_item_id)
+    copy = db.get(Copy, item.copy_id) if item else None
+    if not copy or copy.status in ("finalized", "absent") or db.query(GradingDecision).filter_by(response_id=resp.id).first():
+        raise HTTPException(409, "Cette réponse est déjà corrigée")
+    previous = effective_reading(db, resp.zone_id)
+    raw = dict((previous.raw_json or {}) if previous else {})
+    raw.update(force_manual=True, touched=["zone"])
+    db.add(OcrAttempt(zone_id=resp.zone_id, provider="teacher_ocr", raw_json=raw,
+                      text=previous.text if previous else "", latex=previous.latex if previous else "", confidence=1.0))
+    db.commit()
+    return {"ok": True, "remaining": sum(pending_ocr_units(db, copy.assessment_id).values())}
 
 
 @router.post("/responses/{response_id}/ocr/confirm")
@@ -1343,6 +1370,7 @@ class ResolveIn(BaseModel):
     cell_verdicts: list[float] | None = None
     corrected_text: str | None = None
     note: str = ""
+    feedback: str | None = None
 
 
 def _apply_resolution(db: Session, resp: StudentResponse, body: ResolveIn) -> dict:
@@ -1356,6 +1384,10 @@ def _apply_resolution(db: Session, resp: StudentResponse, body: ResolveIn) -> di
     score = old.score
     max_score = old.max_score
     evidence = {"previous_decision": old.id, "note": body.note}
+    if body.feedback is not None:
+        evidence["teacher_feedback"] = body.feedback.strip()
+    elif "teacher_feedback" in (old.evidence_json or {}):
+        evidence["teacher_feedback"] = old.evidence_json["teacher_feedback"]
     if body.action == "set_score":
         if body.score is None:
             raise HTTPException(422, "score requis")
@@ -1823,6 +1855,32 @@ def refine_answer(response_id: str, body: RefineAnswerIn,
 
 class RefinePointsIn(BaseModel):
     points: float
+
+
+class RefineFeedbackIn(BaseModel):
+    feedback: str
+
+
+@router.post("/refine/responses/{response_id}/feedback")
+def refine_feedback(response_id: str, body: RefineFeedbackIn,
+                    db: Session = Depends(get_db), user: User = Depends(current_user)):
+    resp, item, copy, batch = _refine_response(db, response_id)
+    old = refine._latest_decision(db, resp.id)
+    if not old:
+        raise HTTPException(404, "Aucune décision à modifier")
+    zone = db.get(ResponseZone, resp.zone_id) if resp.zone_id else None
+    before = review_log.snapshot(db, resp, item, zone, copy) if zone else None
+    evidence = {**(old.evidence_json or {}), "teacher_feedback": body.feedback.strip()}
+    decision = refine._record_teacher_decision(db, resp, score=old.score, max_score=old.max_score,
+        reason_code=old.reason_code, evidence=evidence)
+    refine.mark_changed(db, batch.id)
+    if zone:
+        review_log.record(db, stage="refine", action="feedback", resp=resp, item=item, zone=zone,
+                          copy=copy, batch=batch, before=before,
+                          after=review_log.snapshot(db, resp, item, zone, copy),
+                          user_id=getattr(user, "id", None))
+    db.commit()
+    return _after_refine(db, batch, copy, {"uncertain": False, "reason": decision.reason_code})
 
 
 @router.post("/refine/responses/{response_id}/points")

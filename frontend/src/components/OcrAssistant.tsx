@@ -358,6 +358,24 @@ export default function OcrAssistant({ batch, onClose, onReviewAll }: {
   const choose = (text: string) => unit && item && save(unit, item, { text })
   const validateManual = () => { if (manual.trim()) choose(manual) }
 
+  function sendToCorrection() {
+    if (!unit || !item) return
+    const affected = units.filter((u) => u.respId === unit.respId)
+    setDone((d) => ({ ...d, ...Object.fromEntries(affected.map((u) => [u.key, { status: 'saving' }])) }))
+    queue.current = queue.current.then(() => api.post<{ remaining: number }>(`/api/scans/responses/${unit.respId}/ocr/manual`)
+      .then((r) => {
+        setRemaining(r.remaining)
+        setDone((d) => ({ ...d, ...Object.fromEntries(affected.map((u) => [u.key, { status: 'saved' }])) }))
+      }).catch((e) => {
+        setDone((d) => ({ ...d, ...Object.fromEntries(affected.map((u) => [u.key, { status: 'error' }])) }))
+        notifications.show({ color: 'red', message: (e as Error).message })
+      }))
+    setIdx((i) => {
+      const next = units.findIndex((u, n) => n > i && u.respId !== unit.respId && !done[u.key])
+      return next < 0 ? units.length : next
+    })
+  }
+
   function pressKey(k: Key) {
     const el = inputRef.current
     if (!el) { setManual((m) => m + k.insert.replace('|', '')); return }
@@ -519,6 +537,9 @@ export default function OcrAssistant({ batch, onClose, onReviewAll }: {
 
                 {/* ------------------------------------------- droite : les lectures */}
                 <Stack gap="sm">
+                  <Button variant="light" color="orange" onClick={sendToCorrection}>
+                    Envoyer cette réponse en correction manuelle
+                  </Button>
                   {isBoxes(item) || isMatching(item) ? (
                     <Card withBorder padding="md">
                       <Text size="sm" mb="md">

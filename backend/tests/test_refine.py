@@ -323,3 +323,18 @@ def test_retry_of_finished_batch_regenerates_a_stale_overlay(db):
     tasks = BackgroundTasks()
     scans_router.retry_batch(batch.id, tasks, db)
     assert tasks.tasks and tasks.tasks[0].func is scans_router._run_build_overlays
+
+
+def test_feedback_edit_keeps_score_and_survives_later_points_change(db):
+    from app.services import microcorrection
+    _, batch, responses = _seed(db)
+    resp = responses["Alice A"]["text"]
+    old = refine._latest_decision(db, resp.id)
+    old_score = old.score
+    result = scans_router.refine_feedback(resp.id, scans_router.RefineFeedbackIn(feedback="Vérifie ton calcul."), db, None)
+    decision = refine._latest_decision(db, resp.id)
+    item = db.get(CopyItem, resp.copy_item_id)
+    assert result["stale"] and decision.score == old_score
+    assert microcorrection.select(item, decision, resp).text == "Vérifie ton calcul."
+    scans_router.refine_points(resp.id, scans_router.RefinePointsIn(points=1.5), db, None)
+    assert microcorrection.select(item, refine._latest_decision(db, resp.id), resp).text == "Vérifie ton calcul."
