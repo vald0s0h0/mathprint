@@ -1,0 +1,29 @@
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.css">
+<div id="forge-preview">
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Caveat:wght@500&family=IBM+Plex+Mono:wght@400;500&display=swap');
+    #forge-preview { color: var(--foreground); font-family: system-ui, sans-serif; max-width: 620px; }
+    #forge-preview .exercise { line-height: 1.55; }
+    #forge-preview .document { margin: 1em 0; border: 1px solid var(--border); border-radius: 4px; padding: .8em 1em; background: var(--card); color: var(--card-foreground); font-family: 'IBM Plex Mono', monospace; }
+    #forge-preview .title { font-weight: 500; border-bottom: 1px solid var(--border); padding-bottom: .35em; margin-bottom: .45em; }
+    #forge-preview .row { display: flex; justify-content: space-between; gap: 1em; }
+    #forge-preview .value { white-space: nowrap; text-align: right; }
+    #forge-preview .copy { margin: .8em 0; padding: .45em 1em .65em; border: 1px solid var(--border); border-left: 3px solid var(--purple); border-radius: 4px; background: var(--card); color: var(--card-foreground); }
+    #forge-preview .copy-label { font-family: system-ui, sans-serif; font-weight: 500; }
+    #forge-preview .hand { font-family: 'Caveat', 'Comic Sans MS', cursive; font-size: 1.45em; line-height: 1.2; color: var(--purple); }
+  </style>
+  <div class="exercise">
+    <p>Une rampe forme un angle α avec le sol. On relève les mesures suivantes :</p>
+    <div class="document" aria-label="Fiche de chantier">
+      <div class="title">FICHE DE CHANTIER</div>
+      <div class="row"><span>Hauteur</span><span class="value">1,4&nbsp;m</span></div>
+      <div class="row"><span>Longueur au sol</span><span class="value">4,8&nbsp;m</span></div>
+      <div class="row"><span>Longueur de la rampe</span><span class="value">5&nbsp;m</span></div>
+    </div>
+    <p>Mariam propose le calcul suivant :</p>
+    <div class="copy"><div class="copy-label">Copie de Mariam</div><div class="hand"><span class="math-copy">\(\tan(\alpha)=\dfrac{1{,}4}{5}=0{,}28\)</span></div></div>
+    <p>Sa réponse est-elle correcte ? Justifie.</p>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.js" onload="document.querySelectorAll('#forge-preview .math-copy').forEach(function(el){katex.render(String.raw`\tan(\alpha)=\dfrac{1{,}4}{5}=0{,}28`,el,{throwOnError:false});})"></script>
