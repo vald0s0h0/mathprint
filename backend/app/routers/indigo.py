@@ -381,6 +381,8 @@ def summary(grade_level: str = "3e", db: Session = Depends(get_db),
                   CompetencyFramework.id.in_({c.framework_id for c in rows}))}
     chapter_key = lambda c: f"{c.framework_id}\0{c.domain_code}\0{c.chapter_code}"
     work: dict[str, dict] = {}
+    families: dict[str, set] = {}
+    published_families: dict[str, set] = {}
     problem_work: dict[str, dict] = {}
     review_counts: dict[str, int] = {}
     update_counts: dict[str, int] = {}
@@ -397,6 +399,8 @@ def summary(grade_level: str = "3e", db: Session = Depends(get_db),
             problem_work.setdefault(chapter_key(comp), {"draft": 0, "validated": 0})[status] += 1
         else:
             work.setdefault(ex.competency_id, {"draft": 0, "validated": 0})[status] += 1
+            twin = (ex.grading_json or {}).get("twin") or {}
+            families.setdefault(ex.competency_id, set()).add(twin.get("group") or ex.id)
     pub: dict[str, int] = {}
     problem_pub: dict[str, int] = {}
     published = (db.query(GeneratedExercise)
@@ -409,6 +413,7 @@ def summary(grade_level: str = "3e", db: Session = Depends(get_db),
             problem_pub[key] = problem_pub.get(key, 0) + 1
         else:
             pub[ex.competency_id] = pub.get(ex.competency_id, 0) + 1
+            published_families.setdefault(ex.competency_id, set()).add(ex.twin_group or ex.id)
     out = []
     for c in rows:
         w = work.get(c.id, {"draft": 0, "validated": 0})
@@ -425,6 +430,8 @@ def summary(grade_level: str = "3e", db: Session = Depends(get_db),
                     "merge": c.merge_json,
                     "draft": w["draft"], "validated": w["validated"],
                     "published": p, "done": done,
+                    "family_total": len(families.get(c.id, set())),
+                    "family_published": len(published_families.get(c.id, set())),
                     "needs_review": review_counts.get(c.id, 0),
                     "needs_update": update_counts.get(c.id, 0),
                     "problem_draft": pw["draft"],

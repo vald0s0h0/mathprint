@@ -93,6 +93,8 @@ def teaching_scope(db: Session, user) -> dict:
     rows = classes.filter(ClassTeaching.teacher_id == profile.id).all() if profile else []
     if not autonomous:
         rows = rows or classes.all()
+    elif autonomous.program_id:
+        rows = [row for row in rows if row[1] == autonomous.program_id]
     grades = {row[0] for row in rows}
     subjects = {subject_id: name for _, _, subject_id, name in rows if subject_id}
     chosen = db.get(Subject, autonomous.subject_id) if autonomous and autonomous.subject_id else None
@@ -108,28 +110,21 @@ def teaching_scope(db: Session, user) -> dict:
 
 
 def choose_teaching(db: Session, profile: TeacherProfile, program_id: str, subject_id: str) -> None:
-    """Programme et matière d'un professeur autonome : ses classes en cours suivent.
-    Une classe qui a déjà des sujets garde son programme : leurs compétences en dépendent."""
+    """Choisit le pays actif sans modifier les classes ni leurs sujets."""
     if not db.get(Program, program_id) or not db.get(Subject, subject_id):
         raise HTTPException(422, "Programme ou matière inconnus")
-    classes = (db.query(SchoolClass).join(ClassTeaching, ClassTeaching.class_id == SchoolClass.id)
-               .filter(ClassTeaching.teacher_id == profile.id, SchoolClass.archived_at.is_(None)).all())
-    moved = [cls for cls in classes if cls.program_id != program_id]
-    if moved and db.query(Assessment).filter(Assessment.class_id.in_([c.id for c in moved])).first():
-        raise HTTPException(409, "Vos classes ont déjà des sujets : leur programme ne peut plus changer")
-    if program_id == "ci" and any(cls.grade_level not in COLLEGE for cls in moved):
-        raise HTTPException(409, "Vos classes de lycée doivent d’abord recevoir une série")
-    for cls in moved:
-        cls.program_id, cls.series_id = program_id, None
-    for cls in classes:
-        for teaching in db.query(ClassTeaching).filter_by(class_id=cls.id, teacher_id=profile.id):
-            # Une matière qui a déjà des sujets reste affectée : ils restent accessibles.
-            if teaching.subject_id != subject_id and not db.query(Assessment).filter_by(
-                    class_id=cls.id, subject_id=teaching.subject_id).first():
-                db.delete(teaching)
-        db.flush()
-        if not db.query(ClassTeaching).filter_by(class_id=cls.id, subject_id=subject_id).first():
-            db.add(ClassTeaching(class_id=cls.id, subject_id=subject_id, teacher_id=profile.id))
+    if profile.program_id == program_id and profile.subject_id != subject_id:
+        classes = (db.query(SchoolClass).join(ClassTeaching, ClassTeaching.class_id == SchoolClass.id)
+                   .filter(ClassTeaching.teacher_id == profile.id, SchoolClass.program_id == program_id,
+                           SchoolClass.archived_at.is_(None)).all())
+        for cls in classes:
+            for teaching in db.query(ClassTeaching).filter_by(class_id=cls.id, teacher_id=profile.id):
+                if teaching.subject_id != subject_id and not db.query(Assessment).filter_by(
+                        class_id=cls.id, subject_id=teaching.subject_id).first():
+                    db.delete(teaching)
+            db.flush()
+            if not db.query(ClassTeaching).filter_by(class_id=cls.id, subject_id=subject_id).first():
+                db.add(ClassTeaching(class_id=cls.id, subject_id=subject_id, teacher_id=profile.id))
     profile.program_id, profile.subject_id = program_id, subject_id
 
 

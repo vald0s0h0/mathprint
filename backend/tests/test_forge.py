@@ -1311,3 +1311,20 @@ def test_diagonal_axis_needs_whole_steps():
 
 def test_oe_ligature_is_printed():
     assert pdfgen._pdf_safe("les nœuds du quadrillage, Œuvre") == "les nœuds du quadrillage, Œuvre"
+
+
+def test_guide_rejects_questions_in_card_and_part():
+    guide = {"text": "Quel côté est le plus long ?", "position": "apres_question"}
+    assert any("interrogatif" in p for p in forge._guide_problems({"guides": [guide]}))
+    assert any("interrogatif" in p for p in forge._guide_problems({"guides": [guide]}, part=True))
+    assert not forge._guide_problems({"guides": [{"text": "Repère le côté le plus long.", "position": "apres_question"}]})
+
+
+def test_numeric_degree_is_rendered_as_one_text_word():
+    from app.services import pdfgen
+    parts = pdfgen._paragraph_segs(r"Un angle de $40^\circ$ avec $15^{\circ}$.", 10, 10)
+    words = [p[1] for p in parts if p[0] == "word"]
+    assert "40°" in words
+    assert "15°" in words
+    assert all(p[0] != "math" for p in parts)
+    assert pdfgen._paragraph_segs("20 °C", 10, 10)[-1][1] == "°C"

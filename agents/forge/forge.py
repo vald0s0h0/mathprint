@@ -889,6 +889,8 @@ def _guide_problems(node: dict, *, composite_root: bool = False, part: bool = Fa
             problems.append("guide sans texte")
             continue
         text, position = str(guide["text"]), guide.get("position")
+        if "?" in text:
+            problems.append("guide interrogatif : formule une instruction, sans question")
         if position not in GUIDE_POSITIONS:
             problems.append(f"guide : position {position!r} ∉ {GUIDE_POSITIONS}")
         if composite_root and position != "apres_enonce":

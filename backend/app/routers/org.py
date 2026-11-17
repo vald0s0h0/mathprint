@@ -88,12 +88,12 @@ def _class_context(db, grade, program, series):
         raise HTTPException(422, "Choisissez une série pour le lycée ivoirien")
 
 
-def _class_name_taken(db, school_id, teacher_user_id, year_id, name, except_id=None) -> bool:
+def _class_name_taken(db, school_id, teacher_user_id, year_id, name, except_id=None, program_id=None) -> bool:
     """Unicité vérifiée sur toutes les classes de l'établissement, même celles qu'un
     autre professeur ne peut pas consulter ; sans établissement, sur celles du professeur."""
     table = SchoolClass.__table__
     owner = table.c.school_id == school_id if school_id else and_(
-        table.c.school_id.is_(None), table.c.teacher_id == teacher_user_id)
+        table.c.school_id.is_(None), table.c.teacher_id == teacher_user_id, table.c.program_id == program_id)
     return db.execute(select(table.c.id).where(owner, table.c.school_year_id == year_id,
                                                table.c.name == name, table.c.id != (except_id or ""))).first() is not None
 
@@ -139,7 +139,7 @@ def create_class(body: ClassIn, db: Session = Depends(get_db),
     year = db.get(SchoolYear, body.school_year_id) if body.school_year_id else db.query(SchoolYear).filter_by(active=True).first()
     if not year or not year.active: raise HTTPException(422, "Année scolaire active requise")
     if not db.get(Subject, subject_id): raise HTTPException(422, "Matière inconnue")
-    if _class_name_taken(db, body.school_id, teacher.user_id, year.id, name):
+    if _class_name_taken(db, body.school_id, teacher.user_id, year.id, name, program_id=program_id):
         raise HTTPException(409, "Cette classe existe déjà pour cette année")
     c = SchoolClass(name=name, grade_level=body.grade_level, school_year_id=year.id,
         teacher_id=teacher.user_id, school_id=body.school_id, program_id=program_id, series_id=body.series_id)
@@ -169,7 +169,7 @@ def update_class(class_id: str, body: ClassPatch, db: Session = Depends(get_db))
         raise HTTPException(422, "Programme non proposé par l’établissement")
     if body.name is not None:
         if not body.name.strip(): raise HTTPException(422, "Nom requis")
-        if _class_name_taken(db, c.school_id, c.teacher_id, c.school_year_id, body.name.strip(), c.id):
+        if _class_name_taken(db, c.school_id, c.teacher_id, c.school_year_id, body.name.strip(), c.id, program_id=program):
             raise HTTPException(409, "Une classe porte déjà ce nom pour cette année")
         c.name = body.name.strip()
     if body.school_year_id and body.school_year_id != c.school_year_id:

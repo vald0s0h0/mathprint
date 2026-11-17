@@ -89,8 +89,13 @@ def scope_session(db, user, zone: str | None = None):
     st = m.Student.__table__.c
     comp = m.Competency.__table__.c
     fw = m.CompetencyFramework.__table__.c
-    teaches = select(t.id).where(t.teacher_id == teacher_id)
-    classes = select(t.class_id).where(t.teacher_id == teacher_id)
+    active_program = profile.program_id if profile and profile.service_mode == "autonomous" else None
+    classes = (select(t.class_id).select_from(m.ClassTeaching.__table__)
+               .join(m.SchoolClass.__table__, cl.id == t.class_id)
+               .where(t.teacher_id == teacher_id))
+    if active_program:
+        classes = classes.where(cl.program_id == active_program)
+    teaches = select(t.id).where(t.teacher_id == teacher_id, t.class_id.in_(classes))
     # La fiche portée par le sujet est une trace de son destinataire ; les
     # droits actuels suivent l'affectation classe + matière.
     assessments = select(a.id).where(a.class_id.in_(classes), a.subject_id.in_(
@@ -104,14 +109,14 @@ def scope_session(db, user, zone: str | None = None):
     decisions = select(m.GradingDecision.__table__.c.id).where(m.GradingDecision.__table__.c.response_id.in_(responses))
     batches = select(m.ScanBatch.__table__.c.id).where(m.ScanBatch.__table__.c.assessment_id.in_(assessments))
     student_subjects = (select(st.id, t.subject_id).select_from(m.Student.__table__)
-        .join(m.ClassTeaching.__table__, t.class_id == st.class_id).where(t.teacher_id == teacher_id))
+        .join(m.ClassTeaching.__table__, t.class_id == st.class_id).where(t.teacher_id == teacher_id, st.class_id.in_(classes)))
     student_comps = (select(st.id, comp.id).select_from(m.Student.__table__)
         .join(m.ClassTeaching.__table__, t.class_id == st.class_id)
         .join(m.CompetencyFramework.__table__, fw.subject_id == t.subject_id)
-        .join(m.Competency.__table__, comp.framework_id == fw.id).where(t.teacher_id == teacher_id))
+        .join(m.Competency.__table__, comp.framework_id == fw.id).where(t.teacher_id == teacher_id, st.class_id.in_(classes)))
     school_ids = select(m.TeacherSchool.__table__.c.school_id).where(m.TeacherSchool.__table__.c.teacher_id == teacher_id)
     rules = [(m.SchoolClass, m.SchoolClass.id.in_(classes)),
-        (m.ClassTeaching, m.ClassTeaching.teacher_id == teacher_id),
+        (m.ClassTeaching, and_(m.ClassTeaching.teacher_id == teacher_id, m.ClassTeaching.class_id.in_(classes))),
         (m.TeachingGroup, m.TeachingGroup.teaching_id.in_(teaches)),
         (m.GroupStudent, m.GroupStudent.group_id.in_(select(m.TeachingGroup.__table__.c.id).where(m.TeachingGroup.__table__.c.teaching_id.in_(teaches)))),
         (m.Student, m.Student.id.in_(students)),
@@ -138,6 +143,14 @@ def scope_session(db, user, zone: str | None = None):
         (m.School, m.School.id.in_(school_ids)),
         (m.TeacherProfile, m.TeacherProfile.id == teacher_id),
         (m.TeacherSchool, m.TeacherSchool.teacher_id == teacher_id)]
+    if active_program:
+        framework_ids = select(fw.id).where(fw.program_id == active_program)
+        competency_ids = select(comp.id).where(comp.framework_id.in_(framework_ids))
+        rules.extend([
+            (m.CompetencyFramework, m.CompetencyFramework.program_id == active_program),
+            (m.Competency, m.Competency.framework_id.in_(framework_ids)),
+            (m.GeneratedExercise, m.GeneratedExercise.competency_id.in_(competency_ids)),
+        ])
     db.info["teacher_scope"] = teacher_id
     db.info["actor_id"] = user.id
     def apply_scope(execute_state):

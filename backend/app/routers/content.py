@@ -103,6 +103,11 @@ def summary(grade_level: str | None = None, db: Session = Depends(get_db), frame
                         .group_by(GeneratedExercise.competency_id,
                                   GeneratedExercise.difficulty_level)):
         ex_counts.setdefault(cid, {})[lvl] = n
+    family_counts = dict(db.query(
+        GeneratedExercise.competency_id,
+        func.count(func.distinct(func.coalesce(GeneratedExercise.twin_group, GeneratedExercise.id))),
+    ).filter(GeneratedExercise.status == "active", GeneratedExercise.kind != "probleme")
+        .group_by(GeneratedExercise.competency_id).all())
     # les "problèmes" (kind=probleme, regroupe badge probleme+énigme) mobilisent
     # souvent plusieurs compétences d'un même chapitre à la fois : comptés par
     # compétence ici, mais affichés groupés au niveau du chapitre (H2) côté
@@ -123,6 +128,7 @@ def summary(grade_level: str | None = None, db: Session = Depends(get_db), frame
             "recommended_minutes": comp.recommended_minutes, "chapter_hours": comp.chapter_hours,
             "by_level": {str(l): by_level.get(l, 0) for l in range(1, 6)},
             "total": sum(by_level.values()),
+            "family_total": family_counts.get(comp.id, 0),
             "problems": prob_counts.get(comp.id, 0),
         })
     out.sort(key=lambda r: (r["grade_level"], r["code"]))

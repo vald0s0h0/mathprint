@@ -83,6 +83,7 @@ Un difficile n'en a pas. Champ `guides` de la question : `[{"text": "...", "posi
 | `apres_question` | après la question, avant la zone de réponse | il donne une méthode pour répondre : cas le plus fréquent |
 | `apres_enonce` | composite seulement : après le contexte commun | une méthode vaut pour toutes les parties |
 
+- Jamais de question dans un guide : formule une étape à suivre ou une méthode.
 - 4 à 30 mots, tutoiement. Une prochaine étape ou une méthode du cours, ciblée sur cette question.
 - Jamais la réponse, un calcul résolu, ni un indice qui désigne la bonne proposition. Écrire la bonne réponse telle quelle est refusé par `check`.
 - La carte reste complète sans lui, car un sujet peut retirer les guides.

@@ -440,23 +440,28 @@ def test_accompanied_teacher_keeps_school_and_cannot_choose_teaching(env):
     assert new_class(client, tokens['admin']).status_code == 422
 
 
-def test_changing_program_follows_classes_until_they_have_subjects(env):
+def test_changing_program_keeps_countries_separate(env):
     client, factory, tokens, year = env
     h = autonomous_teacher(env)
     assert choose(client, h).status_code == 200
-    cid = new_class(client, h).json()['id']
+    fr = new_class(client, h, '3e4', '3e').json()['id']
+    assert client.post('/api/assessments', headers=h, json={'class_id': fr, 'title': 'Sujet français'}).status_code == 200
     assert choose(client, h, 'ci').status_code == 200
-    assert client.get('/api/classes', headers=h).json()[0]['program_id'] == 'ci'
+    assert client.get('/api/classes', headers=h).json() == []
+    assert client.get(f'/api/classes/{fr}/students', headers=h).status_code == 404
+    assert client.get('/api/assessments', headers=h).json() == []
+    ci = new_class(client, h, '3e4', '3e').json()['id']
+    assert ci != fr
+    assert [c['id'] for c in client.get('/api/classes', headers=h).json()] == [ci]
+    frameworks = client.get('/api/competencies/frameworks', headers=h).json()
+    assert frameworks and all(f['program_id'] == 'ci' for f in frameworks)
     assert choose(client, h, 'fr').status_code == 200
-    assert client.post('/api/assessments', headers=h, json={'class_id': cid, 'title': 'Angles'}).status_code == 200
-    refused = choose(client, h, 'ci')
-    assert refused.status_code == 409 and 'sujets' in refused.json()['detail']
-    assert client.get('/api/auth/me', headers=h).json()['program_id'] == 'fr'
-    # Un lycée ivoirien exige une série : refus plutôt qu'une classe invalide.
-    h2 = autonomous_teacher(env, 'Lina')
-    assert choose(client, h2).status_code == 200
-    assert new_class(client, h2, 'T1', 'tle').status_code == 200
-    assert choose(client, h2, 'ci').status_code == 409
+    assert [c['id'] for c in client.get('/api/classes', headers=h).json()] == [fr]
+    assert [a['title'] for a in client.get('/api/assessments', headers=h).json()] == ['Sujet français']
+    assert all(f['program_id'] == 'fr' for f in client.get('/api/competencies/frameworks', headers=h).json())
+    with factory() as db:
+        assert db.get(SchoolClass, fr).program_id == 'fr'
+        assert db.get(SchoolClass, ci).program_id == 'ci'
 
 
 def test_changing_subject_keeps_access_to_existing_subjects(env):

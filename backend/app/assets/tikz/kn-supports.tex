@@ -35,14 +35,16 @@
 % lignes se dessinent ensuite sur le calque du fond, d'après la hauteur mesurée.
 \makeatletter
 \newcommand{\Copie}[2][]{%
+  % Une expression mathématique emploie la police classique dans toute la copie.
+  \in@{$}{#2}\ifin@\def\kncopiefont{\rmfamily}\def\knlinept{28}\def\knlinecm{0.9878}\else\def\kncopiefont{\knmanu}\def\knlinept{17}\def\knlinecm{0.5997}\fi%
   \node[anchor=base west,inner sep=0pt,text width=5.1cm,align=left,text=repC!70!ink,
-    font=\knmanu\fontsize{13}{17}\selectfont] (knt) at (0.75,-1.5) {#2};
+    font=\kncopiefont\fontsize{13}{\knlinept}\selectfont] (knt) at (0.75,-1.5) {#2};
   \pgfpointdiff{\pgfpointanchor{knt}{south}}{\pgfpointanchor{knt}{north}}%
-  \pgfmathtruncatemacro{\knn}{ceil(\the\pgf@y/17pt)}%
-  \pgfmathsetmacro{\knB}{-1.5-0.5997*(\knn-1)-0.4}%
+  \pgfmathtruncatemacro{\knn}{ceil(\the\pgf@y/(\knlinept pt))}%
+  \pgfmathsetmacro{\knB}{-1.5-\knlinecm*(\knn-1)-0.4}%
   \begin{pgfonlayer}{fond}
   \filldraw[trait,fill=white] (0,0) rectangle (6,\knB);
-  \foreach \k in {1,...,\knn}{\draw[rappel] (0.15,-1.5-0.12-0.5997*\k+0.5997) -- (5.85,-1.5-0.12-0.5997*\k+0.5997);}
+  \foreach \k in {1,...,\knn}{\draw[rappel] (0.15,-1.5-0.12-\knlinecm*\k+\knlinecm) -- (5.85,-1.5-0.12-\knlinecm*\k+\knlinecm);}
   \draw[repE!45,line width=0.4pt] (0.55,-0.75) -- (0.55,\knB);
   \end{pgfonlayer}
   \node[anchor=west,inner sep=0pt,font=\fontsize{9}{10}\selectfont\bfseries] at (0.3,-0.4) {\ifstrempty{#1}{Copie}{Copie de #1}};
@@ -50,12 +52,25 @@
 \makeatother
 
 % \Bulle{texte} : bulle de message à pointe, 4,4 cm de texte au plus
-\newcommand{\Bulle}[1]{%
+\newcommand{\Bulle}[2][]{%
   \node[draw=ink,line width=0.6pt,rounded corners=2.5mm,fill=fillA,inner xsep=3mm,inner ysep=2mm,
-    align=left] (knbul) {\begin{varwidth}{4.4cm}#1\end{varwidth}};
+    align=left,#1] (knbul) {\begin{varwidth}{4.4cm}\hyphenpenalty=10000\exhyphenpenalty=10000 #2\end{varwidth}};
   \coordinate (knp) at ($(knbul.south west)+(0.8,0)$);
   \fill[fillA] ($(knp)+(-0.18,0.05)$) -- ($(knp)+(0.32,0.05)$) -- ($(knp)+(-0.25,-0.45)$) -- cycle;
   \draw[trait] ($(knp)+(-0.18,0)$) -- ($(knp)+(-0.25,-0.45)$) -- ($(knp)+(0.32,0)$);}
+
+% \BulleAuDessus{texte}{figure} : centre chaque élément sur le même axe.
+\newcommand{\BulleAuDessus}[2]{%
+  \begin{scope}[local bounding box=knfig]#2\end{scope}%
+  \begin{scope}[shift={($(knfig.north)+(0,6mm)$)}]
+    \Bulle[anchor=south]{#1}
+  \end{scope}}
+
+% \Fiche{titre}{\FicheLigne{libellé}{valeur}...} : unités liées par ~.
+\newcommand{\FicheLigne}[2]{\ttfamily #1 & \ttfamily #2\\}
+\newcommand{\Fiche}[2]{%
+  \node[boite,inner sep=3mm,align=left] {\ttfamily\textbf{#1}\\[3pt]
+    \begin{tabular}{@{}l@{\hspace{4mm}}r@{}}#2\end{tabular}};}
 
 % \Mascotte[x,y]{nom}{pose} : personnage de la planche, 14 mm de haut (planche fournie à part)
 \newcommand{\Mascotte}[3][0,0]{%

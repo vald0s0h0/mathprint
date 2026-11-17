@@ -288,3 +288,27 @@ def test_exercise_tab_shows_a_filiere_with_its_series(factory):
     resp = client.post("/api/indigo/publish-selection/preview", json={
         "grade_level": "1re", "program_id": "ci", "subject_id": "math", "competency_ids": ids})
     assert resp.status_code == 200, resp.text
+
+
+def test_catalog_counts_twin_families(factory):
+    from app.models import GeneratedExercise, IndigoExercise
+    from app.routers import content, indigo as indigo_router
+
+    with factory() as db:
+        fw = ci_frameworks(db)[('6e', None)]
+        comp = db.query(Competency).filter_by(framework_id=fw.id).first()
+        for i in range(3):
+            db.add(IndigoExercise(id=f'i{i}', competency_id=comp.id,
+                                  grading_json={'twin': {'group': 'family'}}))
+        db.add(IndigoExercise(id='single', competency_id=comp.id, grading_json={}))
+        db.add_all([
+            GeneratedExercise(id='g1', competency_id=comp.id, difficulty_level=1, statement='a', twin_group='family', status='active'),
+            GeneratedExercise(id='g2', competency_id=comp.id, difficulty_level=1, statement='b', twin_group='family', status='twin'),
+            GeneratedExercise(id='g3', competency_id=comp.id, difficulty_level=1, statement='c', status='active'),
+        ])
+        db.commit()
+        admin = next(r for r in indigo_router.summary('6e', db, 'ci', 'math') if r['competency_id'] == comp.id)
+        bank = next(r for r in content.summary('6e', db, fw.id, 'math') if r['competency_id'] == comp.id)
+        assert admin['family_total'] == 2
+        assert admin['draft'] == 4  # les opérations de publication gardent leurs compteurs
+        assert bank['family_total'] == 2

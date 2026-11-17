@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api } from '../api'
 import { useAppState } from '../state/AppState'
+import CompetencyPrintButton from './CompetencyPrintButton'
 import CompetencyHierarchy, { type CompetencyHierarchyColumn } from './CompetencyHierarchy'
 import GradeSelectionRequired from './GradeSelectionRequired'
 import ExerciseCatalogCard, { exerciseDifficulty, type CatalogExercise, type ReviewCause, type ReviewVerdict, type Twin } from './ExerciseCatalogCard'
@@ -18,7 +19,7 @@ type Summary = {
   competency_id: string; code?: string; short_id: string; label: string; grade_level?: string
   domain_code: string; domain_name: string; chapter_code: string; chapter_name: string
   recommended_minutes?: number | null; chapter_hours?: number | null
-  needs_review?: number; needs_update?: number; framework_id?: string; total?: number; problems?: number; draft?: number; validated?: number; published?: number
+  needs_review?: number; needs_update?: number; framework_id?: string; family_total?: number; family_published?: number; total?: number; problems?: number; draft?: number; validated?: number; published?: number
   // Lycée ivoirien : série du référentiel et ligne fusionnée de la filière
   series?: string | null; merge?: Merge | null
   // vue fusionnée : compétences de chaque série réunies sur cette ligne
@@ -35,7 +36,7 @@ const FILIERES: Record<string, { key: string; label: string; series: string[] }[
   'tle': [{ key: 'S', label: 'Scientifique · C D', series: ['C', 'D'] }, { key: 'L', label: 'Littéraire · A1 A2', series: ['A1', 'A2'] }],
 }
 const twinOf = (e: CatalogExercise): Twin | undefined => e.grading?.twin
-const exerciseCount = (s: Summary) => s.total ?? (s.draft ?? 0) + (s.validated ?? 0)
+const exerciseCount = (s: Summary) => s.family_total ?? s.total ?? (s.draft ?? 0) + (s.validated ?? 0)
 const sumOf = (s: Summary, value: (m: Summary) => number) => (s.members ?? [s]).reduce((n, m) => n + value(m), 0)
 type Framework = { id: string; grade_level: string; subject_id: string; program_id: string }
 type PublicationSelection = {
@@ -194,7 +195,7 @@ export default function ExerciseCatalog({ admin = false }: { admin?: boolean }) 
         {s.recommended_minutes == null ? '—' : formatMinutes(s.recommended_minutes)}</Text>,
     }] : []),
     { key: 'total', label: <VisuallyHidden>Total</VisuallyHidden>, width: 60, align: 'center', render: s => <Text size="sm">{sumOf(s, exerciseCount)}</Text> },
-    ...(admin ? [{ key: 'published', label: 'Publiés', width: 76, align: 'center' as const, render: (s: Summary) => <Text size="sm">{sumOf(s, m => m.published ?? 0)}</Text> }] : []),
+    ...(admin ? [{ key: 'published', label: 'Publiés', width: 76, align: 'center' as const, render: (s: Summary) => <Text size="sm">{sumOf(s, m => m.family_published ?? m.published ?? 0)}</Text> }] : []),
     ...(admin ? [{ key: 'needs_update', label: 'Mettre à jour', width: 104, align: 'center' as const, render: (s: Summary) => {
       const n = sumOf(s, m => m.needs_update ?? 0)
       return <Tooltip label="Exercices déjà publiés dont la version actuelle diffère de la version en banque"><Text size="sm" fw={n ? 650 : undefined} c={n ? 'orange' : 'dimmed'}>{n}</Text></Tooltip>
@@ -390,6 +391,9 @@ export default function ExerciseCatalog({ admin = false }: { admin?: boolean }) 
           onChange={chooseFiliere} data={filieres.map(f => ({ value: f.key, label: f.label }))} />}
       </Group>
       <Group gap="xs" wrap="wrap">
+        {!selected && <CompetencyPrintButton context={`${grade} · ${subjectId}${admin ? ` · ${catalog.program.toUpperCase()}` : ''}${filiere ? ` · ${filiere.label}` : ''}`}
+          domains={domains.map(d => ({ ...d, chapters: d.chapters.map(ch => ({ ...ch,
+            rows: ch.rows.map(row => ({ code: [...new Set((row.members ?? [row]).map(m => m.short_id || m.code || ''))].join(' / '), label: row.label })) })) }))} />}
         {admin && !selected && <Button leftSection={<Send size={15} />} loading={preparingPublication}
           disabled={!summary || !domains.length} onClick={preparePublicationSelection}>Tout publier / mettre à jour</Button>}
         {admin && <Switch label="Uniquement les exercices nécessitant mon intervention" checked={onlyProblems} onChange={e => setOnlyProblems(e.currentTarget.checked)} />}

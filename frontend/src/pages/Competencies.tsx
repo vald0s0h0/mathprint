@@ -7,12 +7,12 @@
 // l'assistant sujet : /api/assessments/competency-matrix) + une colonne
 // Moyenne (moyenne des classes renseignées).
 import {
-  Badge, Button, Select, Group, Progress, ScrollArea, Stack, Text, TextInput, Title, Tooltip,
+  Badge, Select, Group, Progress, ScrollArea, Stack, Text, TextInput, Title, Tooltip,
 } from '@mantine/core'
 import { Search } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
-import { api, download } from '../api'
-import { notifications } from '@mantine/notifications'
+import { api } from '../api'
+import CompetencyPrintButton from '../components/CompetencyPrintButton'
 import CompetencyHierarchy, { type CompetencyHierarchyColumn } from '../components/CompetencyHierarchy'
 import GradeSelectionRequired from '../components/GradeSelectionRequired'
 import { useAppState } from '../state/AppState'
@@ -202,8 +202,8 @@ export default function Competencies() {
           )}
         </div>
         <Group gap="xs">
-          <Button size="xs" variant="light" disabled={!sel || !total}
-            onClick={() => download(`/api/competencies/frameworks/${sel}/pdf`, 'competences.pdf').catch(e => notifications.show({ color: 'red', message: e.message }))}>Liste à imprimer</Button>
+          <CompetencyPrintButton context={`${fw?.program_id.toUpperCase() ?? ''} · ${cycle} · ${fw?.name ?? ''}`}
+            domains={hierarchy.map(d => ({ ...d, chapters: d.chapters.map(ch => ({ ...ch, rows: ch.rows.map(c => ({ code: c.short_id || c.code, label: c.label })) })) }))} />
           <TextInput size="xs" w={240} placeholder="Filtrer les objectifs…" value={filter}
             leftSection={<Search size={14} />}
             onChange={(e) => setFilter(e.target.value)} />

@@ -849,6 +849,13 @@ def _paragraph_segs(text: str, fs: float, math_fs: float) -> list[tuple]:
     for part, bold in blocks.split_bold(text or ""):
         for content, is_math in mathrender.split_math_spans(part):
             if is_math:
+                # Un angle numérique isolé se compose avec la police du texte :
+                # le degré reste solidaire du nombre et de la ponctuation.
+                angle = re.fullmatch(r"\s*([+-]?\d+(?:(?:\{,\}|[,.])\d+)?)\s*\^\s*(?:\{\s*\\circ\s*\}|\\circ)\s*", content)
+                if angle:
+                    _emit_words(angle.group(1).replace("{,}", ",") + "°", bold)
+                    prev_no_space = True
+                    continue
                 im = _math_image(content, math_fs)
                 if im is not None:
                     segs.append(("math", *im, prev_no_space and bool(segs)))

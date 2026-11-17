@@ -78,8 +78,10 @@ Un kit est chargé **seulement** si ta figure emploie une de ses macros (la clé
 |---|---|
 | `\Calculatrice{haut}{bas}` | écran de calculatrice (4,6 cm), police à chasse fixe, ligne du bas à droite : `2,9999999`, `1.5E-4` |
 | `\Ticket{titre}{Riz 5 kg/3 500,Huile 1 L/1 200}{4 700 F}` | ticket de caisse de 4,2 cm : une ligne `libellé/prix` par article (séparées par des virgules, pas de virgule dans un libellé), TOTAL en bas |
-| `\Copie[Awa]{3x + 2 = 11\\3x = 9}` | feuille d'élève de 6 cm, lignes de cahier, « Copie de Awa » ; texte manuscrit violet foncé, qui n'est ni le noir de l'imprimé ni le bleu de l'élève. Écris les calculs en texte simple : un `$…$` reprend la police mathématique |
-| `\Bulle{texte}` | bulle de message à pointe, 4,4 cm de texte au plus ; se pose en `(0,0)` |
+| `\Copie[Awa]{3x + 2 = 11\\3x = 9}` | feuille d'élève de 6 cm, lignes de cahier, « Copie de Awa » ; texte manuscrit violet foncé, qui n'est ni le noir de l'imprimé ni le bleu de l'élève. Écris les calculs simples en texte Unicode lisible (par exemple `NP² = 13² − 5²`). Dès que la copie contient une formule `$…$`, toute la copie passe en police classique, cohérente avec les maths |
+| `\Bulle{texte}` | bulle de message à pointe, 4,4 cm de texte au plus, sans césure automatique ; se pose en `(0,0)` |
+| `\BulleAuDessus{texte}{figure}` | bulle centrée au-dessus de la figure, sans césure automatique |
+| `\Fiche{titre}{\FicheLigne{libellé}{valeur}…}` | fiche technique en deux colonnes monospace, unités liées par `~` ; les formules restent en police mathématique |
 | `\Mascotte[x,y]{kiro}{doute}` | personnage de la planche, 14 mm de haut ; refusé tant que la planche n'est pas fournie ou si le personnage ou la pose n'y figure pas |
 
 ```latex

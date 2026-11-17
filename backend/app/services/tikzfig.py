@@ -44,7 +44,7 @@ COMPILE_TIMEOUT_S = 180       # le premier usage de Tectonic télécharge ses pa
 # Kits par matière : chargés seulement par les figures qui s'en servent, pour ne
 # ralentir ni changer les autres (leur clé ne dépend que de la charte commune).
 EXTENSIONS = {
-    "kn-supports.tex": re.compile(r"\\(Calculatrice|Ticket|Copie|Bulle|Mascotte)\b"),
+    "kn-supports.tex": re.compile(r"\\(Calculatrice|Ticket|Copie|Bulle|BulleAuDessus|Fiche|Mascotte)\b"),
     # `to[` : un composant de circuitikz (R, battery, lamp…)
     "kn-pc.tex": re.compile(r"\bto\s*\[|\\(chemfig|chemmove|schemestart|ce|pu|ctikzset|Becher|Erlenmeyer|"
                             r"Eprouvette|TubeEssai|Burette|Ballon|Support|Force|PlanIncline|Solide)\b"),

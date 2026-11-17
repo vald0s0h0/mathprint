@@ -379,7 +379,9 @@ export default function SettingsPage({ scope = 'personal' }: { scope?: 'personal
           style={adminPage ? { gap: 4, alignSelf: 'flex-start' } : undefined}>
           {!adminPage && <>
             <Tabs.Tab value="compte" leftSection={<UserRound size={15} />}>Mon compte</Tabs.Tab>
-            {me?.role === 'teacher' && <Tabs.Tab value="imprimantes" leftSection={<Printer size={15} />}>Mes imprimantes</Tabs.Tab>}
+            {(me?.role === 'teacher' || (me?.edition === 'autonome' && me?.service_mode === 'autonomous')) && (
+              <Tabs.Tab value="imprimantes" leftSection={<Printer size={15} />}>Mes imprimantes</Tabs.Tab>
+            )}
             <Tabs.Tab value="raccourcis" leftSection={<Keyboard size={15} />}>Raccourcis</Tabs.Tab>
             {me?.edition === 'autonome' && <Tabs.Tab value="calibration" leftSection={<Ruler size={15} />}>Calibration</Tabs.Tab>}
           </>}

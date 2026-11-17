@@ -34,7 +34,6 @@ type PrinterDestination = {
 }
 
 type PrintResult = { lp_output: string; queued?: boolean; job_id?: string }
-const preferredDestinationKey = 'mathprint:preferred-print-destination'
 
 // La file peut dépasser l'espace libre autour du bouton : le panneau défile alors
 // en restant dans l'écran, sans jamais masquer le choix de l'imprimante.
@@ -52,14 +51,9 @@ const overlayPopoverMiddlewares: PopoverProps['middlewares'] = {
 function chooseDestination(printers: Printers) {
   const all = [...printers.local, ...printers.network]
   const available = all.filter((destination) => destination.available)
-  const remembered = window.localStorage.getItem(preferredDestinationKey)
-  if (remembered) {
-    // Une destination hors ligne reste le choix du professeur : ne jamais
-    // basculer silencieusement le travail vers l'autre ordinateur.
-    return all.find((destination) => destination.name === remembered) ?? null
-  }
-
-  const explicitDefault = available.find((destination) => destination.app_default)
+  // La préférence enregistrée dans les paramètres fait autorité, même hors
+  // ligne : ne pas envoyer silencieusement le travail vers une autre machine.
+  const explicitDefault = all.find((destination) => destination.app_default)
   if (explicitDefault) return explicitDefault
 
   const connectorDestinations = available.filter(
@@ -126,6 +120,9 @@ export default function PrintButton({
   // Le survol de l'overlay annonce la première copie : il lui faut l'imprimante.
   const printersWanted = opened || (isOverlay && hovered)
   useEffect(() => {
+    if (opened) setPrinter(null)
+  }, [opened])
+  useEffect(() => {
     if (!printersWanted) return
     let active = true
     async function loadPrinters() {
@@ -146,7 +143,7 @@ export default function PrintButton({
       loadPrinters().catch(() => { /* la prochaine actualisation réessaiera */ })
     }, 5000)
     return () => { active = false; window.clearInterval(timer) }
-  }, [printersWanted, printersTick])
+  }, [printersWanted, printersTick, opened])
 
   useEffect(() => {
     if (!isOverlay || !printersWanted || !printer) return
@@ -226,7 +223,6 @@ export default function PrintButton({
     if (!printer || !selectedPrinter?.available) return
     setBusySide(passSide)
     try {
-      window.localStorage.setItem(preferredDestinationKey, printer)
       const r = await api.post<PrintResult>('/api/printers/print', {
         assessment_id: assessmentId, file, printer,
         duplex: file === 'subject_batch.pdf' && assessmentDuplex && selectedPrinter?.duplex,
@@ -264,8 +260,8 @@ export default function PrintButton({
          value: p.name,
          disabled: !p.available,
          label: p.source === 'connector_local'
-           ? `${p.device_name || 'Poste'} — ${p.display_name || p.name}${p.system_default ? ' · défaut du poste' : ''}${!p.available ? ' · hors ligne' : ''}`
-           : `${p.display_name || p.name}${p.system_default ? ' · défaut système' : ''}`,
+           ? `${p.device_name || 'Poste'} — ${p.display_name || p.name}${p.app_default ? ' · préférée' : ''}${p.system_default ? ' · défaut du poste' : ''}${!p.available ? ' · hors ligne' : ''}`
+           : `${p.display_name || p.name}${p.app_default ? ' · préférée' : ''}${p.system_default ? ' · défaut système' : ''}`,
        })),
        ...printers.network.map((p) => ({
          value: p.name,
@@ -276,7 +272,6 @@ export default function PrintButton({
 
   function selectPrinter(name: string | null) {
     setPrinter(name)
-    if (name) window.localStorage.setItem(preferredDestinationKey, name)
     setRectoDone(Boolean(name && window.sessionStorage.getItem(rectoSessionKey(name)) === 'submitted'))
   }
 

@@ -229,7 +229,10 @@ KITS = {
         r"\Calculatrice{2,9999999}{1.5E-4}",
         r"\Ticket{Marché}{Riz 5 kg/3 500,Huile 1 L/1 200}{4 700 F}",
         r"\Copie[Awa]{3x + 2 = 11\\3x = 9}",
+        r"\Copie[Mariam]{NP² = 13² − 5² = 144\\$\dfrac{3}{4}$ à $45^\circ$}",
         r"\Bulle{Je pense que $x=4$.}",
+        r"\BulleAuDessus{Ce résultat est exact.}{\draw[trait] (0,0)--(4,0)--(0,2)--cycle;}",
+        r"\Fiche{FICHE}{\FicheLigne{Hauteur}{1,4~m}\FicheLigne{Angle}{$30^\circ$}}",
     ],
     "kn-pc.tex": [
         r"\Becher{(0,0)}{0.6}{$100$ mL} \Erlenmeyer{(2.6,0)}{0.5}{} \Eprouvette{(4.5,0)}{0.7}{}",
@@ -345,3 +348,19 @@ def test_error_line_stays_the_authors_with_kits():
     assert len(tikzfig.extensions_for(body)) == 1
     with pytest.raises(FigureSpecError, match=r"ligne 4 : .*Undefined control sequence"):
         tikzfig.compile_pdf(body, tikzfig.tectonic_binary())
+
+
+@needs_tex
+def test_copie_switches_whole_text_to_classic_when_it_contains_latex():
+    import fitz
+
+    def text_font(content):
+        body = r"\begin{tikzpicture}\Copie[Awa]{" + content + r"}\end{tikzpicture}"
+        data = tikzfig.compile_pdf(body, tikzfig.tectonic_binary())
+        with fitz.open(stream=data, filetype="pdf") as doc:
+            spans = [span for block in doc[0].get_text("dict")["blocks"]
+                     for line in block.get("lines", []) for span in line["spans"]]
+        return next(span["font"] for span in spans if "Bonjour" in span["text"])
+
+    assert "PatrickHand" in text_font("Bonjour élève")
+    assert "FiraSans" in text_font(r"Bonjour élève\\$\dfrac{3}{4}$")
