@@ -147,6 +147,18 @@ def test_autonomous_edition_has_no_centre_routes(env, monkeypatch):
     assert client.get("/api/auth/me", headers=h).json()["edition"] == "autonome"
 
 
+def test_autonomous_wizard_can_read_only_accessible_class_teachings(env, monkeypatch):
+    client, _, t, ids = env
+    monkeypatch.setattr(settings, "edition", "autonome")
+    h = t["teacher"]
+    response = client.get(f"/api/operations/classes/{ids['other']}/teachings", headers=h)
+    assert response.status_code == 200
+    assert [row["subject_id"] for row in response.json()] == ["math"]
+    assert client.get(f"/api/operations/classes/{ids['own']}/teachings", headers=h).status_code == 404
+    assert client.put(f"/api/operations/classes/{ids['other']}/teaching", headers=h, json={}).status_code == 404
+    assert client.get(f"/api/operations/classes/{ids['other']}/teachings/extra", headers=h).status_code == 404
+
+
 def test_correction_shortcuts_are_personal_with_global_default(env):
     client, factory, t, _ = env
     with factory() as db:
