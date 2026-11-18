@@ -10,8 +10,9 @@ avec un bail, lit, puis poste ses résultats. Aucun modèle ne tourne ici.
   découpe passe en revue manuelle ;
 - résultat idempotent par `job_id`.
 
-La valeur attendue n'existe nulle part ici : ni dans une tâche, ni dans un
-résultat.
+La valeur attendue n'apparaît que dans une tâche `read_ctx` (passage avec
+contexte), lue sur la découpe au moment de la réservation ; jamais dans une tâche
+`read` ou `score`, ni dans un résultat.
 """
 import logging
 import threading
@@ -94,11 +95,11 @@ def engine_role(plan: dict, zone_class: str, engine: str) -> str | None:
 def enqueue_jobs(db: Session, crop: OcrCrop, engines: list[str], kind: str = "read",
                  candidates: list[str] | None = None) -> list[OcrJob]:
     """Crée une tâche par moteur (sans doublon pour un même moteur et un même type
-    tant qu'une tâche `read` existe déjà)."""
+    tant qu'une tâche `read` ou `read_ctx` existe déjà)."""
     existing = {(j.engine, j.kind) for j in db.query(OcrJob).filter_by(crop_id=crop.id).all()}
     out = []
     for engine in engines:
-        if kind == "read" and (engine, kind) in existing:
+        if kind in ("read", "read_ctx") and (engine, kind) in existing:
             continue
         job = OcrJob(crop_id=crop.id, engine=engine, kind=kind,
                      candidates_json=list(candidates or []))
@@ -159,7 +160,9 @@ def _fail_job(db: Session, job: OcrJob, reason: str, plan: dict) -> str:
         return "requeued"
     job.status, job.lease_until = "error", None
     crop = db.get(OcrCrop, job.crop_id)
-    if crop is not None and engine_role(plan, crop.zone_class, job.engine) in ("stage1", "stage2"):
+    # un passage avec contexte en échec n'est qu'une aide absente : la fusion décide sans lui
+    if (crop is not None and job.kind == "read"
+            and engine_role(plan, crop.zone_class, job.engine) in ("stage1", "stage2")):
         _force_manual(db, crop, f"engine_error:{job.engine}:{reason}")
     return "error"
 

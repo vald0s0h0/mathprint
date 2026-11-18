@@ -1,10 +1,18 @@
 """Boucle de vagues du worker (16 Go : jamais deux modèles de vision en mémoire).
 
 1. interroger chaque serveur (`pending`) ;
-2. choisir le moteur qui a le plus de travail, le charger ;
+2. choisir le moteur : d'abord ceux qui ne chargent rien (Apple Vision), puis celui
+   qui a le plus de travail ; le charger ;
 3. réserver des paquets de 32 sur tous les serveurs jusqu'à les épuiser,
-   télécharger, lire, poster ;
+   télécharger, lire, poster. Une même vague traite les deux passages d'un moteur
+   (libre puis avec contexte) et les scores forcés que ses propres résultats
+   viennent de déclencher : le modèle n'est chargé qu'une fois pour tout cela ;
 4. décharger le moteur et passer au suivant.
+
+Pourquoi Apple Vision d'abord : il ne coûte aucun chargement, et ses lectures
+débloquent côté serveur les décisions et les tâches suivantes (étape 2, scores)
+avant que les gros modèles ne passent ; elles tombent alors dans leur vague au lieu
+d'exiger un rechargement.
 """
 import hashlib
 import io
@@ -49,7 +57,9 @@ class Worker:
 
     def next_engine(self) -> str | None:
         counts = {e: n for e, n in self.pending_by_engine().items() if n > 0 and e in self.engines}
-        return max(sorted(counts), key=lambda e: counts[e]) if counts else None
+        if not counts:
+            return None
+        return min(sorted(counts), key=lambda e: (getattr(self.engines[e], "load_cost", 1), -counts[e]))
 
     # ------------------------------------------------------------- vagues
 
@@ -102,6 +112,7 @@ class Worker:
         from PIL import Image
         results: list[dict] = []
         reads: list[tuple[dict, Crop]] = []
+        ctx_reads: list[tuple[dict, Crop]] = []
         scores: list[tuple[dict, Crop]] = []
         for job in jobs:
             try:
@@ -110,15 +121,21 @@ class Worker:
                 if job.get("image_sha256") and job["image_sha256"] != sha:
                     raise ValueError("sha256 de l'image différent de celui annoncé")
                 img = Image.open(io.BytesIO(data)); img.load()
+                kind = job.get("kind", "read")
+                context = job.get("context") if kind == "read_ctx" else None
+                if kind == "read_ctx" and not (eng.supports_context and context):
+                    raise RuntimeError("context_unsupported" if not eng.supports_context else "context_missing")
                 crop = Crop(image=img, zone_class=job["zone_class"], charset=job.get("charset") or "",
-                            crop_id=job["crop_id"], sha256=sha)
+                            crop_id=job["crop_id"], sha256=sha, context=context)
             except Exception as e:                  # image illisible ou réseau : le serveur réessaiera
                 results.append(self._error(job, eng, e))
                 continue
-            (scores if job["kind"] == "score" else reads).append((job, crop))
+            {"score": scores, "read_ctx": ctx_reads}.get(kind, reads).append((job, crop))
 
         if reads:
             results += self._read_batch(eng, reads)
+        if ctx_reads:                               # même modèle, déjà en mémoire
+            results += self._read_batch(eng, ctx_reads)
         for job, crop in scores:
             try:
                 vals = eng.score(crop, job["candidates"])

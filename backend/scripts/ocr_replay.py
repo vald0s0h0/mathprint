@@ -32,6 +32,8 @@ def main() -> int:
     ap.add_argument("--since"); ap.add_argument("--mode", choices=("shadow", "cascade"))
     ap.add_argument("--class", dest="zone_class"); ap.add_argument("--limit", type=int, default=20000)
     ap.add_argument("--engine"); ap.add_argument("--yes", action="store_true"); ap.add_argument("--json", action="store_true")
+    ap.add_argument("--sans-contexte", dest="no_context", action="store_true",
+                    help="rejouer sans les passages avec contexte (mesure de leur apport)")
     a = ap.parse_args()
     from app.db import SessionLocal
     from app.models import OcrCrop
@@ -40,7 +42,8 @@ def main() -> int:
     try:
         since = parse_since(a.since)
         if a.engine:
-            ids = ocr_analysis.missing_jobs(db, a.engine, since=since, mode=a.mode, zone_class=a.zone_class, limit=a.limit)
+            ids = ocr_analysis.missing_jobs(db, a.engine, since=since, mode=a.mode, zone_class=a.zone_class, limit=a.limit,
+                                        context=not a.no_context)
             print(f"{len(ids)} découpe(s) jamais lue(s) par {a.engine}")
             if not a.yes:
                 print("aucune tâche créée (ajoutez --yes). Elles seraient lues par le worker au prochain passage.")

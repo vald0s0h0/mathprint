@@ -26,6 +26,7 @@ export default function OcrEngineSettings({ system, onSaved }: { system: Values;
   const [accept, setAccept] = useState<number | string>(95)
   const [margin, setMargin] = useState<number | string>(2)
   const [montage, setMontage] = useState(false)
+  const [contextPass, setContextPass] = useState(true)
   const [maxCrops, setMaxCrops] = useState<number | string>(12)
   const [flush, setFlush] = useState<number | string>(10)
   const [lease, setLease] = useState<number | string>(15)
@@ -43,6 +44,7 @@ export default function OcrEngineSettings({ system, onSaved }: { system: Values;
     setAccept(Math.round(Number(v('ocr_accept_confidence', 0.95)) * 100))
     setMargin(Number(v('ocr_score_margin', 2)))
     setMontage(Boolean(v('ocr_montage_enabled', false)))
+    setContextPass(Boolean(v('ocr_context_enabled', true)))
     setMaxCrops(Number(v('ocr_montage_max_crops', 12)))
     setFlush(Number(v('ocr_montage_flush_minutes', 10)))
     setLease(Number(v('ocr_lease_minutes', 15)))
@@ -66,6 +68,7 @@ export default function OcrEngineSettings({ system, onSaved }: { system: Values;
       await put('ocr_accept_confidence', Number(accept) / 100)
       await put('ocr_score_margin', Number(margin))
       await put('ocr_montage_enabled', montage)
+      await put('ocr_context_enabled', contextPass)
       await put('ocr_montage_max_crops', Number(maxCrops))
       await put('ocr_montage_flush_minutes', Number(flush))
       await put('ocr_lease_minutes', Number(lease))
@@ -117,6 +120,9 @@ export default function OcrEngineSettings({ system, onSaved }: { system: Values;
           <NumberInput label="Bail d'une tâche" suffix=" min" min={1} w={150}
             value={lease} onChange={setLease} />
         </Group>
+        <Switch label="Second passage avec le contexte de l'exercice" checked={contextPass}
+          onChange={(e) => setContextPass(e.currentTarget.checked)}
+          description="Chaque moteur qui le peut (plan : context_engines) relit la découpe avec l'énoncé et la réponse attendue, dans la même vague que sa lecture libre. Ce que le contexte souffle ne compte que si un moteur l'a aussi lu sans contexte, ou si Mathpix le confirme." />
         <Group align="flex-end">
           <Switch label="Planches Mathpix" checked={montage} onChange={(e) => setMontage(e.currentTarget.checked)} />
           <NumberInput label="Découpes par planche" min={1} w={170} value={maxCrops} onChange={setMaxCrops} />

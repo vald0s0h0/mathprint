@@ -224,3 +224,48 @@ def test_overlay_copy_order_follows_scanner_not_class():
         assert [copy.id for copy in ordered] == [copies[2].id, copies[0].id, copies[1].id]
     finally:
         db.close()
+
+
+def test_partial_subject_print_keeps_status_and_sends_only_pages(tmp_path, monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine)()
+    try:
+        school_class = SchoolClass(name="5A", grade_level="5e")
+        user = User(email="print@x.fr", password_hash="x", role="corrector")
+        db.add_all([school_class, user]); db.flush()
+        assessment = Assessment(class_id=school_class.id, title="Test", status="ready")
+        db.add_all([assessment, Printer(name="Salle", protocol="cups", active=True)])
+        db.commit()
+        source = tmp_path / "assessments" / assessment.id / "generated" / "subject_batch.pdf"
+        source.parent.mkdir(parents=True)
+        writer = PdfWriter()
+        for n in range(5):
+            writer.add_blank_page(width=100 + n, height=200)
+        with source.open("wb") as stream:
+            writer.write(stream)
+        monkeypatch.setattr(printing.settings, "data_dir", tmp_path)
+        monkeypatch.setattr(printing, "_local_printers", lambda: [
+            {"name": "Salle", "source": "cups_local", "status": "idle"}])
+        sent = {}
+
+        def fake_run(cmd, **kwargs):
+            sent["pdf"] = [str(p) for p in cmd if str(p).endswith(".pdf")]
+            from shutil import copy
+            copy(sent["pdf"][0], tmp_path / "sent.pdf")
+            return SimpleNamespace(returncode=0, stdout="job 7", stderr="")
+        monkeypatch.setattr(printing.subprocess, "run", fake_run)
+
+        printing.print_file(PrintIn(assessment_id=assessment.id, file="subject_batch.pdf",
+                                    printer="Salle", pages=[3, 1]), db, user)
+        db.refresh(assessment)
+        assert assessment.status == "ready"
+        widths = [int(p.mediabox.width) for p in PdfReader(str(tmp_path / "sent.pdf")).pages]
+        assert widths == [101, 103]
+
+        printing.print_file(PrintIn(assessment_id=assessment.id, file="subject_batch.pdf",
+                                    printer="Salle"), db, user)
+        db.refresh(assessment)
+        assert assessment.status == "printed"
+    finally:
+        db.close()

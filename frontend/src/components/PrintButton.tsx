@@ -74,7 +74,7 @@ function chooseDestination(printers: Printers) {
 
 export default function PrintButton({
   assessmentId, file, label = 'Imprimer', size = 'xs', assessmentDuplex = false, wave = 0,
-  open, onOpenChange, hiddenTrigger = false,
+  open, onOpenChange, hiddenTrigger = false, pages, popoverZIndex,
 }: {
   assessmentId: string; file: string; label?: string; size?: string
   assessmentDuplex?: boolean
@@ -83,7 +83,12 @@ export default function PrintButton({
   // pilotage depuis l'extérieur (ex. « Réimprimer » dans un menu ⋮) : le bouton est alors
   // masqué et seule la fenêtre d'impression s'ouvre
   open?: boolean; onOpenChange?: (open: boolean) => void; hiddenTrigger?: boolean
+  // Sujet : n'imprimer que ces pages de subject_batch.pdf (index 0). Une impression
+  // partielle (copie perdue, page abîmée…) ne change jamais l'état du sujet.
+  pages?: number[]
+  popoverZIndex?: number
 }) {
+  const partial = pages !== undefined
   const isOverlay = file === 'correction_overlay.pdf'
   const [printers, setPrinters] = useState<Printers | null>(null)
   const [opened, setOpened] = useState(false)
@@ -227,6 +232,7 @@ export default function PrintButton({
         assessment_id: assessmentId, file, printer,
         duplex: file === 'subject_batch.pdf' && assessmentDuplex && selectedPrinter?.duplex,
         pass_side: passSide,
+        ...(partial ? { pages } : {}),
         ...(isOverlay && nextEntry ? {
           start_position: nextEntry.position, expected_student: nextEntry.student, wave,
         } : {}),
@@ -278,7 +284,8 @@ export default function PrintButton({
   const selectedPrinter = printers
     ? [...printers.local, ...printers.network].find((p) => p.name === printer)
     : undefined
-  const twoSided = isOverlay ? Boolean(queue?.assessment_duplex) : file === 'subject_batch.pdf' && assessmentDuplex
+  const twoSided = isOverlay ? Boolean(queue?.assessment_duplex)
+    : file === 'subject_batch.pdf' && assessmentDuplex && !partial
   const manualDuplex = twoSided && selectedPrinter != null && !selectedPrinter.duplex
 
   const queueUsable = isOverlay && queue != null && !queue.blocked && queue.entries.length > 0
@@ -288,7 +295,7 @@ export default function PrintButton({
   // Une reprise de verso reste possible depuis un autre navigateur.
   const versoAllowed = rectoDone || Boolean(lastPass && lastPass.pass_side !== 'all'
     && ['submitted', 'uncertain'].includes(lastPass.status))
-  const printDisabled = !printer || !selectedPrinter?.available || !!pendingJob
+  const printDisabled = (partial && !pages!.length) || !printer || !selectedPrinter?.available || !!pendingJob
     || (isOverlay && !nextEntry)
   const offsetText = selectedPrinter
     ? overlayOffsetLabel(selectedPrinter.overlay_offset_x_mm, selectedPrinter.overlay_offset_y_mm) : ''
@@ -313,7 +320,7 @@ export default function PrintButton({
   return (
     <>
     <Popover opened={opened} onChange={setOpened} position="bottom-end" withArrow={!isOverlay}
-      closeOnClickOutside={!offsetOpen} closeOnEscape={!offsetOpen}
+      zIndex={popoverZIndex} closeOnClickOutside={!offsetOpen} closeOnEscape={!offsetOpen}
       middlewares={isOverlay ? overlayPopoverMiddlewares : undefined}
       width={isOverlay ? 'min(420px, calc(100vw - 32px))' : 360}>
       <Popover.Target>
@@ -372,6 +379,11 @@ export default function PrintButton({
               Taille réelle, collation et ordre physique imposés selon le profil de l’imprimante.
             </Text>
           )}
+          {partial && (
+            <Alert color="blue" p="xs">
+              Impression partielle : l’état du sujet ne change pas.
+            </Alert>
+          )}
           {pendingJob && (
             <Alert color="blue" p="xs">
               En attente du connecteur local — ne relancez pas ce travail.
@@ -407,7 +419,8 @@ export default function PrintButton({
           ) : (
             <Button fullWidth size="xs" h="auto" py={6} onClick={() => doPrint('all')} loading={busySide === 'all'} disabled={printDisabled}
               styles={{ label: { whiteSpace: 'normal', textAlign: 'center' } }}>
-              {!isOverlay ? 'Lancer l\'impression'
+              {partial ? `Imprimer ${pages!.length} page${pages!.length > 1 ? 's' : ''}`
+                : !isOverlay ? 'Lancer l\'impression'
                 : nextEntry ? `Imprimer ${remaining} feuille${remaining > 1 ? 's' : ''} à partir de ${nextEntry.student}`
                   : 'Choisissez d’abord un élève dans la file'}
             </Button>

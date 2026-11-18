@@ -154,6 +154,11 @@ DEFAULT_ENGINE_PLAN: dict = {
     # Moteurs sachant calculer un score forcé (le plan de la classe décide lesquels
     # servent : seuls ceux qui votent évaluent, un observateur n'influence rien).
     "scorers": ["unimumer", "lighton", "trocr"],
+    # Moteurs qui font aussi un passage AVEC contexte (énoncé + réponse attendue), dans la
+    # même vague que leur passage libre (modèle chargé une seule fois). Impossible : TrOCR
+    # (aucun texte en entrée), Mathpix (l'API n'accepte pas de contexte), LightOnOCR (recopie
+    # l'instruction, banc du 2026-11-18). Apple Vision reçoit un vocabulaire, pas une phrase.
+    "context_engines": ["apple_vision", "unimumer"],
     "classes": {
         "num_line": {"stage1": ["apple_vision", "unimumer"], "stage2": ["lighton"],
                      "observe": ["trocr"]},
@@ -194,6 +199,8 @@ OCR_DEFAULTS: dict = {
     "ocr_montage_max_crops": 12,
     "ocr_montage_flush_minutes": 10,
     "ocr_lease_minutes": 15,
+    # second passage de chaque moteur avec l'énoncé et la réponse attendue (voir ocr_context)
+    "ocr_context_enabled": True,
 }
 
 
@@ -234,6 +241,9 @@ def validate_ocr_plan(plan) -> dict:
     scorers = plan.get("scorers", [])
     if not isinstance(scorers, list) or not all(isinstance(e, str) and e in families for e in scorers):
         raise ValueError("plan.scorers : liste de moteurs connus")
+    ctx_engines = plan.get("context_engines", [])
+    if not isinstance(ctx_engines, list) or not all(isinstance(e, str) and e in families for e in ctx_engines):
+        raise ValueError("plan.context_engines : liste de moteurs connus")
     pairs = plan.get("correlated_pairs", [])
     if not isinstance(pairs, list) or not all(
             isinstance(p, list) and len(p) == 2 and all(isinstance(f, str) for f in p) for p in pairs):
@@ -262,9 +272,9 @@ def validate_ocr_setting(key: str, value: dict) -> dict:
         v = value.get("value")
         if not isinstance(v, (int, float)) or isinstance(v, bool) or not 0 <= float(v) <= 50:
             raise ValueError("ocr_score_margin : nombre entre 0 et 50")
-    elif key == "ocr_montage_enabled":
+    elif key in ("ocr_montage_enabled", "ocr_context_enabled"):
         if not isinstance(value.get("value"), bool):
-            raise ValueError("ocr_montage_enabled : booléen")
+            raise ValueError(f"{key} : booléen")
     elif key in ("ocr_montage_max_crops", "ocr_montage_flush_minutes", "ocr_lease_minutes",
                  "ocr_local_timeout_hours"):
         if not _is_pos_int(value.get("value")):
@@ -304,10 +314,23 @@ def ocr_engine_plan(db: Session) -> dict:
     saved = get_setting(db, "ocr_engine_plan")
     if saved and "value" in saved:
         try:
-            return validate_ocr_plan(saved["value"])
+            plan = validate_ocr_plan(saved["value"])
         except ValueError:
-            pass
+            plan = None
+        if plan is not None:
+            # plan enregistré avant le passage avec contexte : il garde la liste par défaut
+            if "context_engines" not in plan:
+                plan = {**plan, "context_engines": list(DEFAULT_ENGINE_PLAN["context_engines"])}
+            return plan
     return DEFAULT_ENGINE_PLAN
+
+
+def ocr_context_engines(db: Session, plan: dict | None = None) -> list[str]:
+    """Moteurs qui font le passage avec contexte ; aucun si `ocr_context_enabled` est coupé."""
+    if not ocr_setting(db, "ocr_context_enabled"):
+        return []
+    plan = plan or ocr_engine_plan(db)
+    return list(plan.get("context_engines", []))
 
 
 def ocr_engine_thresholds(db: Session) -> dict:

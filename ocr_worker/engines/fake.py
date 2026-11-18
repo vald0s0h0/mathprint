@@ -4,6 +4,7 @@ Format :
 {
   "reads":  {"<crop_id | sha256 | *>": {"raw_text": "1,79", "logprob_mean": -0.05,
                                         "illegible": false, "error": "optionnel"}},
+  "reads_ctx": {...même format : passage avec contexte ; à défaut, `reads`},
   "scores": {"<crop_id | sha256 | *>": {"1,79": -0.4, "1,8": -3.0}},
   "delay_s": 0
 }
@@ -23,6 +24,7 @@ class FakeEngine(Engine):
         self.name, self.family = name, family
         self.version, self.weights, self.backend, self.device = "fake-1", f"fake/{name}", "fake", "cpu"
         self.supports_score = supports_score
+        self.supports_context = True
         if isinstance(table, (str, Path)):
             table = json.loads(Path(table).read_text(encoding="utf-8"))
         self.table = table or {}
@@ -49,7 +51,8 @@ class FakeEngine(Engine):
             self.calls.append(crop.crop_id)
             if self.table.get("delay_s"):
                 time.sleep(float(self.table["delay_s"]))
-            entry = self._lookup("reads", crop) or {}
+            entry = ((self._lookup("reads_ctx", crop) if crop.context else None)
+                     or self._lookup("reads", crop) or {})
             if entry.get("error"):
                 raise RuntimeError(entry["error"])
             raw = entry.get("raw_text", "")

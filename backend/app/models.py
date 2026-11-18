@@ -712,8 +712,9 @@ class OcrAttempt(Base):
 
 
 # ------------------------------------------------- lecture OCR multicouche
-# Moteurs locaux -> consensus déterministe -> Mathpix groupé -> OCRiser.
-# Rien ici ne stocke la valeur attendue : seules les lectures et les décisions.
+# Moteurs locaux (passage libre puis passage avec contexte) -> consensus
+# déterministe -> Mathpix groupé -> OCRiser. Seul `OcrCrop.context_json` porte la
+# réponse attendue, pour le passage avec contexte ; Mathpix ne la reçoit jamais.
 
 class OcrCrop(Base):
     """Une découpe à lire : zone entière, case de tableau ou ligne d'une zone
@@ -737,6 +738,9 @@ class OcrCrop(Base):
     status: Mapped[str] = mapped_column(String, default="pending")
     # pending | local_done | mathpix_pending | decided
     full_sample: Mapped[bool] = mapped_column(Boolean, default=False)
+    # contexte du passage « avec contexte » : {"statement", "expected"} (services.ocr_context),
+    # figé à l'inscription. Seuls les passages `read_ctx` le reçoivent ; None : pas de contexte.
+    context_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
     __table_args__ = (Index("ix_ocr_crops_batch_status", "batch_id", "status"),
                       Index("ix_ocr_crops_zone", "zone_id"))
@@ -749,7 +753,7 @@ class OcrJob(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
     crop_id: Mapped[str] = mapped_column(ForeignKey("ocr_crops.id"))
     engine: Mapped[str] = mapped_column(String)
-    kind: Mapped[str] = mapped_column(String, default="read")      # read | score
+    kind: Mapped[str] = mapped_column(String, default="read")      # read | read_ctx | score
     candidates_json: Mapped[list] = mapped_column(JSON, default=list)  # pour un score
     status: Mapped[str] = mapped_column(String, default="pending")
     # pending | claimed | done | error

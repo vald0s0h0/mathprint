@@ -244,3 +244,63 @@ def test_apple_vision_reading_order_left_to_right_then_top_to_bottom():
     two_lines = [(0.5, 0.1, 0.2, 0.3), (0.1, 0.6, 0.2, 0.3), (0.1, 0.1, 0.2, 0.3), (0.5, 0.62, 0.2, 0.3)]
     assert reading_order(two_lines) == [1, 3, 2, 0]
     assert reading_order([]) == []
+
+
+# ------------------------------------------------------------ passage avec contexte
+
+def test_context_pass_reaches_the_engine_in_the_same_wave_as_the_free_pass():
+    s = StubServer()
+    ctx = {"statement": "Calcule 4 × 6.", "expected": "24"}
+    s.add("free", "unimumer", "c1")
+    s.add("ctx", "unimumer", "c1", kind="read_ctx", context=ctx)
+    seen = []
+
+    class Spy(FakeEngine):
+        def read(self, crops):
+            seen.extend(c.context for c in crops)
+            return super().read(crops)
+
+    eng = Spy("unimumer", "qwen35", {"reads": {"*": {"raw_text": "2 1"}}, "reads_ctx": {"*": {"raw_text": "24"}}})
+    w = make_worker({"srv": s}, {"unimumer": eng})
+    stats = w.run_once()
+    assert stats["waves"] == 1                                   # un seul chargement pour les deux passages
+    assert seen == [None, ctx]                                   # le passage libre ne voit jamais le contexte
+    assert {r["job_id"]: r["raw_text"] for r in s.results} == {"free": "2 1", "ctx": "24"}
+
+
+def test_engine_without_context_support_reports_an_error_for_the_context_pass():
+    s = StubServer()
+    s.add("ctx", "trocr", "c1", kind="read_ctx", context={"statement": "x", "expected": "1"})
+    eng = FakeEngine("trocr", "encdec", {"reads": {"*": {"raw_text": "1"}}})
+    eng.supports_context = False
+    make_worker({"srv": s}, {"trocr": eng}).run_once()
+    assert "context_unsupported" in s.results[0]["error"]
+
+
+def test_engines_with_nothing_to_load_go_first():
+    s = StubServer()
+    s.add("a", "apple_vision", "c1")
+    for i in range(5):
+        s.add(f"u{i}", "unimumer", f"c{i}")
+    order = []
+
+    class Spy(FakeEngine):
+        def load(self):
+            order.append(self.name); super().load()
+
+    apple = Spy("apple_vision", "apple", {"reads": {"*": {"raw_text": "2"}}})
+    apple.load_cost = 0
+    w = make_worker({"srv": s}, {"apple_vision": apple, "unimumer": Spy("unimumer", "qwen35", {"reads": {"*": {"raw_text": "2"}}})})
+    w.run_once()
+    assert order == ["apple_vision", "unimumer"]
+
+
+def test_context_prompts_carry_the_statement_and_expected_answer_and_scores_never_do():
+    from ocr_worker.engines.apple_vision import custom_words
+    from ocr_worker.engines.lighton import LightonEngine
+    from ocr_worker.engines.unimumer import PROMPT, UnimumerEngine
+    ctx = {"statement": "Calcule l'aire d'un carré de côté 3,5 cm.", "expected": "12,25"}
+    u = UnimumerEngine().context_prompt(ctx)
+    assert "3,5" in u and "12,25" in u and u.endswith(PROMPT) and "different" in u
+    assert LightonEngine.supports_context is False              # recopie l'instruction (banc du 2026-11-18)
+    assert custom_words(ctx)[:2] == ["12,25", "Calcule"] and "3,5" in custom_words(ctx)

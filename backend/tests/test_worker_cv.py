@@ -725,3 +725,15 @@ def test_salmon_is_never_counted_as_pencil():
     img = np.full((150, 175, 3), 240, np.uint8)
     cv2.line(img, (40, 75), (135, 75), (150, 160, 235), 4)          # trait saumon (BGR), coloré
     assert not worker_cv.has_ink(img)
+
+
+def test_detect_matching_two_lines_from_one_point_are_both_kept_for_the_teacher():
+    """L'élève trace deux traits depuis le même point : les deux liaisons sont
+    rendues (la notation compte le point faux), confiance basse = vérification."""
+    from app.services import worker_cv as W
+
+    img, left, right = _scan_matching(3, [((0, 0), 0, 0), ((0, 1), 0, 0),
+                                          ((1, 2), 0, 0), ((2, 1), 0, 0)])
+    pairs, conf = W.detect_matching(img, left, right)
+    assert sorted(pairs) == [[0, 0], [0, 1], [1, 2], [2, 1]]
+    assert conf < 0.9

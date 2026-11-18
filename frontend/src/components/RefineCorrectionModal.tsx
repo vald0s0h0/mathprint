@@ -26,7 +26,7 @@ import {
 import { useElementSize } from '@mantine/hooks'
 import { notifications } from '@mantine/notifications'
 import {
-  ArrowLeft, Check, ChevronLeft, ChevronRight,
+  ArrowLeft, Check, ChevronLeft, ChevronRight, Printer,
   RefreshCw, Search, X, ZoomIn, ZoomOut,
 } from 'lucide-react'
 import {
@@ -36,6 +36,7 @@ import {
 import { api, getToken } from '../api'
 import MathText, { MathAnswer } from './MathText'
 import FeedbackEditor from './FeedbackEditor'
+import PrintButton from './PrintButton'
 
 type CopyEntry = {
   copy_id: string; student: string; note: string | null; points: string | null
@@ -798,6 +799,11 @@ export default function RefineCorrectionModal({
   const [status, setStatus] = useState<RefineStatus>({ stale: false, rebuilding: false, error: null, overlay_printed: false })
   const [changed, setChanged] = useState<Set<string>>(new Set())
   const [regenerating, setRegenerating] = useState(false)
+  // mode subject : impression de pages choisies (jamais le lot entier, qui marque le sujet imprimé)
+  const [printOpen, setPrintOpen] = useState(false)
+  const [printScope, setPrintScope] = useState<'page' | 'copy' | 'several'>('copy')
+  const [printCopies, setPrintCopies] = useState<Set<string>>(new Set())
+  const [subjectDuplex, setSubjectDuplex] = useState(false)
   const [closing, setClosing] = useState(false)
   const [confirmClose, setConfirmClose] = useState(false)
   const [viewErrors, setViewErrors] = useState<Record<string, string>>({})
@@ -895,6 +901,15 @@ export default function RefineCorrectionModal({
   const step = 1
   const firstShown = Math.min(pageIdx, Math.max(0, pages.length - 1))
   const shownPages = pages.slice(firstShown, firstShown + 1)
+  // index globaux dans subject_batch.pdf, ceux que le serveur attend
+  const printPages = useMemo(() => {
+    if (printScope === 'page') {
+      return entry?.subject ? [entry.subject.offset + firstShown] : []
+    }
+    const ids = printScope === 'copy' ? new Set(entry ? [entry.copy_id] : []) : printCopies
+    return copies.filter((c) => c.subject && ids.has(c.copy_id))
+      .flatMap((c) => Array.from({ length: c.subject!.pages }, (_, k) => c.subject!.offset + k))
+  }, [printScope, printCopies, copies, entry, firstShown])
   const withSkeleton = !!shownPages[0]?.skeleton
 
   // Copie courante d'abord (images en tête de file), puis les voisines dans
@@ -1160,8 +1175,26 @@ export default function RefineCorrectionModal({
             </Group>
           </Group>
           {readOnly ? (
-            <ActionIcon variant="subtle" color="gray" size="lg" onClick={requestClose}
-              aria-label="Fermer"><X size={18} /></ActionIcon>
+            <Group gap="xs" wrap="nowrap">
+              {mode === 'subject' && (
+                <Button size="sm" variant="light" leftSection={<Printer size={14} />}
+                  disabled={!entry?.subject}
+                  onClick={() => {
+                    setPrintCopies(new Set(entry ? [entry.copy_id] : []))
+                    setPrintScope('copy')
+                    api.get<{ duplex?: boolean }[]>('/api/assessments').then((rows) => {
+                      const a = (rows as unknown as { id: string; duplex: boolean }[])
+                        .find((r) => r.id === assessmentId)
+                      setSubjectDuplex(Boolean(a?.duplex))
+                    }).catch(() => {})
+                    setPrintOpen(true)
+                  }}>
+                  Imprimer
+                </Button>
+              )}
+              <ActionIcon variant="subtle" color="gray" size="lg" onClick={requestClose}
+                aria-label="Fermer"><X size={18} /></ActionIcon>
+            </Group>
           ) : review ? (
           <Group gap="xs" wrap="nowrap">
             {remainingOcr > 0 && (
@@ -1317,6 +1350,48 @@ export default function RefineCorrectionModal({
         </Box>
       </Box>
 
+      {mode === 'subject' && (
+        <Modal opened={printOpen} onClose={() => setPrintOpen(false)} zIndex={400} centered
+          title="Imprimer des pages du sujet" size="md">
+          <Stack gap="sm">
+            <Text size="sm" c="dimmed">
+              Une impression partielle ne change pas l’état du sujet : seule l’impression du lot
+              entier, depuis la liste des sujets, le marque « imprimé ».
+            </Text>
+            <Select size="sm" label="À imprimer" allowDeselect={false} value={printScope}
+              comboboxProps={{ zIndex: 500 }}
+              onChange={(v) => v && setPrintScope(v as 'page' | 'copy' | 'several')}
+              data={[
+                { value: 'page', label: `Cette page (page ${firstShown + 1} de ${entry?.student ?? ''})` },
+                { value: 'copy', label: `La copie de ${entry?.student ?? ''} (${entry?.subject?.pages ?? 0} page(s))` },
+                { value: 'several', label: 'Plusieurs copies…' },
+              ]} />
+            {printScope === 'several' && (
+              <ScrollArea.Autosize mah={260}>
+                <Stack gap={4}>
+                  {copies.map((c) => (
+                    <Checkbox key={c.copy_id} size="xs" label={`${c.student} (${c.subject?.pages ?? 0} p.)`}
+                      checked={printCopies.has(c.copy_id)}
+                      onChange={(e) => setPrintCopies((prev) => {
+                        const next = new Set(prev)
+                        if (e.currentTarget.checked) next.add(c.copy_id); else next.delete(c.copy_id)
+                        return next
+                      })} />
+                  ))}
+                </Stack>
+              </ScrollArea.Autosize>
+            )}
+            <Group justify="space-between">
+              <Text size="sm"><b>{printPages.length}</b> page{printPages.length > 1 ? 's' : ''}</Text>
+              {assessmentId && (
+                <PrintButton assessmentId={assessmentId} file="subject_batch.pdf"
+                  label="Choisir l’imprimante" size="sm" assessmentDuplex={subjectDuplex}
+                  pages={printPages} popoverZIndex={500} />
+              )}
+            </Group>
+          </Stack>
+        </Modal>
+      )}
       <Modal opened={confirmClose} onClose={() => setConfirmClose(false)} zIndex={400} centered
         title={<Text fw={650}>Overlay pas encore régénéré</Text>}>
         <Stack>

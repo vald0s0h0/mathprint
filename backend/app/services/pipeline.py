@@ -27,7 +27,7 @@ from ..models import (
     ScannedPage, Student, StudentResponse, CompetencyEvidence, ExerciseCompetency,
 )
 from . import grading as grader
-from . import error_journal, llm_grader, microcorrection, ocr_cascade, ocr_shadow, providers, scoring, typography
+from . import error_journal, llm_grader, microcorrection, ocr_cascade, ocr_context, ocr_shadow, providers, scoring, typography
 from .runtime_settings import (construction_audit_share, construction_confidence_threshold,
                                ocr_confidence_threshold, ocr_mode)
 from .appreciation import build_appreciation
@@ -830,7 +830,8 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment,
                             ctype = (expected_cells[ri][ci].get("type") if ri < len(expected_cells)
                                      and ci < len(expected_cells[ri]) else None)
                             ocr_slots.append((len(cell_texts), ocr_cascade.make_spec(
-                                cfiltered, ocr_cascade.zone_class_for(ctype), cell_index=len(cell_texts))))
+                                cfiltered, ocr_cascade.zone_class_for(ctype), cell_index=len(cell_texts),
+                                context=ocr_context.for_cell(item, ri, ci))))
                         if cascade:
                             # le local décide : aucun appel Mathpix ici, la case attend sa lecture
                             cell_texts.append(""); cell_latex.append(""); confs.append(0.0)
@@ -900,7 +901,8 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment,
                         specs = ocr_cascade.line_specs(res.warped, zone, item, worker_cv.BLANK_INK_THRESHOLD)
                     else:
                         specs = [ocr_cascade.make_spec(
-                            filtered, ocr_cascade.zone_class_for(item.expected_json.get("type")))]
+                            filtered, ocr_cascade.zone_class_for(item.expected_json.get("type")),
+                            context=ocr_context.for_item(item))]
                     if not specs:
                         ocr_cascade.no_line_zone(db, zone, item, student, corr_id)
                     else:
@@ -929,7 +931,8 @@ def _process_real(db: Session, batch: ScanBatch, assessment: Assessment,
                         multi = item.response_type == "multiline_text"
                         specs = (ocr_cascade.line_specs(res.warped, zone, item, worker_cv.BLANK_INK_THRESHOLD)
                                  if multi else [ocr_cascade.make_spec(
-                                     filtered, ocr_cascade.zone_class_for(item.expected_json.get("type")))])
+                                     filtered, ocr_cascade.zone_class_for(item.expected_json.get("type")),
+                                     context=ocr_context.for_item(item))])
                         if specs:
                             db.flush()
                             ocr_cascade.begin_zone(db, batch, zone, kind="text", corr_id=corr_id, mode="shadow",

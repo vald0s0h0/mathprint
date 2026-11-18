@@ -1179,7 +1179,10 @@ def update_ocr_reading(response_id: str, body: OcrReadingIn,
 
     # cases réellement vues par le professeur : seules elles deviennent une vérité terrain
     if item.response_type in ("table_fill", "multi_blank"):
-        raw["touched"] = sorted(set(raw.get("touched") or []) | {body.cell_index})
+        # « zone » (posé par « Passer en manuel ») peut déjà s'y trouver : ne garder
+        # que les indices de cases, sinon le tri mélange str et int (TypeError).
+        raw["touched"] = sorted({t for t in (raw.get("touched") or []) if isinstance(t, int)}
+                                | {body.cell_index})
     else:
         raw["touched"] = ["zone"]
     db.add(OcrAttempt(zone_id=resp.zone_id, provider="teacher_ocr",

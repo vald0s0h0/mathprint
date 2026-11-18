@@ -1,8 +1,11 @@
 """Interface commune des moteurs OCR du worker.
 
-Règles (cahier des charges) : décodage glouton et déterministe, aucune correction
-linguistique, texte brut renvoyé intact. Un moteur ne reçoit jamais la valeur
-attendue : seulement l'image, la classe de zone et l'alphabet qui en découle.
+Règles (cahier des charges) : décodage glouton et déterministe, texte brut renvoyé
+intact. Deux passages par découpe pour les moteurs qui le savent :
+- passage libre (tâche `read`) : l'image, la classe de zone et l'alphabet, rien d'autre ;
+- passage avec contexte (tâche `read_ctx`) : en plus l'énoncé et la réponse attendue
+  (`Crop.context`). Le serveur ne laisse jamais ce passage seul confirmer ce que le
+  contexte a soufflé.
 """
 import gc
 import re
@@ -32,6 +35,13 @@ class Crop:
     charset: str = ""
     crop_id: str = ""
     sha256: str = ""
+    context: dict | None = None        # {"statement", "expected"} : passage avec contexte seulement
+
+
+def context_lines(ctx: dict | None) -> tuple[str, str]:
+    """(énoncé, réponse attendue) d'un contexte, vides si absents."""
+    ctx = ctx or {}
+    return str(ctx.get("statement") or "").strip(), str(ctx.get("expected") or "").strip()
 
 
 @dataclass
@@ -53,6 +63,8 @@ class Engine:
     backend: str = ""
     device: str = ""
     supports_score: bool = False
+    supports_context: bool = False     # sait lire avec l'énoncé et la réponse attendue
+    load_cost: int = 1                 # 0 : rien à charger en mémoire (Apple Vision), passe en premier
 
     def load(self) -> None: ...
 

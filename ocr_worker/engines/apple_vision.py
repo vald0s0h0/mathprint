@@ -2,12 +2,33 @@
 
 Précis, fr-FR, `usesLanguageCorrection=False`, jusqu'à 3 candidats avec leur
 confiance. Pas de score forcé. Désactivé automatiquement hors macOS.
+
+Passage avec contexte : Vision ne prend pas d'instruction, mais accepte un
+vocabulaire (`customWords`) : les mots et nombres de l'énoncé et de la réponse
+attendue, avec la correction linguistique activée (sans elle, le vocabulaire
+n'est pas consulté).
 """
 import io
+import re
 import sys
 import time
 
-from .base import Crop, Engine, Read
+from .base import Crop, Engine, Read, context_lines
+
+MAX_CUSTOM_WORDS = 80
+
+
+def custom_words(ctx: dict | None) -> list[str]:
+    """Vocabulaire du contexte : la réponse attendue entière d'abord, puis ses mots et ceux de
+    l'énoncé (nombres compris), sans doublon, dans l'ordre d'apparition."""
+    statement, expected = context_lines(ctx)
+    out: list[str] = []
+    for w in ([expected] if expected and len(expected) <= 40 else []) + re.findall(
+            r"[\w,.'’²³/-]+", f"{expected} {statement}"):
+        w = w.strip(".,;:")
+        if w and w not in out:
+            out.append(w)
+    return out[:MAX_CUSTOM_WORDS]
 
 
 def available() -> bool:
@@ -53,6 +74,8 @@ class AppleVisionEngine(Engine):
     name, family, backend, device = "apple_vision", "apple", "vision", "ane"
     weights = "system:VNRecognizeTextRequest"
     supports_score = False
+    supports_context = True
+    load_cost = 0
 
     def __init__(self, cfg: dict | None = None):
         self.version = f"macos-{__import__('platform').mac_ver()[0]}"
@@ -68,7 +91,12 @@ class AppleVisionEngine(Engine):
             req = Vision.VNRecognizeTextRequest.alloc().init()
             req.setRecognitionLevel_(Vision.VNRequestTextRecognitionLevelAccurate)
             req.setRecognitionLanguages_(["fr-FR"])
-            req.setUsesLanguageCorrection_(False)        # jamais de correction : lire fidèlement
+            words = custom_words(crop.context) if crop.context else []
+            if words:                                    # passage avec contexte
+                req.setCustomWords_(words)
+                req.setUsesLanguageCorrection_(True)
+            else:
+                req.setUsesLanguageCorrection_(False)    # passage libre : lire fidèlement
             handler = Vision.VNImageRequestHandler.alloc().initWithData_options_(data, {})
             t0 = time.time()
             ok, err = handler.performRequests_error_([req], None)

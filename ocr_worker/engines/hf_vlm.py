@@ -1,18 +1,22 @@
 """Base commune des moteurs vision-langage (transformers sur MPS/CUDA).
 
 Décodage glouton (température 0, graine fixée), `enable_thinking=False`, texte
-brut renvoyé intact. `score` = passage forcé du candidat après le prompt.
+brut renvoyé intact. `score` = passage forcé du candidat après le prompt (toujours
+SANS contexte : le score vérifie l'image seule). Passage avec contexte : l'énoncé
+et la réponse attendue précèdent l'instruction (`context_prompt`).
 """
 import time
 
-from .base import (MAX_NEW_TOKENS, Crop, Engine, Read, ensure_device, free_memory, logprob_stats,
-                   looks_suspect, set_determinism)
+from .base import (MAX_NEW_TOKENS, Crop, Engine, Read, context_lines, ensure_device, free_memory,
+                   logprob_stats, looks_suspect, set_determinism)
 
 _DTYPES = {"fp16": "float16", "bf16": "bfloat16", "fp32": "float32"}
+_PROMPT_MARKERS = ("Exercise:", "Expected answer", "handwritten answer", "Énoncé", "Réponse attendue")
 
 
 class HFVisionLM(Engine):
     supports_score = True
+    supports_context = True
     prompt = ""
     processor_kwargs: dict = {}          # ex. fix_mistral_regex pour LightOnOCR-2
 
@@ -47,10 +51,26 @@ class HFVisionLM(Engine):
         self.model = self.proc = None
         free_memory()
 
-    def _inputs(self, crop: Crop):
-        content = [{"type": "image", "image": crop.image.convert("RGB")}]
+    def context_prompt(self, ctx: dict) -> str:
+        """Instruction du passage avec contexte (sous-classes : formulation propre au modèle)."""
+        statement, expected = context_lines(ctx)
+        parts = ["This image is a student's handwritten answer to a math exercise."]
+        if statement:
+            parts.append(f"Exercise: {statement}")
+        if expected:
+            parts.append(f"Expected answer: {expected}")
+        parts.append("The student may have written a different or wrong answer. Transcribe exactly what is "
+                     "handwritten in the image, character by character, even if it differs from the expected "
+                     "answer. Output only the transcription.")
         if self.prompt:
-            content.append({"type": "text", "text": self.prompt})
+            parts.append(self.prompt)
+        return "\n".join(parts)
+
+    def _inputs(self, crop: Crop, with_context: bool = True):
+        content = [{"type": "image", "image": crop.image.convert("RGB")}]
+        text = self.context_prompt(crop.context) if (with_context and crop.context) else self.prompt
+        if text:
+            content.append({"type": "text", "text": text})
         inputs = self.proc.apply_chat_template(
             [{"role": "user", "content": content}], add_generation_prompt=True, tokenize=True,
             return_dict=True, return_tensors="pt", enable_thinking=False).to(self.device)
@@ -71,7 +91,9 @@ class HFVisionLM(Engine):
             ts = self.model.compute_transition_scores(g.sequences, g.scores, normalize_logits=True)[0].float().cpu()
             raw = self.proc.decode(seq[0], skip_special_tokens=True)
             mean, low = logprob_stats(ts[: seq.shape[1]].tolist())
-            out.append(Read(raw_text=raw, illegible=(not raw.strip()) or looks_suspect(raw),
+            # passage avec contexte : une sortie qui recopie l'instruction n'est pas une transcription
+            echoed = bool(crop.context) and any(k in raw for k in _PROMPT_MARKERS)
+            out.append(Read(raw_text=raw, illegible=(not raw.strip()) or looks_suspect(raw) or echoed,
                             logprob_mean=mean, logprob_min=low, latency_ms=(time.time() - t0) * 1000))
         return out
 
@@ -80,7 +102,7 @@ class HFVisionLM(Engine):
         tok = self.proc.tokenizer
         eos = self.model.generation_config.eos_token_id
         eos = eos[0] if isinstance(eos, (list, tuple)) else eos
-        inputs = self._inputs(crop)
+        inputs = self._inputs(crop, with_context=False)
         prompt_ids = inputs["input_ids"]
         n = prompt_ids.shape[1]
         extra = {k: v for k, v in inputs.items() if k not in ("input_ids", "attention_mask")}

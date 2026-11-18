@@ -3,7 +3,13 @@
 Règles non négociables :
 - aucune réponse n'est acceptée si aucun moteur ne l'a produite librement : le
   score ne CRÉE jamais de candidat, il ne peut que retirer son accord ;
-- la valeur attendue n'apparaît nulle part ici ;
+- deux passages par moteur quand le contexte existe : un passage libre (l'image
+  seule) et un passage avec contexte (énoncé et réponse attendue). Un même moteur
+  ne vote qu'une fois : si ses deux passages divergent, il s'abstient ;
+- ce que le contexte a soufflé (`CropCtx.echo` : la réponse attendue, les nombres
+  de l'énoncé, un passage du texte attendu) ne vote que si au moins un moteur l'a
+  lu SANS contexte. Lu seulement avec le contexte, c'est un candidat que Mathpix
+  (qui ne reçoit jamais de contexte) peut confirmer, jamais une voix ;
 - au moindre doute, la découpe part vers Mathpix puis en manuel ;
 - les moteurs `observe` du plan ne votent jamais et n'influencent aucune décision.
 
@@ -37,6 +43,7 @@ class ReadIn:
     logprob_mean: float | None = None
     logprob_min: float | None = None
     role: str = "observe"            # stage1 | stage2 | observe
+    context: bool = False            # passage avec contexte (énoncé + réponse attendue)
 
 
 @dataclass(frozen=True)
@@ -44,6 +51,17 @@ class CropCtx:
     zone_class: str
     ink_width_px: int = 0
     height_px: int = 0
+    echo: frozenset = frozenset()    # surfaces soufflées par le contexte (voir ocr_context)
+    echo_text: str = ""              # texte du contexte, pour les classes de texte (sous-chaîne)
+
+
+def is_echo(surface: str, ctx: CropCtx) -> bool:
+    """La surface a-t-elle pu être soufflée par le contexte ?"""
+    if not surface:
+        return False
+    if surface in ctx.echo:
+        return True
+    return len(surface) >= 4 and bool(ctx.echo_text) and surface in ctx.echo_text
 
 
 @dataclass
@@ -104,24 +122,75 @@ def _class_voting_families(plan: dict, zone_class: str) -> set[str]:
     return {fam[e] for role in ("stage1", "stage2") for e in roles.get(role, []) if e in fam}
 
 
-def tally(reads: list[ReadIn], plan: dict, thresholds: dict, zone_class: str) -> list[dict]:
+@dataclass(frozen=True)
+class Opinion:
+    """Ce qu'UN moteur dit d'une découpe, ses deux passages confondus."""
+    engine: str
+    family: str
+    role: str
+    surface: str | None          # None : abstention (rien d'exploitable, ou deux passages divergents)
+    free: bool = False           # le passage libre a produit cette surface (au-dessus du seuil)
+    split: bool = False          # passages libre et avec contexte valides mais différents
+
+
+def opinions(reads: list[ReadIn], thresholds: dict) -> list[Opinion]:
+    """Une opinion par moteur (ordre alphabétique). Passage libre et passage avec contexte
+    d'accord : une voix ; un seul exploitable : une voix ; en désaccord : abstention."""
+    by: dict[str, dict] = {}
+    for r in reads:
+        by.setdefault(r.engine, {})["ctx" if r.context else "free"] = r
+    out = []
+    for engine in sorted(by):
+        free, ctxr = by[engine].get("free"), by[engine].get("ctx")
+        ref = free or ctxr
+        fv = free is not None and is_valid(free, thresholds)
+        cv = ctxr is not None and is_valid(ctxr, thresholds)
+        if fv and cv and free.surface != ctxr.surface:
+            out.append(Opinion(engine, ref.family, ref.role, None, split=True))
+        elif fv:
+            out.append(Opinion(engine, ref.family, ref.role, free.surface, free=True))
+        elif cv:
+            out.append(Opinion(engine, ref.family, ref.role, ctxr.surface, free=False))
+        else:
+            out.append(Opinion(engine, ref.family, ref.role, None))
+    return out
+
+
+def _free_producers(reads: list[ReadIn], surface: str) -> set[str]:
+    """Familles qui votent et dont le passage LIBRE a lu cette surface (même sous le seuil :
+    l'image seule la suggère)."""
+    return {r.family for r in voting(reads) if not r.context and has_text(r) and r.surface == surface}
+
+
+def tally(reads: list[ReadIn], plan: dict, thresholds: dict, zone_class: str,
+          ctx: CropCtx | None = None) -> list[dict]:
     """Surfaces lues par les moteurs qui votent, avec leurs voix. Triées : plus
-    de voix d'abord, puis ordre alphabétique (déterministe)."""
+    de voix d'abord, puis ordre alphabétique (déterministe). Une surface soufflée
+    par le contexte que personne n'a lue librement reste candidate à 0 voix."""
+    ctx = ctx or CropCtx(zone_class)
     vr = voting(reads)
     by: dict[str, dict] = {}
-    for r in vr:
-        if not is_valid(r, thresholds):
+    for op in opinions(vr, thresholds):
+        if op.surface is None:
             continue
-        c = by.setdefault(r.surface, {"surface": r.surface, "families": set(), "engines": []})
-        c["families"].add(r.family)
-        c["engines"].append(r.engine)
+        c = by.setdefault(op.surface, {"surface": op.surface, "families": set(), "engines": []})
+        c["families"].add(op.family)
+        c["engines"].append(op.engine if op.free else f"{op.engine}+ctx")
+    # surfaces lues seulement avec le contexte, par un moteur qui s'abstient : candidates sans voix
+    for r in vr:
+        if r.context and is_valid(r, thresholds) and r.surface not in by:
+            by[r.surface] = {"surface": r.surface, "families": set(), "engines": []}
     all_fams = _class_voting_families(plan, zone_class)
     for c in by.values():
         voices = len(c["families"])
+        c["echo"] = is_echo(c["surface"], ctx)
+        if c["echo"] and not _free_producers(reads, c["surface"]):
+            voices = 0                       # seul le contexte l'a soufflée
         for pair in _pairs(plan):
-            if pair <= c["families"]:
+            if voices and pair <= c["families"]:
                 other = all_fams - pair
-                # lit une AUTRE surface : lecture exploitable (texte non vide) d'une autre famille
+                # lit une AUTRE surface : lecture exploitable (texte non vide) d'une autre famille,
+                # dans l'un ou l'autre de ses passages
                 dissent = any(r.family not in pair and has_text(r) and r.surface != c["surface"]
                               for r in vr)
                 if dissent or not other:
@@ -134,11 +203,13 @@ def tally(reads: list[ReadIn], plan: dict, thresholds: dict, zone_class: str) ->
 
 def _cands(tallied: list[dict]) -> list[dict]:
     return [{"surface": c["surface"], "voices": c["voices"], "families": c["families"],
-             "engines": c["engines"]} for c in tallied]
+             "engines": c["engines"], **({"echo": True} if c.get("echo") else {})} for c in tallied]
 
 
 def _illegible_families(reads: list[ReadIn]) -> set[str]:
-    return {r.family for r in voting(reads) if not has_text(r)}
+    """Familles dont AUCUN passage n'a produit de texte exploitable."""
+    seen = {r.family for r in voting(reads) if has_text(r)}
+    return {r.family for r in voting(reads)} - seen
 
 
 # ------------------------------------------------------------------ étapes
@@ -151,7 +222,7 @@ def decide_local(ctx: CropCtx, reads: list[ReadIn], plan: dict, thresholds: dict
     zone_class = ctx.zone_class
     roles = (plan.get("classes") or {}).get(zone_class, {})
     has_stage2 = bool(roles.get("stage2"))
-    tallied = tally(reads, plan, thresholds, zone_class)
+    tallied = tally(reads, plan, thresholds, zone_class, ctx)
     cands = _cands(tallied)
 
     # 5. illisible : au moins 2 familles sans texte exploitable
@@ -159,15 +230,18 @@ def decide_local(ctx: CropCtx, reads: list[ReadIn], plan: dict, thresholds: dict
         return Outcome("manual", "illegible_consensus", candidates=cands)
 
     if phase == 1:
-        s1 = [r for r in reads if r.role == "stage1"]
-        seen = [r for r in s1 if has_text(r)]
-        if (len(s1) >= 2 and len(seen) == len(s1) and all(is_valid(r, thresholds) for r in s1)
-                and len({r.surface for r in s1}) == 1):
+        s1 = [op for op in opinions([r for r in reads if r.role == "stage1"], thresholds)]
+        if (len(s1) >= 2 and all(op.surface is not None for op in s1)
+                and len({op.surface for op in s1}) == 1):
             top = tallied[0] if tallied else None
             unverified_pair = bool(top) and any(
                 pair <= set(top["families"]) and not any(
                     r.family not in pair for r in voting(reads)) for pair in _pairs(plan))
-            if (top and not unverified_pair and top["voices"] >= 2 and len({r.family for r in s1}) >= 2
+            # l'étape 1 ne conclut que sur des lectures LIBRES : une voix qui ne tient qu'au passage
+            # avec contexte demande l'avis de l'étape 2 (ou des scores, qui lisent l'image seule)
+            ctx_only = not all(op.free for op in s1)
+            if (top and not unverified_pair and not ctx_only and top["voices"] >= 2
+                    and len({op.family for op in s1}) >= 2
                     and ink_guard_ok(top["surface"], ctx, thresholds)):
                 return Outcome("accept", "local_consensus", top["surface"], cands, supporters=top["engines"])
         if has_stage2:
@@ -218,9 +292,11 @@ def full_decision(ctx: CropCtx, reads: list[ReadIn], plan: dict, thresholds: dic
 def decide_mathpix(ctx: CropCtx, reads: list[ReadIn], mathpix_text: str, mathpix_confidence: float,
                    plan: dict, thresholds: dict) -> Outcome:
     """Mathpix ne décide jamais seul : sa surface doit être une surface déjà lue par un
-    moteur local qui vote, sans autre surface à 2 voix, avec une confiance suffisante."""
+    moteur local qui vote (passage libre ou avec contexte : Mathpix, lui, ne reçoit jamais
+    de contexte, c'est la lecture indépendante), sans autre surface à 2 voix, avec une
+    confiance suffisante."""
     surface = to_surface(mathpix_text, ctx.zone_class)
-    tallied = tally(reads, plan, thresholds, ctx.zone_class)
+    tallied = tally(reads, plan, thresholds, ctx.zone_class, ctx)
     cands = _cands(tallied)
     if not surface:
         return Outcome("manual", "mathpix_empty", candidates=cands)

@@ -306,6 +306,10 @@ class PrintIn(BaseModel):
     sample: bool = False
     # Enchaînement scanné à imprimer (0 = premier dépôt, cf. services.late_copies).
     wave: int = 0
+    # Sujet uniquement : impression de quelques pages seulement (index 0 de
+    # subject_batch.pdf, ceux de l'aperçu). Une réimpression partielle ne change
+    # jamais l'état du sujet : seule celle du lot entier le marque « imprimé ».
+    pages: list[int] | None = None
 
 
 def _overlay_sheets(db: Session, assessment: Assessment, path: Path, batch: ScanBatch,
@@ -404,6 +408,31 @@ def overlay_print_queue(assessment_id: str, printer: str | None = None,
                                           wave=wave)
                       if batch and queue else None,
     }
+
+
+def _subject_pages_pdf(source: Path, pages: list[int], *, duplex: bool) -> tuple[bytes, bool]:
+    """Extrait des pages du lot, dans l'ordre demandé sans doublon. Le
+    recto-verso automatique n'est gardé que si la sélection reste faite de
+    feuilles complètes (page paire suivie de sa page impaire) : sinon
+    l'imprimante appairerait des pages de copies différentes."""
+    from pypdf import PdfReader, PdfWriter
+
+    reader = PdfReader(str(source))
+    wanted = sorted(set(pages))
+    if not wanted:
+        raise HTTPException(422, "Aucune page choisie")
+    if wanted[0] < 0 or wanted[-1] >= len(reader.pages):
+        raise HTTPException(422, "Page hors du sujet")
+    writer = PdfWriter()
+    for i in wanted:
+        writer.add_page(reader.pages[i])
+    if duplex:
+        duplex = len(wanted) % 2 == 0 and all(
+            wanted[k] % 2 == 0 and wanted[k + 1] == wanted[k] + 1
+            for k in range(0, len(wanted), 2))
+    buf = BytesIO()
+    writer.write(buf)
+    return buf.getvalue(), duplex
 
 
 def _subject_pass_pdf(db: Session, assessment_id: str, source: Path,
@@ -619,6 +648,11 @@ def print_file(body: PrintIn, db: Session = Depends(get_db),
             duplex=duplex, offset_mm=overlay_offset)
     elif body.start_position != 1:
         raise HTTPException(422, "La reprise ne concerne que l’overlay")
+    elif body.pages is not None:
+        if body.file != "subject_batch.pdf" or body.pass_side != "all":
+            raise HTTPException(422, "Seules des pages du sujet peuvent être imprimées une à une")
+        document, duplex = _subject_pages_pdf(Path(path), body.pages, duplex=bool(
+            assessment and assessment.duplex and duplex))
     elif body.pass_side != "all":
         document = _subject_pass_pdf(db, body.assessment_id, Path(path), body.pass_side)
     else:
@@ -634,7 +668,8 @@ def print_file(body: PrintIn, db: Session = Depends(get_db),
                 adf_reversed=adf_reversed, error=error, wave=body.wave)
 
     teacher = db.get(TeacherProfile, assessment.teacher_profile_id) if assessment.teacher_profile_id else None
-    delivery = body.file == "subject_batch.pdf" and teacher and teacher.service_mode == "accompanied"
+    partial = body.pages is not None
+    delivery = body.file == "subject_batch.pdf" and not partial and teacher and teacher.service_mode == "accompanied"
     if delivery:
         document = with_delivery_sheet(document, render_delivery_sheet(db, assessment),
                                        duplex=duplex, pass_side=body.pass_side)
@@ -642,11 +677,13 @@ def print_file(body: PrintIn, db: Session = Depends(get_db),
         job = _queue_connector_job(
             db=db, user=user, profile=profile,
             title=f"{assessment.title if assessment else 'Kiro & Nina'} — "
-                  f"{body.pass_side if body.pass_side != 'all' else body.file}"
+                  + (f"{len(body.pages)} page(s) du sujet" if partial else
+                     f"{body.pass_side if body.pass_side != 'all' else body.file}")
                   + (f" — essai pour {overlay_selected[0].student}" if sample
                      else f" — à partir de {overlay_selected[0].student}" if overlay else ""),
             # Un autre nom de fichier : un essai ne marque jamais l'overlay imprimé.
-            file_name="overlay_sample.pdf" if sample else body.file,
+            file_name=("overlay_sample.pdf" if sample
+                       else "subject_pages.pdf" if partial else body.file),
             pass_side=body.pass_side, document=document,
             assessment_id=body.assessment_id, copies=copies,
             duplex=duplex, reverse=reverse, overlay_offset_mm=overlay_offset,
@@ -663,7 +700,7 @@ def print_file(body: PrintIn, db: Session = Depends(get_db),
     print_path = Path(path)
     temp_path: Path | None = None
     try:
-        if body.pass_side != "all" or delivery or reverse or overlay:
+        if body.pass_side != "all" or delivery or reverse or overlay or partial:
             fd, raw_path = tempfile.mkstemp(prefix=f"kironina-{body.pass_side}-", suffix=".pdf")
             temp_path = Path(raw_path)
             stream = os.fdopen(fd, "wb")
@@ -712,9 +749,10 @@ def print_file(body: PrintIn, db: Session = Depends(get_db),
                         after_json={"printer": body.printer, "file": body.file,
                                     "pass_side": body.pass_side,
                                     "start_position": body.start_position,
+                                    **({"pages": body.pages} if partial else {}),
                                     "cups_compensation_reverse": reverse,
                                     "lp": r.stdout.strip()}))
-        if body.file == "subject_batch.pdf" and body.pass_side in ("all", "verso"):
+        if body.file == "subject_batch.pdf" and body.pass_side in ("all", "verso") and not partial:
             if assessment and assessment.status == "ready":
                 assessment.status = "printed"
         remember_overlay("submitted")

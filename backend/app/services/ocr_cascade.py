@@ -12,7 +12,10 @@ Modes (`ocr_mode`) :
               ensuite à Mathpix et au professeur. Aucune note n'en dépend ;
 - `cascade` : la fusion décide. Le lot attend à l'état `ocr_local_pending`.
 
-La valeur attendue n'est jamais lue ici.
+Deux passages par moteur : libre (l'image seule) puis, pour les moteurs du plan
+`context_engines`, avec contexte (énoncé et réponse attendue, `ocr_context`). Les deux
+tâches sont inscrites ensemble : le worker les traite dans la même vague, modèle chargé
+une seule fois. Mathpix ne reçoit jamais de contexte.
 """
 import hashlib
 import logging
@@ -28,6 +31,7 @@ from ..models import (
     CopyItem, OcrAttempt, OcrCrop, OcrDecision, OcrEngineRead, OcrJob, ResponseZone,
     ScanBatch, StudentResponse,
 )
+from . import ocr_context
 from . import ocr_fusion as fusion
 from . import ocr_queue
 from . import runtime_settings as rs
@@ -81,6 +85,7 @@ class CropSpec:
     ink_width_px: int = 0
     width_px: int = 0
     height_px: int = 0
+    context: dict | None = None      # énoncé + réponse attendue (passage avec contexte)
 
 
 def ink_extent_px(bgr) -> int:
@@ -96,10 +101,10 @@ def ink_extent_px(bgr) -> int:
 
 
 def make_spec(filtered_bgr, zone_class: str, *, cell_index: int | None = None,
-              line_index: int | None = None) -> CropSpec:
+              line_index: int | None = None, context: dict | None = None) -> CropSpec:
     from . import worker_cv
     return CropSpec(png=worker_cv.encode_png(filtered_bgr), zone_class=zone_class,
-                    cell_index=cell_index, line_index=line_index,
+                    cell_index=cell_index, line_index=line_index, context=context,
                     ink_ratio=worker_cv.ink_ratio(filtered_bgr), ink_width_px=ink_extent_px(filtered_bgr),
                     width_px=int(filtered_bgr.shape[1]), height_px=int(filtered_bgr.shape[0]))
 
@@ -130,6 +135,7 @@ def line_specs(warped, zone: ResponseZone, item: CopyItem, blank_threshold: floa
     """Une découpe par ligne NON vide d'une zone multiligne (les lignes vides sont ignorées)."""
     from . import worker_cv
     out = []
+    context = ocr_context.for_item(item)
     for k, (b, h) in enumerate(line_bands(zone.y_pt, zone.h_pt, multiline_count(item))):
         crop = worker_cv.crop_zone(warped, zone.x_pt, b, zone.w_pt, h, padding_pt=0)
         if crop.size == 0:
@@ -137,7 +143,7 @@ def line_specs(warped, zone: ResponseZone, item: CopyItem, blank_threshold: floa
         filtered = worker_cv.dropout_filter(crop)
         if not worker_cv.has_ink(filtered, threshold=blank_threshold):
             continue
-        out.append(make_spec(filtered, "multiline_line", line_index=k))
+        out.append(make_spec(filtered, "multiline_line", line_index=k, context=context))
     return out
 
 
@@ -148,6 +154,23 @@ def _engines_to_read(roles: dict) -> list[str]:
     demandée que par la cascade elle-même ; l'échantillon complet ajoute ses lectures
     APRÈS la décision réelle, pour ne jamais la modifier."""
     return list(roles.get("stage1", [])) + list(roles.get("observe", []))
+
+
+def enqueue_reads(db: Session, crop: OcrCrop, engines: list[str], plan: dict | None = None) -> None:
+    """Passage libre de chaque moteur, et passage avec contexte pour ceux qui le savent
+    quand la découpe a un contexte. Les deux tâches d'un moteur sont créées ensemble pour
+    tomber dans la même vague du worker."""
+    ocr_queue.enqueue_jobs(db, crop, engines)
+    if crop.context_json:
+        ctx_engines = set(rs.ocr_context_engines(db, plan))
+        with_ctx = [e for e in engines if e in ctx_engines]
+        if with_ctx:
+            ocr_queue.enqueue_jobs(db, crop, with_ctx, kind="read_ctx")
+
+
+def fusion_ctx(crop: OcrCrop) -> fusion.CropCtx:
+    echo, echo_text = ocr_context.echo_of(crop.context_json, crop.zone_class)
+    return fusion.CropCtx(crop.zone_class, crop.ink_width_px, crop.height_px, echo=echo, echo_text=echo_text)
 
 
 def register_crop(db: Session, batch: ScanBatch, zone: ResponseZone, spec: CropSpec, mode: str) -> OcrCrop:
@@ -169,10 +192,11 @@ def register_crop(db: Session, batch: ScanBatch, zone: ResponseZone, spec: CropS
                    line_index=spec.line_index, image_path=str(path.relative_to(settings.data_dir)),
                    image_sha256=sha, zone_class=spec.zone_class, charset=charset_for(spec.zone_class),
                    width_px=spec.width_px, height_px=spec.height_px, ink_ratio=spec.ink_ratio,
-                   ink_width_px=spec.ink_width_px, mode=mode, status="pending", full_sample=full)
+                   ink_width_px=spec.ink_width_px, mode=mode, status="pending", full_sample=full,
+                   context_json=spec.context or None)
     db.add(crop)
     db.flush()
-    ocr_queue.enqueue_jobs(db, crop, _engines_to_read(class_roles(plan, spec.zone_class)))
+    enqueue_reads(db, crop, _engines_to_read(class_roles(plan, spec.zone_class)), plan)
     return crop
 
 
@@ -257,7 +281,9 @@ def _role_map(roles: dict) -> dict[str, str]:
 def _reads(db: Session, crop: OcrCrop, plan: dict, roles: dict) -> list[fusion.ReadIn]:
     rolemap = _role_map(roles)
     out = []
-    for r in db.query(OcrEngineRead).filter_by(crop_id=crop.id, kind="read").order_by(OcrEngineRead.engine).all():
+    for r in (db.query(OcrEngineRead).filter(OcrEngineRead.crop_id == crop.id,
+                                             OcrEngineRead.kind.in_(("read", "read_ctx")))
+              .order_by(OcrEngineRead.engine, OcrEngineRead.kind).all()):
         if r.error or r.engine not in rolemap:
             continue
         if not r.surface and r.raw_text:
@@ -266,7 +292,7 @@ def _reads(db: Session, crop: OcrCrop, plan: dict, roles: dict) -> list[fusion.R
             engine=r.engine, family=r.family or plan.get("families", {}).get(r.engine, r.engine),
             raw=r.raw_text, surface=r.surface or "", illegible=bool(r.illegible) or not (r.surface or "").strip(),
             confidence_raw=r.confidence_raw, logprob_mean=r.logprob_mean, logprob_min=r.logprob_min,
-            role=rolemap[r.engine]))
+            role=rolemap[r.engine], context=r.kind == "read_ctx"))
     return out
 
 
@@ -327,23 +353,27 @@ def advance_crop(db: Session, crop: OcrCrop) -> str:
     s1, s2 = roles.get("stage1", []), roles.get("stage2", [])
     jobs = db.query(OcrJob).filter_by(crop_id=crop.id).all()
     read_jobs = {j.engine: j for j in jobs if j.kind == "read"}
+    ctx_jobs = {j.engine: j for j in jobs if j.kind == "read_ctx"}
     score_jobs = {j.engine: j for j in jobs if j.kind == "score"}
     if not all(_terminal(read_jobs.get(e)) for e in s1):
         return crop.status
     s2_requested = bool(s2) and any(e in read_jobs for e in s2)
     if s2_requested and not all(_terminal(read_jobs.get(e)) for e in s2 if e in read_jobs):
         return crop.status
+    # les passages avec contexte des moteurs qui votent (un passage en échec est terminal)
+    if not all(_terminal(j) for e, j in ctx_jobs.items() if e in s1 or (s2_requested and e in s2)):
+        return crop.status
     if score_jobs and not all(_terminal(j) for j in score_jobs.values()):
         return crop.status
 
     reads = _reads(db, crop, plan, roles)
-    ctx = fusion.CropCtx(crop.zone_class, crop.ink_width_px, crop.height_px)
+    ctx = fusion_ctx(crop)
     margin = float(rs.ocr_setting(db, "ocr_score_margin"))
     out = fusion.decide_local(ctx, reads, plan, th, phase=2 if s2_requested else 1,
                               scores=_scores(db, crop) if score_jobs else None, margin=margin)
 
     if out.action == "need_stage2":
-        ocr_queue.enqueue_jobs(db, crop, s2)
+        enqueue_reads(db, crop, s2, plan)
         crop.status = "pending"
     elif out.action == "need_score":
         class_engines = s1 + s2
@@ -375,7 +405,7 @@ def _apply_mathpix(db: Session, crop: OcrCrop, text: str, latex: str, conf: floa
     th = rs.ocr_engine_thresholds(db)
     roles = class_roles(plan, crop.zone_class)
     reads = _reads(db, crop, plan, roles)
-    ctx = fusion.CropCtx(crop.zone_class, crop.ink_width_px, crop.height_px)
+    ctx = fusion_ctx(crop)
     out = fusion.decide_mathpix(ctx, reads, text, conf, plan, th)
     prev = db.query(OcrDecision).filter_by(crop_id=crop.id).first()
     local_reason = prev.reason if prev else ""
@@ -447,13 +477,11 @@ def finish_full_sample(db: Session, crop: OcrCrop) -> None:
     roles = class_roles(plan, crop.zone_class)
     jobs = db.query(OcrJob).filter_by(crop_id=crop.id).all()
     if not state:
-        have = {j.engine for j in jobs if j.kind == "read"}
-        wanted = [e for k in ("stage1", "stage2", "observe") for e in roles.get(k, []) if e not in have]
-        if wanted:
-            ocr_queue.enqueue_jobs(db, crop, wanted)
+        wanted = [e for k in ("stage1", "stage2", "observe") for e in roles.get(k, [])]
+        enqueue_reads(db, crop, wanted, plan)          # sans doublon : seuls les passages manquants
         row.full_decision = {"state": "reading"}
         return
-    reads_jobs = [j for j in jobs if j.kind == "read"]
+    reads_jobs = [j for j in jobs if j.kind in ("read", "read_ctx")]
     if not all(_terminal(j) for j in reads_jobs):
         return
     reads = _reads(db, crop, plan, roles)
@@ -470,7 +498,7 @@ def finish_full_sample(db: Session, crop: OcrCrop) -> None:
     elif state.get("state") == "scoring":
         if not all(_terminal(j) for j in jobs if j.kind == "score"):
             return
-    ctx = fusion.CropCtx(crop.zone_class, crop.ink_width_px, crop.height_px)
+    ctx = fusion_ctx(crop)
     row.full_decision = fusion.full_decision(ctx, reads, plan, th, _scores(db, crop) or None,
                                              float(rs.ocr_setting(db, "ocr_score_margin")))
 

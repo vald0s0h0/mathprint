@@ -1143,6 +1143,8 @@ MATCH_MAX_READINGS = 4000   # lectures énumérées (au-delà : revue)
 MATCH_MAX_ALTERNATIVES = 64  # lectures alternatives vérifiées (au-delà : revue)
 MATCH_OWN_COVER = 0.3       # encre propre mini d'une liaison (hors autres traits)...
 MATCH_OWN_RUN = 0.2         # ... ou portion continue propre : sinon liaison « fantôme »
+MATCH_SHARED_COVER = 0.7    # second trait sur un même point : un vrai trait couvre l'essentiel de son segment,
+MATCH_SHARED_RUN = 0.6      # ... pas le résidu d'un trait repassé (couverture ~0,45 observée)
 MATCH_CORRIDOR_PX = 4       # demi-largeur d'encre expliquée par une liaison retenue
 MATCH_LANE_PX = 10          # le couloir déborde des rangées de points (pas des étiquettes)...
 MATCH_LANE_V_PX = 30        # ... et des points extrêmes de chaque rangée (trait bombé, ~4 mm)
@@ -1686,6 +1688,26 @@ def detect_matching(warped: np.ndarray, left_points: list[dict], right_points: l
         blank = check["traces"] < MATCH_BLANK_PX
         diag["reason"] = "blank" if blank else "unread_ink"
         return ([], 0.97) if blank else (None, 0.0)
+    # deux traits sur le même point (l'élève « double » sa réponse) : la lecture
+    # un-pour-un n'en retient qu'un. Une liaison non retenue qui partage un point
+    # avec une liaison retenue et garde de l'encre PROPRE (hors couloir des traits
+    # retenus) est un second trait : on la joint à la lecture et on passe au
+    # professeur, qui vérifie ; la notation compte ces points faux (grading).
+    used_l = {i for i, _ in chosen}
+    used_r = {j for _, j in chosen}
+    shared: list[tuple[int, int]] = []
+    for q, lk in links.items():
+        if q in chosen or not lk.present or (q[0] not in used_l and q[1] not in used_r):
+            continue
+        own = ink.copy()
+        own[_corridor(ink.shape, [links[c].path for c in chosen])] = 0.0
+        probe = _fit_links(own, [(L[q[0]], R[q[1]])])[0]
+        if (probe is not None and probe.cover >= MATCH_SHARED_COVER
+                and probe.run >= MATCH_SHARED_RUN):
+            shared.append(q)
+    if shared:
+        diag.update(reason="shared_point", shared=[[int(i), int(j)] for i, j in sorted(shared)])
+        return sorted(pairs + [[int(i), int(j)] for i, j in shared]), 0.5
     if not check["clear"]:
         diag["reason"] = ("unexplained_line" if check["line_cover"] >= MATCH_RES_COVER
                           else "unexplained_mark")

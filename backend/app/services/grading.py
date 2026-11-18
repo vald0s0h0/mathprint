@@ -537,12 +537,44 @@ def grade(expected: dict, grading: dict, ocr_text: str, ocr_confidence: float,
             result.update(tier="D", reason_code="matching_ambiguous")
             return result
         got_set = set(got_pairs)
+        # Un point relié par plus de traits que le corrigé n'en prévoit : l'élève
+        # « double » sa réponse pour tenter sa chance. Ses liaisons sont retirées ;
+        # le bon trait ne vaut qu'un demi-point (sinon garder le bon trait coûterait zéro).
+        deg_l, deg_r = {}, {}
+        for a, b in expected_pairs:
+            deg_l[a] = deg_l.get(a, 0) + 1
+            deg_r[b] = deg_r.get(b, 0) + 1
+        got_l, got_r = {}, {}
+        for a, b in got_set:
+            got_l[a] = got_l.get(a, 0) + 1
+            got_r[b] = got_r.get(b, 0) + 1
+        over_l = {a for a, n in got_l.items() if n > deg_l.get(a, 1)}
+        kept = {(a, b) for a, b in got_set if a not in over_l}
+        # côté droit recompté après retrait : un lien déjà annulé à gauche
+        # ne doit pas faire perdre un point voisin resté valide
+        got_r = {}
+        for _a, b in kept:
+            got_r[b] = got_r.get(b, 0) + 1
+        over_r = {b for b, n in got_r.items() if n > deg_r.get(b, 1)}
+        kept = {(a, b) for a, b in kept if b not in over_r}
+        overlinked = kept != got_set
+        # demi-pénalité : le bon trait d'un point doublé vaut la moitié d'un point
+        half_credit = 0.5 * len((got_set - kept) & expected_pairs)
+        got_set = kept
         if grading.get("scoring") == "per_point":
+            if overlinked:
+                # point sur-relié : ses liens sont retirés, donc faux
+                result = _grade_matching_per_point(result, grading, expected, expected_pairs,
+                                                   got_set or {(-1, -1)})
+                result["reason_code"] = "matching_overlinked"
+                result["score"] = min(result["max_score"], result["score"] + half_credit)
+                return result
             return _grade_matching_per_point(result, grading, expected, expected_pairs, got_set)
-        score = float(len(got_set & expected_pairs))
+        score = float(len(got_set & expected_pairs)) + (half_credit if overlinked else 0.0)
         ok = got_set == expected_pairs
         result.update(tier="B", score=score,
-                      reason_code="matching_match" if ok else "matching_partial")
+                      reason_code=("matching_overlinked" if overlinked else
+                                   "matching_match" if ok else "matching_partial"))
         return result
 
     # --- tableau à remplir : une comparaison numérique/texte par cellule

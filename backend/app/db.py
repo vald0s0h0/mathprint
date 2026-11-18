@@ -39,7 +39,8 @@ def get_db():
 _ADDED_COLUMNS: dict[str, list[tuple[str, ...]]] = {
     "users": [("subscription_plan", "TEXT")],
     # largeur d'encre de la découpe : garde-fou encre/longueur de la fusion OCR
-    "ocr_crops": [("ink_width_px", "INTEGER", "0"), ("mode", "TEXT", "'shadow'")],
+    "ocr_crops": [("ink_width_px", "INTEGER", "0"), ("mode", "TEXT", "'shadow'"),
+                  ("context_json", "JSON", "NULL")],
     "ocr_decisions": [("batch_id", "TEXT")],
     "scan_batches": [("overlay_printed", "BOOLEAN"), ("overlay_distributed", "BOOLEAN"),
                      ("refine_rev", "INTEGER", "0"), ("overlay_rev", "INTEGER", "0"),

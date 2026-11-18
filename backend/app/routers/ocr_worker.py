@@ -64,6 +64,8 @@ def claim(body: ClaimIn, db: Session = Depends(get_db), worker: str = Depends(wo
             "zone_class": crop.zone_class, "charset": crop.charset,
             "width_px": crop.width_px, "height_px": crop.height_px, "ink_ratio": crop.ink_ratio,
             "image_sha256": crop.image_sha256,
+            # passage avec contexte seulement : énoncé et réponse attendue
+            "context": (crop.context_json or None) if job.kind == "read_ctx" else None,
             "image_url": f"/api/ocr-worker/crops/{crop.id}/image",
         })
     return {"jobs": out}

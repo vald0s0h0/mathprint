@@ -22,9 +22,9 @@ class StubServer:
         self.down = False
 
     def add(self, job_id, engine, crop_id, *, kind="read", candidates=(), zone_class="num_line",
-            image=None, sha=True):
+            image=None, sha=True, context=None):
         image = image or png()
-        self.jobs.append(dict(job_id=job_id, engine=engine, kind=kind, candidates=list(candidates),
+        self.jobs.append(dict(job_id=job_id, engine=engine, kind=kind, candidates=list(candidates), context=context,
                               crop_id=crop_id, zone_class=zone_class, image=image, status="pending",
                               sha=hashlib.sha256(image).hexdigest() if sha is True else sha))
 
@@ -50,7 +50,7 @@ class StubServer:
                 j["status"] = "claimed"
             out = [{"job_id": j["job_id"], "crop_id": j["crop_id"], "engine": j["engine"], "kind": j["kind"],
                     "candidates": j["candidates"], "zone_class": j["zone_class"], "charset": "0123456789,",
-                    "image_sha256": j["sha"], "image_url": f"/api/ocr-worker/crops/{j['crop_id']}/image"}
+                    "image_sha256": j["sha"], "context": j.get("context"), "image_url": f"/api/ocr-worker/crops/{j['crop_id']}/image"}
                    for j in got]
             return 200, {}, json.dumps({"jobs": out}).encode()
         if path.startswith("/api/ocr-worker/crops/"):

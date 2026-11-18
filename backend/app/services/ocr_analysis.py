@@ -135,10 +135,11 @@ def _percentile(db, base_where, col, p) -> float | None:
 
 def _engines(db, f) -> dict:
     """Volume, exactitude contre la vérité, illisible, latence, calibration, par classe et moteur."""
-    read_ok = and_(OcrEngineRead.kind == "read", OcrEngineRead.error == "")
-    join = (OcrEngineRead.crop_id == OcrCrop.id, OcrDecision.crop_id == OcrCrop.id)
+    # passage libre (`read`) et passage avec contexte (`read_ctx`, affiché « moteur+ctx ») mesurés à part
+    read_ok = and_(OcrEngineRead.kind.in_(("read", "read_ctx")), OcrEngineRead.error == "")
     truth = OcrDecision.truth_surface.isnot(None)
-    q = (select(OcrCrop.zone_class, OcrEngineRead.engine, OcrEngineRead.family, OcrEngineRead.device,
+    q = (select(OcrCrop.zone_class, OcrEngineRead.engine, OcrEngineRead.kind, OcrEngineRead.family,
+                OcrEngineRead.device,
                 func.count(),
                 _sum(OcrEngineRead.illegible.is_(True)),
                 _sum(truth),
@@ -147,10 +148,12 @@ def _engines(db, f) -> dict:
                 func.avg(OcrEngineRead.latency_ms))
          .select_from(OcrEngineRead).join(OcrCrop, OcrCrop.id == OcrEngineRead.crop_id)
          .join(OcrDecision, OcrDecision.crop_id == OcrCrop.id)
-         .where(read_ok, *f).group_by(OcrCrop.zone_class, OcrEngineRead.engine, OcrEngineRead.family, OcrEngineRead.device))
+         .where(read_ok, *f).group_by(OcrCrop.zone_class, OcrEngineRead.engine, OcrEngineRead.kind,
+                                      OcrEngineRead.family, OcrEngineRead.device))
     out: dict = {}
-    for zc, eng, fam, dev, n, ill, tn, tok, empty, lat in db.execute(q):
-        e = out.setdefault(zc, {}).setdefault(eng, {"family": fam, "devices": [], "reads": 0, "illegible": 0,
+    for zc, eng, kind, fam, dev, n, ill, tn, tok, empty, lat in db.execute(q):
+        label = f"{eng}+ctx" if kind == "read_ctx" else eng
+        e = out.setdefault(zc, {}).setdefault(label, {"engine": eng, "kind": kind, "family": fam, "devices": [], "reads": 0, "illegible": 0,
                                                     "with_truth": 0, "correct": 0, "empty_with_truth": 0,
                                                     "latency_avg_ms": None})
         e["devices"] = sorted(set(e["devices"] + [dev]))
@@ -159,13 +162,14 @@ def _engines(db, f) -> dict:
         if lat is not None:
             e["latency_avg_ms"] = round(float(lat), 1)
     for zc, engines in out.items():
-        for eng, e in engines.items():
+        for e in engines.values():
             e["illegible_rate"] = round(e["illegible"] / e["reads"], 4) if e["reads"] else None
             e["accuracy"] = wilson(e["correct"], e["with_truth"])
-            where = [OcrEngineRead.engine == eng, read_ok]
+            kind_ok = and_(OcrEngineRead.kind == e["kind"], OcrEngineRead.error == "")
+            where = [OcrEngineRead.engine == e["engine"], kind_ok]
             e["latency_p50_ms"] = _lat(db, where, zc, f, 0.50)
             e["latency_p95_ms"] = _lat(db, where, zc, f, 0.95)
-            e["calibration"] = _calibration(db, eng, zc, f, read_ok)
+            e["calibration"] = _calibration(db, e["engine"], zc, f, kind_ok)
     return out
 
 
@@ -280,16 +284,23 @@ def _load_full_sample(db, f, limit=3000) -> dict:
     return load_crops(db, ids) if ids else {}
 
 
+def _ctx(crop: dict) -> "fusion.CropCtx":
+    from .ocr_context import echo_of
+    echo, text = echo_of(crop.get("context"), crop["zone_class"])
+    return fusion.CropCtx(crop["zone_class"], crop["ink"] or 0, crop["h"] or 0, echo=echo, echo_text=text)
+
+
 def decide_full(crop: dict, plan: dict, th: dict, margin: float, exclude: str | None = None) -> tuple:
     """(action, surface) du passage complet d'une découpe, éventuellement SANS un moteur."""
     zc = crop["zone_class"]
     roles = (plan.get("classes") or {}).get(zc) or {}
     role_of = {e: r for r in ("observe", "stage2", "stage1") for e in roles.get(r, [])}
     reads = [fusion.ReadIn(engine=e, family=fam, raw=raw, surface=surf, illegible=ill or not surf.strip(),
-                           confidence_raw=conf, logprob_mean=lpm, logprob_min=lpn, role=role_of.get(e, "observe"))
-             for (e, fam, raw, surf, ill, conf, lpm, lpn) in crop["reads"] if e != exclude]
+                           confidence_raw=conf, logprob_mean=lpm, logprob_min=lpn, role=role_of.get(e, "observe"),
+                           context=wc)
+             for (e, fam, raw, surf, ill, conf, lpm, lpn, wc) in crop["reads"] if e != exclude]
     scores = {e: t for e, t in crop["scores"].items() if e != exclude} or None
-    ctx = fusion.CropCtx(zc, crop["ink"] or 0, crop["h"] or 0)
+    ctx = _ctx(crop)
     plan2 = plan
     if exclude:
         classes = {k: {r: [e for e in v if e != exclude] for r, v in vv.items()} if k == zc else vv
@@ -357,9 +368,10 @@ def load_crops(db: Session, ids: list[str]) -> dict:
     crops: dict = {}
     for i in range(0, len(ids), 500):
         part = ids[i:i + 500]
-        for cid, zc, w, h in db.execute(select(OcrCrop.id, OcrCrop.zone_class, OcrCrop.ink_width_px,
-                                               OcrCrop.height_px).where(OcrCrop.id.in_(part))):
-            crops[cid] = {"zone_class": zc, "ink": w, "h": h, "reads": [], "scores": {}}
+        for cid, zc, w, h, cj in db.execute(select(OcrCrop.id, OcrCrop.zone_class, OcrCrop.ink_width_px,
+                                                   OcrCrop.height_px, OcrCrop.context_json)
+                                            .where(OcrCrop.id.in_(part))):
+            crops[cid] = {"zone_class": zc, "ink": w, "h": h, "context": cj, "reads": [], "scores": {}}
         q = select(OcrEngineRead.crop_id, OcrEngineRead.engine, OcrEngineRead.family, OcrEngineRead.raw_text,
                    OcrEngineRead.illegible, OcrEngineRead.confidence_raw, OcrEngineRead.logprob_mean,
                    OcrEngineRead.logprob_min, OcrEngineRead.kind, OcrEngineRead.scores_json
@@ -367,9 +379,10 @@ def load_crops(db: Session, ids: list[str]) -> dict:
         from .ocr_surface import to_surface
         for cid, eng, fam, raw, ill, conf, lpm, lpn, kind, sc in db.execute(q):
             zc = crops[cid]["zone_class"]
-            if kind == "read":
+            if kind in ("read", "read_ctx"):
                 # la surface est TOUJOURS recalculée depuis le texte brut : ocr_surface peut avoir changé
-                crops[cid]["reads"].append((eng, fam, raw, to_surface(raw, zc), bool(ill), conf, lpm, lpn))
+                crops[cid]["reads"].append((eng, fam, raw, to_surface(raw, zc), bool(ill), conf, lpm, lpn,
+                                            kind == "read_ctx"))
             elif isinstance(sc, dict):
                 crops[cid]["scores"].setdefault(eng, {}).update(
                     {to_surface(k, zc): v for k, v in sc.items() if v is not None})
@@ -378,9 +391,10 @@ def load_crops(db: Session, ids: list[str]) -> dict:
 
 def replay_local(db: Session, *, plan: dict | None = None, thresholds: dict | None = None,
                  margin: float | None = None, since: datetime | None = None, mode: str | None = None,
-                 zone_class: str | None = None, limit: int = 20000) -> dict:
+                 zone_class: str | None = None, limit: int = 20000, context: bool = True) -> dict:
     """Rejoue la fusion LOCALE sur les lectures déjà stockées, avec d'autres seuils ou un autre plan :
-    aucun moteur relancé, aucun appel Mathpix. Compare à ce que la cascade avait décidé et à la vérité."""
+    aucun moteur relancé, aucun appel Mathpix. Compare à ce que la cascade avait décidé et à la vérité.
+    `context=False` : rejoue SANS les passages avec contexte, pour mesurer ce qu'ils apportent."""
     base_plan, base_th = rs.ocr_engine_plan(db), rs.ocr_engine_thresholds(db)
     plan = plan or base_plan
     rs.validate_ocr_plan(plan)
@@ -402,10 +416,10 @@ def replay_local(db: Session, *, plan: dict | None = None, thresholds: dict | No
         role_of = {e: r for r in ("observe", "stage2", "stage1") for e in roles.get(r, [])}
         reads = [fusion.ReadIn(engine=e, family=plan["families"].get(e, fam), raw=raw, surface=surf,
                                illegible=ill or not surf.strip(), confidence_raw=conf, logprob_mean=lpm,
-                               logprob_min=lpn, role=role_of.get(e, "observe"))
-                 for (e, fam, raw, surf, ill, conf, lpm, lpn) in c["reads"]]
+                               logprob_min=lpn, role=role_of.get(e, "observe"), context=wc)
+                 for (e, fam, raw, surf, ill, conf, lpm, lpn, wc) in c["reads"] if context or not wc]
         has_s2 = any(r.role == "stage2" for r in reads)
-        ctx = fusion.CropCtx(zc, c["ink"] or 0, c["h"] or 0)
+        ctx = _ctx(c)
         out = fusion.decide_local(ctx, reads, plan, th, phase=2 if has_s2 else 1,
                                   scores=c["scores"] or None, margin=margin)
         s = stats.setdefault(zc, {"crops": 0, "old_auto": 0, "new_auto": 0, "old_auto_errors": 0,
@@ -428,7 +442,8 @@ def replay_local(db: Session, *, plan: dict | None = None, thresholds: dict | No
             s["auto_gained"] += 1
             if truth is not None and out.surface != truth and len(changed) < 100:
                 changed.append({"crop_id": cid, "class": zc, "new_surface": out.surface, "truth": truth})
-    return {"settings": {"margin": margin, "thresholds": thresholds or {}, "plan_changed": plan is not base_plan},
+    return {"settings": {"margin": margin, "thresholds": thresholds or {}, "plan_changed": plan is not base_plan,
+                         "context": context},
             "by_class": stats, "gained_but_wrong": changed}
 
 
