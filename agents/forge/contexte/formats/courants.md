@@ -42,6 +42,7 @@ Règles propres à chaque format. Le socle commun est dans `commun.md`.
 - Chaque élément de gauche a exactement un lien. Chaque point de droite a au plus un lien et son message.
 - Un point de droite sans lien est un **piège**. Le script ajoute lui-même la consigne « Attention : N propositions ne servent pas. ». Ne l'écris pas.
 - 2 à 6 éléments de chaque côté, 80 caractères au plus.
+- `dispositions` : deux ordres de la colonne de droite (liste d'`id`). Dans chacun, les traits se croisent (jamais des traits parallèles), au plus un élément relié en face de lui-même, et les deux ordres donnent des traits différents. Le script le contrôle.
 
 ### `short_text`
 

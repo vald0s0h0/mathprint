@@ -218,11 +218,43 @@ def _movable_ids(leaf: dict) -> list:
     return []
 
 
+def _matching_problems(leaf: dict, orders: list) -> list[str]:
+    """Points à relier : dans chaque disposition, les traits doivent se croiser. Des traits
+    parallèles (chaque élément de gauche en face de sa réponse, ou dans le même ordre) se
+    devinent à vue. La colonne de gauche ne bouge pas ; seule celle de droite est ordonnée."""
+    problems = []
+    pairs = [(int(a), str(b)) for a, b in leaf.get("pairs") or []]
+    n = len(pairs)
+    if n < 2:
+        return problems
+    by_left = dict(pairs)
+    where = []
+    for rank, order in enumerate(orders, 1):
+        pos = {str(i): k for k, i in enumerate(order)}
+        row = [pos[by_left[a]] for a in sorted(by_left) if by_left[a] in pos]
+        where.append(row)
+        if len(row) != n:
+            continue
+        if all(row[k] < row[k + 1] for k in range(n - 1)):
+            problems.append(f"disposition {rank} : les traits ne se croisent pas (réponses de droite "
+                            "dans l'ordre de la gauche) ; place au moins une réponse hors de l'ordre")
+        elif sum(1 for a, k in enumerate(row) if k == a) > 1:
+            problems.append(f"disposition {rank} : plusieurs éléments sont reliés en face d'eux-mêmes ; "
+                            "un seul au plus peut garder sa place")
+    if len(where) == 2 and where[0] == where[1]:
+        problems.append("les deux dispositions donnent les mêmes traits : déplace aussi les bonnes réponses, "
+                        "pas seulement les pièges")
+    return problems
+
+
 def disposition_problems(leaf: dict) -> list[str]:
     """Deux ordres écrits par l'auteur, ou la raison d'un ordre imposé."""
     rtype = leaf.get("response_type")
     orders = leaf.get("dispositions")
     reason = str(leaf.get("ordre_impose") or "").strip()
+    if rtype == "matching" and reason:
+        return ["un relier n'a jamais `ordre_impose` : la colonne de gauche reste fixe (elle porte l'ordre "
+                "logique), seule celle de droite se déplace. Écris `dispositions`."]
     if orders is None:
         if rtype in MOVABLE and not reason:
             return ["écris `dispositions` (deux ordres des réponses), ou `ordre_impose` avec la "
@@ -244,6 +276,8 @@ def disposition_problems(leaf: dict) -> list[str]:
         return problems
     if list(map(str, orders[0])) == list(map(str, orders[1])):
         problems.append("les deux dispositions sont identiques")
+    if rtype == "matching":
+        problems += _matching_problems(leaf, orders)
     if rtype == "qcm_single":
         right = [str(c.get("id")) for c in leaf.get("choices") or [] if isinstance(c, dict) and c.get("correct")]
         if len(right) == 1 and (list(map(str, orders[0])).index(right[0])

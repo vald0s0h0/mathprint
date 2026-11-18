@@ -21,7 +21,7 @@ Tu travailles **seul, sans sous-agent**, du début à la fin : le contexte se li
 5. **Brouillons.** Quand tout passe, `valider` écrit lui-même les brouillons (`persist`). Rien n'est publié ; l'humain relit l'échantillon tiré par l'indice de confiance, puis publie d'un clic.
 6. **Bilan**, à la fin de la cible : `run.py bilan <run>` pour chaque run, puis en quelques lignes : familles écrites, écartées et pourquoi, codes d'erreur proposés, ce que tu as remarqué sur la leçon (un fait qui manque, un fait douteux).
 
-En cas de besoin : `run.py render`, `goldfish` et `relecture` existent séparément. Quand une carte contexte + question a une figure, sépare la question finale par un saut de ligne : elle passera sous la figure, sur toute la largeur. Si `render` signale un blanc anormal, raccourcis une phrase ou resserre la figure sans changer aucune valeur.
+En cas de besoin : `run.py render`, `goldfish` et `relecture` existent séparément. Quand une carte contexte + question a une figure, sépare la question finale par un saut de ligne : elle passera sous la figure, sur toute la largeur. Si `render` signale un blanc anormal, raccourcis une phrase ou resserre la figure sans changer aucune valeur. Dans chaque famille, l’écart de hauteur entre la carte la plus haute et la plus petite ne doit pas dépasser 5 mm, avec et sans aides : si `render` le signale, adapte les cartes, en priorité leurs figures, puis relance `valider`. À 5 mm ou moins, ne modifie rien pour cette raison.
 
 Ce que le relecteur humain doit regarder sur une carte précise va dans son champ `review_flags` : ce texte s'affiche en rouge sur la carte, dans l'onglet Exercices. Écris-le avant `persist`.
 

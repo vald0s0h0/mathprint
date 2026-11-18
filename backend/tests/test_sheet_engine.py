@@ -785,3 +785,35 @@ def test_time_estimate_prefers_the_authors_value_and_grows_with_the_work():
                                       {"response_type": "qcm_single", "statement": "b", "grading": {}}]})
     assert 30 <= manual_subject.estimated_seconds(qcm) < manual_subject.estimated_seconds(harder)
     assert manual_subject.estimated_seconds(composite) > manual_subject.estimated_seconds(qcm)
+
+
+def test_twin_family_uses_maximum_height_to_pack_without_padding(db, tmp_path, monkeypatch):
+    a, rows, _students = _seed(db, levels=(5, 5), pages=1, guides=pdfgen.GUIDES_NONE, n_qcm=1)
+    head = rows[0]
+    head.twin_group, head.twin_jeu, head.twin_disposition = 'family', 1, 1
+    twin = GeneratedExercise(competency_id=head.competency_id, difficulty_level=head.difficulty_level,
+        statement='Un énoncé beaucoup plus long. ' * 20, response_type=head.response_type,
+        source=head.source, kind=head.kind, status='twin', twin_group='family', twin_jeu=2,
+        twin_disposition=1, expected_json=head.expected_json, grading_json=head.grading_json)
+    db.add(twin); db.flush()
+    a.blueprint_json = {**a.blueprint_json, 'variants': [{'key': 'A', 'items': [
+        {'exercise_id': head.id, 'page': 0, 'col': 0, 'rank': 0}]}]}
+    db.commit()
+    measures = manual_subject._CardMeasures(manual_subject.doc_templates(db), pdfgen.GUIDES_NONE, db)
+    assert measures._measure(twin, False)[0] > measures._measure(head, False)[0]
+    assert measures.height(head) == measures.height(twin)
+    cards = manual_subject.pool(db, [head.competency_id])['exercises']
+    assert next(c for c in cards if c['id'] == head.id)['height_pt_no_guide'] == measures.height(twin)
+    captured = []
+    render_copy = pdfgen.render_copy
+    def spy(*args, **kwargs):
+        captured.append(kwargs['items'][0])
+        return render_copy(*args, **kwargs)
+    monkeypatch.setattr(pdfgen, 'render_copy', spy)
+    report = _generate(db, a, tmp_path, monkeypatch)
+    assert not report['warnings']
+    assert len(captured) == 2
+    assert all('min_height_pt' not in item for item in captured)
+    tpl = manual_subject.doc_templates(db)['exercise']
+    assert pdfgen.estimate_item_height(captured[0], 9, 9, tpl) != pdfgen.estimate_item_height(captured[1], 9, 9, tpl)
+    assert all(c.total_pages == 1 for c in db.query(Copy).filter_by(assessment_id=a.id))

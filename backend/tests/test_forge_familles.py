@@ -186,7 +186,7 @@ def test_a_verdict_and_the_bank_treat_the_family_as_one_card(db):  # noqa: F811
     # en banque : une seule carte active, ses jumelles en réserve pour l'impression
     data = {"exercises": []}
     for r in db.query(IndigoExercise).all():
-        rec = {"id": r.id, "competency_code": "Z1.1", "grade_level": "3e", "statement": r.statement,
+        rec = {"id": r.id, "competency_code": "Z1.1", "grade_level": "3e", "program_id": "fr", "subject_id": "math", "statement": r.statement,
                "response_type": r.response_type, "expected": r.expected_json, "grading": r.grading_json,
                "source": "forge", "difficulty": 1}
         assert indigo._seed_record(db, data, rec, Path("."))
@@ -194,3 +194,76 @@ def test_a_verdict_and_the_bank_treat_the_family_as_one_card(db):  # noqa: F811
     bank = db.query(GeneratedExercise).all()
     assert sorted(b.status for b in bank) == ["active"] + ["twin"] * 5
     assert {b.twin_group for b in bank} == {f"{run.name}/s01"}
+
+
+def test_family_height_tolerance_is_five_mm_inclusive():
+    spreads = forge.family_height_spreads({'s01': 80.0, 's01.j2d1': 85.0,
+                                          's02': 80.0, 's02.j2d1': 85.001})
+    assert not spreads['s01']['too_different']
+    assert spreads['s02']['too_different']
+    assert spreads['s02']['max_card'] == 's02.j2d1'
+
+
+def test_render_blocks_family_with_excess_height_until_corrected(db, monkeypatch):  # noqa: F811
+    run = forge.prepare(db, 'fr', '3e', 'Z1.1', model='test-model')[0]
+    forge.dump_json(run / 'grid.json', [s for s in forge.load_json(run / 'grid.json') if s['slot'] == 's01'])
+    (run / 'familles').mkdir()
+    (run / 'familles' / 's01.json').write_text(json.dumps(_family()), encoding='utf-8')
+    best = forge.best_layout
+    calls = iter([0, 6, 0, 0, 0, 0])
+    def uneven(ex):
+        layout, scale, height = best(ex)
+        return layout, scale, height + next(calls)
+    monkeypatch.setattr(forge, 'best_layout', uneven)
+    result = forge.render(db, run)
+    assert result['family_heights']['s01']['too_different']
+    assert any('maximum 5 mm' in hint for hint in forge.lot_hints(result, 'exercise'))
+    with pytest.raises(SystemExit, match='supérieur à 5 mm'):
+        forge.persist(db, run)
+    monkeypatch.setattr(forge, 'best_layout', best)
+    result = forge.render(db, run)
+    assert not result['family_heights']['s01']['too_different']
+    assert len(forge.persist(db, run)['written']) == 6
+
+
+def test_relier_les_traits_doivent_se_croiser():
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "agents" / "forge"))
+    import familles
+    base = {"response_type": "matching", "left": ["a", "b", "c"],
+            "right": [{"id": i} for i in ["d1", "d2", "d3", "p"]],
+            "pairs": [[0, "d1"], [1, "d2"], [2, "d3"]]}
+    parallel = familles.disposition_problems({**base, "dispositions": [["d1", "d2", "d3", "p"], ["d2", "p", "d3", "d1"]]})
+    assert any("ne se croisent pas" in p for p in parallel)
+    same_place = familles.disposition_problems({**base, "dispositions": [["p", "d2", "d3", "d1"], ["d3", "d1", "p", "d2"]]})
+    assert any("en face d'eux-mêmes" in p for p in same_place)
+    assert not familles.disposition_problems({**base, "dispositions": [["d2", "d3", "d1", "p"], ["d3", "p", "d1", "d2"]]})
+    assert familles.disposition_problems({**base, "ordre_impose": "chronologie"})
+
+
+def test_legible_order_garde_des_traits_croises():
+    from app.services import pdfgen
+    left, right = ["A", "B", "C"], ["a", "b", "c"]
+    pairs = [[0, 0], [1, 1], [2, 2]]
+    order = pdfgen.legible_order(left, right, pairs, keep_crossing=True)
+    assert order is not None
+    pos = {old: new for new, old in enumerate(order)}
+    ends = [pos[b] for _a, b in pairs]
+    assert any(x > y for x, y in zip(ends, ends[1:]))
+
+
+def test_melange_ancien_garde_la_verite_de_la_carte():
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "agents" / "forge"))
+    import melange_ancien as m
+    g = {"choices": ["A", "B", "C"], "option_ids": ["a", "b", "c"]}
+    e = {"type": "choice", "correct": [0]}
+    g2, e2 = m.arrange("qcm_single", g, e, ["c", "a", "b"])
+    assert g2["choices"] == ["C", "A", "B"] and e2["correct"] == [1]
+    assert m.cleaned("qcm_single", g, e) == m.cleaned("qcm_single", g2, e2)
+    table = {"cells": [[{"v": 1}, {"v": 2}], [{"v": 3}, {"v": 4}]], "row_labels": ["L1", "L2"], "col_labels": ["C1", "C2"]}
+    t2, te2 = m.arrange("table_fill", table, {"cells": table["cells"]}, [1, 0], "lignes")
+    assert t2["row_labels"] == ["L2", "L1"] and te2["cells"][0] == [{"v": 3}, {"v": 4}]
+    assert m.cleaned("table_fill", table, {"cells": table["cells"]}) == m.cleaned("table_fill", t2, te2)

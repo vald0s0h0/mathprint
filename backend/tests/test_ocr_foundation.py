@@ -232,3 +232,22 @@ def test_worker_token_env_wins_and_short_token_refused(db, monkeypatch):
     assert rs.ocr_worker_token(db) == "d" * 30
     monkeypatch.setattr(rs.settings, "ocr_worker_token", "e" * 30)
     assert rs.ocr_worker_token(db) == "e" * 30
+
+
+def test_send_ocr_to_manual_never_marks_copy_blank_or_calls_grader(db, monkeypatch):
+    from app.models import GradingDecision, ManualReview
+    a, item, zone, resp = _seed_table(db)
+    batch = ScanBatch(assessment_id=a.id, status="ocr_review_pending")
+    db.add_all([batch, OcrAttempt(zone_id=zone.id, provider="cv_ocr", confidence=0.2,
+                                  raw_json={"cells": ["", ""], "cell_confidences": [0.2, 0.2]})])
+    db.commit()
+    out = scans_router.send_ocr_to_manual(resp.id, db, None)
+    assert out["remaining"] == 0
+    assert not pipeline.copy_is_blank(db, db.get(Copy, item.copy_id))
+    monkeypatch.setattr(pipeline, "_decide_existing", lambda *a, **kw: pytest.fail("automatic grading called"))
+    monkeypatch.setattr(pipeline, "_grade_with_llm", lambda *a: None)
+    monkeypatch.setattr(pipeline, "after_llm_grading", lambda *a: 1)
+    pipeline.grade_stored_responses(db, batch)
+    decision = db.query(GradingDecision).filter_by(response_id=resp.id).one()
+    assert decision.reason_code == "teacher_requested_manual"
+    assert db.query(ManualReview).filter_by(decision_id=decision.id).count() == 1

@@ -2665,13 +2665,23 @@ def _promote_to_volume() -> None:
     logger.info("Indigo : contenu publié promu de l'image vers le volume (%s)", jf)
 
 
-def _resolve_competency(db, code: str, grade: str):
-    """Résout une compétence par son CODE (stable entre déploiements) et non par
-    id (UUID régénéré à chaque seed de competencies_fr.json)."""
-    fw = db.query(CompetencyFramework).filter_by(grade_level=grade, program_id="fr", subject_id="math", path_id=None).first()
-    if fw is None:
-        return None
-    return db.query(Competency).filter_by(framework_id=fw.id, code=code).first()
+def _resolve_competency(db, code: str, grade: str, program: str | None = None,
+                        subject: str | None = None, path: str | None = None):
+    """Résout le code stable dans son référentiel, sans confondre les pays.
+
+    Les anciennes publications ne portent que le code : on les accepte si
+    celui-ci identifie une seule compétence pour le niveau donné.
+    """
+    query = (db.query(Competency).join(CompetencyFramework)
+             .filter(Competency.code == code, CompetencyFramework.grade_level == grade))
+    if program:
+        query = query.filter(CompetencyFramework.program_id == program)
+    if subject:
+        query = query.filter(CompetencyFramework.subject_id == subject)
+    if program and subject:
+        query = query.filter(CompetencyFramework.path_id == path)
+    matches = query.limit(2).all()
+    return matches[0] if len(matches) == 1 else None
 
 
 class PublishRefused(RuntimeError):
@@ -2729,6 +2739,7 @@ def _published_record(db, ex: IndigoExercise, crops, figs, *, copy_images: bool 
     enregistrement, sinon un exercice publié à chaud différerait du même exercice
     republié en bloc — et la différence ne se verrait qu'à l'usage."""
     comp = db.get(Competency, ex.competency_id)
+    framework = db.get(CompetencyFramework, comp.framework_id) if comp else None
     crop_file = fig_file = ""
     if ex.crop_path and crop_abs_path(ex.crop_path).exists():
         crop_file = f"{ex.id}.png"
@@ -2755,7 +2766,10 @@ def _published_record(db, ex: IndigoExercise, crops, figs, *, copy_images: bool 
     # banque — Astra, Gemini, retouche du professeur après génération.
     return typography.apply_to_record({
         "id": ex.id, "competency_code": comp.code if comp else "",
-        "grade_level": ex.grade_level, "source_number": ex.source_number,
+        "program_id": framework.program_id if framework else None,
+        "subject_id": framework.subject_id if framework else None,
+        "path_id": framework.path_id if framework else None,
+        "grade_level": framework.grade_level if framework else ex.grade_level, "source_number": ex.source_number,
         "badge_type": ex.badge_type, "difficulty": ex.difficulty,
         "variant_kind": ex.variant_kind or "base",
         "derived_from_id": ex.derived_from_id,
@@ -2838,6 +2852,10 @@ def publish_rows(db, rows: list[IndigoExercise]) -> int:
     data = load_published() if jf.exists() else {}
     records = [r for r in data.get("exercises", [])]
     new_records = [_published_record(db, ex, crops, figs) for ex in rows]
+    for rec in new_records:
+        if not _resolve_competency(db, rec["competency_code"], rec["grade_level"],
+                                   rec.get("program_id"), rec.get("subject_id"), rec.get("path_id")):
+            raise PublishRefused("Compétence introuvable ou ambiguë : publication impossible.")
     new_ids = {r["id"] for r in new_records}
     payload = {"version": settings.indigo_schema_version,
                "grade_level": data.get("grade_level", "3e"),
@@ -2995,7 +3013,8 @@ def _seed_record(db, data: dict, rec: dict, figs) -> bool:
     (publication à chaud d'une famille) : une seule écriture de la ligne de
     banque, donc aucune divergence possible entre les deux chemins."""
     comp = _resolve_competency(db, rec.get("competency_code", ""),
-                               rec.get("grade_level", "3e"))
+                               rec.get("grade_level", "3e"), rec.get("program_id"),
+                               rec.get("subject_id"), rec.get("path_id"))
     if comp is None:
         return False  # compétence absente de ce déploiement : on saute proprement
     procedural = rec.get("figure_json") or {}

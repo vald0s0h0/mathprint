@@ -2404,8 +2404,16 @@ def shuffled_legible_order(left: list, right: list, pairs: list, rng, font_size:
     return None
 
 
+def _links_cross(links: list[tuple[int, int]], order: tuple[int, ...]) -> bool:
+    """Les traits se croisent-ils dans cet ordre de la colonne de droite ? Des traits
+    parallèles (même ordre à gauche et à droite) se devinent à vue."""
+    pos = {old: new for new, old in enumerate(order)}
+    ends = [pos[b] for _a, b in sorted(links)]
+    return any(x > y for x, y in zip(ends, ends[1:]))
+
+
 def legible_order(left: list, right: list, pairs: list, font_size: float = 9,
-                  width: float = COL_W) -> tuple[int, ...] | None:
+                  width: float = COL_W, keep_crossing: bool = False) -> tuple[int, ...] | None:
     """Ordre de la colonne de droite (nouvelle place -> ancien indice) pour une
     lecture sans ambiguïté, dans la disposition retenue (colonnes ou
     horizontale) ; None pour garder l'ordre d'origine — déjà lisible et sans
@@ -2421,13 +2429,16 @@ def legible_order(left: list, right: list, pairs: list, font_size: float = 9,
         return None
     geo = _matching_layout(left, right, font_size, width)
 
-    def cost(order: tuple[int, ...]) -> tuple[float, int, int]:
+    def cost(order: tuple[int, ...]) -> tuple:
         flaws, straight = _matching_order_defects(geo, len(left), n, links, order)
         moved = sum(1 for new, old in enumerate(order) if new != old)
-        return flaws, straight, moved
+        # Carte dont l'auteur a écrit l'ordre : jamais de traits parallèles, même si
+        # c'est l'ordre le plus « propre » ; la lisibilité départage les ordres croisés.
+        flat = 0 if not keep_crossing or _links_cross(links, order) else 1
+        return flat, flaws, straight, moved
 
-    flaws, straight, _moved = cost(tuple(range(n)))
-    if flaws == 0 and straight <= 1:
+    flat, flaws, straight, _moved = cost(tuple(range(n)))
+    if flat == 0 and flaws == 0 and straight <= 1:
         return None
     best = min(itertools.permutations(range(n)), key=cost)
     return None if best == tuple(range(n)) else best
@@ -3642,9 +3653,11 @@ def estimate_item_height(item: dict, font_size: int, math_fs: int,
     """Hauteur (pt) qu'occuperait `item` (placement inclus), sans dessiner —
     mesure pure réutilisée par le remplissage automatique de page."""
     if item.get("response_type") == "composite":
-        return _composite_card_h(_composite_layout(item, font_size, math_fs)) + GAP
-    layout, _fs, zone_h, strip = _exercise_layout(item, font_size, math_fs)
-    return _exercise_card_h(layout, zone_h, strip["height"], ex_tpl) + GAP
+        natural = _composite_card_h(_composite_layout(item, font_size, math_fs)) + GAP
+    else:
+        layout, _fs, zone_h, strip = _exercise_layout(item, font_size, math_fs)
+        natural = _exercise_card_h(layout, zone_h, strip["height"], ex_tpl) + GAP
+    return max(natural, item.get("packing_height_pt", 0))
 
 
 def render_copy(pdf_canvas: canvas.Canvas, *, student_name: str, class_name: str,

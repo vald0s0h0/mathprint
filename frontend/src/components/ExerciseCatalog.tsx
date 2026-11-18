@@ -35,6 +35,9 @@ const FILIERES: Record<string, { key: string; label: string; series: string[] }[
   '1re': [{ key: 'S', label: 'Scientifique · C D', series: ['C', 'D'] }, { key: 'L', label: 'Littéraire · A1 A2', series: ['A1', 'A2'] }],
   'tle': [{ key: 'S', label: 'Scientifique · C D', series: ['C', 'D'] }, { key: 'L', label: 'Littéraire · A1 A2', series: ['A1', 'A2'] }],
 }
+const signalPublication = () => {
+  try { localStorage.setItem('mathprint_bank_updated', `${Date.now()}-${Math.random()}`) } catch { /* Le prochain rafraîchissement récupère la banque. */ }
+}
 const twinOf = (e: CatalogExercise): Twin | undefined => e.grading?.twin
 const exerciseCount = (s: Summary) => s.family_total ?? s.total ?? (s.draft ?? 0) + (s.validated ?? 0)
 const sumOf = (s: Summary, value: (m: Summary) => number) => (s.members ?? [s]).reduce((n, m) => n + value(m), 0)
@@ -138,12 +141,14 @@ export default function ExerciseCatalog({ admin = false }: { admin?: boolean }) 
   }, [selectedId, endpoint])
 
   useEffect(() => {
-    if (!admin || grade === 'all') return
+    if (grade === 'all' || (!admin && !frameworkIds)) return
     let current = true
     const refresh = async () => {
       try {
-        const rows = await api.get<Summary[]>(`${endpoint}/summary?${scope}`)
-        if (current) setSummary(rows)
+        const ids = frameworkIds.split(',').filter(Boolean)
+        const scopes = admin ? [scope] : ids.map(id => `${scope}&framework_id=${encodeURIComponent(id)}`)
+        const groups = await Promise.all(scopes.map(query => api.get<Summary[]>(`${endpoint}/summary?${query}`)))
+        if (current) setSummary(groups.flatMap((rows, i) => rows.map(row => ({ ...row, framework_id: ids[i] ?? row.framework_id }))))
         if (selectedId) {
           const id = encodeURIComponent(selectedId)
           const [items, chapter] = await Promise.all([
@@ -154,10 +159,12 @@ export default function ExerciseCatalog({ admin = false }: { admin?: boolean }) 
         }
       } catch { /* Les données restent visibles ; le prochain rafraîchissement réessaie. */ }
     }
+    const onStorage = (event: StorageEvent) => { if (event.key === 'mathprint_bank_updated') void refresh() }
     window.addEventListener('focus', refresh)
-    const timer = window.setInterval(refresh, 30000)
-    return () => { current = false; window.removeEventListener('focus', refresh); window.clearInterval(timer) }
-  }, [admin, grade, scope, endpoint, selectedId])
+    window.addEventListener('storage', onStorage)
+    const timer = window.setInterval(refresh, admin ? 30000 : 5000)
+    return () => { current = false; window.removeEventListener('focus', refresh); window.removeEventListener('storage', onStorage); window.clearInterval(timer) }
+  }, [admin, grade, scope, endpoint, selectedId, frameworkIds])
 
   const mastery = useMemo(() => {
     const out = new Map<string, Record<string, number | null>>()
@@ -304,6 +311,7 @@ export default function ExerciseCatalog({ admin = false }: { admin?: boolean }) 
     setPublishing(true)
     try {
       const result = await api.post<{ published: number; skipped: number }>(`/api/indigo/competencies/${encodeURIComponent(selectedId)}/publish`)
+      signalPublication()
       const id = encodeURIComponent(selectedId)
       setExercises(await api.get<CatalogExercise[]>(`${endpoint}/exercises?competency_id=${id}&category=exercise`))
       setSummary(await api.get<Summary[]>(`${endpoint}/summary?${scope}`))
@@ -331,6 +339,7 @@ export default function ExerciseCatalog({ admin = false }: { admin?: boolean }) 
     setPublishing(true)
     try {
       const result = await api.post<{ published: number; skipped: number }>('/api/indigo/publish-selection', publicationSelection)
+      signalPublication()
       setPublicationSelection(null)
       setSummary(await api.get<Summary[]>(`${endpoint}/summary?${scope}`))
       notifications.show({ color: 'teal', message: `${result.published} exercice(s) publié(s) / mis à jour ; ${result.skipped} disliké(s) laissé(s) de côté.` })

@@ -1,0 +1,3103 @@
+[
+  {
+    "id": "a3612ec6-e943-4d47-9f2f-d8cef887e3d7",
+    "group": "ci-3e-E1.11-20261116-190118/s04",
+    "jeu": 1,
+    "disposition": 1,
+    "before_mm": [
+      92.51052791372122,
+      85.75052791372121
+    ],
+    "after_mm": [
+      105.79314801174043,
+      99.03314801174044
+    ],
+    "before": {
+      "statement": "Le triangle $ABC$ est rectangle en $A$. Les longueurs sont en cm.\n{{figure}}\nSans poser la division, quel encadrement de $\\mathrm{tan}\\,\\widehat{ABC}$ est juste ?\n{{aide}} Compare les longueurs pour estimer leur quotient.",
+      "figure_json": {
+        "type": "tikz",
+        "params": {
+          "tikz": "\\begin{tikzpicture}\n\\coordinate (A) at (0,0); \\coordinate (B) at (4.04,0); \\coordinate (C) at (0,3.44);\n\\filldraw[trait,aplat] (A)--(B)--(C)--cycle;\n\\AngDroit{B}{A}{C} \\AngMark{C}{B}{A}{}{1}\n\\Nom{(A)}{A}{below left} \\Nom{(B)}{B}{below right} \\Nom{(C)}{C}{above}\n\\Cote{(B)}{(A)}{10,1}{4mm} \\Cote{(A)}{(C)}{8,6}{4mm}\n\\end{tikzpicture}"
+        }
+      },
+      "grading_json": {
+        "max_score": 3,
+        "comparator": "qcm",
+        "negative": 0,
+        "choices": [
+          "$0{,}8<\\mathrm{tan}\\,\\widehat{ABC}< 0{,}9$",
+          "$1{,}1<\\mathrm{tan}\\,\\widehat{ABC}< 1{,}2$",
+          "$0{,}6<\\mathrm{tan}\\,\\widehat{ABC}< 0{,}7$"
+        ],
+        "exclusive": true,
+        "bareme_points": 1.5,
+        "route": "cv",
+        "feedback": {
+          "lines": 2,
+          "options": {
+            "b": {
+              "text": "Tu as inversé : la tangente est $AC/AB$, opposé sur adjacent.",
+              "error": "math.geo.trigo_rapport"
+            },
+            "c": {
+              "text": "Cet encadrement est celui du sinus : la tangente n’utilise pas l’hypoténuse.",
+              "error": "math.geo.trigo_rapport"
+            }
+          },
+          "wrong_answers": [],
+          "correct": {
+            "text": "Oui : tu as comparé $AC$ à $AB$ pour situer leur quotient."
+          },
+          "blank": {
+            "text": "La tangente de l’angle en $B$ est $AC/AB$ : compare ces deux longueurs."
+          },
+          "fallback": {
+            "text": "$\\mathrm{tan}\\,\\widehat{ABC}=AC/AB$ : estime ce quotient."
+          }
+        },
+        "option_ids": [
+          "a",
+          "b",
+          "c"
+        ],
+        "guides_placed": true,
+        "figure_layout": "right",
+        "family_id": "tangente-encadrement-estime-figure",
+        "leak_keys": [],
+        "gives": [],
+        "author_order": true,
+        "twin": {
+          "group": "ci-3e-E1.11-20261116-190118/s04",
+          "jeu": 1,
+          "disposition": 1,
+          "jeux": 2,
+          "dispositions": 2,
+          "principal": true
+        }
+      }
+    },
+    "after": {
+      "statement": "Le triangle $ABC$ est rectangle en $A$. Les longueurs sont en cm.\n{{figure}}\nSans poser la division, quel encadrement de $\\mathrm{tan}\\,\\widehat{ABC}$ est juste ?\n{{aide}} Compare les longueurs pour estimer leur quotient.",
+      "figure_json": {
+        "type": "tikz",
+        "params": {
+          "tikz": "\\begin{tikzpicture}\n\\coordinate (A) at (0,0); \\coordinate (B) at (4.04,0); \\coordinate (C) at (0,3.44);\n\\filldraw[trait,aplat] (A)--(B)--(C)--cycle;\n\\AngDroit{B}{A}{C} \\AngMark{C}{B}{A}{}{1}\n\\Nom{(A)}{A}{below left} \\Nom{(B)}{B}{below right} \\Nom{(C)}{C}{above}\n\\Cote{(B)}{(A)}{10,1}{4mm} \\Cote{(A)}{(C)}{8,6}{4mm}\n\\end{tikzpicture}"
+        }
+      },
+      "grading_json": {
+        "max_score": 3,
+        "comparator": "qcm",
+        "negative": 0,
+        "choices": [
+          "$0{,}8<\\mathrm{tan}\\,\\widehat{ABC}< 0{,}9$",
+          "$1{,}1<\\mathrm{tan}\\,\\widehat{ABC}< 1{,}2$",
+          "$0{,}6<\\mathrm{tan}\\,\\widehat{ABC}< 0{,}7$"
+        ],
+        "exclusive": true,
+        "bareme_points": 1.5,
+        "route": "cv",
+        "feedback": {
+          "lines": 2,
+          "options": {
+            "b": {
+              "text": "Tu as inversé : la tangente est $AC/AB$, opposé sur adjacent.",
+              "error": "math.geo.trigo_rapport"
+            },
+            "c": {
+              "text": "Cet encadrement est celui du sinus : la tangente n’utilise pas l’hypoténuse.",
+              "error": "math.geo.trigo_rapport"
+            }
+          },
+          "wrong_answers": [],
+          "correct": {
+            "text": "Oui : tu as comparé $AC$ à $AB$ pour situer leur quotient."
+          },
+          "blank": {
+            "text": "La tangente de l’angle en $B$ est $AC/AB$ : compare ces deux longueurs."
+          },
+          "fallback": {
+            "text": "$\\mathrm{tan}\\,\\widehat{ABC}=AC/AB$ : estime ce quotient."
+          }
+        },
+        "option_ids": [
+          "a",
+          "b",
+          "c"
+        ],
+        "guides_placed": true,
+        "family_id": "tangente-encadrement-estime-figure",
+        "leak_keys": [],
+        "gives": [],
+        "author_order": true,
+        "twin": {
+          "group": "ci-3e-E1.11-20261116-190118/s04",
+          "jeu": 1,
+          "disposition": 1,
+          "jeux": 2,
+          "dispositions": 2,
+          "principal": true
+        }
+      }
+    },
+    "before_fingerprint": "969b5add8fb6675dbddbbab13e587c6bbf0bc55070663e91f4ecbccd3361142f"
+  },
+  {
+    "id": "934464ce-0442-4b9c-823b-a1bd685308b3",
+    "group": "ci-3e-E1.11-20261116-190118/s04",
+    "jeu": 1,
+    "disposition": 2,
+    "before_mm": [
+      92.51052791372122,
+      85.75052791372121
+    ],
+    "after_mm": [
+      105.79314801174043,
+      99.03314801174044
+    ],
+    "before": {
+      "statement": "Le triangle $ABC$ est rectangle en $A$. Les longueurs sont en cm.\n{{figure}}\nSans poser la division, quel encadrement de $\\mathrm{tan}\\,\\widehat{ABC}$ est juste ?\n{{aide}} Compare les longueurs pour estimer leur quotient.",
+      "figure_json": {
+        "type": "tikz",
+        "params": {
+          "tikz": "\\begin{tikzpicture}\n\\coordinate (A) at (0,0); \\coordinate (B) at (4.04,0); \\coordinate (C) at (0,3.44);\n\\filldraw[trait,aplat] (A)--(B)--(C)--cycle;\n\\AngDroit{B}{A}{C} \\AngMark{C}{B}{A}{}{1}\n\\Nom{(A)}{A}{below left} \\Nom{(B)}{B}{below right} \\Nom{(C)}{C}{above}\n\\Cote{(B)}{(A)}{10,1}{4mm} \\Cote{(A)}{(C)}{8,6}{4mm}\n\\end{tikzpicture}"
+        }
+      },
+      "grading_json": {
+        "max_score": 3,
+        "comparator": "qcm",
+        "negative": 0,
+        "choices": [
+          "$0{,}6<\\mathrm{tan}\\,\\widehat{ABC}< 0{,}7$",
+          "$0{,}8<\\mathrm{tan}\\,\\widehat{ABC}< 0{,}9$",
+          "$1{,}1<\\mathrm{tan}\\,\\widehat{ABC}< 1{,}2$"
+        ],
+        "exclusive": true,
+        "bareme_points": 1.5,
+        "route": "cv",
+        "feedback": {
+          "lines": 2,
+          "options": {
+            "c": {
+              "text": "Cet encadrement est celui du sinus : la tangente n’utilise pas l’hypoténuse.",
+              "error": "math.geo.trigo_rapport"
+            },
+            "b": {
+              "text": "Tu as inversé : la tangente est $AC/AB$, opposé sur adjacent.",
+              "error": "math.geo.trigo_rapport"
+            }
+          },
+          "wrong_answers": [],
+          "correct": {
+            "text": "Oui : tu as comparé $AC$ à $AB$ pour situer leur quotient."
+          },
+          "blank": {
+            "text": "La tangente de l’angle en $B$ est $AC/AB$ : compare ces deux longueurs."
+          },
+          "fallback": {
+            "text": "$\\mathrm{tan}\\,\\widehat{ABC}=AC/AB$ : estime ce quotient."
+          }
+        },
+        "option_ids": [
+          "c",
+          "a",
+          "b"
+        ],
+        "guides_placed": true,
+        "figure_layout": "right",
+        "family_id": "tangente-encadrement-estime-figure",
+        "leak_keys": [],
+        "gives": [],
+        "author_order": true,
+        "twin": {
+          "group": "ci-3e-E1.11-20261116-190118/s04",
+          "jeu": 1,
+          "disposition": 2,
+          "jeux": 2,
+          "dispositions": 2,
+          "principal": false
+        }
+      }
+    },
+    "after": {
+      "statement": "Le triangle $ABC$ est rectangle en $A$. Les longueurs sont en cm.\n{{figure}}\nSans poser la division, quel encadrement de $\\mathrm{tan}\\,\\widehat{ABC}$ est juste ?\n{{aide}} Compare les longueurs pour estimer leur quotient.",
+      "figure_json": {
+        "type": "tikz",
+        "params": {
+          "tikz": "\\begin{tikzpicture}\n\\coordinate (A) at (0,0); \\coordinate (B) at (4.04,0); \\coordinate (C) at (0,3.44);\n\\filldraw[trait,aplat] (A)--(B)--(C)--cycle;\n\\AngDroit{B}{A}{C} \\AngMark{C}{B}{A}{}{1}\n\\Nom{(A)}{A}{below left} \\Nom{(B)}{B}{below right} \\Nom{(C)}{C}{above}\n\\Cote{(B)}{(A)}{10,1}{4mm} \\Cote{(A)}{(C)}{8,6}{4mm}\n\\end{tikzpicture}"
+        }
+      },
+      "grading_json": {
+        "max_score": 3,
+        "comparator": "qcm",
+        "negative": 0,
+        "choices": [
+          "$0{,}6<\\mathrm{tan}\\,\\widehat{ABC}< 0{,}7$",
+          "$0{,}8<\\mathrm{tan}\\,\\widehat{ABC}< 0{,}9$",
+          "$1{,}1<\\mathrm{tan}\\,\\widehat{ABC}< 1{,}2$"
+        ],
+        "exclusive": true,
+        "bareme_points": 1.5,
+        "route": "cv",
+        "feedback": {
+          "lines": 2,
+          "options": {
+            "c": {
+              "text": "Cet encadrement est celui du sinus : la tangente n’utilise pas l’hypoténuse.",
+              "error": "math.geo.trigo_rapport"
+            },
+            "b": {
+              "text": "Tu as inversé : la tangente est $AC/AB$, opposé sur adjacent.",
+              "error": "math.geo.trigo_rapport"
+            }
+          },
+          "wrong_answers": [],
+          "correct": {
+            "text": "Oui : tu as comparé $AC$ à $AB$ pour situer leur quotient."
+          },
+          "blank": {
+            "text": "La tangente de l’angle en $B$ est $AC/AB$ : compare ces deux longueurs."
+          },
+          "fallback": {
+            "text": "$\\mathrm{tan}\\,\\widehat{ABC}=AC/AB$ : estime ce quotient."
+          }
+        },
+        "option_ids": [
+          "c",
+          "a",
+          "b"
+        ],
+        "guides_placed": true,
+        "family_id": "tangente-encadrement-estime-figure",
+        "leak_keys": [],
+        "gives": [],
+        "author_order": true,
+        "twin": {
+          "group": "ci-3e-E1.11-20261116-190118/s04",
+          "jeu": 1,
+          "disposition": 2,
+          "jeux": 2,
+          "dispositions": 2,
+          "principal": false
+        }
+      }
+    },
+    "before_fingerprint": "b4e55814ce70c5bb7e0d02153335b29510f11d17ebc5e40014d9cf6220d72b9c"
+  },
+  {
+    "id": "b928e8d3-ffdb-4584-8137-09e82a4a2a17",
+    "group": "ci-3e-E1.11-20261116-190118/s04",
+    "jeu": 2,
+    "disposition": 1,
+    "before_mm": [
+      121.4565126718031,
+      114.6965126718031
+    ],
+    "after_mm": [
+      108.92582094375298,
+      102.16582094375296
+    ],
+    "before": {
+      "statement": "Le triangle $ABC$ est rectangle en $A$. Les longueurs sont en cm.\n{{figure}}\nSans poser la division, quel encadrement de $\\mathrm{tan}\\,\\widehat{ABC}$ est juste ?\n{{aide}} Compare les longueurs pour estimer leur quotient.",
+      "figure_json": {
+        "type": "tikz",
+        "params": {
+          "tikz": "\\begin{tikzpicture}\n\\coordinate (A) at (0,0); \\coordinate (B) at (4.08,0); \\coordinate (C) at (0,5);\n\\filldraw[trait,aplat] (A)--(B)--(C)--cycle;\n\\AngDroit{B}{A}{C} \\AngMark{C}{B}{A}{}{1}\n\\Nom{(A)}{A}{below left} \\Nom{(B)}{B}{below right} \\Nom{(C)}{C}{above}\n\\Cote{(B)}{(A)}{10,2}{4mm} \\Cote{(A)}{(C)}{12,5}{4mm}\n\\end{tikzpicture}"
+        }
+      },
+      "grading_json": {
+        "max_score": 3,
+        "comparator": "qcm",
+        "negative": 0,
+        "choices": [
+          "$1{,}2<\\mathrm{tan}\\,\\widehat{ABC}< 1{,}3$",
+          "$0{,}8<\\mathrm{tan}\\,\\widehat{ABC}< 0{,}9$",
+          "$0{,}7<\\mathrm{tan}\\,\\widehat{ABC}< 0{,}8$"
+        ],
+        "exclusive": true,
+        "bareme_points": 1.5,
+        "route": "cv",
+        "feedback": {
+          "lines": 2,
+          "options": {
+            "b": {
+              "text": "Tu as inversé : la tangente est $AC/AB$, opposé sur adjacent.",
+              "error": "math.geo.trigo_rapport"
+            },
+            "c": {
+              "text": "Cet encadrement est celui du sinus : la tangente n’utilise pas l’hypoténuse.",
+              "error": "math.geo.trigo_rapport"
+            }
+          },
+          "wrong_answers": [],
+          "correct": {
+            "text": "Oui : tu as comparé $AC$ à $AB$ pour situer leur quotient."
+          },
+          "blank": {
+            "text": "La tangente de l’angle en $B$ est $AC/AB$ : compare ces deux longueurs."
+          },
+          "fallback": {
+            "text": "$\\mathrm{tan}\\,\\widehat{ABC}=AC/AB$ : estime ce quotient."
+          }
+        },
+        "option_ids": [
+          "a",
+          "b",
+          "c"
+        ],
+        "guides_placed": true,
+        "family_id": "tangente-encadrement-estime-figure",
+        "leak_keys": [],
+        "gives": [],
+        "author_order": true,
+        "twin": {
+          "group": "ci-3e-E1.11-20261116-190118/s04",
+          "jeu": 2,
+          "disposition": 1,
+          "jeux": 2,
+          "dispositions": 2,
+          "principal": false
+        }
+      }
+    },
+    "after": {
+      "statement": "Le triangle $ABC$ est rectangle en $A$. Les longueurs sont en cm.\n{{figure}}\nSans poser la division, quel encadrement de $\\mathrm{tan}\\,\\widehat{ABC}$ est juste ?\n{{aide}} Compare les longueurs pour estimer leur quotient.",
+      "figure_json": {
+        "type": "tikz",
+        "params": {
+          "tikz": "\\begin{tikzpicture}\n\\coordinate (A) at (0,0); \\coordinate (B) at (3.06,0); \\coordinate (C) at (0,3.75);\n\\filldraw[trait,aplat] (A)--(B)--(C)--cycle;\n\\AngDroit{B}{A}{C} \\AngMark{C}{B}{A}{}{1}\n\\Nom{(A)}{A}{below left} \\Nom{(B)}{B}{below right} \\Nom{(C)}{C}{above}\n\\Cote{(B)}{(A)}{10,2}{4mm} \\Cote{(A)}{(C)}{12,5}{4mm}\n\\end{tikzpicture}"
+        }
+      },
+      "grading_json": {
+        "max_score": 3,
+        "comparator": "qcm",
+        "negative": 0,
+        "choices": [
+          "$1{,}2<\\mathrm{tan}\\,\\widehat{ABC}< 1{,}3$",
+          "$0{,}8<\\mathrm{tan}\\,\\widehat{ABC}< 0{,}9$",
+          "$0{,}7<\\mathrm{tan}\\,\\widehat{ABC}< 0{,}8$"
+        ],
+        "exclusive": true,
+        "bareme_points": 1.5,
+        "route": "cv",
+        "feedback": {
+          "lines": 2,
+          "options": {
+            "b": {
+              "text": "Tu as inversé : la tangente est $AC/AB$, opposé sur adjacent.",
+              "error": "math.geo.trigo_rapport"
+            },
+            "c": {
+              "text": "Cet encadrement est celui du sinus : la tangente n’utilise pas l’hypoténuse.",
+              "error": "math.geo.trigo_rapport"
+            }
+          },
+          "wrong_answers": [],
+          "correct": {
+            "text": "Oui : tu as comparé $AC$ à $AB$ pour situer leur quotient."
+          },
+          "blank": {
+            "text": "La tangente de l’angle en $B$ est $AC/AB$ : compare ces deux longueurs."
+          },
+          "fallback": {
+            "text": "$\\mathrm{tan}\\,\\widehat{ABC}=AC/AB$ : estime ce quotient."
+          }
+        },
+        "option_ids": [
+          "a",
+          "b",
+          "c"
+        ],
+        "guides_placed": true,
+        "family_id": "tangente-encadrement-estime-figure",
+        "leak_keys": [],
+        "gives": [],
+        "author_order": true,
+        "twin": {
+          "group": "ci-3e-E1.11-20261116-190118/s04",
+          "jeu": 2,
+          "disposition": 1,
+          "jeux": 2,
+          "dispositions": 2,
+          "principal": false
+        }
+      }
+    },
+    "before_fingerprint": "7309ae954851e81b67a957dbefd84dfadf98a6274f4e98f97c9e8518cc9222dd"
+  },
+  {
+    "id": "8827ade1-383f-47b6-9fce-fda40fc56989",
+    "group": "ci-3e-E1.11-20261116-190118/s04",
+    "jeu": 2,
+    "disposition": 2,
+    "before_mm": [
+      121.4565126718031,
+      114.6965126718031
+    ],
+    "after_mm": [
+      108.92582094375298,
+      102.16582094375296
+    ],
+    "before": {
+      "statement": "Le triangle $ABC$ est rectangle en $A$. Les longueurs sont en cm.\n{{figure}}\nSans poser la division, quel encadrement de $\\mathrm{tan}\\,\\widehat{ABC}$ est juste ?\n{{aide}} Compare les longueurs pour estimer leur quotient.",
+      "figure_json": {
+        "type": "tikz",
+        "params": {
+          "tikz": "\\begin{tikzpicture}\n\\coordinate (A) at (0,0); \\coordinate (B) at (4.08,0); \\coordinate (C) at (0,5);\n\\filldraw[trait,aplat] (A)--(B)--(C)--cycle;\n\\AngDroit{B}{A}{C} \\AngMark{C}{B}{A}{}{1}\n\\Nom{(A)}{A}{below left} \\Nom{(B)}{B}{below right} \\Nom{(C)}{C}{above}\n\\Cote{(B)}{(A)}{10,2}{4mm} \\Cote{(A)}{(C)}{12,5}{4mm}\n\\end{tikzpicture}"
+        }
+      },
+      "grading_json": {
+        "max_score": 3,
+        "comparator": "qcm",
+        "negative": 0,
+        "choices": [
+          "$0{,}7<\\mathrm{tan}\\,\\widehat{ABC}< 0{,}8$",
+          "$1{,}2<\\mathrm{tan}\\,\\widehat{ABC}< 1{,}3$",
+          "$0{,}8<\\mathrm{tan}\\,\\widehat{ABC}< 0{,}9$"
+        ],
+        "exclusive": true,
+        "bareme_points": 1.5,
+        "route": "cv",
+        "feedback": {
+          "lines": 2,
+          "options": {
+            "c": {
+              "text": "Cet encadrement est celui du sinus : la tangente n’utilise pas l’hypoténuse.",
+              "error": "math.geo.trigo_rapport"
+            },
+            "b": {
+              "text": "Tu as inversé : la tangente est $AC/AB$, opposé sur adjacent.",
+              "error": "math.geo.trigo_rapport"
+            }
+          },
+          "wrong_answers": [],
+          "correct": {
+            "text": "Oui : tu as comparé $AC$ à $AB$ pour situer leur quotient."
+          },
+          "blank": {
+            "text": "La tangente de l’angle en $B$ est $AC/AB$ : compare ces deux longueurs."
+          },
+          "fallback": {
+            "text": "$\\mathrm{tan}\\,\\widehat{ABC}=AC/AB$ : estime ce quotient."
+          }
+        },
+        "option_ids": [
+          "c",
+          "a",
+          "b"
+        ],
+        "guides_placed": true,
+        "family_id": "tangente-encadrement-estime-figure",
+        "leak_keys": [],
+        "gives": [],
+        "author_order": true,
+        "twin": {
+          "group": "ci-3e-E1.11-20261116-190118/s04",
+          "jeu": 2,
+          "disposition": 2,
+          "jeux": 2,
+          "dispositions": 2,
+          "principal": false
+        }
+      }
+    },
+    "after": {
+      "statement": "Le triangle $ABC$ est rectangle en $A$. Les longueurs sont en cm.\n{{figure}}\nSans poser la division, quel encadrement de $\\mathrm{tan}\\,\\widehat{ABC}$ est juste ?\n{{aide}} Compare les longueurs pour estimer leur quotient.",
+      "figure_json": {
+        "type": "tikz",
+        "params": {
+          "tikz": "\\begin{tikzpicture}\n\\coordinate (A) at (0,0); \\coordinate (B) at (3.06,0); \\coordinate (C) at (0,3.75);\n\\filldraw[trait,aplat] (A)--(B)--(C)--cycle;\n\\AngDroit{B}{A}{C} \\AngMark{C}{B}{A}{}{1}\n\\Nom{(A)}{A}{below left} \\Nom{(B)}{B}{below right} \\Nom{(C)}{C}{above}\n\\Cote{(B)}{(A)}{10,2}{4mm} \\Cote{(A)}{(C)}{12,5}{4mm}\n\\end{tikzpicture}"
+        }
+      },
+      "grading_json": {
+        "max_score": 3,
+        "comparator": "qcm",
+        "negative": 0,
+        "choices": [
+          "$0{,}7<\\mathrm{tan}\\,\\widehat{ABC}< 0{,}8$",
+          "$1{,}2<\\mathrm{tan}\\,\\widehat{ABC}< 1{,}3$",
+          "$0{,}8<\\mathrm{tan}\\,\\widehat{ABC}< 0{,}9$"
+        ],
+        "exclusive": true,
+        "bareme_points": 1.5,
+        "route": "cv",
+        "feedback": {
+          "lines": 2,
+          "options": {
+            "c": {
+              "text": "Cet encadrement est celui du sinus : la tangente n’utilise pas l’hypoténuse.",
+              "error": "math.geo.trigo_rapport"
+            },
+            "b": {
+              "text": "Tu as inversé : la tangente est $AC/AB$, opposé sur adjacent.",
+              "error": "math.geo.trigo_rapport"
+            }
+          },
+          "wrong_answers": [],
+          "correct": {
+            "text": "Oui : tu as comparé $AC$ à $AB$ pour situer leur quotient."
+          },
+          "blank": {
+            "text": "La tangente de l’angle en $B$ est $AC/AB$ : compare ces deux longueurs."
+          },
+          "fallback": {
+            "text": "$\\mathrm{tan}\\,\\widehat{ABC}=AC/AB$ : estime ce quotient."
+          }
+        },
+        "option_ids": [
+          "c",
+          "a",
+          "b"
+        ],
+        "guides_placed": true,
+        "family_id": "tangente-encadrement-estime-figure",
+        "leak_keys": [],
+        "gives": [],
+        "author_order": true,
+        "twin": {
+          "group": "ci-3e-E1.11-20261116-190118/s04",
+          "jeu": 2,
+          "disposition": 2,
+          "jeux": 2,
+          "dispositions": 2,
+          "principal": false
+        }
+      }
+    },
+    "before_fingerprint": "a77326f89abb413cde1239dd860bb2ece3566fbd637a86429d3573de0c6934f5"
+  },
+  {
+    "id": "9c35d306-c44c-4db5-863f-0b409df6bbc9",
+    "group": "ci-3e-E1.14-20261116-190118/s06",
+    "jeu": 1,
+    "disposition": 1,
+    "before_mm": [
+      81.098,
+      70.8286111111111
+    ],
+    "after_mm": [
+      95.02900845257246,
+      84.75961956368356
+    ],
+    "before": {
+      "statement": "Un électricien pose un panneau solaire sur un toit plat horizontal, le bord bas contre le toit, d’après cette fiche. La longueur du panneau est mesurée dans le sens de la pente, et le bord haut est à la verticale d’un point du toit.\n{{figure}}\nCalcule la hauteur du bord haut au-dessus du toit, arrondie au centième, en m. {{blank_right}}\n{{aide}} Le panneau est l’hypoténuse : la hauteur cherchée est le côté opposé à l’inclinaison.",
+      "figure_json": {
+        "type": "tikz",
+        "params": {
+          "tikz": "\\begin{tikzpicture}\n\\node[boite,inner sep=3mm,align=left] {\\ttfamily\\textbf{FICHE DE POSE}\\\\[3pt]\\begin{tabular}{@{}l@{\\hspace{4mm}}r@{}}\n\\ttfamily Panneau & \\ttfamily 1,6~m \\\\\n\\ttfamily Inclinaison & \\ttfamily 15° \\\\\n\\ttfamily Puissance & \\ttfamily 300~W \\\\\n\\ttfamily Prix & \\ttfamily 95 000~F\n\\end{tabular}};\n\\end{tikzpicture}"
+        }
+      },
+      "grading_json": {
+        "max_score": 1,
+        "comparator": "numeric",
+        "tolerance": 0,
+        "bareme_points": 2.0,
+        "route": "ocr_llm",
+        "feedback": {
+          "lines": 2,
+          "options": {},
+          "wrong_answers": [
+            {
+              "value": 1.55,
+              "cell": null,
+              "text": "Le cosinus donne la longueur au sol : la hauteur est opposée à l’angle.",
+              "error": "math.geo.trigo_rapport"
+            },
+            {
+              "value": 0.43,
+              "cell": null,
+              "text": "Le panneau est l’hypoténuse : avec elle, la hauteur se calcule par le sinus.",
+              "error": "math.geo.trigo_rapport"
+            }
+          ],
+          "correct": {
+            "text": "Oui : $1{,}6\\times \\mathrm{sin}\\,15^\\circ$, arrondi au centième."
+          },
+          "blank": {
+            "text": "Repère l’angle d’inclinaison, l’hypoténuse et le côté opposé."
+          },
+          "fallback": {
+            "text": "Hauteur $=1{,}6\\times \\mathrm{sin}\\,15^\\circ$."
+          }
+        },
+        "answer_form": "exact_decimal",
+        "guides_placed": true,
+        "figure_layout": "right",
+        "family_id": "sinus-fiche-panneau-solaire",
+        "leak_keys": [],
+        "gives": [],
+        "author_order": true,
+        "twin": {
+          "group": "ci-3e-E1.14-20261116-190118/s06",
+          "jeu": 1,
+          "disposition": 1,
+          "jeux": 2,
+          "dispositions": 1,
+          "principal": true
+        }
+      }
+    },
+    "after": {
+      "statement": "Un électricien pose un panneau solaire sur un toit plat horizontal, le bord bas contre le toit, d’après cette fiche. La longueur du panneau est mesurée dans le sens de la pente, et le bord haut est à la verticale d’un point du toit.\n{{figure}}\nCalcule la hauteur du bord haut au-dessus du toit, arrondie au centième, en m. {{blank_right}}\n{{aide}} Le panneau est l’hypoténuse : la hauteur cherchée est le côté opposé à l’inclinaison.",
+      "figure_json": {
+        "type": "tikz",
+        "params": {
+          "tikz": "\\begin{tikzpicture}\n\\node[boite,inner sep=3mm,align=left] {\\ttfamily\\textbf{FICHE DE POSE}\\\\[3pt]\\begin{tabular}{@{}l@{\\hspace{4mm}}r@{}}\n\\ttfamily Panneau & \\ttfamily 1,6~m \\\\\n\\ttfamily Inclinaison & \\ttfamily 15° \\\\\n\\ttfamily Puissance & \\ttfamily 300~W \\\\\n\\ttfamily Prix & \\ttfamily 95 000~F\n\\end{tabular}};\n\\end{tikzpicture}"
+        }
+      },
+      "grading_json": {
+        "max_score": 1,
+        "comparator": "numeric",
+        "tolerance": 0,
+        "bareme_points": 2.0,
+        "route": "ocr_llm",
+        "feedback": {
+          "lines": 2,
+          "options": {},
+          "wrong_answers": [
+            {
+              "value": 1.55,
+              "cell": null,
+              "text": "Le cosinus donne la longueur au sol : la hauteur est opposée à l’angle.",
+              "error": "math.geo.trigo_rapport"
+            },
+            {
+              "value": 0.43,
+              "cell": null,
+              "text": "Le panneau est l’hypoténuse : avec elle, la hauteur se calcule par le sinus.",
+              "error": "math.geo.trigo_rapport"
+            }
+          ],
+          "correct": {
+            "text": "Oui : $1{,}6\\times \\mathrm{sin}\\,15^\\circ$, arrondi au centième."
+          },
+          "blank": {
+            "text": "Repère l’angle d’inclinaison, l’hypoténuse et le côté opposé."
+          },
+          "fallback": {
+            "text": "Hauteur $=1{,}6\\times \\mathrm{sin}\\,15^\\circ$."
+          }
+        },
+        "answer_form": "exact_decimal",
+        "guides_placed": true,
+        "family_id": "sinus-fiche-panneau-solaire",
+        "leak_keys": [],
+        "gives": [],
+        "author_order": true,
+        "twin": {
+          "group": "ci-3e-E1.14-20261116-190118/s06",
+          "jeu": 1,
+          "disposition": 1,
+          "jeux": 2,
+          "dispositions": 1,
+          "principal": true
+        }
+      }
+    },
+    "before_fingerprint": "bcbf006511211a104cbbea86b2a214c5279e7c2dc04aa08953aa3c123b270613"
+  },
+  {
+    "id": "681efd76-4125-4b2a-8c51-f60f8cad1d49",
+    "group": "ci-3e-E1.14-20261116-190118/s06",
+    "jeu": 2,
+    "disposition": 1,
+    "before_mm": [
+      95.02900845257246,
+      84.75961956368356
+    ],
+    "after_mm": [
+      95.02900845257246,
+      84.75961956368356
+    ],
+    "before": {
+      "statement": "Un électricien pose un panneau solaire sur un toit plat horizontal, le bord bas contre le toit, d’après cette fiche. La longueur du panneau est mesurée dans le sens de la pente, et le bord haut est à la verticale d’un point du toit.\n{{figure}}\nCalcule la hauteur du bord haut au-dessus du toit, arrondie au centième, en m. {{blank_right}}\n{{aide}} Le panneau est l’hypoténuse : la hauteur cherchée est le côté opposé à l’inclinaison.",
+      "figure_json": {
+        "type": "tikz",
+        "params": {
+          "tikz": "\\begin{tikzpicture}\n\\node[boite,inner sep=3mm,align=left] {\\ttfamily\\textbf{FICHE DE POSE}\\\\[3pt]\\begin{tabular}{@{}l@{\\hspace{4mm}}r@{}}\n\\ttfamily Panneau & \\ttfamily 2,1~m \\\\\n\\ttfamily Inclinaison & \\ttfamily 12° \\\\\n\\ttfamily Puissance & \\ttfamily 400~W \\\\\n\\ttfamily Prix & \\ttfamily 120 000~F\n\\end{tabular}};\n\\end{tikzpicture}"
+        }
+      },
+      "grading_json": {
+        "max_score": 1,
+        "comparator": "numeric",
+        "tolerance": 0,
+        "bareme_points": 2.0,
+        "route": "ocr_llm",
+        "feedback": {
+          "lines": 2,
+          "options": {},
+          "wrong_answers": [
+            {
+              "value": 2.05,
+              "cell": null,
+              "text": "Le cosinus donne la longueur au sol : la hauteur est opposée à l’angle.",
+              "error": "math.geo.trigo_rapport"
+            },
+            {
+              "value": 0.45,
+              "cell": null,
+              "text": "Le panneau est l’hypoténuse : avec elle, la hauteur se calcule par le sinus.",
+              "error": "math.geo.trigo_rapport"
+            }
+          ],
+          "correct": {
+            "text": "Oui : $2{,}1\\times \\mathrm{sin}\\,12^\\circ$, arrondi au centième."
+          },
+          "blank": {
+            "text": "Repère l’angle d’inclinaison, l’hypoténuse et le côté opposé."
+          },
+          "fallback": {
+            "text": "Hauteur $=2{,}1\\times \\mathrm{sin}\\,12^\\circ$."
+          }
+        },
+        "answer_form": "exact_decimal",
+        "guides_placed": true,
+        "family_id": "sinus-fiche-panneau-solaire",
+        "leak_keys": [],
+        "gives": [],
+        "author_order": true,
+        "twin": {
+          "group": "ci-3e-E1.14-20261116-190118/s06",
+          "jeu": 2,
+          "disposition": 1,
+          "jeux": 2,
+          "dispositions": 1,
+          "principal": false
+        }
+      }
+    },
+    "after": {
+      "statement": "Un électricien pose un panneau solaire sur un toit plat horizontal, le bord bas contre le toit, d’après cette fiche. La longueur du panneau est mesurée dans le sens de la pente, et le bord haut est à la verticale d’un point du toit.\n{{figure}}\nCalcule la hauteur du bord haut au-dessus du toit, arrondie au centième, en m. {{blank_right}}\n{{aide}} Le panneau est l’hypoténuse : la hauteur cherchée est le côté opposé à l’inclinaison.",
+      "figure_json": {
+        "type": "tikz",
+        "params": {
+          "tikz": "\\begin{tikzpicture}\n\\node[boite,inner sep=3mm,align=left] {\\ttfamily\\textbf{FICHE DE POSE}\\\\[3pt]\\begin{tabular}{@{}l@{\\hspace{4mm}}r@{}}\n\\ttfamily Panneau & \\ttfamily 2,1~m \\\\\n\\ttfamily Inclinaison & \\ttfamily 12° \\\\\n\\ttfamily Puissance & \\ttfamily 400~W \\\\\n\\ttfamily Prix & \\ttfamily 120 000~F\n\\end{tabular}};\n\\end{tikzpicture}"
+        }
+      },
+      "grading_json": {
+        "max_score": 1,
+        "comparator": "numeric",
+        "tolerance": 0,
+        "bareme_points": 2.0,
+        "route": "ocr_llm",
+        "feedback": {
+          "lines": 2,
+          "options": {},
+          "wrong_answers": [
+            {
+              "value": 2.05,
+              "cell": null,
+              "text": "Le cosinus donne la longueur au sol : la hauteur est opposée à l’angle.",
+              "error": "math.geo.trigo_rapport"
+            },
+            {
+              "value": 0.45,
+              "cell": null,
+              "text": "Le panneau est l’hypoténuse : avec elle, la hauteur se calcule par le sinus.",
+              "error": "math.geo.trigo_rapport"
+            }
+          ],
+          "correct": {
+            "text": "Oui : $2{,}1\\times \\mathrm{sin}\\,12^\\circ$, arrondi au centième."
+          },
+          "blank": {
+            "text": "Repère l’angle d’inclinaison, l’hypoténuse et le côté opposé."
+          },
+          "fallback": {
+            "text": "Hauteur $=2{,}1\\times \\mathrm{sin}\\,12^\\circ$."
+          }
+        },
+        "answer_form": "exact_decimal",
+        "guides_placed": true,
+        "family_id": "sinus-fiche-panneau-solaire",
+        "leak_keys": [],
+        "gives": [],
+        "author_order": true,
+        "twin": {
+          "group": "ci-3e-E1.14-20261116-190118/s06",
+          "jeu": 2,
+          "disposition": 1,
+          "jeux": 2,
+          "dispositions": 1,
+          "principal": false
+        }
+      }
+    },
+    "before_fingerprint": "66a854b98729331b88565803d5bb13fc8a153a48f74d3a1db281e5f944ac7df3"
+  },
+  {
+    "id": "0ba8abbf-6079-4dde-89d8-def01b07de0e",
+    "group": "ci-3e-E1.11-20261116-165448/s03",
+    "jeu": 1,
+    "disposition": 1,
+    "before_mm": [
+      121.7285406259701,
+      111.45915173708121
+    ],
+    "after_mm": [
+      121.7285406259701,
+      111.45915173708121
+    ],
+    "before": {
+      "statement": "Aya examine le triangle rectangle et fait l’affirmation ci-dessous.\n{{figure}}\nCoche les deux affirmations qui corrigent cette erreur.\n{{aide}} Vérifie la définition du rapport avant de décider si sa valeur est possible.",
+      "figure_json": {
+        "type": "tikz",
+        "params": {
+          "tikz": "\\begin{tikzpicture}[x=0.25cm,y=0.25cm]\n\\coordinate (A) at (0,0); \\coordinate (B) at (0,7); \\coordinate (C) at (24,0);\n\\draw[trait] (A)--(B)--(C)--cycle; \\AngDroit{B}{A}{C}\n\\Nom{(A)}{A}{below left} \\Nom{(B)}{B}{above} \\Nom{(C)}{C}{below right}\n\\Cote{(A)}{(B)}{7 cm}{4mm} \\Cote{(C)}{(A)}{24 cm}{4mm} \\Cote{(B)}{(C)}{25 cm}{4mm}\n\\begin{scope}[yshift=3.5cm,xshift=3cm]\n\\Bulle{Opposé ÷ adjacent dépasse 1.\\\\Je dois donc inverser ce rapport.}\n\\end{scope}\n\\end{tikzpicture}"
+        }
+      },
+      "grading_json": {
+        "max_score": 4,
+        "comparator": "qcm",
+        "negative": 0,
+        "choices": [
+          "Une tangente d’angle aigu peut dépasser $1$.",
+          "Il faut inverser le rapport car la tangente reste inférieure à $1$.",
+          "$3{,}4 < \\mathrm{tan}\\,\\widehat{ABC} < 3{,}5$.",
+          "$0 < \\mathrm{tan}\\,\\widehat{ABC} < 1$."
+        ],
+        "exclusive": false,
+        "bareme_points": 2.0,
+        "route": "cv",
+        "feedback": {
+          "lines": 2,
+          "options": {
+            "c": {
+              "text": "Tu limites la tangente à $1$ : elle peut dépasser $1$, sans inverser le rapport.",
+              "error": "math.num.encadrement"
+            },
+            "d": {
+              "text": "Tu confonds les bornes du sinus avec celles de la tangente : compare les deux côtés.",
+              "error": "math.geo.trigo_rapport"
+            }
+          },
+          "wrong_answers": [],
+          "correct": {
+            "text": "Tu conserves le rapport opposé sur adjacent et tu encadres sa valeur, même supérieure à $1$."
+          },
+          "blank": {
+            "text": "Repère les deux côtés du rapport, puis calcule le quotient sans les inverser."
+          },
+          "fallback": {
+            "text": "La tangente est le rapport opposé sur adjacent ; ce quotient peut dépasser $1$."
+          }
+        },
+        "option_ids": [
+          "a",
+          "c",
+          "b",
+          "d"
+        ],
+        "guides_placed": true,
+        "family_id": "erreur-inversion-tangente-borne",
+        "leak_keys": [],
+        "gives": [],
+        "author_order": true,
+        "twin": {
+          "group": "ci-3e-E1.11-20261116-165448/s03",
+          "jeu": 1,
+          "disposition": 1,
+          "jeux": 2,
+          "dispositions": 2,
+          "principal": true
+        }
+      }
+    },
+    "after": {
+      "statement": "Aya examine le triangle rectangle et fait l’affirmation ci-dessous.\n{{figure}}\nCoche les deux affirmations qui corrigent cette erreur.\n{{aide}} Vérifie la définition du rapport avant de décider si sa valeur est possible.",
+      "figure_json": {
+        "type": "tikz",
+        "params": {
+          "tikz": "\\begin{tikzpicture}[x=0.25cm,y=0.25cm]\n\\coordinate (A) at (0,0); \\coordinate (B) at (0,7); \\coordinate (C) at (24,0);\n\\draw[trait] (A)--(B)--(C)--cycle; \\AngDroit{B}{A}{C}\n\\Nom{(A)}{A}{below left} \\Nom{(B)}{B}{above} \\Nom{(C)}{C}{below right}\n\\Cote{(A)}{(B)}{7 cm}{4mm} \\Cote{(C)}{(A)}{24 cm}{4mm} \\Cote{(B)}{(C)}{25 cm}{4mm}\n\\begin{scope}[yshift=3.5cm,xshift=3cm]\n\\Bulle{Opposé ÷ adjacent dépasse 1.\\\\Je dois donc inverser ce rapport.}\n\\end{scope}\n\\end{tikzpicture}"
+        }
+      },
+      "grading_json": {
+        "max_score": 4,
+        "comparator": "qcm",
+        "negative": 0,
+        "choices": [
+          "Une tangente d’angle aigu peut dépasser $1$.",
+          "Il faut inverser le rapport car la tangente reste inférieure à $1$.",
+          "$3{,}4 < \\mathrm{tan}\\,\\widehat{ABC} < 3{,}5$.",
+          "$0 < \\mathrm{tan}\\,\\widehat{ABC} < 1$."
+        ],
+        "exclusive": false,
+        "bareme_points": 2.0,
+        "route": "cv",
+        "feedback": {
+          "lines": 2,
+          "options": {
+            "c": {
+              "text": "Tu limites la tangente à $1$ : elle peut dépasser $1$, sans inverser le rapport.",
+              "error": "math.num.encadrement"
+            },
+            "d": {
+              "text": "Tu confonds les bornes du sinus avec celles de la tangente : compare les deux côtés.",
+              "error": "math.geo.trigo_rapport"
+            }
+          },
+          "wrong_answers": [],
+          "correct": {
+            "text": "Tu conserves le rapport opposé sur adjacent et tu encadres sa valeur, même supérieure à $1$."
+          },
+          "blank": {
+            "text": "Repère les deux côtés du rapport, puis calcule le quotient sans les inverser."
+          },
+          "fallback": {
+            "text": "La tangente est le rapport opposé sur adjacent ; ce quotient peut dépasser $1$."
+          }
+        },
+        "option_ids": [
+          "a",
+          "c",
+          "b",
+          "d"
+        ],
+        "guides_placed": true,
+        "family_id": "erreur-inversion-tangente-borne",
+        "leak_keys": [],
+        "gives": [],
+        "author_order": true,
+        "twin": {
+          "group": "ci-3e-E1.11-20261116-165448/s03",
+          "jeu": 1,
+          "disposition": 1,
+          "jeux": 2,
+          "dispositions": 2,
+          "principal": true
+        }
+      }
+    },
+    "before_fingerprint": "4f46015ec361aa2030efc9513e02791e6b829bb0d15b0d7c2190e1629dbdc101"
+  },
+  {
+    "id": "149013ac-10a5-4722-bdd1-5497a2a4b8b2",
+    "group": "ci-3e-E1.11-20261116-165448/s03",
+    "jeu": 1,
+    "disposition": 2,
+    "before_mm": [
+      121.7285406259701,
+      111.45915173708121
+    ],
+    "after_mm": [
+      121.7285406259701,
+      111.45915173708121
+    ],
+    "before": {
+      "statement": "Aya examine le triangle rectangle et fait l’affirmation ci-dessous.\n{{figure}}\nCoche les deux affirmations qui corrigent cette erreur.\n{{aide}} Vérifie la définition du rapport avant de décider si sa valeur est possible.",
+      "figure_json": {
+        "type": "tikz",
+        "params": {
+          "tikz": "\\begin{tikzpicture}[x=0.25cm,y=0.25cm]\n\\coordinate (A) at (0,0); \\coordinate (B) at (0,7); \\coordinate (C) at (24,0);\n\\draw[trait] (A)--(B)--(C)--cycle; \\AngDroit{B}{A}{C}\n\\Nom{(A)}{A}{below left} \\Nom{(B)}{B}{above} \\Nom{(C)}{C}{below right}\n\\Cote{(A)}{(B)}{7 cm}{4mm} \\Cote{(C)}{(A)}{24 cm}{4mm} \\Cote{(B)}{(C)}{25 cm}{4mm}\n\\begin{scope}[yshift=3.5cm,xshift=3cm]\n\\Bulle{Opposé ÷ adjacent dépasse 1.\\\\Je dois donc inverser ce rapport.}\n\\end{scope}\n\\end{tikzpicture}"
+        }
+      },
+      "grading_json": {
+        "max_score": 4,
+        "comparator": "qcm",
+        "negative": 0,
+        "choices": [
+          "$0 < \\mathrm{tan}\\,\\widehat{ABC} < 1$.",
+          "$3{,}4 < \\mathrm{tan}\\,\\widehat{ABC} < 3{,}5$.",
+          "Il faut inverser le rapport car la tangente reste inférieure à $1$.",
+          "Une tangente d’angle aigu peut dépasser $1$."
+        ],
+        "exclusive": false,
+        "bareme_points": 2.0,
+        "route": "cv",
+        "feedback": {
+          "lines": 2,
+          "options": {
+            "d": {
+              "text": "Tu confonds les bornes du sinus avec celles de la tangente : compare les deux côtés.",
+              "error": "math.geo.trigo_rapport"
+            },
+            "c": {
+              "text": "Tu limites la tangente à $1$ : elle peut dépasser $1$, sans inverser le rapport.",
+              "error": "math.num.encadrement"
+            }
+          },
+          "wrong_answers": [],
+          "correct": {
+            "text": "Tu conserves le rapport opposé sur adjacent et tu encadres sa valeur, même supérieure à $1$."
+          },
+          "blank": {
+            "text": "Repère les deux côtés du rapport, puis calcule le quotient sans les inverser."
+          },
+          "fallback": {
+            "text": "La tangente est le rapport opposé sur adjacent ; ce quotient peut dépasser $1$."
+          }
+        },
+        "option_ids": [
+          "d",
+          "b",
+          "c",
+          "a"
+        ],
+        "guides_placed": true,
+        "family_id": "erreur-inversion-tangente-borne",
+        "leak_keys": [],
+        "gives": [],
+        "author_order": true,
+        "twin": {
+          "group": "ci-3e-E1.11-20261116-165448/s03",
+          "jeu": 1,
+          "disposition": 2,
+          "jeux": 2,
+          "dispositions": 2,
+          "principal": false
+        }
+      }
+    },
+    "after": {
+      "statement": "Aya examine le triangle rectangle et fait l’affirmation ci-dessous.\n{{figure}}\nCoche les deux affirmations qui corrigent cette erreur.\n{{aide}} Vérifie la définition du rapport avant de décider si sa valeur est possible.",
+      "figure_json": {
+        "type": "tikz",
+        "params": {
+          "tikz": "\\begin{tikzpicture}[x=0.25cm,y=0.25cm]\n\\coordinate (A) at (0,0); \\coordinate (B) at (0,7); \\coordinate (C) at (24,0);\n\\draw[trait] (A)--(B)--(C)--cycle; \\AngDroit{B}{A}{C}\n\\Nom{(A)}{A}{below left} \\Nom{(B)}{B}{above} \\Nom{(C)}{C}{below right}\n\\Cote{(A)}{(B)}{7 cm}{4mm} \\Cote{(C)}{(A)}{24 cm}{4mm} \\Cote{(B)}{(C)}{25 cm}{4mm}\n\\begin{scope}[yshift=3.5cm,xshift=3cm]\n\\Bulle{Opposé ÷ adjacent dépasse 1.\\\\Je dois donc inverser ce rapport.}\n\\end{scope}\n\\end{tikzpicture}"
+        }
+      },
+      "grading_json": {
+        "max_score": 4,
+        "comparator": "qcm",
+        "negative": 0,
+        "choices": [
+          "$0 < \\mathrm{tan}\\,\\widehat{ABC} < 1$.",
+          "$3{,}4 < \\mathrm{tan}\\,\\widehat{ABC} < 3{,}5$.",
+          "Il faut inverser le rapport car la tangente reste inférieure à $1$.",
+          "Une tangente d’angle aigu peut dépasser $1$."
+        ],
+        "exclusive": false,
+        "bareme_points": 2.0,
+        "route": "cv",
+        "feedback": {
+          "lines": 2,
+          "options": {
+            "d": {
+              "text": "Tu confonds les bornes du sinus avec celles de la tangente : compare les deux côtés.",
+              "error": "math.geo.trigo_rapport"
+            },
+            "c": {
+              "text": "Tu limites la tangente à $1$ : elle peut dépasser $1$, sans inverser le rapport.",
+              "error": "math.num.encadrement"
+            }
+          },
+          "wrong_answers": [],
+          "correct": {
+            "text": "Tu conserves le rapport opposé sur adjacent et tu encadres sa valeur, même supérieure à $1$."
+          },
+          "blank": {
+            "text": "Repère les deux côtés du rapport, puis calcule le quotient sans les inverser."
+          },
+          "fallback": {
+            "text": "La tangente est le rapport opposé sur adjacent ; ce quotient peut dépasser $1$."
+          }
+        },
+        "option_ids": [
+          "d",
+          "b",
+          "c",
+          "a"
+        ],
+        "guides_placed": true,
+        "family_id": "erreur-inversion-tangente-borne",
+        "leak_keys": [],
+        "gives": [],
+        "author_order": true,
+        "twin": {
+          "group": "ci-3e-E1.11-20261116-165448/s03",
+          "jeu": 1,
+          "disposition": 2,
+          "jeux": 2,
+          "dispositions": 2,
+          "principal": false
+        }
+      }
+    },
+    "before_fingerprint": "0c3038b1c20361de7eabd2a66bbe0cceb3e9054732dab952cd342f20cc83c815"
+  },
+  {
+    "id": "9f275b29-8455-466d-8b83-644c32b48e1d",
+    "group": "ci-3e-E1.11-20261116-165448/s03",
+    "jeu": 2,
+    "disposition": 1,
+    "before_mm": [
+      108.17986178861786,
+      97.91047289972896
+    ],
+    "after_mm": [
+      121.7285406259701,
+      111.45915173708121
+    ],
+    "before": {
+      "statement": "Koffi examine le triangle rectangle et fait l’affirmation ci-dessous.\n{{figure}}\nCoche les deux affirmations qui corrigent cette erreur.\n{{aide}} Vérifie la définition du rapport avant de décider si sa valeur est possible.",
+      "figure_json": {
+        "type": "tikz",
+        "params": {
+          "tikz": "\\begin{tikzpicture}[x=0.25cm,y=0.25cm]\n\\coordinate (A) at (0,0); \\coordinate (B) at (0,8); \\coordinate (C) at (15,0);\n\\draw[trait] (A)--(B)--(C)--cycle; \\AngDroit{B}{A}{C}\n\\Nom{(A)}{A}{below left} \\Nom{(B)}{B}{above} \\Nom{(C)}{C}{below right}\n\\Cote{(A)}{(B)}{8 cm}{4mm} \\Cote{(C)}{(A)}{15 cm}{4mm} \\Cote{(B)}{(C)}{17 cm}{4mm}\n\\begin{scope}[yshift=3.5cm,xshift=1.875cm]\n\\Bulle{Opposé ÷ adjacent dépasse 1.\\\\Je dois donc inverser ce rapport.}\n\\end{scope}\n\\end{tikzpicture}"
+        }
+      },
+      "grading_json": {
+        "max_score": 4,
+        "comparator": "qcm",
+        "negative": 0,
+        "choices": [
+          "Une tangente d’angle aigu peut dépasser $1$.",
+          "Il faut inverser le rapport car la tangente reste inférieure à $1$.",
+          "$1{,}8 < \\mathrm{tan}\\,\\widehat{ABC} < 1{,}9$.",
+          "$0 < \\mathrm{tan}\\,\\widehat{ABC} < 1$."
+        ],
+        "exclusive": false,
+        "bareme_points": 2.0,
+        "route": "cv",
+        "feedback": {
+          "lines": 2,
+          "options": {
+            "c": {
+              "text": "Tu limites la tangente à $1$ : elle peut dépasser $1$, sans inverser le rapport.",
+              "error": "math.num.encadrement"
+            },
+            "d": {
+              "text": "Tu confonds les bornes du sinus avec celles de la tangente : compare les deux côtés.",
+              "error": "math.geo.trigo_rapport"
+            }
+          },
+          "wrong_answers": [],
+          "correct": {
+            "text": "Tu conserves le rapport opposé sur adjacent et tu encadres sa valeur, même supérieure à $1$."
+          },
+          "blank": {
+            "text": "Repère les deux côtés du rapport, puis calcule le quotient sans les inverser."
+          },
+          "fallback": {
+            "text": "La tangente est le rapport opposé sur adjacent ; ce quotient peut dépasser $1$."
+          }
+        },
+        "option_ids": [
+          "a",
+          "c",
+          "b",
+          "d"
+        ],
+        "guides_placed": true,
+        "figure_layout": "right",
+        "family_id": "erreur-inversion-tangente-borne",
+        "leak_keys": [],
+        "gives": [],
+        "author_order": true,
+        "twin": {
+          "group": "ci-3e-E1.11-20261116-165448/s03",
+          "jeu": 2,
+          "disposition": 1,
+          "jeux": 2,
+          "dispositions": 2,
+          "principal": false
+        }
+      }
+    },
+    "after": {
+      "statement": "Koffi examine le triangle rectangle et fait l’affirmation ci-dessous.\n{{figure}}\nCoche les deux affirmations qui corrigent cette erreur.\n{{aide}} Vérifie la définition du rapport avant de décider si sa valeur est possible.",
+      "figure_json": {
+        "type": "tikz",
+        "params": {
+          "tikz": "\\begin{tikzpicture}[x=0.25cm,y=0.25cm]\n\\coordinate (A) at (0,0); \\coordinate (B) at (0,8); \\coordinate (C) at (15,0);\n\\draw[trait] (A)--(B)--(C)--cycle; \\AngDroit{B}{A}{C}\n\\Nom{(A)}{A}{below left} \\Nom{(B)}{B}{above} \\Nom{(C)}{C}{below right}\n\\Cote{(A)}{(B)}{8 cm}{4mm} \\Cote{(C)}{(A)}{15 cm}{4mm} \\Cote{(B)}{(C)}{17 cm}{4mm}\n\\begin{scope}[yshift=3.5cm,xshift=1.875cm]\n\\Bulle{Opposé ÷ adjacent dépasse 1.\\\\Je dois donc inverser ce rapport.}\n\\end{scope}\n\\end{tikzpicture}"
+        }
+      },
+      "grading_json": {
+        "max_score": 4,
+        "comparator": "qcm",
+        "negative": 0,
+        "choices": [
+          "Une tangente d’angle aigu peut dépasser $1$.",
+          "Il faut inverser le rapport car la tangente reste inférieure à $1$.",
+          "$1{,}8 < \\mathrm{tan}\\,\\widehat{ABC} < 1{,}9$.",
+          "$0 < \\mathrm{tan}\\,\\widehat{ABC} < 1$."
+        ],
+        "exclusive": false,
+        "bareme_points": 2.0,
+        "route": "cv",
+        "feedback": {
+          "lines": 2,
+          "options": {
+            "c": {
+              "text": "Tu limites la tangente à $1$ : elle peut dépasser $1$, sans inverser le rapport.",
+              "error": "math.num.encadrement"
+            },
+            "d": {
+              "text": "Tu confonds les bornes du sinus avec celles de la tangente : compare les deux côtés.",
+              "error": "math.geo.trigo_rapport"
+            }
+          },
+          "wrong_answers": [],
+          "correct": {
+            "text": "Tu conserves le rapport opposé sur adjacent et tu encadres sa valeur, même supérieure à $1$."
+          },
+          "blank": {
+            "text": "Repère les deux côtés du rapport, puis calcule le quotient sans les inverser."
+          },
+          "fallback": {
+            "text": "La tangente est le rapport opposé sur adjacent ; ce quotient peut dépasser $1$."
+          }
+        },
+        "option_ids": [
+          "a",
+          "c",
+          "b",
+          "d"
+        ],
+        "guides_placed": true,
+        "family_id": "erreur-inversion-tangente-borne",
+        "leak_keys": [],
+        "gives": [],
+        "author_order": true,
+        "twin": {
+          "group": "ci-3e-E1.11-20261116-165448/s03",
+          "jeu": 2,
+          "disposition": 1,
+          "jeux": 2,
+          "dispositions": 2,
+          "principal": false
+        }
+      }
+    },
+    "before_fingerprint": "a4af5331129674ccd1c7afd439f0b7b1b3229c8c361005bd2b4bdbaf06de9a1e"
+  },
+  {
+    "id": "388b5a05-42e5-4bff-ac23-bc6dc14fba66",
+    "group": "ci-3e-E1.11-20261116-165448/s03",
+    "jeu": 2,
+    "disposition": 2,
+    "before_mm": [
+      108.17986178861786,
+      97.91047289972896
+    ],
+    "after_mm": [
+      121.7285406259701,
+      111.45915173708121
+    ],
+    "before": {
+      "statement": "Koffi examine le triangle rectangle et fait l’affirmation ci-dessous.\n{{figure}}\nCoche les deux affirmations qui corrigent cette erreur.\n{{aide}} Vérifie la définition du rapport avant de décider si sa valeur est possible.",
+      "figure_json": {
+        "type": "tikz",
+        "params": {
+          "tikz": "\\begin{tikzpicture}[x=0.25cm,y=0.25cm]\n\\coordinate (A) at (0,0); \\coordinate (B) at (0,8); \\coordinate (C) at (15,0);\n\\draw[trait] (A)--(B)--(C)--cycle; \\AngDroit{B}{A}{C}\n\\Nom{(A)}{A}{below left} \\Nom{(B)}{B}{above} \\Nom{(C)}{C}{below right}\n\\Cote{(A)}{(B)}{8 cm}{4mm} \\Cote{(C)}{(A)}{15 cm}{4mm} \\Cote{(B)}{(C)}{17 cm}{4mm}\n\\begin{scope}[yshift=3.5cm,xshift=1.875cm]\n\\Bulle{Opposé ÷ adjacent dépasse 1.\\\\Je dois donc inverser ce rapport.}\n\\end{scope}\n\\end{tikzpicture}"
+        }
+      },
+      "grading_json": {
+        "max_score": 4,
+        "comparator": "qcm",
+        "negative": 0,
+        "choices": [
+          "$0 < \\mathrm{tan}\\,\\widehat{ABC} < 1$.",
+          "$1{,}8 < \\mathrm{tan}\\,\\widehat{ABC} < 1{,}9$.",
+          "Il faut inverser le rapport car la tangente reste inférieure à $1$.",
+          "Une tangente d’angle aigu peut dépasser $1$."
+        ],
+        "exclusive": false,
+        "bareme_points": 2.0,
+        "route": "cv",
+        "feedback": {
+          "lines": 2,
+          "options": {
+            "d": {
+              "text": "Tu confonds les bornes du sinus avec celles de la tangente : compare les deux côtés.",
+              "error": "math.geo.trigo_rapport"
+            },
+            "c": {
+              "text": "Tu limites la tangente à $1$ : elle peut dépasser $1$, sans inverser le rapport.",
+              "error": "math.num.encadrement"
+            }
+          },
+          "wrong_answers": [],
+          "correct": {
+            "text": "Tu conserves le rapport opposé sur adjacent et tu encadres sa valeur, même supérieure à $1$."
+          },
+          "blank": {
+            "text": "Repère les deux côtés du rapport, puis calcule le quotient sans les inverser."
+          },
+          "fallback": {
+            "text": "La tangente est le rapport opposé sur adjacent ; ce quotient peut dépasser $1$."
+          }
+        },
+        "option_ids": [
+          "d",
+          "b",
+          "c",
+          "a"
+        ],
+        "guides_placed": true,
+        "figure_layout": "right",
+        "family_id": "erreur-inversion-tangente-borne",
+        "leak_keys": [],
+        "gives": [],
+        "author_order": true,
+        "twin": {
+          "group": "ci-3e-E1.11-20261116-165448/s03",
+          "jeu": 2,
+          "disposition": 2,
+          "jeux": 2,
+          "dispositions": 2,
+          "principal": false
+        }
+      }
+    },
+    "after": {
+      "statement": "Koffi examine le triangle rectangle et fait l’affirmation ci-dessous.\n{{figure}}\nCoche les deux affirmations qui corrigent cette erreur.\n{{aide}} Vérifie la définition du rapport avant de décider si sa valeur est possible.",
+      "figure_json": {
+        "type": "tikz",
+        "params": {
+          "tikz": "\\begin{tikzpicture}[x=0.25cm,y=0.25cm]\n\\coordinate (A) at (0,0); \\coordinate (B) at (0,8); \\coordinate (C) at (15,0);\n\\draw[trait] (A)--(B)--(C)--cycle; \\AngDroit{B}{A}{C}\n\\Nom{(A)}{A}{below left} \\Nom{(B)}{B}{above} \\Nom{(C)}{C}{below right}\n\\Cote{(A)}{(B)}{8 cm}{4mm} \\Cote{(C)}{(A)}{15 cm}{4mm} \\Cote{(B)}{(C)}{17 cm}{4mm}\n\\begin{scope}[yshift=3.5cm,xshift=1.875cm]\n\\Bulle{Opposé ÷ adjacent dépasse 1.\\\\Je dois donc inverser ce rapport.}\n\\end{scope}\n\\end{tikzpicture}"
+        }
+      },
+      "grading_json": {
+        "max_score": 4,
+        "comparator": "qcm",
+        "negative": 0,
+        "choices": [
+          "$0 < \\mathrm{tan}\\,\\widehat{ABC} < 1$.",
+          "$1{,}8 < \\mathrm{tan}\\,\\widehat{ABC} < 1{,}9$.",
+          "Il faut inverser le rapport car la tangente reste inférieure à $1$.",
+          "Une tangente d’angle aigu peut dépasser $1$."
+        ],
+        "exclusive": false,
+        "bareme_points": 2.0,
+        "route": "cv",
+        "feedback": {
+          "lines": 2,
+          "options": {
+            "d": {
+              "text": "Tu confonds les bornes du sinus avec celles de la tangente : compare les deux côtés.",
+              "error": "math.geo.trigo_rapport"
+            },
+            "c": {
+              "text": "Tu limites la tangente à $1$ : elle peut dépasser $1$, sans inverser le rapport.",
+              "error": "math.num.encadrement"
+            }
+          },
+          "wrong_answers": [],
+          "correct": {
+            "text": "Tu conserves le rapport opposé sur adjacent et tu encadres sa valeur, même supérieure à $1$."
+          },
+          "blank": {
+            "text": "Repère les deux côtés du rapport, puis calcule le quotient sans les inverser."
+          },
+          "fallback": {
+            "text": "La tangente est le rapport opposé sur adjacent ; ce quotient peut dépasser $1$."
+          }
+        },
+        "option_ids": [
+          "d",
+          "b",
+          "c",
+          "a"
+        ],
+        "guides_placed": true,
+        "family_id": "erreur-inversion-tangente-borne",
+        "leak_keys": [],
+        "gives": [],
+        "author_order": true,
+        "twin": {
+          "group": "ci-3e-E1.11-20261116-165448/s03",
+          "jeu": 2,
+          "disposition": 2,
+          "jeux": 2,
+          "dispositions": 2,
+          "principal": false
+        }
+      }
+    },
+    "before_fingerprint": "1817e6026043b2512bac40133953a0eec5eaeec885aa9c3552b9ccd70b7bfe33"
+  },
+  {
+    "id": "d1e2ab2c-2965-4314-a4ff-ef1eba0f61fc",
+    "group": "ci-3e-E1.10-20261116-190118/s05",
+    "jeu": 1,
+    "disposition": 1,
+    "before_mm": [
+      146.55085821127196,
+      146.55085821127196
+    ],
+    "after_mm": [
+      143.75685262326078,
+      143.75685262326078
+    ],
+    "before": {
+      "statement": "Le triangle $ABC$ est rectangle en $A$, avec $BC=15$ cm et $\\mathrm{sin}\\,\\widehat{ABC}=0{,}6$. La figure n’est pas en vraie grandeur.\n{{figure}}\nCalcule $AC$ puis $AB$. Déduis-en $\\mathrm{cos}\\,\\widehat{ABC}$ et $\\mathrm{tan}\\,\\widehat{ABC}$, en fraction irréductible pour la tangente.",
+      "figure_json": {
+        "type": "tikz",
+        "params": {
+          "tikz": "\\begin{tikzpicture}\n\\pgfmathsetmacro{\\c}{sqrt(1-0.6*0.6)}\n\\coordinate (B) at (0,0); \\coordinate (C) at (6,0); \\coordinate (A) at ({6*\\c*\\c},{6*\\c*0.6});\n\\filldraw[trait,aplat] (A)--(B)--(C)--cycle;\n\\AngDroit{B}{A}{C} \\AngMark{C}{B}{A}{}{1}\n\\Nom{(A)}{A}{above} \\Nom{(B)}{B}{below left} \\Nom{(C)}{C}{below right}\n\\Cote{(C)}{(B)}{15 cm}{4mm}\n\\end{tikzpicture}"
+        }
+      },
+      "grading_json": {
+        "max_score": 4,
+        "comparator": "rubric",
+        "steps": [
+          {
+            "description": "Calcule AC avec le sinus",
+            "expected_text": "$AC=BC\\times \\mathrm{sin}\\,\\widehat{ABC}=15\\times 0{,}6=9$ cm",
+            "points": 1
+          },
+          {
+            "description": "Calcule AB par Pythagore",
+            "expected_text": "$AB^2=15^2-9^2=144$, $AB=12$ cm",
+            "points": 1
+          },
+          {
+            "description": "Calcule le cosinus",
+            "expected_text": "$\\mathrm{cos}\\,\\widehat{ABC}=\\dfrac{12}{15}=0{,}8$",
+            "points": 1
+          },
+          {
+            "description": "Calcule la tangente",
+            "expected_text": "$\\mathrm{tan}\\,\\widehat{ABC}=\\dfrac{9}{12}=\\dfrac{3}{4}$",
+            "points": 1
+          }
+        ],
+        "rubric": [
+          {
+            "description": "Calcule AC avec le sinus",
+            "expected_text": "$AC=BC\\times \\mathrm{sin}\\,\\widehat{ABC}=15\\times 0{,}6=9$ cm",
+            "points": 1
+          },
+          {
+            "description": "Calcule AB par Pythagore",
+            "expected_text": "$AB^2=15^2-9^2=144$, $AB=12$ cm",
+            "points": 1
+          },
+          {
+            "description": "Calcule le cosinus",
+            "expected_text": "$\\mathrm{cos}\\,\\widehat{ABC}=\\dfrac{12}{15}=0{,}8$",
+            "points": 1
+          },
+          {
+            "description": "Calcule la tangente",
+            "expected_text": "$\\mathrm{tan}\\,\\widehat{ABC}=\\dfrac{9}{12}=\\dfrac{3}{4}$",
+            "points": 1
+          }
+        ],
+        "lines": 6,
+        "bareme_points": 4.0,
+        "route": "llm",
+        "feedback": {
+          "lines": 4,
+          "options": {
+            "e1": {
+              "text": "Tu as divisé $BC$ par le sinus : $AC=BC\\times \\mathrm{sin}$, car $\\mathrm{sin}=AC/BC$.",
+              "error": "math.calc.operation_inversee"
+            },
+            "e2": {
+              "text": "Tu as additionné les carrés : $[BC]$ est l’hypoténuse, donc $AB^2=BC^2-AC^2$.",
+              "error": "math.geo.pythagore_hypotenuse"
+            },
+            "e3": {
+              "text": "Ta tangente divise par l’hypoténuse : c’est côté opposé $AC$ sur côté adjacent $AB$.",
+              "error": "math.geo.trigo_rapport"
+            }
+          },
+          "wrong_answers": [],
+          "correct": {
+            "text": "Oui : tu as retrouvé les deux côtés, puis formé cosinus et tangente."
+          },
+          "blank": {
+            "text": "Le sinus vaut $AC/BC$ : commence par calculer $AC$."
+          },
+          "fallback": {
+            "text": "$AC=BC\\times \\mathrm{sin}$, puis Pythagore pour $AB$, puis les deux quotients."
+          }
+        },
+        "llm_brief": {
+          "objective": "Retrouver AC à partir du sinus, AB par Pythagore, puis calculer cosinus et tangente de l'angle en B",
+          "expected_steps": [
+            "AC = 15 × 0,6 = 9 cm (1 pt)",
+            "AB² = 225 − 81 = 144, AB = 12 cm (1 pt)",
+            "cos = AB/BC = 0,8 (1 pt)",
+            "tan = AC/AB = \\dfrac{3}{4} (1 pt)"
+          ],
+          "other_methods": [
+            "Cosinus obtenu par (cos)² = 1 − (sin)² puis racine positive, si c'est justifié",
+            "Cosinus laissé en fraction égale à 0,8"
+          ],
+          "expected_errors": [
+            {
+              "message_id": "e1",
+              "trap": "AC = 15 ÷ 0,6"
+            },
+            {
+              "message_id": "e2",
+              "trap": "AB² = 225 + 81"
+            },
+            {
+              "message_id": "e3",
+              "trap": "tan = AC/BC ou AB/AC"
+            }
+          ],
+          "do_not_penalize": [
+            "Une tangente juste mais non simplifiée : retirer seulement la mention irréductible si l'énoncé l'exige, au plus un demi-point",
+            "Les unités oubliées sur les rapports"
+          ]
+        },
+        "option_ids": [
+          "e1",
+          "e2",
+          "e3"
+        ],
+        "family_id": "sinus-donne-vers-cos-tan",
+        "leak_keys": [],
+        "gives": [],
+        "author_order": true,
+        "twin": {
+          "group": "ci-3e-E1.10-20261116-190118/s05",
+          "jeu": 1,
+          "disposition": 1,
+          "jeux": 2,
+          "dispositions": 1,
+          "principal": true
+        }
+      }
+    },
+    "after": {
+      "statement": "Le triangle $ABC$ est rectangle en $A$, avec $BC=15$ cm et $\\mathrm{sin}\\,\\widehat{ABC}=0{,}6$. La figure n’est pas en vraie grandeur.\n{{figure}}\nCalcule $AC$ puis $AB$. Déduis-en $\\mathrm{cos}\\,\\widehat{ABC}$ et $\\mathrm{tan}\\,\\widehat{ABC}$, en fraction irréductible pour la tangente.",
+      "figure_json": {
+        "type": "tikz",
+        "params": {
+          "tikz": "\\begin{tikzpicture}\n\\pgfmathsetmacro{\\c}{sqrt(1-0.5*0.5)}\n\\coordinate (B) at (0,0); \\coordinate (C) at (6,0); \\coordinate (A) at ({6*\\c*\\c},{6*\\c*0.5});\n\\filldraw[trait,aplat] (A)--(B)--(C)--cycle;\n\\AngDroit{B}{A}{C} \\AngMark{C}{B}{A}{}{1}\n\\Nom{(A)}{A}{above} \\Nom{(B)}{B}{below left} \\Nom{(C)}{C}{below right}\n\\Cote{(C)}{(B)}{15 cm}{4mm}\n\\end{tikzpicture}"
+        }
+      },
+      "grading_json": {
+        "max_score": 4,
+        "comparator": "rubric",
+        "steps": [
+          {
+            "description": "Calcule AC avec le sinus",
+            "expected_text": "$AC=BC\\times \\mathrm{sin}\\,\\widehat{ABC}=15\\times 0{,}6=9$ cm",
+            "points": 1
+          },
+          {
+            "description": "Calcule AB par Pythagore",
+            "expected_text": "$AB^2=15^2-9^2=144$, $AB=12$ cm",
+            "points": 1
+          },
+          {
+            "description": "Calcule le cosinus",
+            "expected_text": "$\\mathrm{cos}\\,\\widehat{ABC}=\\dfrac{12}{15}=0{,}8$",
+            "points": 1
+          },
+          {
+            "description": "Calcule la tangente",
+            "expected_text": "$\\mathrm{tan}\\,\\widehat{ABC}=\\dfrac{9}{12}=\\dfrac{3}{4}$",
+            "points": 1
+          }
+        ],
+        "rubric": [
+          {
+            "description": "Calcule AC avec le sinus",
+            "expected_text": "$AC=BC\\times \\mathrm{sin}\\,\\widehat{ABC}=15\\times 0{,}6=9$ cm",
+            "points": 1
+          },
+          {
+            "description": "Calcule AB par Pythagore",
+            "expected_text": "$AB^2=15^2-9^2=144$, $AB=12$ cm",
+            "points": 1
+          },
+          {
+            "description": "Calcule le cosinus",
+            "expected_text": "$\\mathrm{cos}\\,\\widehat{ABC}=\\dfrac{12}{15}=0{,}8$",
+            "points": 1
+          },
+          {
+            "description": "Calcule la tangente",
+            "expected_text": "$\\mathrm{tan}\\,\\widehat{ABC}=\\dfrac{9}{12}=\\dfrac{3}{4}$",
+            "points": 1
+          }
+        ],
+        "lines": 6,
+        "bareme_points": 4.0,
+        "route": "llm",
+        "feedback": {
+          "lines": 4,
+          "options": {
+            "e1": {
+              "text": "Tu as divisé $BC$ par le sinus : $AC=BC\\times \\mathrm{sin}$, car $\\mathrm{sin}=AC/BC$.",
+              "error": "math.calc.operation_inversee"
+            },
+            "e2": {
+              "text": "Tu as additionné les carrés : $[BC]$ est l’hypoténuse, donc $AB^2=BC^2-AC^2$.",
+              "error": "math.geo.pythagore_hypotenuse"
+            },
+            "e3": {
+              "text": "Ta tangente divise par l’hypoténuse : c’est côté opposé $AC$ sur côté adjacent $AB$.",
+              "error": "math.geo.trigo_rapport"
+            }
+          },
+          "wrong_answers": [],
+          "correct": {
+            "text": "Oui : tu as retrouvé les deux côtés, puis formé cosinus et tangente."
+          },
+          "blank": {
+            "text": "Le sinus vaut $AC/BC$ : commence par calculer $AC$."
+          },
+          "fallback": {
+            "text": "$AC=BC\\times \\mathrm{sin}$, puis Pythagore pour $AB$, puis les deux quotients."
+          }
+        },
+        "llm_brief": {
+          "objective": "Retrouver AC à partir du sinus, AB par Pythagore, puis calculer cosinus et tangente de l'angle en B",
+          "expected_steps": [
+            "AC = 15 × 0,6 = 9 cm (1 pt)",
+            "AB² = 225 − 81 = 144, AB = 12 cm (1 pt)",
+            "cos = AB/BC = 0,8 (1 pt)",
+            "tan = AC/AB = \\dfrac{3}{4} (1 pt)"
+          ],
+          "other_methods": [
+            "Cosinus obtenu par (cos)² = 1 − (sin)² puis racine positive, si c'est justifié",
+            "Cosinus laissé en fraction égale à 0,8"
+          ],
+          "expected_errors": [
+            {
+              "message_id": "e1",
+              "trap": "AC = 15 ÷ 0,6"
+            },
+            {
+              "message_id": "e2",
+              "trap": "AB² = 225 + 81"
+            },
+            {
+              "message_id": "e3",
+              "trap": "tan = AC/BC ou AB/AC"
+            }
+          ],
+          "do_not_penalize": [
+            "Une tangente juste mais non simplifiée : retirer seulement la mention irréductible si l'énoncé l'exige, au plus un demi-point",
+            "Les unités oubliées sur les rapports"
+          ]
+        },
+        "option_ids": [
+          "e1",
+          "e2",
+          "e3"
+        ],
+        "family_id": "sinus-donne-vers-cos-tan",
+        "leak_keys": [],
+        "gives": [],
+        "author_order": true,
+        "twin": {
+          "group": "ci-3e-E1.10-20261116-190118/s05",
+          "jeu": 1,
+          "disposition": 1,
+          "jeux": 2,
+          "dispositions": 1,
+          "principal": true
+        }
+      }
+    },
+    "before_fingerprint": "9131ac020ec05b72683f712a770e1a3ec424a47d503d6a4fa2d1aa2fc61b1137"
+  },
+  {
+    "id": "19656d02-dc19-47b9-818e-83f9df0c6c21",
+    "group": "ci-3e-E1.10-20261116-190118/s05",
+    "jeu": 2,
+    "disposition": 1,
+    "before_mm": [
+      133.9354996472215,
+      133.9354996472215
+    ],
+    "after_mm": [
+      143.75685262326078,
+      143.75685262326078
+    ],
+    "before": {
+      "statement": "Le triangle $ABC$ est rectangle en $A$, avec $BC=25$ cm et $\\mathrm{sin}\\,\\widehat{ABC}=0{,}28$. La figure n’est pas en vraie grandeur.\n{{figure}}\nCalcule $AC$ puis $AB$. Déduis-en $\\mathrm{cos}\\,\\widehat{ABC}$ et $\\mathrm{tan}\\,\\widehat{ABC}$, en fraction irréductible pour la tangente.",
+      "figure_json": {
+        "type": "tikz",
+        "params": {
+          "tikz": "\\begin{tikzpicture}\n\\pgfmathsetmacro{\\c}{sqrt(1-0.28*0.28)}\n\\coordinate (B) at (0,0); \\coordinate (C) at (6,0); \\coordinate (A) at ({6*\\c*\\c},{6*\\c*0.28});\n\\filldraw[trait,aplat] (A)--(B)--(C)--cycle;\n\\AngDroit{B}{A}{C} \\AngMark{C}{B}{A}{}{1}\n\\Nom{(A)}{A}{above} \\Nom{(B)}{B}{below left} \\Nom{(C)}{C}{below right}\n\\Cote{(C)}{(B)}{25 cm}{4mm}\n\\end{tikzpicture}"
+        }
+      },
+      "grading_json": {
+        "max_score": 4,
+        "comparator": "rubric",
+        "steps": [
+          {
+            "description": "Calcule AC avec le sinus",
+            "expected_text": "$AC=BC\\times \\mathrm{sin}\\,\\widehat{ABC}=25\\times 0{,}28=7$ cm",
+            "points": 1
+          },
+          {
+            "description": "Calcule AB par Pythagore",
+            "expected_text": "$AB^2=25^2-7^2=576$, $AB=24$ cm",
+            "points": 1
+          },
+          {
+            "description": "Calcule le cosinus",
+            "expected_text": "$\\mathrm{cos}\\,\\widehat{ABC}=\\dfrac{24}{25}=0{,}96$",
+            "points": 1
+          },
+          {
+            "description": "Calcule la tangente",
+            "expected_text": "$\\mathrm{tan}\\,\\widehat{ABC}=\\dfrac{7}{24}=\\dfrac{7}{24}$",
+            "points": 1
+          }
+        ],
+        "rubric": [
+          {
+            "description": "Calcule AC avec le sinus",
+            "expected_text": "$AC=BC\\times \\mathrm{sin}\\,\\widehat{ABC}=25\\times 0{,}28=7$ cm",
+            "points": 1
+          },
+          {
+            "description": "Calcule AB par Pythagore",
+            "expected_text": "$AB^2=25^2-7^2=576$, $AB=24$ cm",
+            "points": 1
+          },
+          {
+            "description": "Calcule le cosinus",
+            "expected_text": "$\\mathrm{cos}\\,\\widehat{ABC}=\\dfrac{24}{25}=0{,}96$",
+            "points": 1
+          },
+          {
+            "description": "Calcule la tangente",
+            "expected_text": "$\\mathrm{tan}\\,\\widehat{ABC}=\\dfrac{7}{24}=\\dfrac{7}{24}$",
+            "points": 1
+          }
+        ],
+        "lines": 6,
+        "bareme_points": 4.0,
+        "route": "llm",
+        "feedback": {
+          "lines": 4,
+          "options": {
+            "e1": {
+              "text": "Tu as divisé $BC$ par le sinus : $AC=BC\\times \\mathrm{sin}$, car $\\mathrm{sin}=AC/BC$.",
+              "error": "math.calc.operation_inversee"
+            },
+            "e2": {
+              "text": "Tu as additionné les carrés : $[BC]$ est l’hypoténuse, donc $AB^2=BC^2-AC^2$.",
+              "error": "math.geo.pythagore_hypotenuse"
+            },
+            "e3": {
+              "text": "Ta tangente divise par l’hypoténuse : c’est côté opposé $AC$ sur côté adjacent $AB$.",
+              "error": "math.geo.trigo_rapport"
+            }
+          },
+          "wrong_answers": [],
+          "correct": {
+            "text": "Oui : tu as retrouvé les deux côtés, puis formé cosinus et tangente."
+          },
+          "blank": {
+            "text": "Le sinus vaut $AC/BC$ : commence par calculer $AC$."
+          },
+          "fallback": {
+            "text": "$AC=BC\\times \\mathrm{sin}$, puis Pythagore pour $AB$, puis les deux quotients."
+          }
+        },
+        "llm_brief": {
+          "objective": "Retrouver AC à partir du sinus, AB par Pythagore, puis calculer cosinus et tangente de l'angle en B",
+          "expected_steps": [
+            "AC = 25 × 0,28 = 7 cm (1 pt)",
+            "AB² = 625 − 49 = 576, AB = 24 cm (1 pt)",
+            "cos = AB/BC = 0,96 (1 pt)",
+            "tan = AC/AB = \\dfrac{7}{24} (1 pt)"
+          ],
+          "other_methods": [
+            "Cosinus obtenu par (cos)² = 1 − (sin)² puis racine positive, si c'est justifié",
+            "Cosinus laissé en fraction égale à 0,96"
+          ],
+          "expected_errors": [
+            {
+              "message_id": "e1",
+              "trap": "AC = 25 ÷ 0,28"
+            },
+            {
+              "message_id": "e2",
+              "trap": "AB² = 625 + 49"
+            },
+            {
+              "message_id": "e3",
+              "trap": "tan = AC/BC ou AB/AC"
+            }
+          ],
+          "do_not_penalize": [
+            "Une tangente juste mais non simplifiée : retirer seulement la mention irréductible si l'énoncé l'exige, au plus un demi-point",
+            "Les unités oubliées sur les rapports"
+          ]
+        },
+        "option_ids": [
+          "e1",
+          "e2",
+          "e3"
+        ],
+        "family_id": "sinus-donne-vers-cos-tan",
+        "leak_keys": [],
+        "gives": [],
+        "author_order": true,
+        "twin": {
+          "group": "ci-3e-E1.10-20261116-190118/s05",
+          "jeu": 2,
+          "disposition": 1,
+          "jeux": 2,
+          "dispositions": 1,
+          "principal": false
+        }
+      }
+    },
+    "after": {
+      "statement": "Le triangle $ABC$ est rectangle en $A$, avec $BC=25$ cm et $\\mathrm{sin}\\,\\widehat{ABC}=0{,}28$. La figure n’est pas en vraie grandeur.\n{{figure}}\nCalcule $AC$ puis $AB$. Déduis-en $\\mathrm{cos}\\,\\widehat{ABC}$ et $\\mathrm{tan}\\,\\widehat{ABC}$, en fraction irréductible pour la tangente.",
+      "figure_json": {
+        "type": "tikz",
+        "params": {
+          "tikz": "\\begin{tikzpicture}\n\\pgfmathsetmacro{\\c}{sqrt(1-0.5*0.5)}\n\\coordinate (B) at (0,0); \\coordinate (C) at (6,0); \\coordinate (A) at ({6*\\c*\\c},{6*\\c*0.5});\n\\filldraw[trait,aplat] (A)--(B)--(C)--cycle;\n\\AngDroit{B}{A}{C} \\AngMark{C}{B}{A}{}{1}\n\\Nom{(A)}{A}{above} \\Nom{(B)}{B}{below left} \\Nom{(C)}{C}{below right}\n\\Cote{(C)}{(B)}{25 cm}{4mm}\n\\end{tikzpicture}"
+        }
+      },
+      "grading_json": {
+        "max_score": 4,
+        "comparator": "rubric",
+        "steps": [
+          {
+            "description": "Calcule AC avec le sinus",
+            "expected_text": "$AC=BC\\times \\mathrm{sin}\\,\\widehat{ABC}=25\\times 0{,}28=7$ cm",
+            "points": 1
+          },
+          {
+            "description": "Calcule AB par Pythagore",
+            "expected_text": "$AB^2=25^2-7^2=576$, $AB=24$ cm",
+            "points": 1
+          },
+          {
+            "description": "Calcule le cosinus",
+            "expected_text": "$\\mathrm{cos}\\,\\widehat{ABC}=\\dfrac{24}{25}=0{,}96$",
+            "points": 1
+          },
+          {
+            "description": "Calcule la tangente",
+            "expected_text": "$\\mathrm{tan}\\,\\widehat{ABC}=\\dfrac{7}{24}=\\dfrac{7}{24}$",
+            "points": 1
+          }
+        ],
+        "rubric": [
+          {
+            "description": "Calcule AC avec le sinus",
+            "expected_text": "$AC=BC\\times \\mathrm{sin}\\,\\widehat{ABC}=25\\times 0{,}28=7$ cm",
+            "points": 1
+          },
+          {
+            "description": "Calcule AB par Pythagore",
+            "expected_text": "$AB^2=25^2-7^2=576$, $AB=24$ cm",
+            "points": 1
+          },
+          {
+            "description": "Calcule le cosinus",
+            "expected_text": "$\\mathrm{cos}\\,\\widehat{ABC}=\\dfrac{24}{25}=0{,}96$",
+            "points": 1
+          },
+          {
+            "description": "Calcule la tangente",
+            "expected_text": "$\\mathrm{tan}\\,\\widehat{ABC}=\\dfrac{7}{24}=\\dfrac{7}{24}$",
+            "points": 1
+          }
+        ],
+        "lines": 6,
+        "bareme_points": 4.0,
+        "route": "llm",
+        "feedback": {
+          "lines": 4,
+          "options": {
+            "e1": {
+              "text": "Tu as divisé $BC$ par le sinus : $AC=BC\\times \\mathrm{sin}$, car $\\mathrm{sin}=AC/BC$.",
+              "error": "math.calc.operation_inversee"
+            },
+            "e2": {
+              "text": "Tu as additionné les carrés : $[BC]$ est l’hypoténuse, donc $AB^2=BC^2-AC^2$.",
+              "error": "math.geo.pythagore_hypotenuse"
+            },
+            "e3": {
+              "text": "Ta tangente divise par l’hypoténuse : c’est côté opposé $AC$ sur côté adjacent $AB$.",
+              "error": "math.geo.trigo_rapport"
+            }
+          },
+          "wrong_answers": [],
+          "correct": {
+            "text": "Oui : tu as retrouvé les deux côtés, puis formé cosinus et tangente."
+          },
+          "blank": {
+            "text": "Le sinus vaut $AC/BC$ : commence par calculer $AC$."
+          },
+          "fallback": {
+            "text": "$AC=BC\\times \\mathrm{sin}$, puis Pythagore pour $AB$, puis les deux quotients."
+          }
+        },
+        "llm_brief": {
+          "objective": "Retrouver AC à partir du sinus, AB par Pythagore, puis calculer cosinus et tangente de l'angle en B",
+          "expected_steps": [
+            "AC = 25 × 0,28 = 7 cm (1 pt)",
+            "AB² = 625 − 49 = 576, AB = 24 cm (1 pt)",
+            "cos = AB/BC = 0,96 (1 pt)",
+            "tan = AC/AB = \\dfrac{7}{24} (1 pt)"
+          ],
+          "other_methods": [
+            "Cosinus obtenu par (cos)² = 1 − (sin)² puis racine positive, si c'est justifié",
+            "Cosinus laissé en fraction égale à 0,96"
+          ],
+          "expected_errors": [
+            {
+              "message_id": "e1",
+              "trap": "AC = 25 ÷ 0,28"
+            },
+            {
+              "message_id": "e2",
+              "trap": "AB² = 625 + 49"
+            },
+            {
+              "message_id": "e3",
+              "trap": "tan = AC/BC ou AB/AC"
+            }
+          ],
+          "do_not_penalize": [
+            "Une tangente juste mais non simplifiée : retirer seulement la mention irréductible si l'énoncé l'exige, au plus un demi-point",
+            "Les unités oubliées sur les rapports"
+          ]
+        },
+        "option_ids": [
+          "e1",
+          "e2",
+          "e3"
+        ],
+        "family_id": "sinus-donne-vers-cos-tan",
+        "leak_keys": [],
+        "gives": [],
+        "author_order": true,
+        "twin": {
+          "group": "ci-3e-E1.10-20261116-190118/s05",
+          "jeu": 2,
+          "disposition": 1,
+          "jeux": 2,
+          "dispositions": 1,
+          "principal": false
+        }
+      }
+    },
+    "before_fingerprint": "f363ad4ca553d0fdd391b165cca0f18b316995012537e8aef9f5ba663daab031"
+  },
+  {
+    "id": "d75416f2-91c2-4880-ac9a-27b1688b7eeb",
+    "group": "ci-3e-E1.12-20261116-165448/s02",
+    "jeu": 1,
+    "disposition": 1,
+    "before_mm": [
+      63.61437922275846,
+      53.34499033386955
+    ],
+    "after_mm": [
+      67.4093236672029,
+      57.13993477831401
+    ],
+    "before": {
+      "statement": "Le triangle $RST$ est rectangle en $R$.\n{{figure}}\nCalcule $RT$, en cm. {{blank}}\n{{aide}} Repère l’hypoténuse et isole le carré de la longueur cherchée.",
+      "figure_json": {
+        "type": "tikz",
+        "params": {
+          "tikz": "\\begin{tikzpicture}[x=0.25cm,y=0.25cm]\n\\coordinate (R) at (0,0); \\coordinate (S) at (0,5); \\coordinate (T) at (12,0);\n\\draw[trait] (R)--(S)--(T)--cycle;\n\\AngDroit{S}{R}{T}\n\\Nom{(R)}{R}{below left} \\Nom{(S)}{S}{above} \\Nom{(T)}{T}{below right}\n\\Cote{(R)}{(S)}{5 cm}{4mm} \\Cote{(S)}{(T)}{13 cm}{4mm}\n\\end{tikzpicture}"
+        }
+      },
+      "grading_json": {
+        "max_score": 1,
+        "comparator": "numeric",
+        "tolerance": 0,
+        "bareme_points": 2.0,
+        "route": "ocr_llm",
+        "feedback": {
+          "lines": 2,
+          "options": {},
+          "wrong_answers": [
+            {
+              "value": 8,
+              "cell": null,
+              "text": "Tu as soustrait les longueurs : soustrais les carrés, puis prends la racine.",
+              "error": "math.geo.pythagore_carres"
+            },
+            {
+              "value": 144,
+              "cell": null,
+              "text": "Tu as trouvé $RT^2$ : il reste à prendre sa racine positive.",
+              "error": "math.geo.pythagore_carres"
+            }
+          ],
+          "correct": {
+            "text": "Tu as soustrait les carrés, puis pris la racine positive."
+          },
+          "blank": {
+            "text": "Identifie l’hypoténuse et écris la relation de Pythagore."
+          },
+          "fallback": {
+            "text": "Pour un côté de l’angle droit, soustrais les carrés puis prends la racine."
+          }
+        },
+        "guides_placed": true,
+        "figure_layout": "right",
+        "family_id": "pythagore-petit-cote-schema",
+        "leak_keys": [
+          "valeur:12"
+        ],
+        "gives": [],
+        "author_order": true,
+        "twin": {
+          "group": "ci-3e-E1.12-20261116-165448/s02",
+          "jeu": 1,
+          "disposition": 1,
+          "jeux": 2,
+          "dispositions": 1,
+          "principal": true
+        }
+      }
+    },
+    "after": {
+      "statement": "Le triangle $RST$ est rectangle en $R$.\n{{figure}}\nCalcule $RT$, en cm. {{blank}}\n{{aide}} Repère l’hypoténuse et isole le carré de la longueur cherchée.",
+      "figure_json": {
+        "type": "tikz",
+        "params": {
+          "tikz": "\\begin{tikzpicture}[x=0.25cm,y=0.25cm]\n\\coordinate (R) at (0,0); \\coordinate (S) at (0,5); \\coordinate (T) at (12,0);\n\\draw[trait] (R)--(S)--(T)--cycle;\n\\AngDroit{S}{R}{T}\n\\Nom{(R)}{R}{below left} \\Nom{(S)}{S}{above} \\Nom{(T)}{T}{below right}\n\\Cote{(R)}{(S)}{5 cm}{4mm} \\Cote{(S)}{(T)}{13 cm}{4mm}\n\\end{tikzpicture}"
+        }
+      },
+      "grading_json": {
+        "max_score": 1,
+        "comparator": "numeric",
+        "tolerance": 0,
+        "bareme_points": 2.0,
+        "route": "ocr_llm",
+        "feedback": {
+          "lines": 2,
+          "options": {},
+          "wrong_answers": [
+            {
+              "value": 8,
+              "cell": null,
+              "text": "Tu as soustrait les longueurs : soustrais les carrés, puis prends la racine.",
+              "error": "math.geo.pythagore_carres"
+            },
+            {
+              "value": 144,
+              "cell": null,
+              "text": "Tu as trouvé $RT^2$ : il reste à prendre sa racine positive.",
+              "error": "math.geo.pythagore_carres"
+            }
+          ],
+          "correct": {
+            "text": "Tu as soustrait les carrés, puis pris la racine positive."
+          },
+          "blank": {
+            "text": "Identifie l’hypoténuse et écris la relation de Pythagore."
+          },
+          "fallback": {
+            "text": "Pour un côté de l’angle droit, soustrais les carrés puis prends la racine."
+          }
+        },
+        "guides_placed": true,
+        "figure_layout": "left",
+        "family_id": "pythagore-petit-cote-schema",
+        "leak_keys": [
+          "valeur:12"
+        ],
+        "gives": [],
+        "author_order": true,
+        "twin": {
+          "group": "ci-3e-E1.12-20261116-165448/s02",
+          "jeu": 1,
+          "disposition": 1,
+          "jeux": 2,
+          "dispositions": 1,
+          "principal": true
+        }
+      }
+    },
+    "before_fingerprint": "3bac84a59a06351a8a524028aa220165a1f9f3a7bfc4e885e84a61b09cdd54aa"
+  },
+  {
+    "id": "d3b01c6a-dd78-472b-a000-b6fb33117f30",
+    "group": "ci-3e-E1.12-20261116-165448/s02",
+    "jeu": 2,
+    "disposition": 1,
+    "before_mm": [
+      70.89572711878756,
+      60.626338229898685
+    ],
+    "after_mm": [
+      70.89572711878756,
+      60.626338229898685
+    ],
+    "before": {
+      "statement": "Le triangle $RST$ est rectangle en $R$.\n{{figure}}\nCalcule $RT$, en cm. {{blank}}\n{{aide}} Repère l’hypoténuse et isole le carré de la longueur cherchée.",
+      "figure_json": {
+        "type": "tikz",
+        "params": {
+          "tikz": "\\begin{tikzpicture}[x=0.25cm,y=0.25cm]\n\\coordinate (R) at (0,0); \\coordinate (S) at (0,8); \\coordinate (T) at (15,0);\n\\draw[trait] (R)--(S)--(T)--cycle;\n\\AngDroit{S}{R}{T}\n\\Nom{(R)}{R}{below left} \\Nom{(S)}{S}{above} \\Nom{(T)}{T}{below right}\n\\Cote{(R)}{(S)}{8 cm}{4mm} \\Cote{(S)}{(T)}{17 cm}{4mm}\n\\end{tikzpicture}"
+        }
+      },
+      "grading_json": {
+        "max_score": 1,
+        "comparator": "numeric",
+        "tolerance": 0,
+        "bareme_points": 2.0,
+        "route": "ocr_llm",
+        "feedback": {
+          "lines": 2,
+          "options": {},
+          "wrong_answers": [
+            {
+              "value": 9,
+              "cell": null,
+              "text": "Tu as soustrait les longueurs : soustrais les carrés, puis prends la racine.",
+              "error": "math.geo.pythagore_carres"
+            },
+            {
+              "value": 225,
+              "cell": null,
+              "text": "Tu as trouvé $RT^2$ : il reste à prendre sa racine positive.",
+              "error": "math.geo.pythagore_carres"
+            }
+          ],
+          "correct": {
+            "text": "Tu as soustrait les carrés, puis pris la racine positive."
+          },
+          "blank": {
+            "text": "Identifie l’hypoténuse et écris la relation de Pythagore."
+          },
+          "fallback": {
+            "text": "Pour un côté de l’angle droit, soustrais les carrés puis prends la racine."
+          }
+        },
+        "guides_placed": true,
+        "figure_layout": "right",
+        "family_id": "pythagore-petit-cote-schema",
+        "leak_keys": [
+          "valeur:15"
+        ],
+        "gives": [],
+        "author_order": true,
+        "twin": {
+          "group": "ci-3e-E1.12-20261116-165448/s02",
+          "jeu": 2,
+          "disposition": 1,
+          "jeux": 2,
+          "dispositions": 1,
+          "principal": false
+        }
+      }
+    },
+    "after": {
+      "statement": "Le triangle $RST$ est rectangle en $R$.\n{{figure}}\nCalcule $RT$, en cm. {{blank}}\n{{aide}} Repère l’hypoténuse et isole le carré de la longueur cherchée.",
+      "figure_json": {
+        "type": "tikz",
+        "params": {
+          "tikz": "\\begin{tikzpicture}[x=0.25cm,y=0.25cm]\n\\coordinate (R) at (0,0); \\coordinate (S) at (0,8); \\coordinate (T) at (15,0);\n\\draw[trait] (R)--(S)--(T)--cycle;\n\\AngDroit{S}{R}{T}\n\\Nom{(R)}{R}{below left} \\Nom{(S)}{S}{above} \\Nom{(T)}{T}{below right}\n\\Cote{(R)}{(S)}{8 cm}{4mm} \\Cote{(S)}{(T)}{17 cm}{4mm}\n\\end{tikzpicture}"
+        }
+      },
+      "grading_json": {
+        "max_score": 1,
+        "comparator": "numeric",
+        "tolerance": 0,
+        "bareme_points": 2.0,
+        "route": "ocr_llm",
+        "feedback": {
+          "lines": 2,
+          "options": {},
+          "wrong_answers": [
+            {
+              "value": 9,
+              "cell": null,
+              "text": "Tu as soustrait les longueurs : soustrais les carrés, puis prends la racine.",
+              "error": "math.geo.pythagore_carres"
+            },
+            {
+              "value": 225,
+              "cell": null,
+              "text": "Tu as trouvé $RT^2$ : il reste à prendre sa racine positive.",
+              "error": "math.geo.pythagore_carres"
+            }
+          ],
+          "correct": {
+            "text": "Tu as soustrait les carrés, puis pris la racine positive."
+          },
+          "blank": {
+            "text": "Identifie l’hypoténuse et écris la relation de Pythagore."
+          },
+          "fallback": {
+            "text": "Pour un côté de l’angle droit, soustrais les carrés puis prends la racine."
+          }
+        },
+        "guides_placed": true,
+        "figure_layout": "right",
+        "family_id": "pythagore-petit-cote-schema",
+        "leak_keys": [
+          "valeur:15"
+        ],
+        "gives": [],
+        "author_order": true,
+        "twin": {
+          "group": "ci-3e-E1.12-20261116-165448/s02",
+          "jeu": 2,
+          "disposition": 1,
+          "jeux": 2,
+          "dispositions": 1,
+          "principal": false
+        }
+      }
+    },
+    "before_fingerprint": "83078a81eefcef54a732f5baecceffb5b7793d90aee7b455bb38fbdc53e690b5"
+  },
+  {
+    "id": "b3a45805-7b47-4abb-8a4b-1aa8ef2a1a6e",
+    "group": "ci-3e-E1.9-20261116-190118/s04",
+    "jeu": 1,
+    "disposition": 1,
+    "before_mm": [
+      53.34666666666668,
+      46.586666666666666
+    ],
+    "after_mm": [
+      45.31744444444445,
+      38.55744444444444
+    ],
+    "before": {
+      "statement": "Pour construire un segment de longueur $\\sqrt{20}$ cm, des élèves tracent un triangle rectangle dont les côtés de l’angle droit mesurent $4$ cm et $2$ cm. Ils mesurent ensuite leur segment à la règle.\nQuelle mesure correspond à une construction juste ?\n{{aide}} Élève chaque mesure au carré et compare avec $20$.",
+      "figure_json": null,
+      "grading_json": {
+        "max_score": 4,
+        "comparator": "qcm",
+        "negative": 0,
+        "choices": [
+          "$4{,}5$ cm",
+          "$10$ cm",
+          "$6$ cm",
+          "$3{,}5$ cm"
+        ],
+        "exclusive": true,
+        "bareme_points": 1.5,
+        "route": "cv",
+        "feedback": {
+          "lines": 2,
+          "options": {
+            "b": {
+              "text": "Tu as pris la moitié de $20$ : la racine carrée n’est pas la moitié.",
+              "error": "math.calc.racine"
+            },
+            "c": {
+              "text": "L’hypoténuse est plus courte que la somme des deux autres côtés.",
+              "error": "math.geo.pythagore_carres"
+            },
+            "d": {
+              "text": "Cette mesure vaut $\\sqrt{12}$ : tu as soustrait les carrés.",
+              "error": "math.geo.pythagore_hypotenuse"
+            }
+          },
+          "wrong_answers": [],
+          "correct": {
+            "text": "Oui : $4{,}5^2$ est proche de $20$."
+          },
+          "blank": {
+            "text": "Le carré de la bonne mesure doit être proche de $20$."
+          },
+          "fallback": {
+            "text": "Le carré de la bonne mesure est proche de $20$."
+          }
+        },
+        "option_ids": [
+          "a",
+          "b",
+          "c",
+          "d"
+        ],
+        "guides_placed": true,
+        "family_id": "racine-mesure-plausible",
+        "leak_keys": [],
+        "gives": [],
+        "author_order": true,
+        "twin": {
+          "group": "ci-3e-E1.9-20261116-190118/s04",
+          "jeu": 1,
+          "disposition": 1,
+          "jeux": 3,
+          "dispositions": 2,
+          "principal": true
+        }
+      }
+    },
+    "after": {
+      "statement": "On construit un segment de $\\sqrt{20}$ cm : les côtés de l’angle droit du triangle mesurent $4$ cm et $2$ cm.\nQuelle mesure en cm correspond à une construction juste ?\n{{aide}} Élève chaque mesure au carré et compare avec $20$.",
+      "figure_json": null,
+      "grading_json": {
+        "max_score": 4,
+        "comparator": "qcm",
+        "negative": 0,
+        "choices": [
+          "$4{,}5$",
+          "$10$",
+          "$6$",
+          "$3{,}5$"
+        ],
+        "exclusive": true,
+        "bareme_points": 1.5,
+        "route": "cv",
+        "feedback": {
+          "lines": 2,
+          "options": {
+            "b": {
+              "text": "Tu as pris la moitié de $20$ : la racine carrée n’est pas la moitié.",
+              "error": "math.calc.racine"
+            },
+            "c": {
+              "text": "L’hypoténuse est plus courte que la somme des deux autres côtés.",
+              "error": "math.geo.pythagore_carres"
+            },
+            "d": {
+              "text": "Cette mesure vaut $\\sqrt{12}$ : tu as soustrait les carrés.",
+              "error": "math.geo.pythagore_hypotenuse"
+            }
+          },
+          "wrong_answers": [],
+          "correct": {
+            "text": "Oui : $4{,}5^2$ est proche de $20$."
+          },
+          "blank": {
+            "text": "Le carré de la bonne mesure doit être proche de $20$."
+          },
+          "fallback": {
+            "text": "Le carré de la bonne mesure est proche de $20$."
+          }
+        },
+        "option_ids": [
+          "a",
+          "b",
+          "c",
+          "d"
+        ],
+        "guides_placed": true,
+        "family_id": "racine-mesure-plausible",
+        "leak_keys": [],
+        "gives": [],
+        "author_order": true,
+        "twin": {
+          "group": "ci-3e-E1.9-20261116-190118/s04",
+          "jeu": 1,
+          "disposition": 1,
+          "jeux": 3,
+          "dispositions": 2,
+          "principal": true
+        }
+      }
+    },
+    "before_fingerprint": "f89cb4030255488db35db04b480fc441c1054b891c633a6ffb7e3be00b12a9c8"
+  },
+  {
+    "id": "9c41edab-3792-4d69-be3e-c6e3d93c92eb",
+    "group": "ci-3e-E1.9-20261116-190118/s04",
+    "jeu": 1,
+    "disposition": 2,
+    "before_mm": [
+      53.34666666666668,
+      46.586666666666666
+    ],
+    "after_mm": [
+      45.31744444444445,
+      38.55744444444444
+    ],
+    "before": {
+      "statement": "Pour construire un segment de longueur $\\sqrt{20}$ cm, des élèves tracent un triangle rectangle dont les côtés de l’angle droit mesurent $4$ cm et $2$ cm. Ils mesurent ensuite leur segment à la règle.\nQuelle mesure correspond à une construction juste ?\n{{aide}} Élève chaque mesure au carré et compare avec $20$.",
+      "figure_json": null,
+      "grading_json": {
+        "max_score": 4,
+        "comparator": "qcm",
+        "negative": 0,
+        "choices": [
+          "$6$ cm",
+          "$3{,}5$ cm",
+          "$4{,}5$ cm",
+          "$10$ cm"
+        ],
+        "exclusive": true,
+        "bareme_points": 1.5,
+        "route": "cv",
+        "feedback": {
+          "lines": 2,
+          "options": {
+            "c": {
+              "text": "L’hypoténuse est plus courte que la somme des deux autres côtés.",
+              "error": "math.geo.pythagore_carres"
+            },
+            "d": {
+              "text": "Cette mesure vaut $\\sqrt{12}$ : tu as soustrait les carrés.",
+              "error": "math.geo.pythagore_hypotenuse"
+            },
+            "b": {
+              "text": "Tu as pris la moitié de $20$ : la racine carrée n’est pas la moitié.",
+              "error": "math.calc.racine"
+            }
+          },
+          "wrong_answers": [],
+          "correct": {
+            "text": "Oui : $4{,}5^2$ est proche de $20$."
+          },
+          "blank": {
+            "text": "Le carré de la bonne mesure doit être proche de $20$."
+          },
+          "fallback": {
+            "text": "Le carré de la bonne mesure est proche de $20$."
+          }
+        },
+        "option_ids": [
+          "c",
+          "d",
+          "a",
+          "b"
+        ],
+        "guides_placed": true,
+        "family_id": "racine-mesure-plausible",
+        "leak_keys": [],
+        "gives": [],
+        "author_order": true,
+        "twin": {
+          "group": "ci-3e-E1.9-20261116-190118/s04",
+          "jeu": 1,
+          "disposition": 2,
+          "jeux": 3,
+          "dispositions": 2,
+          "principal": false
+        }
+      }
+    },
+    "after": {
+      "statement": "On construit un segment de $\\sqrt{20}$ cm : les côtés de l’angle droit du triangle mesurent $4$ cm et $2$ cm.\nQuelle mesure en cm correspond à une construction juste ?\n{{aide}} Élève chaque mesure au carré et compare avec $20$.",
+      "figure_json": null,
+      "grading_json": {
+        "max_score": 4,
+        "comparator": "qcm",
+        "negative": 0,
+        "choices": [
+          "$6$",
+          "$3{,}5$",
+          "$4{,}5$",
+          "$10$"
+        ],
+        "exclusive": true,
+        "bareme_points": 1.5,
+        "route": "cv",
+        "feedback": {
+          "lines": 2,
+          "options": {
+            "c": {
+              "text": "L’hypoténuse est plus courte que la somme des deux autres côtés.",
+              "error": "math.geo.pythagore_carres"
+            },
+            "d": {
+              "text": "Cette mesure vaut $\\sqrt{12}$ : tu as soustrait les carrés.",
+              "error": "math.geo.pythagore_hypotenuse"
+            },
+            "b": {
+              "text": "Tu as pris la moitié de $20$ : la racine carrée n’est pas la moitié.",
+              "error": "math.calc.racine"
+            }
+          },
+          "wrong_answers": [],
+          "correct": {
+            "text": "Oui : $4{,}5^2$ est proche de $20$."
+          },
+          "blank": {
+            "text": "Le carré de la bonne mesure doit être proche de $20$."
+          },
+          "fallback": {
+            "text": "Le carré de la bonne mesure est proche de $20$."
+          }
+        },
+        "option_ids": [
+          "c",
+          "d",
+          "a",
+          "b"
+        ],
+        "guides_placed": true,
+        "family_id": "racine-mesure-plausible",
+        "leak_keys": [],
+        "gives": [],
+        "author_order": true,
+        "twin": {
+          "group": "ci-3e-E1.9-20261116-190118/s04",
+          "jeu": 1,
+          "disposition": 2,
+          "jeux": 3,
+          "dispositions": 2,
+          "principal": false
+        }
+      }
+    },
+    "before_fingerprint": "632294798cb58bff05de828fbaabc8b5c86a47f56885a09ea6571b0a1f3b89df"
+  },
+  {
+    "id": "b16ae1d0-6f54-4636-acd2-28c5ee1c2ae9",
+    "group": "ci-3e-E1.9-20261116-190118/s04",
+    "jeu": 2,
+    "disposition": 1,
+    "before_mm": [
+      53.34666666666668,
+      46.586666666666666
+    ],
+    "after_mm": [
+      45.31744444444445,
+      38.55744444444444
+    ],
+    "before": {
+      "statement": "Pour construire un segment de longueur $\\sqrt{13}$ cm, des élèves tracent un triangle rectangle dont les côtés de l’angle droit mesurent $3$ cm et $2$ cm. Ils mesurent ensuite leur segment à la règle.\nQuelle mesure correspond à une construction juste ?\n{{aide}} Élève chaque mesure au carré et compare avec $13$.",
+      "figure_json": null,
+      "grading_json": {
+        "max_score": 4,
+        "comparator": "qcm",
+        "negative": 0,
+        "choices": [
+          "$3{,}6$ cm",
+          "$6{,}5$ cm",
+          "$5$ cm",
+          "$2{,}2$ cm"
+        ],
+        "exclusive": true,
+        "bareme_points": 1.5,
+        "route": "cv",
+        "feedback": {
+          "lines": 2,
+          "options": {
+            "b": {
+              "text": "Tu as pris la moitié de $13$ : la racine carrée n’est pas la moitié.",
+              "error": "math.calc.racine"
+            },
+            "c": {
+              "text": "L’hypoténuse est plus courte que la somme des deux autres côtés.",
+              "error": "math.geo.pythagore_carres"
+            },
+            "d": {
+              "text": "Cette mesure vaut $\\sqrt{5}$ : tu as soustrait les carrés.",
+              "error": "math.geo.pythagore_hypotenuse"
+            }
+          },
+          "wrong_answers": [],
+          "correct": {
+            "text": "Oui : $3{,}6^2$ est proche de $13$."
+          },
+          "blank": {
+            "text": "Le carré de la bonne mesure doit être proche de $13$."
+          },
+          "fallback": {
+            "text": "Le carré de la bonne mesure est proche de $13$."
+          }
+        },
+        "option_ids": [
+          "a",
+          "b",
+          "c",
+          "d"
+        ],
+        "guides_placed": true,
+        "family_id": "racine-mesure-plausible",
+        "leak_keys": [],
+        "gives": [],
+        "author_order": true,
+        "twin": {
+          "group": "ci-3e-E1.9-20261116-190118/s04",
+          "jeu": 2,
+          "disposition": 1,
+          "jeux": 3,
+          "dispositions": 2,
+          "principal": false
+        }
+      }
+    },
+    "after": {
+      "statement": "On construit un segment de $\\sqrt{13}$ cm : les côtés de l’angle droit du triangle mesurent $3$ cm et $2$ cm.\nQuelle mesure en cm correspond à une construction juste ?\n{{aide}} Élève chaque mesure au carré et compare avec $13$.",
+      "figure_json": null,
+      "grading_json": {
+        "max_score": 4,
+        "comparator": "qcm",
+        "negative": 0,
+        "choices": [
+          "$3{,}6$",
+          "$6{,}5$",
+          "$5$",
+          "$2{,}2$"
+        ],
+        "exclusive": true,
+        "bareme_points": 1.5,
+        "route": "cv",
+        "feedback": {
+          "lines": 2,
+          "options": {
+            "b": {
+              "text": "Tu as pris la moitié de $13$ : la racine carrée n’est pas la moitié.",
+              "error": "math.calc.racine"
+            },
+            "c": {
+              "text": "L’hypoténuse est plus courte que la somme des deux autres côtés.",
+              "error": "math.geo.pythagore_carres"
+            },
+            "d": {
+              "text": "Cette mesure vaut $\\sqrt{5}$ : tu as soustrait les carrés.",
+              "error": "math.geo.pythagore_hypotenuse"
+            }
+          },
+          "wrong_answers": [],
+          "correct": {
+            "text": "Oui : $3{,}6^2$ est proche de $13$."
+          },
+          "blank": {
+            "text": "Le carré de la bonne mesure doit être proche de $13$."
+          },
+          "fallback": {
+            "text": "Le carré de la bonne mesure est proche de $13$."
+          }
+        },
+        "option_ids": [
+          "a",
+          "b",
+          "c",
+          "d"
+        ],
+        "guides_placed": true,
+        "family_id": "racine-mesure-plausible",
+        "leak_keys": [],
+        "gives": [],
+        "author_order": true,
+        "twin": {
+          "group": "ci-3e-E1.9-20261116-190118/s04",
+          "jeu": 2,
+          "disposition": 1,
+          "jeux": 3,
+          "dispositions": 2,
+          "principal": false
+        }
+      }
+    },
+    "before_fingerprint": "5cadce702dc32bb2a4cabf24a234fd2dfb6223dda29b442cfaa2736b4e2359c5"
+  },
+  {
+    "id": "31e4f4f1-aeea-49d5-8c56-eae707c643fa",
+    "group": "ci-3e-E1.9-20261116-190118/s04",
+    "jeu": 2,
+    "disposition": 2,
+    "before_mm": [
+      53.34666666666668,
+      46.586666666666666
+    ],
+    "after_mm": [
+      45.31744444444445,
+      38.55744444444444
+    ],
+    "before": {
+      "statement": "Pour construire un segment de longueur $\\sqrt{13}$ cm, des élèves tracent un triangle rectangle dont les côtés de l’angle droit mesurent $3$ cm et $2$ cm. Ils mesurent ensuite leur segment à la règle.\nQuelle mesure correspond à une construction juste ?\n{{aide}} Élève chaque mesure au carré et compare avec $13$.",
+      "figure_json": null,
+      "grading_json": {
+        "max_score": 4,
+        "comparator": "qcm",
+        "negative": 0,
+        "choices": [
+          "$5$ cm",
+          "$2{,}2$ cm",
+          "$3{,}6$ cm",
+          "$6{,}5$ cm"
+        ],
+        "exclusive": true,
+        "bareme_points": 1.5,
+        "route": "cv",
+        "feedback": {
+          "lines": 2,
+          "options": {
+            "c": {
+              "text": "L’hypoténuse est plus courte que la somme des deux autres côtés.",
+              "error": "math.geo.pythagore_carres"
+            },
+            "d": {
+              "text": "Cette mesure vaut $\\sqrt{5}$ : tu as soustrait les carrés.",
+              "error": "math.geo.pythagore_hypotenuse"
+            },
+            "b": {
+              "text": "Tu as pris la moitié de $13$ : la racine carrée n’est pas la moitié.",
+              "error": "math.calc.racine"
+            }
+          },
+          "wrong_answers": [],
+          "correct": {
+            "text": "Oui : $3{,}6^2$ est proche de $13$."
+          },
+          "blank": {
+            "text": "Le carré de la bonne mesure doit être proche de $13$."
+          },
+          "fallback": {
+            "text": "Le carré de la bonne mesure est proche de $13$."
+          }
+        },
+        "option_ids": [
+          "c",
+          "d",
+          "a",
+          "b"
+        ],
+        "guides_placed": true,
+        "family_id": "racine-mesure-plausible",
+        "leak_keys": [],
+        "gives": [],
+        "author_order": true,
+        "twin": {
+          "group": "ci-3e-E1.9-20261116-190118/s04",
+          "jeu": 2,
+          "disposition": 2,
+          "jeux": 3,
+          "dispositions": 2,
+          "principal": false
+        }
+      }
+    },
+    "after": {
+      "statement": "On construit un segment de $\\sqrt{13}$ cm : les côtés de l’angle droit du triangle mesurent $3$ cm et $2$ cm.\nQuelle mesure en cm correspond à une construction juste ?\n{{aide}} Élève chaque mesure au carré et compare avec $13$.",
+      "figure_json": null,
+      "grading_json": {
+        "max_score": 4,
+        "comparator": "qcm",
+        "negative": 0,
+        "choices": [
+          "$5$",
+          "$2{,}2$",
+          "$3{,}6$",
+          "$6{,}5$"
+        ],
+        "exclusive": true,
+        "bareme_points": 1.5,
+        "route": "cv",
+        "feedback": {
+          "lines": 2,
+          "options": {
+            "c": {
+              "text": "L’hypoténuse est plus courte que la somme des deux autres côtés.",
+              "error": "math.geo.pythagore_carres"
+            },
+            "d": {
+              "text": "Cette mesure vaut $\\sqrt{5}$ : tu as soustrait les carrés.",
+              "error": "math.geo.pythagore_hypotenuse"
+            },
+            "b": {
+              "text": "Tu as pris la moitié de $13$ : la racine carrée n’est pas la moitié.",
+              "error": "math.calc.racine"
+            }
+          },
+          "wrong_answers": [],
+          "correct": {
+            "text": "Oui : $3{,}6^2$ est proche de $13$."
+          },
+          "blank": {
+            "text": "Le carré de la bonne mesure doit être proche de $13$."
+          },
+          "fallback": {
+            "text": "Le carré de la bonne mesure est proche de $13$."
+          }
+        },
+        "option_ids": [
+          "c",
+          "d",
+          "a",
+          "b"
+        ],
+        "guides_placed": true,
+        "family_id": "racine-mesure-plausible",
+        "leak_keys": [],
+        "gives": [],
+        "author_order": true,
+        "twin": {
+          "group": "ci-3e-E1.9-20261116-190118/s04",
+          "jeu": 2,
+          "disposition": 2,
+          "jeux": 3,
+          "dispositions": 2,
+          "principal": false
+        }
+      }
+    },
+    "before_fingerprint": "23b7cbddf822e7d400f75b07db65ede4f8b591511fa8828e0b1c125825d00ce5"
+  },
+  {
+    "id": "59da4c0f-3b26-4dce-9aee-9eaf7d32e7ba",
+    "group": "ci-3e-E1.9-20261116-190118/s04",
+    "jeu": 3,
+    "disposition": 1,
+    "before_mm": [
+      59.34666666666668,
+      52.58666666666666
+    ],
+    "after_mm": [
+      45.31744444444445,
+      38.55744444444444
+    ],
+    "before": {
+      "statement": "Pour construire un segment de longueur $\\sqrt{29}$ cm, des élèves tracent un triangle rectangle dont les côtés de l’angle droit mesurent $5$ cm et $2$ cm. Ils mesurent ensuite leur segment à la règle.\nQuelle mesure correspond à une construction juste ?\n{{aide}} Élève chaque mesure au carré et compare avec $29$.",
+      "figure_json": null,
+      "grading_json": {
+        "max_score": 4,
+        "comparator": "qcm",
+        "negative": 0,
+        "choices": [
+          "$5{,}4$ cm",
+          "$14{,}5$ cm",
+          "$7$ cm",
+          "$4{,}6$ cm"
+        ],
+        "exclusive": true,
+        "bareme_points": 1.5,
+        "route": "cv",
+        "feedback": {
+          "lines": 2,
+          "options": {
+            "b": {
+              "text": "Tu as pris la moitié de $29$ : la racine carrée n’est pas la moitié.",
+              "error": "math.calc.racine"
+            },
+            "c": {
+              "text": "L’hypoténuse est plus courte que la somme des deux autres côtés.",
+              "error": "math.geo.pythagore_carres"
+            },
+            "d": {
+              "text": "Cette mesure vaut $\\sqrt{21}$ : tu as soustrait les carrés.",
+              "error": "math.geo.pythagore_hypotenuse"
+            }
+          },
+          "wrong_answers": [],
+          "correct": {
+            "text": "Oui : $5{,}4^2$ est proche de $29$."
+          },
+          "blank": {
+            "text": "Le carré de la bonne mesure doit être proche de $29$."
+          },
+          "fallback": {
+            "text": "Le carré de la bonne mesure est proche de $29$."
+          }
+        },
+        "option_ids": [
+          "a",
+          "b",
+          "c",
+          "d"
+        ],
+        "guides_placed": true,
+        "family_id": "racine-mesure-plausible",
+        "leak_keys": [],
+        "gives": [],
+        "author_order": true,
+        "twin": {
+          "group": "ci-3e-E1.9-20261116-190118/s04",
+          "jeu": 3,
+          "disposition": 1,
+          "jeux": 3,
+          "dispositions": 2,
+          "principal": false
+        }
+      }
+    },
+    "after": {
+      "statement": "On construit un segment de $\\sqrt{29}$ cm : les côtés de l’angle droit du triangle mesurent $5$ cm et $2$ cm.\nQuelle mesure en cm correspond à une construction juste ?\n{{aide}} Élève chaque mesure au carré et compare avec $29$.",
+      "figure_json": null,
+      "grading_json": {
+        "max_score": 4,
+        "comparator": "qcm",
+        "negative": 0,
+        "choices": [
+          "$5{,}4$",
+          "$14{,}5$",
+          "$7$",
+          "$4{,}6$"
+        ],
+        "exclusive": true,
+        "bareme_points": 1.5,
+        "route": "cv",
+        "feedback": {
+          "lines": 2,
+          "options": {
+            "b": {
+              "text": "Tu as pris la moitié de $29$ : la racine carrée n’est pas la moitié.",
+              "error": "math.calc.racine"
+            },
+            "c": {
+              "text": "L’hypoténuse est plus courte que la somme des deux autres côtés.",
+              "error": "math.geo.pythagore_carres"
+            },
+            "d": {
+              "text": "Cette mesure vaut $\\sqrt{21}$ : tu as soustrait les carrés.",
+              "error": "math.geo.pythagore_hypotenuse"
+            }
+          },
+          "wrong_answers": [],
+          "correct": {
+            "text": "Oui : $5{,}4^2$ est proche de $29$."
+          },
+          "blank": {
+            "text": "Le carré de la bonne mesure doit être proche de $29$."
+          },
+          "fallback": {
+            "text": "Le carré de la bonne mesure est proche de $29$."
+          }
+        },
+        "option_ids": [
+          "a",
+          "b",
+          "c",
+          "d"
+        ],
+        "guides_placed": true,
+        "family_id": "racine-mesure-plausible",
+        "leak_keys": [],
+        "gives": [],
+        "author_order": true,
+        "twin": {
+          "group": "ci-3e-E1.9-20261116-190118/s04",
+          "jeu": 3,
+          "disposition": 1,
+          "jeux": 3,
+          "dispositions": 2,
+          "principal": false
+        }
+      }
+    },
+    "before_fingerprint": "7f033aae8c09006994efa48eee318fb9381584cfa28e948000c8499343b96412"
+  },
+  {
+    "id": "79781785-f5ba-4098-9652-4111ee5f6fe3",
+    "group": "ci-3e-E1.9-20261116-190118/s04",
+    "jeu": 3,
+    "disposition": 2,
+    "before_mm": [
+      59.34666666666668,
+      52.58666666666666
+    ],
+    "after_mm": [
+      45.31744444444445,
+      38.55744444444444
+    ],
+    "before": {
+      "statement": "Pour construire un segment de longueur $\\sqrt{29}$ cm, des élèves tracent un triangle rectangle dont les côtés de l’angle droit mesurent $5$ cm et $2$ cm. Ils mesurent ensuite leur segment à la règle.\nQuelle mesure correspond à une construction juste ?\n{{aide}} Élève chaque mesure au carré et compare avec $29$.",
+      "figure_json": null,
+      "grading_json": {
+        "max_score": 4,
+        "comparator": "qcm",
+        "negative": 0,
+        "choices": [
+          "$7$ cm",
+          "$4{,}6$ cm",
+          "$5{,}4$ cm",
+          "$14{,}5$ cm"
+        ],
+        "exclusive": true,
+        "bareme_points": 1.5,
+        "route": "cv",
+        "feedback": {
+          "lines": 2,
+          "options": {
+            "c": {
+              "text": "L’hypoténuse est plus courte que la somme des deux autres côtés.",
+              "error": "math.geo.pythagore_carres"
+            },
+            "d": {
+              "text": "Cette mesure vaut $\\sqrt{21}$ : tu as soustrait les carrés.",
+              "error": "math.geo.pythagore_hypotenuse"
+            },
+            "b": {
+              "text": "Tu as pris la moitié de $29$ : la racine carrée n’est pas la moitié.",
+              "error": "math.calc.racine"
+            }
+          },
+          "wrong_answers": [],
+          "correct": {
+            "text": "Oui : $5{,}4^2$ est proche de $29$."
+          },
+          "blank": {
+            "text": "Le carré de la bonne mesure doit être proche de $29$."
+          },
+          "fallback": {
+            "text": "Le carré de la bonne mesure est proche de $29$."
+          }
+        },
+        "option_ids": [
+          "c",
+          "d",
+          "a",
+          "b"
+        ],
+        "guides_placed": true,
+        "family_id": "racine-mesure-plausible",
+        "leak_keys": [],
+        "gives": [],
+        "author_order": true,
+        "twin": {
+          "group": "ci-3e-E1.9-20261116-190118/s04",
+          "jeu": 3,
+          "disposition": 2,
+          "jeux": 3,
+          "dispositions": 2,
+          "principal": false
+        }
+      }
+    },
+    "after": {
+      "statement": "On construit un segment de $\\sqrt{29}$ cm : les côtés de l’angle droit du triangle mesurent $5$ cm et $2$ cm.\nQuelle mesure en cm correspond à une construction juste ?\n{{aide}} Élève chaque mesure au carré et compare avec $29$.",
+      "figure_json": null,
+      "grading_json": {
+        "max_score": 4,
+        "comparator": "qcm",
+        "negative": 0,
+        "choices": [
+          "$7$",
+          "$4{,}6$",
+          "$5{,}4$",
+          "$14{,}5$"
+        ],
+        "exclusive": true,
+        "bareme_points": 1.5,
+        "route": "cv",
+        "feedback": {
+          "lines": 2,
+          "options": {
+            "c": {
+              "text": "L’hypoténuse est plus courte que la somme des deux autres côtés.",
+              "error": "math.geo.pythagore_carres"
+            },
+            "d": {
+              "text": "Cette mesure vaut $\\sqrt{21}$ : tu as soustrait les carrés.",
+              "error": "math.geo.pythagore_hypotenuse"
+            },
+            "b": {
+              "text": "Tu as pris la moitié de $29$ : la racine carrée n’est pas la moitié.",
+              "error": "math.calc.racine"
+            }
+          },
+          "wrong_answers": [],
+          "correct": {
+            "text": "Oui : $5{,}4^2$ est proche de $29$."
+          },
+          "blank": {
+            "text": "Le carré de la bonne mesure doit être proche de $29$."
+          },
+          "fallback": {
+            "text": "Le carré de la bonne mesure est proche de $29$."
+          }
+        },
+        "option_ids": [
+          "c",
+          "d",
+          "a",
+          "b"
+        ],
+        "guides_placed": true,
+        "family_id": "racine-mesure-plausible",
+        "leak_keys": [],
+        "gives": [],
+        "author_order": true,
+        "twin": {
+          "group": "ci-3e-E1.9-20261116-190118/s04",
+          "jeu": 3,
+          "disposition": 2,
+          "jeux": 3,
+          "dispositions": 2,
+          "principal": false
+        }
+      }
+    },
+    "before_fingerprint": "176520ca05d1e3199f5d89c2b08bf2edccd055c28be92a0fcb4172fe1e9d8d03"
+  }
+]

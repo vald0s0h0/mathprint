@@ -42,7 +42,6 @@ const DOC = {
   formatsCourants: { label: 'formats/courants.md', path: F('contexte/formats/courants.md') },
   geo: { label: 'formats/geo_construction.md', path: F('contexte/formats/geo_construction.md') },
   figures: { label: 'figures/commun.md', path: F('contexte/figures/commun.md') },
-  exemples: { label: 'exemples/math.json', path: F('contexte/exemples/math.json') },
   verificateur: { label: 'prompts/verificateur.md', path: F('prompts/verificateur.md') },
   relecteur: { label: 'prompts/relecteur.md', path: F('prompts/relecteur.md') },
   eleve: { label: 'prompts/eleve.md', path: F('prompts/eleve.md') },
@@ -77,7 +76,6 @@ const FLOWS: Flow[] = [
     outputs: [
       { cap: 'Contexte matière', name: 'Contexte matière, valable pour tous les pays', where: 'contexte/matieres/<m>.md', size: '4 à 10 Ko', tone: 'know', docs: MATIERES,
         def: 'Archétypes de la matière, contre-sens, règles valables dans toutes les leçons, charte d\'écriture.' },
-      { cap: 'Exemples', name: 'Cartes validées de la matière', where: 'contexte/exemples/<m>.json', tone: 'know', docs: [DOC.exemples] },
       { cap: 'Contexte de format', name: 'Kit de figures de la matière', where: 'contexte/figures/<m>.md', tone: 'tool', docs: KITS },
       { cap: 'Erreurs types', name: 'Liste fermée des erreurs d\'élèves', where: 'backend/app/data/misconceptions/<m>.json', tone: 'know', docs: ERREURS },
       { cap: 'Contexte pays', name: 'Mots officiels, monnaie, lieux, registres d\'âge', where: 'contexte/pays/<pays>.md', size: '1 à 3 Ko', tone: 'know', docs: PAYS },
@@ -108,35 +106,46 @@ const FLOWS: Flow[] = [
   },
   {
     title: '3. Écrire les exercices',
-    lead: 'Un seul agent par leçon, sans sous-agent. prepare compose un fichier de contexte unique, lu une fois : seulement les formats de la grille, un exemple par format, les erreurs types des domaines de la leçon, et les figures s\'il y en a.',
+    lead: "Un seul agent par leçon, sans sous-agent. Le script prepare refuse la leçon absente, à l'ancien format ou aux faits non vérifiés, calcule la grille, puis compose UN fichier de contexte (data/forge/contextes/), lu une fois, dans cet ordre, du plus général au plus spécifique. Les blocs marqués « seulement si » sont ajoutés ou retirés selon la grille.",
     inputs: [
-      'Universel',
-      { cap: 'Consigne', name: 'Procédure de la commande forge', where: 'agents/forge/CONSIGNE-EXERCICES.md', tone: 'data', docs: [DOC.consigneExercices] },
-      { cap: 'Universel', name: 'Le bon exercice, familles et jumelles', where: 'contexte/exercice.md', tone: 'know', docs: [DOC.exercice] },
-      { cap: 'Contexte de format', name: 'Socle commun et formats courants', where: 'contexte/formats/', tone: 'tool', docs: [DOC.formatsCommun, DOC.formatsCourants] },
-      { cap: 'Contexte de format', name: 'Charte des figures et kit de la matière', where: 'contexte/figures/commun.md + <m>.md', tone: 'tool', docs: [DOC.figures, KITS[0]] },
-      'Pays et matière',
-      { cap: 'Matière', name: 'Contexte matière, exemples validés, erreurs types', where: 'matieres/<m>.md · exemples/<m>.json · misconceptions', tone: 'know',
-        docs: [MATIERES[0], DOC.exemples, ERREURS[0]] },
-      { cap: 'Pays', name: 'Contexte pays', where: 'contexte/pays/<pays>.md', tone: 'know', docs: PAYS },
-      'Leçon et lot',
-      { cap: 'Contexte de format', name: 'Géométrie à tracer', where: 'contexte/formats/geo_construction.md', tone: 'tool', dashed: true, docs: [DOC.geo],
+      'Contexte unique, dans l\'ordre du fichier',
+      { cap: '1 · Universel', name: 'Le bon exercice', where: 'contexte/exercice.md', tone: 'know', docs: [DOC.exercice], def: 'Familles, jumelles, archétypes.' },
+      { cap: '2 · Formats', name: 'Socle commun', where: 'contexte/formats/commun.md', tone: 'tool', docs: [DOC.formatsCommun] },
+      { cap: '3 · Formats', name: 'Formats de cette préparation, un exemple chacun', where: 'extrait de formats/courants.md', tone: 'tool', docs: [DOC.formatsCourants],
+        tag: 'seulement les formats de la grille' },
+      { cap: '4 · Formats', name: 'Géométrie à tracer', where: 'contexte/formats/geo_construction.md', tone: 'tool', dashed: true, docs: [DOC.geo],
         tag: 'seulement si la grille a des tracés' },
-      { cap: 'Contexte de leçon', name: 'En-tête et section de la compétence', where: 'extrait de lecons/<m>/<tag>.md', tone: 'know', lessons: true },
-      { cap: 'Demande', name: 'Grille, idées tirées, existant', where: 'slots/, existants.md (par run)', tone: 'data',
-        def: 'Chaque emplacement porte son format, son niveau et son archétype avec sa définition.' },
+      { cap: '5 · Figures', name: 'Charte commune et kit de la matière', where: 'figures/commun.md + <m>.md', tone: 'tool', dashed: true, docs: [DOC.figures, KITS[0]],
+        tag: 'seulement si une carte a une figure ou un tracé' },
+      { cap: '6 · Matière', name: 'Contexte matière', where: 'contexte/matieres/<m>.md', tone: 'know', docs: MATIERES },
+      { cap: '7 · Matière', name: 'Erreurs types citées par la leçon', where: 'misconceptions/<m>.json, filtré', tone: 'know', docs: ERREURS,
+        tag: 'un code par ligne, pris dans la leçon entière' },
+      { cap: '8 · Pays', name: 'Contexte pays', where: 'contexte/pays/<pays>.md', tone: 'know', docs: PAYS },
+      { cap: '9 · Programme', name: 'Référentiel et progression de l\'année', where: 'data/forge/sources/<tag>-referentiel.md', tone: 'data',
+        def: 'Compétences mot pour mot. Ce qui est déjà vu avant la leçon, et ce qui ne l\'est pas encore : un exercice n\'en mobilise rien.' },
+      { cap: '10 · Leçon', name: 'En-tête et section de la compétence', where: 'extrait de lecons/<m>/<tag>.md', tone: 'know', lessons: true,
+        tag: 'leçon entière si plusieurs compétences' },
+      { cap: '11 · Banque', name: 'Exercices existants', where: 'existants.md (par run)', tone: 'data', dashed: true,
+        tag: 'seulement pour --suite et --complement' },
+      'Hors fichier',
+      { cap: 'Consigne', name: 'Procédure de la commande forge', where: 'agents/forge/CONSIGNE-EXERCICES.md', tone: 'data', docs: [DOC.consigneExercices] },
+      { cap: 'Demande', name: 'Grille de la compétence', where: 'grid.json du run, lue par run.py suivant', tone: 'data',
+        def: 'Par emplacement : difficulté, format, taille, figure, archétype avec sa définition, parfois une idée de la leçon.' },
     ],
     steps: [
-      { name: 'Opus ou Codex Sol', def: 'Écrit les familles. Chaque famille cite les faits qu\'elle mobilise et le code d\'erreur de chaque piège.' },
-      { name: 'run.py valider', def: 'Enchaîne contrôles par script (calculs, rendu, géométrie, jumelles, archétype, faits cités), goldfish et relecture, et s\'arrête à la première étape qui demande d\'agir.' },
-      { name: 'Lecteur sans contexte (goldfish)', def: 'Voit la carte rendue, la paraphrase et la résout.', docs: [DOC.eleve, DOC.correction] },
-      { name: 'Relecteur pédagogique, contexte neuf', def: 'Opus : juste, utile, distracteurs, niveau, programme. Bloquée → réécrite une fois → écartée.', docs: [DOC.relecteur], added: true },
-      { name: 'Vous, sur échantillon', def: 'La part fixée par l\'indice de confiance (100 % jusqu\'à 10 acceptées, puis 50 %, 25 %…), plus tout blocage du goldfish. Puis « Tout publier ».', human: true },
+      { name: 'run.py prepare', def: 'Porte d\'entrée : leçon présente, conforme, faits vérifiés. Calcule la grille, compose le contexte unique. Un run par compétence.' },
+      { name: 'Opus ou Codex Sol', def: 'Lit le contexte une fois. run.py suivant donne un lot de 5 emplacements : une famille chacun, écrites en un seul appel. Chaque famille cite ses faits et le code d\'erreur de chaque piège.' },
+      { name: 'run.py valider · 1. contrôles', def: 'Calculs, LaTeX, jumelles, archétype, faits cités, tracés. Arrêt à la première erreur.' },
+      { name: 'run.py valider · 2. rendu', def: 'Compile les cartes. Refuse le blanc anormal, une figure illisible et, dans une famille, un écart de plus de 5 mm entre la carte la plus haute et la plus basse, avec et sans aides.', added: true },
+      { name: 'run.py valider · 3. lecteur sans contexte (goldfish)', def: 'Voit la carte rendue, la paraphrase et la résout. Une carte bloquée : corrigée, puis relancée.', docs: [DOC.eleve, DOC.correction] },
+      { name: 'run.py valider · 4. relecteur pédagogique, contexte neuf', def: 'Opus : juste, utile, distracteurs, niveau, programme. Bloquée → réécrite une fois → écartée.', docs: [DOC.relecteur], added: true },
+      { name: 'run.py valider · 5. persist', def: 'Écrit les brouillons, rien n\'est publié. Remplit review_flags (texte rouge sur la carte) et marque celles à relire.' },
+      { name: 'Vous, sur échantillon', def: 'Par format et par format × archétype : 100 % jusqu\'à 10 cartes acceptées d\'affilée, puis 50 % (30), 25 % (100), 10 % (300), 5 %. Un pouce baissé remet 100 %. Puis « Tout publier ».', human: true },
     ],
     outputs: [
       { cap: 'Familles', name: 'Énoncé à paramètres, deux dispositions', where: 'familles/<emplacement>.json', tone: 'data' },
-      { cap: 'Cartes', name: 'Jumelles remplies par le script', where: 'manifeste.json du run', tone: 'data' },
-      { cap: 'Banque', name: 'Exercices acceptés, avec faits cités et codes d\'erreur', where: 'onglet Exercices', tone: 'data', tag: '→ impression, correction, suivi' },
+      { cap: 'Cartes', name: 'Jumelles remplies par le script (4 ou 6 par famille)', where: 'manifeste.json du run', tone: 'data' },
+      { cap: 'Banque', name: 'Brouillons avec faits cités et codes d\'erreur', where: 'onglet Exercices', tone: 'data', tag: '→ impression, correction, suivi' },
       { cap: 'Bilan', name: 'Écartés, signalés, erreurs proposées, tokens', where: 'run.py bilan', tone: 'data' },
     ],
   },
@@ -267,6 +276,58 @@ function FlowView({ flow, onOpen, onLessons }: { flow: Flow; onOpen: (p: string)
         {flow.outputs.map((c, i) => <Card key={i} card={c} onOpen={onOpen} onLessons={onLessons} />)}
       </Stack>
     </Box>
+  </Stack>
+}
+
+// ------------------------------------------------------------------ grille
+const DIFF_COLOR = ['teal', 'yellow', 'red']
+const PLANS: { name: string; verbs: string; count: string; slots: [number, string, string, string][] }[] = [
+  { name: 'Savoir à restituer', verbs: 'connaître, identifier, reconnaître, nommer, citer, définir, distinguer, énoncer', count: '2 familles',
+    slots: [[1, 'qcm_single', 'XS', 'CALC'], [1, 'matching', 'S', 'REPR'], [2, 'checkbox_grid', 'M', 'CONTRE']] },
+  { name: 'Savoir-faire', verbs: 'tout autre verbe (calculer, construire, résoudre…)', count: '5, 6 ou 7 familles selon la durée (≤15 min, ≤30 min, plus)',
+    slots: [[1, 'qcm_single', 'XS', 'CALC'], [2, 'short_text', 'S', 'CALC'], [2, 'table_fill', 'L', 'REPR'], [2, 'qcm_single', 'M', 'ESTIM'],
+      [3, 'multiline_text', 'L', 'INVERSE'], [2, 'short_text', 'M', 'DOC'], [3, 'multiline_text', 'L', 'DECIDE']] },
+  { name: 'Raisonnement', verbs: 'justifier, démontrer, interpréter, prouver, argumenter, expliquer, analyser, critiquer', count: '4 familles',
+    slots: [[2, 'checkbox_grid', 'M', 'CONTRE'], [2, 'qcm_single', 'M', 'REPR'], [3, 'multiline_text', 'L', 'CALC'], [3, 'multiline_text', 'L', 'INVERSE']] },
+]
+const ARCHETYPES: [string, string][] = [
+  ['CALC', 'application directe'], ['REPR', 'changer de représentation'], ['ERR', 'copie d\'élève à corriger'], ['QUI', 'deux élèves en désaccord'],
+  ['CONTRE', 'vrai ou faux, contre-exemple'], ['INVERSE', 'retrouver la donnée'], ['ESTIM', 'ordre de grandeur'], ['DOC', 'lire un document'], ['DECIDE', 'prendre une décision'],
+]
+
+function GridSection() {
+  return <Stack gap="sm">
+    <Title order={3}>La grille : ce que le script décide, ce que le modèle remplit</Title>
+    <Text size="sm" c="dimmed" maw="80ch">Le verbe du libellé de la compétence donne sa nature, donc son nombre de familles, leurs formats, leurs difficultés et leurs archétypes. Chaque famille s'imprime en 4 ou 6 jumelles. Tout est déterministe : même compétence, même grille.</Text>
+    <SimpleGrid cols={{ base: 1, md: 3 }} spacing="sm">
+      {PLANS.map(plan => <Box key={plan.name} p="sm" style={{ border: '1px solid var(--mantine-color-default-border)', borderRadius: 6 }}>
+        <Text fw={600} size="sm">{plan.name}</Text>
+        <Text size="xs" c="dimmed">{plan.verbs}</Text>
+        <Text size="xs" fw={600} mb={6}>{plan.count}</Text>
+        <Stack gap={3}>
+          {plan.slots.map(([level, format, size, arch], i) => <Group key={i} gap={6} wrap="nowrap">
+            <Badge size="xs" color={DIFF_COLOR[level - 1]} variant="light" w={74}>{['facile', 'moyen', 'difficile'][level - 1]}</Badge>
+            <Text size="xs" ff="monospace" style={{ flex: 1 }}>{format}</Text>
+            <Text size="xs" c="dimmed">{size}</Text>
+            <Badge size="xs" variant="outline" color="gray">{arch}</Badge>
+          </Group>)}
+        </Stack>
+      </Box>)}
+    </SimpleGrid>
+    <Text size="xs" c="dimmed">« Traiter une situation » : aucun exercice, quatre problèmes par leçon (--problemes), de 2 à 4 parties, sur au moins 2 compétences. Un savoir change de format de départ d'une compétence à l'autre.</Text>
+    <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="sm">
+      {[['Élèves fictifs', 'ERR et QUI remplacent 2 emplacements par leçon, 3 à partir de 6 compétences qui en accueillent. Jamais le premier, jamais un savoir. Format simple : QCM ou rédaction.'],
+        ['Idées de la leçon', 'Au plus 40 % des emplacements reçoivent une idée (un mécanisme en deux phrases), jamais une application directe CALC.'],
+        ['Tracés', 'Profil de la leçon : « central » remplace 6 cartes par des géométries à tracer, « partiel » en remplace 1 ou 2. Le mode (quadrillage, libre, case) suit la difficulté.'],
+        ['Figures', 'Une partie des cartes, 20 % par défaut, porte une figure TikZ, en commençant par les grandes tailles.']]
+        .map(([t, d]) => <Box key={t} p="sm" style={{ border: '1px solid var(--mantine-color-default-border)', borderRadius: 6 }}>
+          <Text fw={600} size="sm">{t}</Text><Text size="xs" c="dimmed">{d}</Text></Box>)}
+    </SimpleGrid>
+    <Group gap={6} wrap="wrap">
+      <Text size="xs" fw={600}>Archétypes :</Text>
+      {ARCHETYPES.map(([code, def]) => <Tooltip key={code} label={def}><Badge size="sm" variant="light" color="gray">{code} · {def}</Badge></Tooltip>)}
+    </Group>
+    <Text size="xs" c="dimmed">Runs particuliers : --suite (nouvelle série, différente de la banque), --complement N ou --facile/--moyen/--difficile N (cartes ajoutées, 40 % / 40 % / 20 % par défaut), --traces N (géométries seules), --pilote (tout relire), --vingt (ancienne grille fixe de 20 cartes : 8 faciles, 8 moyennes, 4 difficiles).</Text>
   </Stack>
 }
 
@@ -417,6 +478,8 @@ export default function ForgeAdmin() {
     </Group>
 
     {FLOWS.map(flow => <FlowView key={flow.title} flow={flow} onOpen={openDoc} onLessons={() => setLessons(true)} />)}
+
+    <GridSection />
 
     <Stack gap={8}>
       <Title order={3}>Quand une carte est refusée, on corrige le bon niveau</Title>

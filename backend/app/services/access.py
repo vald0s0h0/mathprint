@@ -5,6 +5,7 @@ elles ne se réappliquent pas récursivement. Les workers de génération utilis
 un sujet déjà autorisé ; le worker d'ingestion réinstalle le périmètre de l'auteur.
 """
 from fastapi import HTTPException
+import re
 from sqlalchemy import event, select, or_, and_, tuple_
 from sqlalchemy.orm import with_loader_criteria
 from .. import models as m
@@ -180,7 +181,9 @@ def check_edition(request):
     if is_centre():
         return
     path, method = request.url.path, request.method
-    if path.startswith("/api/operations/") and not (path == "/api/operations/catalog" and method in _READ):
+    allowed_read = method in _READ and (path == "/api/operations/catalog" or
+        re.fullmatch(r"/api/operations/classes/[^/]+/teachings", path))
+    if path.startswith("/api/operations/") and not allowed_read:
         raise HTTPException(404, "Indisponible sur cette instance")
     if path == "/api/admin/users/correctors":
         raise HTTPException(404, "Indisponible sur cette instance")

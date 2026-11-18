@@ -1806,12 +1806,13 @@ def preview_exercise(contract: dict, exercise: dict, slot: dict) -> dict:
             "is_problem": slot["kind"] == "problem"}
 
 
-def card_height_mm(ex: dict) -> float:
+def card_height_mm(ex: dict, guides: bool = True) -> float:
     from app.services import card_preview, pdfgen
-    item = card_preview.shape(ex)
+    item = card_preview.shape(ex, guides=guides)
     tpl = pdfgen.DEFAULT_TEMPLATES["exercise"]
     fs = float(tpl.get("font_size", 9))
-    return pdfgen.estimate_item_height(item, fs, fs, tpl) / pdfgen.mm
+    math_fs = float(tpl.get("math_size", 9))
+    return pdfgen.estimate_item_height(item, fs, math_fs, tpl) / pdfgen.mm
 
 
 def whitespace(png: bytes) -> dict:
@@ -1991,6 +1992,26 @@ def simulate(heights_mm: list[float], tiers: list[int], *, n: int = SIMULATIONS,
             "median_leftover_mm": round(statistics.median(leftovers), 1), "runs": n}
 
 
+FAMILY_HEIGHT_TOLERANCE_MM = 5.0
+
+
+def family_height_spreads(heights: dict[str, float]) -> dict[str, dict]:
+    """Écart réel de hauteur entre les cartes de chaque famille, en millimètres."""
+    groups: dict[str, dict[str, float]] = {}
+    for key, height in heights.items():
+        groups.setdefault(key.split(".", 1)[0], {})[key] = height
+    out = {}
+    for group, members in groups.items():
+        low = min(members, key=members.get)
+        high = max(members, key=members.get)
+        delta = members[high] - members[low]
+        out[group] = {"min_card": low, "max_card": high,
+                      "min_mm": round(members[low], 3), "max_mm": round(members[high], 3),
+                      "difference_mm": round(delta, 3),
+                      "too_different": delta > FAMILY_HEIGHT_TOLERANCE_MM + 1e-9}
+    return out
+
+
 def render(db, run: Path) -> dict:
     """Rendu réel de chaque carte valide : PNG, hauteur, blanc, compactage gratuit,
     simulation de sujets. Aucun modèle n'est appelé."""
@@ -2005,6 +2026,8 @@ def render(db, run: Path) -> dict:
         shutil.rmtree(folder, ignore_errors=True)
         folder.mkdir()
     cards: dict = {}
+    raw_heights: dict[str, float] = {}
+    no_guide_heights: dict[str, float] = {}
     layouts: dict = {}
     writing: dict = {}
     field_whitespace: dict = {}
@@ -2048,6 +2071,8 @@ def render(db, run: Path) -> dict:
             fs = float(pdfgen.DEFAULT_TEMPLATES["exercise"].get("font_size", 9))
             if pdfgen.broken_leading(pdfgen._exercise_layout(card_preview.shape(ex), fs, fs)[0]):
                 leading.append(key)
+        raw_heights[key] = height
+        no_guide_heights[key] = card_height_mm(ex, guides=False)
         cards[key] = {"height_mm": round(height, 1), "size": size_class(height),
                       "size_target": slot["size"], "whitespace": metrics, "excess": excess,
                       "figure_layout": chosen, "figure_scale": scale,
@@ -2066,10 +2091,16 @@ def render(db, run: Path) -> dict:
     size_gaps = {name: {"cible": targets.get(name, 0), "mesure": actual.get(name, 0)}
                  for name, _ in SIZE_LIMITS_MM
                  if abs(targets.get(name, 0) - actual.get(name, 0)) > SIZE_TOLERANCE}
-    simulation = simulate([c["height_mm"] for c in principal.values()],
+    family_heights = family_height_spreads(raw_heights)
+    without_guides = family_height_spreads(no_guide_heights)
+    for group, measure in family_heights.items():
+        no_guide = without_guides[group]
+        measure["without_guides"] = no_guide
+        measure["too_different"] = measure["too_different"] or no_guide["too_different"]
+    simulation = simulate([family_heights[k]["max_mm"] for k in principal],
                           [c["tier"] for c in principal.values()], seed=run.name)
     from app.services.exercise_review import fingerprint
-    summary = {"inputs": {k: fingerprint({"exercise": exercises[k], "contract": v}) for k, v in contracts.items()}, "cards": cards, "size_gaps": size_gaps, "simulation": simulation,
+    summary = {"inputs": {k: fingerprint({"exercise": exercises[k], "contract": v}) for k, v in contracts.items()}, "cards": cards, "family_heights": family_heights, "size_gaps": size_gaps, "simulation": simulation,
                "writing": writing, "field_whitespace": field_whitespace, "leading": leading, "traces": traces,
                "geometry": geometry,
                "too_tall": [k for k, c in cards.items() if not c["fits_column"]],
@@ -2103,6 +2134,12 @@ def lot_hints(summary: dict, kind: str) -> list[str]:
     if summary.get("leading"):
         hints.append("INTERLIGNE CASSÉ par une case dans une phrase repliée : "
                      + ", ".join(summary["leading"]) + " (mets la phrase à trous sur sa propre ligne)")
+    for group, sizes in (summary.get("family_heights") or {}).items():
+        if sizes["too_different"]:
+            worst = max((sizes, sizes["without_guides"]), key=lambda item: item["difference_mm"])
+            hints.append(f"HAUTEURS {group} : écart {worst['difference_mm']:.3f} mm "
+                         f"({worst['min_card']} / {worst['max_card']}) ; maximum 5 mm. "
+                         "Adapte les cartes, notamment les figures, puis relance render.")
     if summary["too_tall"]:
         hints.append(f"Carte trop haute pour une colonne : {', '.join(summary['too_tall'])}")
     for key, reasons in summary["excess"].items():
@@ -2196,8 +2233,21 @@ def persist(db, run: Path, *, replace: bool = False, slots: list[str] | None = N
     targets = {f"{run.name}/{key}" for key in selected}
     replace = replace or bool(slots)
     rendered = load_json(run / "render.json") if (run / "render.json").exists() else {}
-    if "writing" not in rendered:
-        raise SystemExit("Lance `render` d'abord : le contrôle d'écriture n'a pas tourné.")
+    if "writing" not in rendered or "family_heights" not in rendered:
+        raise SystemExit("Lance `render` d'abord : les contrôles de mise en page n'ont pas tourné.")
+    from app.services.exercise_review import fingerprint
+    exercises = load_slots(run)
+    for key in selected:
+        if rendered.get("inputs", {}).get(key) != fingerprint({"exercise": exercises[key], "contract": contracts[key]}):
+            raise SystemExit(f"Rendu périmé pour {key} : relance `render`.")
+    bad_heights = {key.split(".", 1)[0] for key in selected
+                   if (rendered["family_heights"].get(key.split(".", 1)[0]) or {}).get("too_different")}
+    missing_heights = {key.split(".", 1)[0] for key in selected} - set(rendered["family_heights"])
+    if missing_heights:
+        raise SystemExit("Mesure de famille absente : relance `render`.")
+    if bad_heights:
+        raise SystemExit("Écart de hauteur supérieur à 5 mm : " + ", ".join(sorted(bad_heights))
+                         + ". Adapte les cartes, notamment les figures, puis relance `render`.")
     # Une reprise ciblée ne doit ni remplacer ni être bloquée par une autre carte.
     # Sans sélection explicite, toutes les cartes restent contrôlées.
     refused = (set(rendered["writing"]) | set(rendered.get("leading") or [])
@@ -2206,7 +2256,6 @@ def persist(db, run: Path, *, replace: bool = False, slots: list[str] | None = N
     if refused:
         raise SystemExit("Cartes refusées à la mise en page : " + ", ".join(
             sorted(refused)))
-    exercises = load_slots(run)
     layouts = load_json(run / "layouts.json") if (run / "layouts.json").exists() else {}
     goldfish = load_json(run / "goldfish.json") if (run / "goldfish.json").exists() else {}
     conflicts = load_json(run / "conflicts.json") if (run / "conflicts.json").exists() else []

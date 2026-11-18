@@ -210,6 +210,9 @@ def _cmd_validate(args, db):
     summary = forge.render(db, run)
     blocked = sorted(set(summary.get("writing") or []) | set(summary.get("leading") or [])
                      | set(summary.get("traces") or []) | set(summary.get("geometry") or []))
+    height_blocked = {group for group, measure in (summary.get("family_heights") or {}).items()
+                      if measure["too_different"] and (not args.slots or group in args.slots)}
+    blocked = sorted(set(blocked) | height_blocked)
     hints = forge.lot_hints(summary, forge.load_json(run / "grid.json")[0]["kind"])
     if blocked:
         _print_limited(hints)

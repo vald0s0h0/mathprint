@@ -159,7 +159,7 @@ def estimated_seconds(row: GeneratedExercise) -> int:
 
 
 def _card(db: Session, row: GeneratedExercise, comp: Competency, tpl: dict,
-          font_size: int, math_fs: int) -> dict:
+          font_size: int, math_fs: int, family_measures: dict | None = None) -> dict:
     """Une entrée du pool, telle que l'assistant l'affiche et la mesure."""
     indigo = (row.raw_extract_json or {}).get("indigo") or {}
     heights = {}
@@ -167,8 +167,8 @@ def _card(db: Session, row: GeneratedExercise, comp: Competency, tpl: dict,
         shape = generation.render_shape(row, mode)
         # mesure mise en cache sur disque (préchauffée en arrière-plan) : l'ouverture
         # de l'assistant ne refait plus la mise en page de chaque carte
-        heights[mode] = card_preview.cached_height(
-            shape, font_size, math_fs, tpl["exercise"])
+        heights[mode] = (family_measures[mode].height(row) if family_measures else
+                         card_preview.cached_height(shape, font_size, math_fs, tpl["exercise"]))
     grading = row.grading_json or {}
     display_statement, is_problem = generation.indigo_display(row)
     return {
@@ -233,6 +233,7 @@ def pool(db: Session, competency_ids: list[str], pages: int = 1, user_id: str | 
             .order_by(GeneratedExercise.difficulty_level).all())
 
     selected = set(competency_ids)
+    family_measures = {mode: _CardMeasures(tpl, mode, db) for mode in GUIDE_MODES}
     exercises, problems = [], []
     # Cartes écartées par ce professeur : absentes de ses propositions manuelles.
     preferences = {p.exercise_id: p.value for p in
@@ -245,7 +246,7 @@ def pool(db: Session, competency_ids: list[str], pages: int = 1, user_id: str | 
         if not is_problem and row.competency_id not in selected:
             continue        # exercice d'une compétence voisine non cochée
         (problems if is_problem else exercises).append(_card(db, row, comp, tpl,
-                                                             font_size, math_fs))
+                                                             font_size, math_fs, family_measures))
     exercises.sort(key=lambda e: (e["competency_label"], e["difficulty"]))
     problems.sort(key=lambda e: (e["chapter_code"], e["difficulty"]))
     return {"exercises": exercises, "problems": problems,
@@ -283,8 +284,10 @@ class _CardMeasures:
     toutes les copies du sujet : hauteur maximale et largeur de zone de réponse.
     La police adaptée change ces mesures : elles sont gardées séparément."""
 
-    def __init__(self, tpl: dict, guide_mode: str):
-        self.tpl, self.guide_mode = tpl, guide_mode
+    def __init__(self, tpl: dict, guide_mode: str, db: Session | None = None):
+        self.tpl, self.guide_mode, self.db = tpl, guide_mode, db
+        self._siblings: dict = {}
+        self._family_heights: dict = {}
         self.font_size = int(tpl["exercise"].get("font_size", 9))
         self.math_fs = int(tpl["exercise"].get("math_size", 9))
         self._cache: dict[tuple[str, bool], tuple[float, float]] = {}
@@ -295,13 +298,21 @@ class _CardMeasures:
             shape = generation.render_shape(row, self.guide_mode)
             with pdfgen.dyslexic_measures(dyslexic):
                 self._cache[key] = (
-                    sheet_engine.measured(pdfgen.estimate_item_height(
-                        shape, self.font_size, self.math_fs, self.tpl["exercise"])),
+                    sheet_engine.measured((pdfgen.estimate_item_height(
+                        shape, self.font_size, self.math_fs, self.tpl["exercise"]) if dyslexic else
+                        card_preview.cached_height(shape, self.font_size, self.math_fs, self.tpl["exercise"]))),
                     pdfgen.answer_zone_width(shape, self.font_size, self.math_fs))
         return self._cache[key]
 
     def height(self, row: GeneratedExercise, dyslexic: bool = False) -> float:
-        return self._measure(row, dyslexic)[0]
+        if self.db is None or not row.twin_group:
+            return self._measure(row, dyslexic)[0]
+        key = (row.twin_group, dyslexic)
+        if key not in self._family_heights:
+            siblings = distribution.twin_siblings(self.db, row, self._siblings)
+            self._family_heights[key] = max(self._measure(r, dyslexic)[0]
+                                            for r in (list(siblings.values()) or [row]))
+        return self._family_heights[key]
 
     def zone_width(self, row: GeneratedExercise, dyslexic: bool = False) -> float:
         return self._measure(row, dyslexic)[1]
@@ -314,7 +325,7 @@ def assert_selection_fits(db: Session, exercise_ids: list[str], pages: int, guid
             .filter(GeneratedExercise.id.in_(exercise_ids)).all()}
     chosen = [rows[i] for i in exercise_ids if i in rows]
     worst = pdfgen.GUIDES_NONE if guides == pdfgen.GUIDES_NONE else pdfgen.GUIDES_INCLUDE
-    measures = _CardMeasures(doc_templates(db), worst)
+    measures = _CardMeasures(doc_templates(db), worst, db)
     heights = [measures.height(r) for r in chosen]
     if sheet_engine.pack_best(heights, [_card_tier(r) for r in chosen], pages) is None:
         raise ValueError("Ces exercices ne tiennent pas dans les pages prévues : "
@@ -335,6 +346,8 @@ def _engine_copy(db: Session, *, chosen: list[GeneratedExercise], catalog_refs: 
     tiers = [_card_tier(r) for r in chosen]
     columns = sheet_engine.mix_columns(heights, tiers, pages, rng)
     if columns is None:
+        if any(row.twin_group for row in chosen):
+            raise ValueError("Les jumelles de ces exercices ne tiennent pas dans les pages prévues : retirez une carte ou ajoutez une page.")
         columns = pdfgen.pack_columns(heights, tiers)
     render_items, placement = [], []
     seq = 0
@@ -428,7 +441,7 @@ def generate_manual_job(db: Session, assessment: Assessment, job: Job | None = N
     base_seed = int(hashlib.sha256(seed_source.encode()).hexdigest()[:8], 16) % 2_000_000_000
     max_pages = max(1, min(6, assessment.pages_target or 1))
     assessment.duplex = max_pages >= 2
-    measures = _CardMeasures(tpl, guide_mode)
+    measures = _CardMeasures(tpl, guide_mode, db)
     # réserve de pages signées : une colonne trop pleine fait glisser une carte
     # dans la suivante (jamais coupée), donc le plan peut déborder de la cible.
     PAGE_RESERVE = 4

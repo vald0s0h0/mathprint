@@ -145,7 +145,8 @@ def legible_matching(grading: dict, expected: dict) -> tuple[dict, dict]:
     if any(r != right for r in rights) or any(as_set(p) != as_set(pairs) for p in all_pairs):
         return grading, expected
     left = grading.get("left") or expected.get("left") or []
-    order = pdfgen.legible_order(left, right, pairs)
+    order = pdfgen.legible_order(left, right, pairs,
+                                 keep_crossing=bool(grading.get("author_order")))
     if order is None:
         return grading, expected
     pos = {old: new for new, old in enumerate(order)}
@@ -392,6 +393,8 @@ def generate_assessment_job(db: Session, assessment: Assessment,
     # absorber le + student_index de distribution.variant_seed.
     base_seed = int(hashlib.sha256(assessment.id.encode()).hexdigest()[:8], 16) % 2_000_000_000
     max_pages = max(1, min(6, assessment.pages_target or 1))
+    from .manual_subject import _CardMeasures
+    family_measures = _CardMeasures(tpl, guide_mode, db)
     assessment.duplex = max_pages >= 2
     ex_tpl_font_size = int(tpl["exercise"].get("font_size", font_size))
     math_fs = int(tpl["exercise"].get("math_size", 9))
@@ -569,6 +572,8 @@ def generate_assessment_job(db: Session, assessment: Assessment,
                 seq=seq, guides=mode)
             if render is None:
                 return False
+            if row.twin_group:
+                render["packing_height_pt"] = family_measures.height(row, bool(student.dyslexic))
             if revenge_code:
                 render = {**render, "revanche": True}
                 for iid in render.get("part_item_ids") or [render["item_id"]]:
@@ -639,8 +644,8 @@ def generate_assessment_job(db: Session, assessment: Assessment,
             mode = _guide_for(row)[0]
             key = (row.id, mode)
             if key not in _measure_cache:
-                _measure_cache[key] = pdfgen.estimate_item_height(
-                    render_shape(row, mode), ex_tpl_font_size, math_fs, tpl["exercise"])
+                _measure_cache[key] = (family_measures.height(row, bool(student.dyslexic)) if row.twin_group else
+                    pdfgen.estimate_item_height(render_shape(row, mode), ex_tpl_font_size, math_fs, tpl["exercise"]))
             return _measure_cache[key]
 
         def _rollback(before: int) -> None:

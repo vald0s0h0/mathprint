@@ -501,3 +501,23 @@ def test_a_legacy_volume_without_base_never_hides_the_repo(db, tmp_path):
     _seed_image(indigo._IMAGE_PUB_DIR, ids=("livre-1", "livre-2"))
     assert indigo.published_status()["source"] == "image"
     assert indigo.seed_published(db) == 2
+
+
+def test_publication_ivoirienne_est_disponible_immediatement_et_apres_redemarrage(db):
+    from app.routers import content
+    fw = CompetencyFramework(grade_level='3e', program_id='ci', subject_id='math', name='CI')
+    db.add(fw); db.flush()
+    comp = Competency(framework_id=fw.id, code='CI-2023-MATH-3E-A1.1', short_id='A1.1',
+                      label='Calcul', domain_code='A', domain_name='Nombres',
+                      chapter_code='A1', chapter_name='Calcul')
+    db.add(comp); db.flush()
+    row = IndigoExercise(competency_id=comp.id, grade_level='3e', status='validated',
+                         statement='Calculer.', grading_json={}, expected_json={})
+    db.add(row); db.commit()
+    assert indigo.publish_rows(db, [row]) == 1
+    assert db.get(GeneratedExercise, row.id).competency_id == comp.id
+    assert next(c for c in content.summary('3e', db, fw.id, 'math') if c['competency_id'] == comp.id)['family_total'] == 1
+    assert indigo.seed_published(db) == 1
+    assert db.get(GeneratedExercise, row.id).competency_id == comp.id
+    # Une publication ancienne sans métadonnées de pays reste lisible.
+    assert indigo._resolve_competency(db, comp.code, '3e').id == comp.id

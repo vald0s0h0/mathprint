@@ -48,7 +48,7 @@ Formats à ajouter après une barre quand le choix automatique ne convient pas :
 | `matching` | les `id` de la colonne de droite |
 | `table_fill` | les rangs des colonnes, à partir de 0 (`[[0, 1, 2], [2, 0, 1]]`) ; les lignes ne bougent jamais |
 
-Sur ces quatre formats, `dispositions` est obligatoire, sauf pour le tableau. Si l'ordre ne peut pas changer, écris à la place `"ordre_impose": "étapes d'un raisonnement"` (ou chronologie, valeurs croissantes, protocole) : la carte n'a alors qu'une disposition. `check` refuse deux dispositions identiques, une disposition incomplète, et un QCM dont la bonne réponse garde la même place.
+Sur ces quatre formats, `dispositions` est obligatoire, sauf pour le tableau. Si l'ordre ne peut pas changer, écris à la place `"ordre_impose": "étapes d'un raisonnement"` (ou chronologie, valeurs croissantes, protocole) : la carte n'a alors qu'une disposition. `check` refuse deux dispositions identiques, une disposition incomplète, un QCM dont la bonne réponse garde la même place, et un relier dont les traits sont parallèles ou identiques d'une disposition à l'autre (voir `exercice.md`).
 
 Une famille fautive ne donne aucune carte : l'erreur est rendue sous le nom de l'emplacement. Une jumelle refusée (`s10.j2d1 : …`) fait tomber toute sa famille : corrige la famille, jamais une jumelle.
 

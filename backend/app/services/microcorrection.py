@@ -254,6 +254,16 @@ def _select_llm(feedback: dict, decision, selection: Selection) -> None:
 
 def select(item, decision, response=None, reading=None) -> Selection | None:
     """Micro-correction d'une réponse, ou None si l'exercice n'en porte pas."""
+    selection = _select_automatic(item, decision, response, reading)
+    evidence = decision.evidence_json or {}
+    if "teacher_feedback" in evidence:
+        selection = selection or Selection()
+        selection.text = evidence["teacher_feedback"]
+        selection.kind = "teacher"
+    return selection
+
+
+def _select_automatic(item, decision, response=None, reading=None) -> Selection | None:
     policy = item.grading_json or {}
     feedback = policy.get("feedback")
     if not isinstance(feedback, dict):
