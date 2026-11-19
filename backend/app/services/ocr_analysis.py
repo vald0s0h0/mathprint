@@ -212,19 +212,25 @@ def _pairs(db, f) -> list:
     """Accord deux à deux et accords À TORT (les deux d'accord sur une surface fausse), par classe."""
     r1, r2 = OcrEngineRead.__table__.alias("r1"), OcrEngineRead.__table__.alias("r2")
     truth = OcrDecision.truth_surface.isnot(None)
-    both = and_(r1.c.kind == "read", r2.c.kind == "read", r1.c.error == "", r2.c.error == "",
+    kinds = ("read", "read_ctx")      # chaque passage est une source : « moteur » et « moteur+ctx »
+    both = and_(r1.c.kind.in_(kinds), r2.c.kind.in_(kinds), r1.c.error == "", r2.c.error == "",
                 r1.c.illegible.is_(False), r2.c.illegible.is_(False), r1.c.surface != "", r2.c.surface != "")
     agree = and_(both, r1.c.surface == r2.c.surface)
-    q = (select(OcrCrop.zone_class, r1.c.engine, r2.c.engine, func.count(), _sum(both), _sum(agree),
+    q = (select(OcrCrop.zone_class, r1.c.engine, r1.c.kind, r2.c.engine, r2.c.kind, func.count(),
+                _sum(both), _sum(agree),
                 _sum(and_(agree, truth, r1.c.surface != OcrDecision.truth_surface)),
                 _sum(and_(both, truth, r1.c.surface != OcrDecision.truth_surface,
                           r2.c.surface != OcrDecision.truth_surface)),
                 _sum(and_(agree, truth)))
-         .select_from(r1).join(r2, and_(r1.c.crop_id == r2.c.crop_id, r1.c.engine < r2.c.engine))
+         .select_from(r1).join(r2, and_(r1.c.crop_id == r2.c.crop_id, r1.c.kind.in_(kinds), r2.c.kind.in_(kinds),
+                                        or_(r1.c.engine < r2.c.engine,
+                                            and_(r1.c.engine == r2.c.engine, r1.c.kind < r2.c.kind))))
          .join(OcrCrop, OcrCrop.id == r1.c.crop_id).join(OcrDecision, OcrDecision.crop_id == OcrCrop.id)
-         .where(*f).group_by(OcrCrop.zone_class, r1.c.engine, r2.c.engine))
+         .where(*f).group_by(OcrCrop.zone_class, r1.c.engine, r1.c.kind, r2.c.engine, r2.c.kind))
     out = []
-    for zc, a, b, n, nboth, nagree, wrong_agree, both_wrong, agree_truth in db.execute(q):
+    lab = lambda e, k: f"{e}+ctx" if k == "read_ctx" else e
+    for zc, a, ka, b, kb, n, nboth, nagree, wrong_agree, both_wrong, agree_truth in db.execute(q):
+        a, b = lab(a, ka), lab(b, kb)
         out.append({"class": zc, "a": a, "b": b, "crops": int(n), "both_readable": int(nboth),
                     "agree": int(nagree), "agree_rate": round(nagree / nboth, 4) if nboth else None,
                     "wrong_agree": int(wrong_agree), "both_wrong": int(both_wrong),
@@ -281,7 +287,23 @@ def _load_full_sample(db, f, limit=3000) -> dict:
         .join(OcrCrop, OcrCrop.id == OcrDecision.crop_id)
         .where(*f, OcrCrop.full_sample.is_(True)).order_by(OcrDecision.created_at.desc()).limit(limit)).all()
     ids = [cid for cid, fd in rows if isinstance(fd, dict) and "action" in fd]      # passage complet terminé
-    return load_crops(db, ids) if ids else {}
+    crops = load_crops(db, ids) if ids else {}
+    for i in range(0, len(ids), 500):
+        for cid, truth in db.execute(select(OcrDecision.crop_id, OcrDecision.truth_surface)
+                                     .where(OcrDecision.crop_id.in_(ids[i:i + 500]))):
+            if cid in crops:
+                crops[cid]["truth"] = truth
+    return crops
+
+
+def source_of(engine: str, with_ctx: bool) -> str:
+    """Une source de lecture : le passage libre d'un moteur (« unimumer ») ou son passage avec
+    contexte (« unimumer+ctx »)."""
+    return f"{engine}+ctx" if with_ctx else engine
+
+
+def _sources(crops: dict) -> list[str]:
+    return sorted({source_of(e, r[-1]) for c in crops.values() for r in c["reads"] for e in [r[0]]})
 
 
 def _ctx(crop: dict) -> "fusion.CropCtx":
@@ -290,24 +312,35 @@ def _ctx(crop: dict) -> "fusion.CropCtx":
     return fusion.CropCtx(crop["zone_class"], crop["ink"] or 0, crop["h"] or 0, echo=echo, echo_text=text)
 
 
-def decide_full(crop: dict, plan: dict, th: dict, margin: float, exclude: str | None = None) -> tuple:
-    """(action, surface) du passage complet d'une découpe, éventuellement SANS un moteur."""
+def decide_full(crop: dict, plan: dict, th: dict, margin: float, exclude: str | set | frozenset | None = None,
+                keep: set | frozenset | None = None) -> tuple:
+    """(action, surface) du passage complet d'une découpe, éventuellement SANS certaines sources.
+    `exclude` : un nom de moteur (ses deux passages) ou un ensemble de sources (« moteur »,
+    « moteur+ctx ») ; `keep` : à l'inverse, les seules sources gardées (une pile à évaluer).
+    Un moteur dont aucun passage ne reste est retiré du plan ; ses scores forcés aussi."""
     zc = crop["zone_class"]
+    if isinstance(exclude, str):
+        exclude = {exclude, f"{exclude}+ctx"}
+    exclude = set(exclude or ())
+    if keep is not None:
+        exclude |= {src for src in _sources({"_": crop}) if src not in keep}
+        exclude |= {e for e in crop["scores"] if e not in keep and f"{e}+ctx" not in keep}
+    gone = {src for src in exclude if not src.endswith("+ctx") and f"{src}+ctx" in exclude} | \
+           {src for src in exclude if not src.endswith("+ctx")
+            and not any(r[0] == src and r[-1] for r in crop["reads"])}
     roles = (plan.get("classes") or {}).get(zc) or {}
     role_of = {e: r for r in ("observe", "stage2", "stage1") for e in roles.get(r, [])}
     reads = [fusion.ReadIn(engine=e, family=fam, raw=raw, surface=surf, illegible=ill or not surf.strip(),
                            confidence_raw=conf, logprob_mean=lpm, logprob_min=lpn, role=role_of.get(e, "observe"),
                            context=wc)
-             for (e, fam, raw, surf, ill, conf, lpm, lpn, wc) in crop["reads"] if e != exclude]
-    scores = {e: t for e, t in crop["scores"].items() if e != exclude} or None
+             for (e, fam, raw, surf, ill, conf, lpm, lpn, wc) in crop["reads"] if source_of(e, wc) not in exclude]
+    scores = {e: t for e, t in crop["scores"].items() if e not in gone} or None
     ctx = _ctx(crop)
     plan2 = plan
-    if exclude:
-        classes = {k: {r: [e for e in v if e != exclude] for r, v in vv.items()} if k == zc else vv
+    if gone:
+        classes = {k: {r: [e for e in v if e not in gone] for r, v in vv.items()} if k == zc else vv
                    for k, vv in plan["classes"].items()}
         plan2 = {**plan, "classes": classes}
-        if len(classes[zc].get("stage1", [])) < 2:       # le plan exige deux moteurs d'étape 1
-            classes[zc]["stage2"] = classes[zc].get("stage2", [])
     out = fusion.full_decision(ctx, reads, plan2, th, scores, margin)
     return out["action"], out["surface"]
 
@@ -320,21 +353,122 @@ def _marginal(db, f) -> dict:
         return {"crops": 0, "engines": {}}
     base = {cid: decide_full(c, plan, th, margin) for cid, c in crops.items()}
     engines = sorted({e for c in crops.values() for (e, *_r) in c["reads"]})
+    # retirer : un moteur entier, un seul de ses passages, ou TOUS les passages avec contexte
+    variants: dict[str, set | str] = {e: e for e in engines}
+    ctx_sources = {s for s in _sources(crops) if s.endswith("+ctx")}
+    for src in sorted(ctx_sources):                   # un moteur à deux passages : chacun retiré seul
+        variants[f"{src.removesuffix('+ctx')} (passage libre seul)"] = {src.removesuffix("+ctx")}
+        variants[src] = {src}
+    if ctx_sources:
+        variants["contexte (tous les passages)"] = ctx_sources
     out = {}
-    for eng in engines:
-        changed = lost = wrong_after = 0
+    for name, excl in variants.items():
+        srcs = {excl, f"{excl}+ctx"} if isinstance(excl, str) else excl
+        changed = lost = gained = errs_base = errs_alt = 0
         for cid, c in crops.items():
-            if not any(r[0] == eng for r in c["reads"]):
+            if not any(source_of(r[0], r[-1]) in srcs for r in c["reads"]):
                 continue
-            alt = decide_full(c, plan, th, margin, exclude=eng)
-            if alt != base[cid]:
+            alt = decide_full(c, plan, th, margin, exclude=excl)
+            b, truth = base[cid], c.get("truth")
+            if truth is not None:
+                errs_base += int(b[0] == "accept" and b[1] != truth)
+                errs_alt += int(alt[0] == "accept" and alt[1] != truth)
+            if alt != b:
                 changed += 1
-                if base[cid][0] == "accept" and alt[0] != "accept":
-                    lost += 1
-        out[eng] = {"decisions_changed": changed, "automatic_decisions_lost": lost,
-                    "share_changed": round(changed / len(crops), 4)}
-    return {"crops": len(crops), "engines": out,
-            "note": "décisions qui changeraient si le moteur était retiré (échantillon complet, mêmes réglages)"}
+                lost += int(b[0] == "accept" and alt[0] != "accept")
+                gained += int(alt[0] == "accept" and b[0] != "accept")
+        out[name] = {"decisions_changed": changed, "automatic_decisions_lost": lost,
+                     "automatic_decisions_gained": gained,
+                     "auto_errors_with": errs_base, "auto_errors_without": errs_alt,
+                     "share_changed": round(changed / len(crops), 4)}
+    return {"crops": len(crops), "with_truth": sum(1 for c in crops.values() if c.get("truth") is not None),
+            "engines": out,
+            "note": "décisions qui changeraient sans cette source (échantillon complet, mêmes réglages) ; "
+                    "erreurs automatiques comptées sur les découpes relues par le professeur"}
+
+
+def _context_gain(db, f, limit: int = 5000) -> dict:
+    """Le passage avec contexte apporte-t-il ? Pour chaque moteur qui lit deux fois, sur les découpes
+    relues par le professeur où les DEUX passages existent : exactitude libre et avec contexte,
+    lectures réparées (libre fausse, contexte juste), cassées (l'inverse) et recopies de la réponse
+    attendue alors que l'élève a écrit autre chose (le biais que le garde-fou neutralise)."""
+    from .ocr_surface import to_surface
+    rows = db.execute(select(OcrDecision.crop_id, OcrDecision.truth_surface).select_from(OcrDecision)
+                      .join(OcrCrop, OcrCrop.id == OcrDecision.crop_id)
+                      .where(*f, OcrDecision.truth_surface.isnot(None), OcrCrop.context_json.isnot(None))
+                      .order_by(OcrDecision.created_at.desc()).limit(limit)).all()
+    truth = dict(rows)
+    crops = load_crops(db, list(truth)) if truth else {}
+    out: dict = {}
+    for cid, c in crops.items():
+        t = truth[cid]
+        expected = ""
+        if c.get("context"):
+            expected = to_surface((c["context"] or {}).get("expected") or "", c["zone_class"])
+        by: dict = {}
+        for (e, _fam, _raw, surf, ill, *_r, wc) in c["reads"]:
+            by.setdefault(e, {})["ctx" if wc else "free"] = "" if ill else surf
+        for e, p in by.items():
+            if "free" not in p or "ctx" not in p:
+                continue
+            g = out.setdefault(e, {"crops": 0, "free_ok": 0, "ctx_ok": 0, "fixed": 0, "broken": 0,
+                                   "copied_expected": 0, "wrong_answers": 0})
+            fok, cok = p["free"] == t, p["ctx"] == t
+            g["crops"] += 1; g["free_ok"] += int(fok); g["ctx_ok"] += int(cok)
+            g["fixed"] += int(cok and not fok); g["broken"] += int(fok and not cok)
+            if expected and t != expected:            # l'élève n'a pas écrit la réponse attendue
+                g["wrong_answers"] += 1
+                g["copied_expected"] += int(p["ctx"] == expected)
+    for g in out.values():
+        g["free_accuracy"] = wilson(g["free_ok"], g["crops"])
+        g["ctx_accuracy"] = wilson(g["ctx_ok"], g["crops"])
+        g["copy_rate"] = wilson(g["copied_expected"], g["wrong_answers"])
+    return {"crops": len(crops), "engines": out}
+
+
+MAX_STACK_CROPS = 800      # ~55 piles × 800 découpes × 115 µs ≈ 5 s au pire
+
+
+def _stacks(db, f) -> dict:
+    """Quelle pile retenir ? Pour chaque combinaison d'au moins deux sources (passages libres et
+    avec contexte), la fusion complète rejouée sur l'échantillon complet relu par le professeur :
+    part de décisions automatiques, erreurs automatiques (Wilson), et « oracle » : part des
+    découpes où la bonne lecture figure parmi les propositions de la pile (ce que le professeur
+    peut retenir d'un clic dans OCRiser)."""
+    from itertools import combinations
+    plan, th = rs.ocr_engine_plan(db), rs.ocr_engine_thresholds(db)
+    margin = float(rs.ocr_setting(db, "ocr_score_margin"))
+    crops = {cid: c for cid, c in _load_full_sample(db, f).items() if c.get("truth") is not None}
+    crops = dict(list(crops.items())[:MAX_STACK_CROPS])
+    if not crops:
+        return {"crops": 0, "stacks": []}
+    sources = _sources(crops)
+    out = []
+    for k in range(2, len(sources) + 1):
+        for combo in combinations(sources, k):
+            keep = frozenset(combo)
+            if len({s.removesuffix("+ctx") for s in keep}) < 2:
+                continue                 # un seul moteur (ses deux passages) ne peut rien accepter seul
+            n = auto = err = oracle = 0
+            for c in crops.values():
+                if not any(source_of(r[0], r[-1]) in keep for r in c["reads"]):
+                    continue
+                n += 1
+                action, surface = decide_full(c, plan, th, margin, keep=keep)
+                if action == "accept":
+                    auto += 1
+                    err += int(surface != c["truth"])
+                oracle += int(any(source_of(r[0], r[-1]) in keep and not r[4] and r[3] == c["truth"]
+                                  for r in c["reads"]))
+            if not n:
+                continue
+            out.append({"sources": list(combo), "crops": n, "auto": auto,
+                        "auto_share": round(auto / n, 4), "auto_errors": err,
+                        "auto_error_rate": wilson(err, auto), "oracle": wilson(oracle, n)})
+    # les plus sûres d'abord (borne haute de l'erreur), puis les plus automatiques
+    out.sort(key=lambda x: (x["auto_error_rate"]["high"] if x["auto"] else 1.0, -x["auto_share"], len(x["sources"])))
+    return {"crops": len(crops), "sources": sources, "stacks": out,
+            "note": "fusion complète rejouée avec les réglages actuels sur l'échantillon complet relu par le professeur"}
 
 
 # --------------------------------------------------------------- rapport
@@ -352,6 +486,8 @@ def build_report(db: Session, *, since: datetime | None = None, mode: str | None
         "engines": _engines(db, f),
         "pairs": _pairs(db, f),
         "marginal": _marginal(db, f),
+        "stacks": _stacks(db, f),
+        "context_gain": _context_gain(db, f),
         "mathpix": _mathpix(db, f),
         "shadow": _shadow(db, since, zone_class),
         "waiting": _pending_batches(db, timeout),

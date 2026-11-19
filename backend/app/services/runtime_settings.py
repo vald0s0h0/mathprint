@@ -192,7 +192,7 @@ OCR_DEFAULTS: dict = {
     "ocr_shadow_audit_share": 0.05,
     # lot en attente du Mac depuis plus de N heures : alerte visible et possibilité de le relire avec Mathpix
     "ocr_local_timeout_hours": 6,
-    "ocr_full_sample_share": 0.05,
+    "ocr_full_sample_share": 1.0,       # toutes les découpes : tous les moteurs lisent (2026-11-18)
     "ocr_accept_confidence": 0.95,
     "ocr_score_margin": 2.0,
     "ocr_montage_enabled": False,

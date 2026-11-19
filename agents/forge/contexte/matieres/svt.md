@@ -49,6 +49,7 @@ Une carte chiffrée (mesures, effectifs, séquences) a ses jeux de valeurs : mê
 
 - **Bien lus** : QCM, vrai-faux en grille, relier (structure et fonction, organe et appareil), tableau de nombres, numéro de ligne.
 - **Lettres d'une séquence** (A, T, C, G, U) : préfère un tableau d'une lettre par case à une suite écrite d'un trait.
+- **Phrase à trous manuscrite** (`response_layout.style: "phrase"`, voir `courants.md`) : pour rappeler la leçon — une définition, un rôle, un terme de la fiche (« La ___ est le lieu de la photosynthèse »). Le terme est sans variante.
 - **Mot écrit** : pour un schéma à légender, ou un terme de la fiche sans variante.
 - **Rédaction courte** (`multiline_text`, 2 à 4 lignes) : une interprétation ou une conclusion d'expérience, avec un dossier du correcteur qui liste les idées attendues. Pas de synthèse longue.
 

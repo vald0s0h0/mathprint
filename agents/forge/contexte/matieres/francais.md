@@ -48,6 +48,7 @@ Les phrases d'un texte, les étapes d'une analyse, les répliques d'un dialogue 
 ## Formats
 
 - **Bien lus** : QCM, vrai-faux en grille, relier, tableau à cocher (nature, fonction, temps), numéro de ligne.
+- **Phrase à trous manuscrite** (`response_layout.style: "phrase"`, voir `courants.md`) : pour rappeler la leçon — une règle, une définition, un terme de grammaire, un mot de vocabulaire à compléter. Un mot court et déclaré ; si l'orthographe de sa terminaison est la compétence, fais choisir.
 - **Banque de mots** : pour un texte à trous, l'élève choisit parmi des formes données ; c'est une liaison ou un tableau à cocher, pas une écriture libre.
 - **À éviter en réponse écrite** : une terminaison ou un accent qui sont la compétence évaluée (é, er, ez, ai, ais) : leur lecture manuscrite n'est pas sûre. Fais choisir la forme.
 - **Réponse écrite courte** : un mot ou un groupe de mots aux formes peu nombreuses, déclarées ; une transformation de phrase en une ligne, corrigée par le LLM (`route: llm`, avec `llm_brief`).

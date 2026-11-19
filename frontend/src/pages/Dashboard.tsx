@@ -24,6 +24,7 @@ import PdfPreviewModal from '../components/PdfPreview'
 import RefineCorrectionModal from '../components/RefineCorrectionModal'
 import { type LateJob, LateConflictButton, lateJobNames } from '../components/LateJobs'
 import PrintButton from '../components/PrintButton'
+import { MacStatusButton, macStateOf, type OcrLocal } from '../components/ScanLotRow'
 import { useAppState } from '../state/AppState'
 import { masteryColor } from '../utils/mastery'
 import MathText from '../components/MathText'
@@ -56,6 +57,8 @@ type Batch = {
   overlay_stale: boolean
   error: string | null; pending_reviews: number; pending_ocr: number
   created_at: string; page_count: number
+  // lecture sur le Mac (cascade, ou ombre avant OCRiser) : machine à états, voir ScanLotRow
+  ocr_local?: OcrLocal | null
   // Pendant une correction tardive, la première vague garde son état propre.
   first_wave_status?: string; late_jobs?: LateJob[]
 }
@@ -111,7 +114,7 @@ const STAGE_LABEL: Record<Stage, { label: string; color: string }> = {
   awaiting: { label: 'en attente de scan', color: 'gray' },
   processing: { label: 'correction en cours', color: 'blue' },
   error: { label: 'bloqué', color: 'red' },
-  ocr_review: { label: 'lecture à vérifier', color: 'blue' },
+  ocr_review: { label: 'à OCRiser', color: 'orange' },
   review: { label: 'à corriger', color: 'orange' },
   done: { label: 'corrigé', color: 'green' },
 }
@@ -638,10 +641,24 @@ export default function Dashboard() {
         out.push({ key: `rev-${b.id}`, tone: 'orange', weight: 1, icon: <ScanLine size={18} />,
           title: `${plural(b.pending_reviews, 'réponse')} à corriger`, detail: where,
           action: go('/corrections', 'Corriger', 'orange') })
+      } else if (b.ocr_local && (macStateOf(b.ocr_local) === 'mac_reading' || macStateOf(b.ocr_local) === 'mac_offline')) {
+        // le Mac lit : rien à faire, on attend (OCRiser s'ouvrira avec ses propositions)
+        const reading = macStateOf(b.ocr_local) === 'mac_reading'
+        out.push({ key: `mac-${b.id}`, tone: reading ? 'blue' : 'gray', weight: 7,
+          icon: reading ? <Loader2 size={18} className="mpd-spin" /> : <Hourglass size={18} />,
+          title: reading ? 'Lecture des écritures sur le Mac' : 'Mac hors ligne : lecture en pause',
+          detail: `${where} — rien à faire, ${reading ? 'la lecture continue' : 'elle reprendra au retour du Mac'}`,
+          progress: b.ocr_local.total ? (100 * b.ocr_local.decided) / b.ocr_local.total : undefined,
+          action: <MacStatusButton ocr={b.ocr_local} /> })
+      } else if (stage === 'processing' && macStateOf(b.ocr_local) === 'mac_overdue') {
+        out.push({ key: `mac-${b.id}`, tone: 'orange', weight: 1, icon: <Hourglass size={18} />,
+          title: `Le Mac ne lit plus depuis ${Math.round(b.ocr_local?.waiting_hours ?? 0)} h`,
+          detail: `${where} — relire avec Mathpix ?`,
+          action: go('/corrections', 'Décider', 'orange') })
       } else if (stage === 'ocr_review') {
-        out.push({ key: `ocr-${b.id}`, tone: 'blue', weight: 2, icon: <Eye size={18} />,
-          title: 'Lecture des copies à vérifier', detail: where,
-          action: go('/corrections', 'Vérifier') })
+        out.push({ key: `ocr-${b.id}`, tone: 'orange', weight: 2, icon: <Eye size={18} />,
+          title: 'Écritures à OCRiser', detail: where,
+          action: go('/corrections', 'OCRiser', 'orange') })
       } else if (b.status === 'overlay_ready' && b.overlay_stale && !b.overlay_distributed) {
         out.push({ key: `stale-${b.id}`, tone: 'orange', weight: 3, icon: <RefreshCw size={18} />,
           title: 'Overlay à régénérer après correction affinée', detail: where,
@@ -719,7 +736,9 @@ export default function Dashboard() {
       ...visibleBatches.filter((b) => b.status !== 'awaiting_scan').map((b) => ({
         key: `b-${b.id}`, when: b.created_at, icon: <ScanLine size={12} />,
         title: b.assessment_title, detail: `Copies déposées · ${b.class_name}`,
-        badge: b.overlay_distributed ? { label: 'terminé', color: 'gray' } : STAGE_LABEL[stageOf(b)],
+        badge: b.overlay_distributed ? { label: 'terminé', color: 'gray' }
+          : macStateOf(b.ocr_local) === 'mac_reading' ? { label: 'lecture sur le Mac', color: 'blue' }
+          : STAGE_LABEL[stageOf(b)],
       })),
     ]
     return rows.sort((x, y) => parseDate(y.when).getTime() - parseDate(x.when).getTime()).slice(0, 7)

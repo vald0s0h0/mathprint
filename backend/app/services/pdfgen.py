@@ -61,6 +61,22 @@ for _style, _filename in {
 }.items():
     pdfmetrics.registerFont(TTFont(_DYSLEXIC_FONTS[_style], str(_FONT_DIR / _filename)))
 
+# Phrase à trous MANUSCRITE (response_layout.style == "phrase") : la phrase est
+# imprimée dans la police des copies simulées (Patrick Hand), en bleu, au corps
+# d'une écriture d'élève — un chiffre mesure handwriting.DIGIT_H. Les trous sont
+# de longs tirets saumon (couleur de dropout) à bouts ronds, sous la ligne, et non
+# des cases : l'élève écrit AU-DESSUS du tiret, comme sur une phrase à compléter.
+HAND_FONT = "PatrickHand"
+pdfmetrics.registerFont(TTFont(HAND_FONT, str(_FONT_DIR / "PatrickHand-Regular.ttf")))
+_HAND_FACE = pdfmetrics.getFont(HAND_FONT).face
+HAND_FS = handwriting.DIGIT_H / ((getattr(_HAND_FACE, "capHeight", 0) or 661) / 1000)
+HAND_INK = HexColor("#2F5FA7")                  # bleu imprimé de la phrase
+HAND_LINE_H = 10 * (72.0 / 25.4)                # interligne : de la place pour écrire
+HAND_BLANK_ASC = 6.2 * (72.0 / 25.4)            # zone d'écriture au-dessus de la ligne
+HAND_BLANK_DESC = 2.4 * (72.0 / 25.4)
+HAND_RULE_DROP = 1.0 * (72.0 / 25.4)            # le tiret passe sous la ligne de base
+HAND_RULE_W = 0.75 * (72.0 / 25.4)              # épaisseur du tiret, bouts ronds
+
 _USE_DYSLEXIC: ContextVar[bool] = ContextVar("pdf_use_dyslexic", default=False)
 # Les métriques moyennes d'OpenDyslexic sont environ 15 % plus larges que
 # celles d'Helvetica. Ce facteur conserve les retours à la ligne et donc la
@@ -714,12 +730,16 @@ def _zone_font_size(response_type: str, font_size: float) -> float:
 def _seg_font(seg: tuple) -> str:
     """Police d'un segment de mot : le gras est porté par le segment lui-même
     (cf. _paragraph_segs), pour que la MESURE et le DESSIN emploient la même."""
+    if seg[2] == "hand":
+        return HAND_FONT
     return _font("bold" if seg[2] else "regular")
 
 
 def _seg_w(seg: tuple, fs: float) -> float:
     if seg[0] == "word":
-        return stringWidth(seg[1], _seg_font(seg), _subject_font_size(fs))
+        # la taille d'une écriture ne se corrige pas pour la dyslexie
+        return stringWidth(seg[1], _seg_font(seg),
+                           fs if seg[2] == "hand" else _subject_font_size(fs))
     if seg[0] == "blank":
         return seg[1]
     return seg[2]
@@ -731,6 +751,9 @@ def _seg_glue(seg: tuple) -> bool:
 
 _FIELD_SIZE: ContextVar[tuple[float, float] | None] = ContextVar("answer_field_size", default=None)
 _FIELD_CENTER: ContextVar[bool] = ContextVar("answer_field_center", default=False)
+# Largeur (pt) de chaque trou d'une phrase manuscrite, dans l'ordre de lecture ;
+# None = style désactivé. Même contrat que _FIELD_SIZE : posé par _exercise_layout.
+_PHRASE_STYLE: ContextVar[list[float] | None] = ContextVar("phrase_style", default=None)
 
 
 def _blank_seg(kind: str, fs: float, glue: bool, extra_h: float = 0.0) -> tuple:
@@ -761,11 +784,17 @@ _TALL_TOKEN_BY_PUBLIC = {
     WIDE_TOKEN: _TALL_RIGHT_TOKEN,
     MINI_TOKEN: _TALL_MINI_TOKEN,
 }
+# Marque PRIVÉE de rendu d'un trou de phrase manuscrite : « {{blank_hand_NNN}} »,
+# NNN = largeur en dixièmes de mm (cf. _mark_phrase_blanks). Jamais stockée.
+_HAND_BLANK_RE = re.compile(r"\{\{blank_hand_(\d+)\}\}")
 _ANSWER_SPLIT = re.compile(
-    r"(\{\{blank_right_tall\}\}|\{\{blank_tall\}\}|\{\{mini_tall\}\}|"
+    r"(\{\{blank_hand_\d+\}\}|\{\{blank_right_tall\}\}|\{\{blank_tall\}\}|\{\{mini_tall\}\}|"
     r"\{\{blank_right\}\}|\{\{blank\}\}|\{\{mini\}\})")
 _PUBLIC_ANSWER_RE = re.compile(
     r"(\{\{blank_right\}\}|\{\{blank\}\}|\{\{mini\}\})")
+_ANY_ANSWER_RE = re.compile(
+    r"(\{\{blank_right_tall\}\}|\{\{blank_tall\}\}|\{\{mini_tall\}\}|"
+    r"\{\{blank_right\}\}|\{\{blank\}\}|\{\{mini\}\})")
 _TOKEN_KIND = {
     WIDE_TOKEN: ("right", 0.0), BLANK_TOKEN: ("normal", 0.0),
     MINI_TOKEN: ("mini", 0.0),
@@ -794,8 +823,47 @@ def _mark_fraction_blanks(text: str, indices: set[int] | None) -> str:
     return _PUBLIC_ANSWER_RE.sub(repl, text)
 
 
+def _mark_phrase_blanks(text: str) -> str:
+    """Phrase manuscrite : chaque trou reçoit sa LARGEUR, celle de sa réponse
+    attendue écrite à la main (même règle que les autres cases). Le rang suit
+    l'ordre de lecture des marqueurs, comme l'appariement OCR des multi_blank."""
+    widths = _PHRASE_STYLE.get()
+    if widths is None:
+        return text
+    rank = -1
+
+    def repl(match: re.Match) -> str:
+        nonlocal rank
+        rank += 1
+        w = widths[rank] if rank < len(widths) else (widths[-1] if widths else BLANK_W)
+        return "{{blank_hand_%d}}" % round(w / mm * 10)
+
+    marked = _ANY_ANSWER_RE.sub(repl, text)
+    # l'indice « (cueillir) » reste collé à son trou : jamais seul en début de ligne
+    return re.sub(r"(\{\{blank_hand_\d+\}\}) \(", "\\1\u00a0(", marked)
+
+
+def _hand_safe(s: str) -> str:
+    """Texte sans glyphe manquant dans Patrick Hand (jamais de carré vide)."""
+    for k, v in _PDF_CHAR_MAP.items():
+        s = s.replace(k, v)
+    s = s.replace("\u202f", "\u00a0")
+    cmap = _HAND_FACE.charToGlyph
+    return "".join(ch if ord(ch) in cmap else "?" for ch in s)
+
+
+def _hand_math(content: str) -> str | None:
+    """Une formule SIMPLE s'écrit comme l'élève l'écrirait (AC², 3/4, √5) : en
+    police manuscrite. Une formule qui demande une vraie composition reste une
+    image, rendue à la même taille."""
+    text = handwriting.plain(f"${content}$")
+    if not text or re.search(r"[\\{}^_]", text) or text.count("/") > 1:
+        return None
+    return _hand_safe(text)
+
+
 def _has_render_answer_field(text: str) -> bool:
-    return statement_mod.has_answer_field(text) or any(
+    return bool(_HAND_BLANK_RE.search(text or "")) or statement_mod.has_answer_field(text) or any(
         token in (text or "") for token in _TOKEN_KIND if token not in statement_mod.ANSWER_TOKENS)
 
 
@@ -807,7 +875,7 @@ _BREAK_SPACE = re.compile(r"[ \t\n]+")
 _CLOSING_PUNCT = ("?", "!", ";", ":", "»")
 
 
-def _paragraph_segs(text: str, fs: float, math_fs: float) -> list[tuple]:
+def _paragraph_segs(text: str, fs: float, math_fs: float, hand: bool = False) -> list[tuple]:
     """Segments d'UNE ligne logique d'énoncé (elle peut encore se replier sur
     plusieurs lignes de rendu). seg = ("word", texte, gras, glue) |
     ("math", img, w, h, d, glue) | ("blank", w, asc, desc, kind, glue) ; glue =
@@ -828,7 +896,9 @@ def _paragraph_segs(text: str, fs: float, math_fs: float) -> list[tuple]:
         # morceau, elle devient l'espace de tête d'un mot COLLÉ au segment
         # précédent (formule, case) : le « ? » ne part jamais seul à la ligne.
         nonlocal prev_no_space
-        words = [_pdf_safe(w) for w in _BREAK_SPACE.split(part) if w]
+        if hand:
+            bold = "hand"       # le « gras » du segment devient sa police (cf. _seg_font)
+        words = [(_hand_safe(w) if hand else _pdf_safe(w)) for w in _BREAK_SPACE.split(part) if w]
         leading_ws = part[:1] in _BREAKING
         for j, w in enumerate(words):
             # « ? » seul : espace ordinaire d'un texte non typographié (brouillon,
@@ -856,6 +926,10 @@ def _paragraph_segs(text: str, fs: float, math_fs: float) -> list[tuple]:
                     _emit_words(angle.group(1).replace("{,}", ",") + "°", bold)
                     prev_no_space = True
                     continue
+                if hand and (written := _hand_math(content)) is not None:
+                    _emit_words(written, bold)
+                    prev_no_space = True
+                    continue
                 im = _math_image(content, math_fs)
                 if im is not None:
                     segs.append(("math", *im, prev_no_space and bool(segs)))
@@ -868,7 +942,14 @@ def _paragraph_segs(text: str, fs: float, math_fs: float) -> list[tuple]:
                 # découpe en gardant chaque marque de case (blank / blank_right / mini)
                 for piece in _ANSWER_SPLIT.split(content):
                     spec = _TOKEN_KIND.get(piece)
-                    if spec is not None:
+                    hand_blank = _HAND_BLANK_RE.fullmatch(piece)
+                    if hand_blank:
+                        w = int(hand_blank.group(1)) / 10 * mm
+                        # « l'{{blank}} » : l'apostrophe colle au trou, sans espace
+                        segs.append(("blank", w, HAND_BLANK_ASC, HAND_BLANK_DESC, "phrase",
+                                     prev_no_space and bool(segs)))
+                        prev_no_space = False
+                    elif spec is not None:
                         kind, extra_h = spec
                         segs.append(_blank_seg(kind, fs, False, extra_h))
                         prev_no_space = False
@@ -878,7 +959,7 @@ def _paragraph_segs(text: str, fs: float, math_fs: float) -> list[tuple]:
                         # soudée à la case, avec l'espace qui l'en sépare
                         # à l'œil — jamais en tête de la ligne suivante
                         prev_no_space = True
-                        _emit_words(piece if piece[:1] in _NOBREAK else " " + piece, bold)
+                        _emit_words(piece if (piece[:1] in _NOBREAK or (hand and piece[:1] in ".,)")) else " " + piece, bold)
                     else:
                         _emit_words(piece, bold)
             else:
@@ -1194,7 +1275,10 @@ def _rich_layout(text: str, width: float, fs: float, math_fs: float | None = Non
             badge, para = lab
         # Case en fin d'une phrase qui se replie : elle passe seule à la ligne. Haute
         # comme elle est, elle écarterait sinon l'interligne de la question.
-        detached = _detach_final_blank(para, max(1.0, width - lead), fs, blank_fs, math_fs)
+        # phrase manuscrite : le trou reste DANS la phrase, jamais détaché sur sa ligne
+        hand = _PHRASE_STYLE.get() is not None and bool(_HAND_BLANK_RE.search(para))
+        detached = (None if hand else
+                    _detach_final_blank(para, max(1.0, width - lead), fs, blank_fs, math_fs))
         if detached is not None:
             head = _rich_layout(f"{badge}. {detached[0]}" if badge is not None else detached[0],
                                 width, fs, math_fs=math_fs, first_indent=lead,
@@ -1211,16 +1295,17 @@ def _rich_layout(text: str, width: float, fs: float, math_fs: float | None = Non
             continue
         # le corps suit la case quand la ligne en porte une — décidé APRÈS
         # l'étiquette, qui ne change pas la nature de la phrase
-        p_fs = blank_fs if (blank_fs and _has_render_answer_field(para)) else fs
-        p_math_fs = math_fs or p_fs
+        p_fs = HAND_FS if hand else (blank_fs if (blank_fs and _has_render_answer_field(para)) else fs)
+        p_math_fs = HAND_FS if hand else (math_fs or p_fs)
         badge_w = (_badge_metrics(p_fs)[0] + BADGE_GAP) if badge is not None else 0.0
         # retrait PENDANT sous une pastille : les lignes suivantes de la
         # sous-question s'alignent sur son texte, pas sous sa pastille
         head_indent = lead + badge_w
         cont_indent = head_indent if badge is not None else 0.0
 
-        segs = _paragraph_segs(para, p_fs, p_math_fs)
-        space_w = stringWidth(" ", _font(), _subject_font_size(p_fs))
+        segs = _paragraph_segs(para, p_fs, p_math_fs, hand)
+        space_w = (stringWidth(" ", HAND_FONT, p_fs) if hand
+                   else stringWidth(" ", _font(), _subject_font_size(p_fs)))
 
         raw_lines: list[list[tuple]] = []
         cur: list[tuple] = []
@@ -1301,17 +1386,23 @@ def _rich_layout(text: str, width: float, fs: float, math_fs: float | None = Non
                 elif seg[0] == "blank":
                     asc = max(asc, seg[2])
                     desc = max(desc, seg[3])
+            if hand:
+                # toutes les lignes d'une phrase manuscrite ont la même hauteur,
+                # qu'elles portent un trou ou non : interligne régulier
+                asc, desc = max(asc, HAND_BLANK_ASC), max(desc, HAND_BLANK_DESC)
             lh = asc + desc + 2.2
+            if hand:
+                lh = max(lh, HAND_LINE_H)
             n_spaces = sum(1 for j, s in enumerate(line) if j > 0 and not _seg_glue(s))
             line_w = sum(_seg_w(s, p_fs) for s in line) + space_w * n_spaces
             lines.append({
                 "segs": line, "asc": asc, "desc": desc, "h": lh, "fs": p_fs,
-                "indent": (max(0.0, (width - line_w) / 2) if opens_on_blank or (_FIELD_CENTER.get() and any(s[0] == "blank" for s in line))
+                "indent": (max(0.0, (width - line_w) / 2) if not hand and (opens_on_blank or (_FIELD_CENTER.get() and any(s[0] == "blank" for s in line)))
                            else head_indent if i == 0 else cont_indent),
                 "w": line_w,
                 "badge": badge if i == 0 else None,
                 "badge_x": lead, "badge_color": sub_badge_color,
-                "para_lines": len(raw_lines),
+                "para_lines": len(raw_lines), "hand": hand,
             })
             total_h += lh
     return {"lines": lines, "height": total_h}
@@ -1380,8 +1471,9 @@ def _draw_rich(c: canvas.Canvas, x: float, y_top: float, layout: dict,
     y = y_top
     for line in layout["lines"]:
         fs = line["fs"]
-        draw_fs = _subject_font_size(fs)
-        space_w = stringWidth(" ", font, draw_fs)
+        hand = bool(line.get("hand")) and not font_forced
+        draw_fs = fs if hand else _subject_font_size(fs)
+        space_w = stringWidth(" ", HAND_FONT if hand else font, draw_fs)
         y_base = y - line["asc"]
         cx = x + line.get("indent", 0.0)
         if centered and width:
@@ -1411,14 +1503,23 @@ def _draw_rich(c: canvas.Canvas, x: float, y_top: float, layout: dict,
                 # impose déjà une police (bande corrigé, libellés) : elle prime.
                 word_font = font if font_forced else _seg_font(seg)
                 c.setFont(word_font, draw_fs)
-                c.setFillColor(color)
+                c.setFillColor(HAND_INK if hand else color)
                 c.drawString(cx, y_base, seg[1])
                 cx += stringWidth(seg[1], word_font, draw_fs)
             elif seg[0] == "blank":
                 _, w, asc, desc, kind, _glue = seg
                 c.setStrokeColor(DROPOUT)
-                c.setLineWidth(0.9)
-                c.roundRect(cx, y_base - desc, w, asc + desc, 0.8 * mm)
+                if kind == "phrase":
+                    # long tiret plein, bouts ronds, sous la ligne : on écrit au-dessus
+                    c.setLineWidth(HAND_RULE_W)
+                    c.setLineCap(1)
+                    inset = HAND_RULE_W / 2
+                    y_rule = y_base - HAND_RULE_DROP
+                    c.line(cx + inset, y_rule, cx + w - inset, y_rule)
+                    c.setLineCap(0)
+                else:
+                    c.setLineWidth(0.9)
+                    c.roundRect(cx, y_base - desc, w, asc + desc, 0.8 * mm)
                 if blanks is not None:
                     blanks.append({"x_pt": cx, "y_pt": y_base - desc,
                                   "w_pt": w, "h_pt": asc + desc, "kind": kind})
@@ -1426,7 +1527,7 @@ def _draw_rich(c: canvas.Canvas, x: float, y_top: float, layout: dict,
                 cx += w
             else:
                 _, img, w, h, d, _glue = seg
-                c.drawImage(_tinted(img, color) if tint else img, cx, y_base - d,
+                c.drawImage(_tinted(img, HAND_INK if hand else color) if (tint or hand) else img, cx, y_base - d,
                             width=w, height=h, mask="auto", preserveAspectRatio=True)
                 cx += w
         y -= line["h"]
@@ -1695,7 +1796,8 @@ def _statement_layout(statement: str, width: float, font_size: float,
     # mise en lignes — et elle est idempotente, donc un énoncé déjà bien formé la
     # traverse inchangé.
     statement = statement_mod.normalize(statement)
-    statement = _mark_fraction_blanks(statement, fraction_blank_indices)
+    statement = (_mark_phrase_blanks(statement) if _PHRASE_STYLE.get() is not None
+                 else _mark_fraction_blanks(statement, fraction_blank_indices))
     if figure_layout in FIGURE_SIDE_LAYOUTS + FIGURE_GRID_LAYOUTS and figure_json:
         side = _side_figure_layout(statement, width, font_size, figure_json, figure_layout,
                                    first_indent, first_min_asc, blank_fs, sub_badge_color,
@@ -3349,11 +3451,36 @@ def _response_field_size(expected: dict, grading: dict) -> tuple[float, float]:
     return handwriting.field_size(values)
 
 
+def _phrase_widths(item: dict, grading: dict) -> list[float] | None:
+    """Largeur de chaque trou d'une phrase à trous MANUSCRITE, ou None si l'exercice
+    n'a pas ce style (`grading.response_layout.style == "phrase"`).
+
+    Chaque trou est dimensionné d'après SA réponse attendue écrite à la main
+    (`handwriting.field_size`, la même règle que les autres champs), élargie des
+    mauvaises réponses prévues pour ce trou : une phrase mêle « 36 » et
+    « hypoténuse », un seul gabarit pour tous écraserait l'un ou gâcherait l'autre."""
+    if (grading.get("response_layout") or {}).get("style") != "phrase":
+        return None
+    if item.get("response_type") not in ("short_text", "multi_blank"):
+        return None
+    expected = item.get("expected") or {}
+    cells = expected.get("cells") or []
+    values = list(cells[0]) if (cells and item.get("response_type") == "multi_blank") else [expected]
+    wrong = (grading.get("feedback") or {}).get("wrong_answers") or []
+    widths = []
+    for rank, value in enumerate(values):
+        mine = [w.get("value") for w in wrong
+                if not w.get("cell") or (isinstance(w["cell"], (list, tuple)) and w["cell"][-1] == rank)]
+        widths.append(handwriting.field_size([value, *mine])[0])
+    return widths
+
+
 def _exercise_layout(item: dict, font_size: int, math_fs: int):
     grading, expected = item.get("grading") or {}, item.get("expected") or {}
     size = _response_field_size(expected, grading) if item.get("response_type") in ("short_text", "multi_blank") else None
     token = _FIELD_SIZE.set(size)
     center_token = _FIELD_CENTER.set((grading.get("response_layout") or {}).get("align", "center") == "center")
+    phrase_token = _PHRASE_STYLE.set(_phrase_widths(item, grading))
     try:
         result = _exercise_layout_impl(item, font_size, math_fs)
         if size:
@@ -3362,6 +3489,7 @@ def _exercise_layout(item: dict, font_size: int, math_fs: int):
     finally:
         _FIELD_SIZE.reset(token)
         _FIELD_CENTER.reset(center_token)
+        _PHRASE_STYLE.reset(phrase_token)
 
 
 def _exercise_layout_impl(item: dict, font_size: int,
@@ -3613,7 +3741,9 @@ def broken_leading(layout: dict) -> int:
     count = 0
     for part in (layout.get("intro"), layout.get("intro_after")):
         for line in (part or {}).get("lines", []):
-            if line.get("para_lines", 1) > 1 and any(s[0] == "blank" for s in line.get("segs", [])):
+            # une phrase manuscrite a un interligne régulier : se replier ne l'abîme pas
+            if (line.get("para_lines", 1) > 1 and not line.get("hand")
+                    and any(s[0] == "blank" for s in line.get("segs", []))):
                 count += 1
     return count
 

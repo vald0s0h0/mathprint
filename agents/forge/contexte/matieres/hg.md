@@ -46,6 +46,7 @@ Une carte chiffrée (données, durées, échelles) a ses jeux de valeurs, toutes
 ## Formats
 
 - **Bien lus** : QCM, vrai-faux en grille, relier (date et événement, notion et définition), tableau à cocher, numéro de zone ou de ligne, année en chiffres.
+- **Phrase à trous manuscrite** (`response_layout.style: "phrase"`, voir `courants.md`) : pour rappeler la leçon — « En ___, la bataille de ___ marque… », une définition de la fiche. Une date s'écrit en quatre chiffres, un lieu ou un terme aux formes déclarées.
 - **Année écrite** : quatre chiffres, sans « av. J.-C. » à lire ; pour une date avant notre ère, fais cocher.
 - **Mot écrit** : un nom de lieu ou un terme de la fiche aux formes peu nombreuses et déclarées (avec et sans article).
 - **Rédaction courte** (`multiline_text`, 2 à 4 lignes) : expliquer une cause, justifier un choix, avec un dossier du correcteur qui liste les idées attendues. Pas de développement construit.

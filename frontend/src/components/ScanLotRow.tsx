@@ -3,8 +3,8 @@
 // Chaque lot a son pipeline, son aperçu et sa prochaine action ; ce qui est propre à
 // la correction entière (titre, absents) reste dans l'en-tête de la carte.
 import { useState } from 'react'
-import { Badge, Button, Group, Menu, Text, Tooltip } from '@mantine/core'
-import { Eye, PencilLine, RefreshCw, Printer, ScanLine, Send, Trash2, Undo2 } from 'lucide-react'
+import { Badge, Button, Group, Loader, Menu, Text, Tooltip } from '@mantine/core'
+import { CloudOff, Download, Eye, PencilLine, Presentation, RefreshCw, Printer, ScanLine, Send, Trash2, Undo2 } from 'lucide-react'
 import ActionsMenu from './ActionsMenu'
 import { LateConflictButton } from './LateJobs'
 import PrintButton from './PrintButton'
@@ -12,6 +12,47 @@ import SegmentBar, { STEP_COUNT, type Segment } from './SegmentBar'
 
 export type LotStage =
   'awaiting' | 'processing' | 'error' | 'ocr_review' | 'review' | 'conflict' | 'ready'
+
+/** Machine à états de la lecture sur le Mac (backend : ocr_cascade.local_progress).
+ *  - mac_reading : le Mac lit (bleu animé) — rien à faire, on attend, on ne l'interrompt pas ;
+ *  - mac_offline : worker muet depuis 2 min (gris) — la lecture reprendra à son retour ;
+ *  - mac_overdue : attente au-delà du délai (orange) — au professeur de décider.
+ *  Ensuite `ocr_review` (orange) : OCRiser, avec les propositions de tous les moteurs. */
+export type MacState = 'mac_reading' | 'mac_offline' | 'mac_overdue'
+export type OcrLocal = {
+  decided: number; total: number; worker_online: boolean; mode?: 'cascade' | 'shadow'; state?: MacState
+  waiting_hours?: number; timeout_hours?: number; overdue?: boolean
+}
+
+export function macStateOf(o: OcrLocal | null | undefined): MacState | null {
+  if (!o) return null
+  return o.state ?? (o.overdue ? 'mac_overdue' : o.worker_online ? 'mac_reading' : 'mac_offline')
+}
+
+/** Bouton d'état du Mac : spinner pendant la lecture, jamais cliquable (on n'interrompt pas). */
+export function MacStatusButton({ ocr }: { ocr: OcrLocal }) {
+  const state = macStateOf(ocr)
+  const count = `${ocr.decided}/${ocr.total}`
+  const waiting = ocr.mode === 'shadow' ? 'OCRiser s\'ouvrira avec leurs propositions dès la fin.' : 'La correction reprendra seule dès la fin.'
+  const tip = state === 'mac_reading'
+    ? `Les moteurs locaux du Mac lisent les écritures (lecture libre puis avec contexte). ${waiting} Rien à faire : la lecture n'est pas interrompue.`
+    : state === 'mac_offline'
+      ? `Le Mac n'a pas contacté le serveur depuis plus de 2 minutes (veille, réseau ?). La lecture reprendra à son retour, là où elle s'est arrêtée.`
+      : `En attente du Mac depuis ${Math.round(ocr.waiting_hours ?? 0)} h (délai : ${ocr.timeout_hours ?? '?'} h).`
+  const label = state === 'mac_reading' ? `Lecture sur le Mac ${count}`
+    : state === 'mac_offline' ? `Mac hors ligne ${count}` : `Mac en retard ${count}`
+  return (
+    <Tooltip label={tip} multiline maw={300}>
+      <Button size="xs" variant="light" color={state === 'mac_reading' ? 'blue' : 'gray'}
+        leftSection={state === 'mac_reading' ? <Loader size={12} color="blue" /> : <CloudOff size={14} />}
+        data-testid="ocr-local-status" data-state={state}
+        style={{ cursor: 'default', fontVariantNumeric: 'tabular-nums' }}
+        onClick={(e) => e.preventDefault()}>
+        {label}
+      </Button>
+    </Tooltip>
+  )
+}
 
 export type Lot = {
   wave: number
@@ -26,8 +67,8 @@ export type Lot = {
   distributed: boolean
   stale: boolean
   rebuilding: boolean
-  /** Lecture locale sur le Mac (mode cascade) : avancement et présence du worker. */
-  ocrLocal?: { decided: number; total: number; worker_online: boolean; waiting_hours?: number; timeout_hours?: number; overdue?: boolean } | null
+  /** Lecture sur le Mac (cascade, ou ombre avant OCRiser) : voir `MacState`. */
+  ocrLocal?: OcrLocal | null
   /** Élèves du lot (nommés à côté du pipeline s'il y en a moins de 4). */
   students: string[]
   /** Dépôt et pages du lot (infobulle du badge). */
@@ -54,6 +95,9 @@ export type LotHandlers = {
   onReset?: () => void
   onDistributed: (value: boolean) => void
   onChanged: () => void
+  /** Diaporama de correction au tableau du sujet (lot principal seulement). */
+  onSlideshow?: () => void
+  onExportSlideshow?: () => void
 }
 
 // largeur de « 35 copies »
@@ -68,6 +112,9 @@ export default function ScanLotRow({ lot, h }: { lot: Lot; h: LotHandlers }) {
   const n = lot.students.length
   // « Distribué » n'est à faire qu'une fois l'overlay à jour et imprimé
   const distributable = ready && lot.overlayReady && !lot.stale && lot.printed && !lot.distributed
+  // lecture sur le Mac : tant qu'il lit (ou revient), OCRiser attend ses propositions
+  const mac = macStateOf(lot.ocrLocal)
+  const macBusy = mac === 'mac_reading' || mac === 'mac_offline'
   // Rend 4 cellules de la grille de la carte (voir Corrections) : taille du lot,
   // pipeline (avec « Distribué »), élèves, actions — alignées d'une ligne à l'autre.
   return (
@@ -112,30 +159,27 @@ export default function ScanLotRow({ lot, h }: { lot: Lot; h: LotHandlers }) {
           {lot.stage === 'conflict' && (
             <LateConflictButton batchId={h.batchId} count={lot.conflicts} onResolved={h.onChanged} />
           )}
-          {lot.stage === 'processing' && lot.ocrLocal && (
-            <Tooltip label={lot.ocrLocal.worker_online ? 'Les moteurs locaux lisent les écritures'
-              : 'Le worker n\'a pas sondé le serveur depuis plus de 2 minutes'} multiline maw={280}>
-              <Button size="xs" variant="light" color={lot.ocrLocal.worker_online ? 'blue' : 'gray'}
-                loading={lot.ocrLocal.worker_online} disabled data-testid="ocr-local-status">
-                {lot.ocrLocal.worker_online
-                  ? `Lecture en cours sur le Mac (${lot.ocrLocal.decided}/${lot.ocrLocal.total})`
-                  : 'Mac hors ligne, la lecture reprendra à son retour'}
-              </Button>
-            </Tooltip>
+          {(lot.stage === 'processing' || lot.stage === 'ocr_review') && lot.ocrLocal && (
+            <MacStatusButton ocr={lot.ocrLocal} />
           )}
-          {lot.stage === 'processing' && lot.ocrLocal?.overdue && h.onOcrFallback && (
-            <Tooltip multiline maw={300} label={`En attente du Mac depuis ${Math.round(lot.ocrLocal.waiting_hours ?? 0)} h : relire ce lot avec Mathpix, comme avant la lecture locale`}>
-              <Button size="xs" color="orange" variant="light" leftSection={<RefreshCw size={14} />}
+          {lot.stage === 'processing' && mac === 'mac_overdue' && h.onOcrFallback && (
+            <Tooltip multiline maw={300} label={`En attente du Mac depuis ${Math.round(lot.ocrLocal?.waiting_hours ?? 0)} h : relire ce lot avec Mathpix, comme avant la lecture locale`}>
+              <Button size="xs" color="orange" leftSection={<RefreshCw size={14} />}
                 onClick={h.onOcrFallback} data-testid="ocr-fallback">Lire avec Mathpix</Button>
             </Tooltip>
           )}
           {lot.stage === 'processing' && !lot.ocrLocal && (
             <Button size="xs" variant="light" loading disabled>Correction en cours…</Button>
           )}
-          {lot.stage === 'ocr_review' && (
-            <Button size="xs" color="blue" leftSection={<ScanLine size={14} />} onClick={h.onOcr}>
-              {lot.pendingOcr > 0 ? `OCRiser (${lot.pendingOcr})` : 'OCRiser : revoir et lancer la correction'}
-            </Button>
+          {/* OCRiser = intervention humaine (orange), une fois le Mac fini (ou en retard) */}
+          {lot.stage === 'ocr_review' && !macBusy && (
+            <Tooltip multiline maw={300} disabled={mac !== 'mac_overdue'}
+              label="Le Mac n'a pas fini : les propositions de ses moteurs manqueront pour les cases qu'il n'a pas lues.">
+              <Button size="xs" color="orange" leftSection={<ScanLine size={14} />} onClick={h.onOcr}
+                data-testid="ocr-open">
+                {lot.pendingOcr > 0 ? `OCRiser (${lot.pendingOcr})` : 'OCRiser : revoir et lancer la correction'}
+              </Button>
+            </Tooltip>
           )}
           {lot.stage === 'error' && (
             <Button size="xs" color="orange" leftSection={<RefreshCw size={14} />} onClick={h.onRetry}>
@@ -204,6 +248,20 @@ export default function ScanLotRow({ lot, h }: { lot: Lot; h: LotHandlers }) {
                 Annuler la distribution
               </Menu.Item>
             )}
+            {(ready || lot.stage === 'review') && h.onSlideshow && (
+              <Tooltip position="left" label="Corriger au tableau : exercices du plus facile au plus dur, résultats des élèves, correction">
+                <Menu.Item leftSection={<Presentation size={14} />} onClick={h.onSlideshow}>
+                  Lancer diaporama
+                </Menu.Item>
+              </Tooltip>
+            )}
+            {(ready || lot.stage === 'review') && h.onExportSlideshow && (
+              <Tooltip position="left" label="Le diaporama en un seul fichier HTML, images comprises, à ouvrir sans connexion">
+                <Menu.Item leftSection={<Download size={14} />} onClick={h.onExportSlideshow}>
+                  Exporter diaporama
+                </Menu.Item>
+              </Tooltip>
+            )}
             {(ready || lot.stage === 'error') && (
               <Menu.Item leftSection={<ScanLine size={14} />} onClick={() => h.onCorrect('all')}>
                 Corriger
@@ -213,6 +271,13 @@ export default function ScanLotRow({ lot, h }: { lot: Lot; h: LotHandlers }) {
               <Tooltip position="left" label="Recalculer les notes et régénérer les copies corrigées après un ajustement">
                 <Menu.Item leftSection={<RefreshCw size={14} />} onClick={h.onRecalc}>
                   Recalculer les notes
+                </Menu.Item>
+              </Tooltip>
+            )}
+            {lot.stage === 'ocr_review' && macBusy && (
+              <Tooltip position="left" multiline maw={280} label="Ouvrir OCRiser tout de suite, sans les propositions des moteurs du Mac pour les cases qu'il n'a pas encore lues. La lecture du Mac continue.">
+                <Menu.Item leftSection={<ScanLine size={14} />} onClick={h.onOcr}>
+                  OCRiser sans attendre le Mac
                 </Menu.Item>
               </Tooltip>
             )}

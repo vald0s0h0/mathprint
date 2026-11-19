@@ -1,0 +1,460 @@
+<!doctype html>
+<html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Diaporama de correction</title>
+<script>window.DATA = __DATA__;</script>
+<style>
+:root{--bg:#f6f7f9;--border:#dfe2e8;--bs:#ebedf1;--text:#1d2330;--dim:#6b7280;--sunken:#eef0f3;
+ --indigo:#4c5fd5;--indigo-l:#eef0ff;--green:#2f9e44;--green-l:#e7f6ea;--red:#e03131;--red-l:#fdeeee;--orange:#e8590c;--orange-l:#fff2e8;--ghost:#c4c9d2}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{font-family:-apple-system,"SF Pro Text",system-ui,sans-serif;color:var(--text);background:var(--bg);font-size:14px;display:flex;flex-direction:column;overflow:hidden}
+button{font:inherit;color:inherit;cursor:pointer;border:0;background:none}
+.kbd{display:inline-block;font:600 10.5px/1 ui-monospace,Menlo,monospace;padding:3px 5px;border:1px solid #cfd4dc;border-bottom-width:2px;border-radius:4px;background:#fff;color:#444}
+.dim{color:var(--dim)}
+.top{flex-shrink:0;background:#fff;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;padding:8px 16px;white-space:nowrap}
+.top h1{font-size:15px;font-weight:700}
+select{font:inherit;border:1px solid var(--border);border-radius:7px;padding:5px 8px;background:#fff}
+.tools{display:flex;gap:4px;margin-left:auto;align-items:center}
+.tb{border:1px solid var(--border);border-radius:7px;background:#fff;height:30px;padding:0 9px;font-size:12.5px;font-weight:650;color:#444;display:flex;align-items:center;gap:6px}
+.tb.on{background:var(--indigo-l);border-color:#c5ccf5;color:var(--indigo)}
+.tb.corr.on{background:var(--red-l);border-color:#efc0c0;color:var(--red)}
+.sw{width:18px;height:18px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 0 1px var(--border)}
+.sw.on{box-shadow:0 0 0 2px var(--indigo)}
+.sep{width:1px;height:22px;background:var(--border);margin:0 4px}
+.close{width:32px;height:32px;border-radius:8px;font-size:17px;color:var(--dim);display:none;place-items:center;margin-left:6px}
+.close:hover{background:var(--sunken);color:var(--text)}
+body.embedded .close{display:grid}
+.top h1 span{font-weight:500;color:var(--dim);margin-left:8px}
+.proto{font-size:11px;color:#8a6d00;background:#fff7d6;border:1px solid #ecd98a;border-radius:6px;padding:3px 8px}
+/* frise (comme la file du prototype 4) */
+.queue{flex-shrink:0;display:flex;gap:4px;padding:8px 18px 2px;flex-wrap:wrap;align-items:center}
+.queue .g{font-size:11px;font-weight:700;color:var(--dim);margin:0 4px 0 12px;text-transform:uppercase;letter-spacing:.05em}
+.queue .g:first-child{margin-left:0}
+.qd{min-width:36px;height:30px;border-radius:6px;background:#dfe3ea;position:relative;font:700 14px/27px -apple-system,sans-serif;color:rgba(0,0,0,.55);padding:0 4px;overflow:hidden}
+.qd .bar{position:absolute;left:0;right:0;bottom:0;height:4px;display:flex}
+.qd .bar i{display:block;height:100%}
+.qd.seen{color:#222}
+.qd.cur{outline:2.5px solid var(--indigo);outline-offset:1px;color:var(--indigo)}
+.qd .tw{position:absolute;top:2px;right:3px;font-size:9px;line-height:9px;color:var(--dim)}
+/* scène */
+#main{flex:1;min-height:0;display:flex;gap:14px;padding:8px 18px 14px}
+.stage{flex:1;min-width:0;display:flex;flex-direction:column;min-height:0}
+.ctx{flex-shrink:0;display:flex;align-items:center;gap:10px;padding:2px 0 8px;min-height:40px}
+.ctx .ex{font-weight:750;font-size:17px}
+.lvl{font-size:11.5px;font-weight:700;padding:3px 9px;border-radius:99px}
+.lvl.l1{background:#e6f6ea;color:#2b8a3e}.lvl.l2{background:#fff2e0;color:#d9480f}.lvl.l3{background:#fdeaea;color:#c92a2a}.lvl.pb{background:#efe9fd;color:#6741d9}
+.comp{color:var(--dim);font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.var{margin-left:auto;display:flex;align-items:center;gap:6px;background:#fff;border:1px solid var(--border);border-radius:9px;padding:3px}
+.var button{width:28px;height:26px;border-radius:6px;font-size:16px;color:var(--indigo)}
+.var button:hover{background:var(--indigo-l)}
+.var button:disabled{color:#ccd;cursor:default;background:none}
+.var span{font-size:12.5px;font-weight:650;min-width:92px;text-align:center}
+.zoom{position:absolute;right:6px;bottom:4px;z-index:8;display:flex;align-items:center;gap:2px;background:rgba(255,255,255,.85);border:1px solid var(--border);border-radius:8px;padding:2px;opacity:.45;transition:opacity .15s}
+.zoom:hover{opacity:1}
+.zoom button{width:24px;height:22px;border-radius:5px;font-size:15px;font-weight:700;color:#555}
+.zoom button:hover{background:var(--sunken)}
+.zoom span{font-size:11px;min-width:38px;text-align:center;color:var(--dim);font-variant-numeric:tabular-nums;cursor:pointer}
+.board{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;gap:22px;position:relative}
+.cardw{position:relative;flex-shrink:0;background:#fff;border-radius:6px;box-shadow:0 2px 14px rgba(20,30,50,.16)}
+.cardw img{display:block;width:100%;height:100%;border-radius:6px;user-select:none;-webkit-user-drag:none}
+#ink{position:absolute;left:0;top:0;width:100%;height:100%;z-index:5}
+.cardw .tag{position:absolute;top:-26px;left:0;font-size:12.5px;font-weight:700;display:flex;gap:6px;align-items:center;white-space:nowrap}
+.tag .t{padding:3px 9px;border-radius:6px}
+.t.scan{background:#e7f0fc;color:#1c6fd1}.t.corr{background:var(--red-l);color:var(--red)}.t.blank{background:var(--sunken);color:var(--dim)}
+.draw #ink{cursor:crosshair}
+
+#laser{position:fixed;left:0;top:0;width:100vw;height:100vh;pointer-events:none;z-index:90}
+/* le point laser remplace le curseur, partout et sans bascule */
+body.laser,body.laser *{cursor:none!important}
+/* panneau élèves */
+.side{width:clamp(300px,26vw,430px);flex-shrink:0;display:flex;flex-direction:column;gap:10px;min-height:0}
+.panel{background:#fff;border:1px solid var(--border);border-radius:10px;display:flex;flex-direction:column;min-height:0}
+.panel .hd{padding:8px 12px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--bs);font-weight:700;font-size:13px}
+.panel .bd{padding:10px 12px;overflow:auto;min-height:0}
+.stack{display:flex;height:10px;border-radius:99px;overflow:hidden;background:var(--sunken);margin:2px 0 6px}
+.stack i{display:block;height:100%}
+.sum{display:flex;gap:10px;font-size:12.5px;font-weight:650}
+.sum b{font-size:22px;font-weight:800;margin-right:4px}
+.grp{margin-top:10px}
+.grp h4{font-size:11px;font-weight:750;letter-spacing:.05em;text-transform:uppercase;margin-bottom:4px;display:flex;gap:6px;align-items:center}
+.grp h4 .dot{width:9px;height:9px;border-radius:50%}
+.names{display:grid;grid-template-columns:1fr;gap:4px}
+.names.two{grid-template-columns:1fr 1fr;grid-auto-flow:column}
+.leg{display:flex;gap:10px;flex-wrap:wrap;font-size:11.5px;color:var(--dim);margin:2px 0 10px}.leg i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:4px;vertical-align:-1px}
+.nm{display:flex;align-items:center;gap:8px;padding:.18em .45em;border-radius:9px;font-size:var(--nm,22px);font-weight:600;text-align:left;min-width:0}
+.nm span.n{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.nm.ok{background:var(--green-l);color:#237a36}.nm.pa{background:var(--orange-l);color:#c2410c}.nm.ko{background:var(--red-l);color:#c92a2a}
+.nm.no{color:#cfd3da;font-weight:500}
+.nm.nc{box-shadow:inset 0 0 0 1px #ccd1d8;color:#555}
+.nm.cur{outline:3px solid var(--indigo)}
+.nm .x{font-size:.65em;font-weight:700;opacity:.75;margin-left:auto;white-space:nowrap}
+.nm .tw{font-size:.6em;font-weight:800;background:rgba(0,0,0,.08);border-radius:5px;padding:1px 6px}
+.nm.noscan{cursor:default}
+.freq{display:grid;grid-template-columns:auto 1fr auto;gap:5px 8px;align-items:center;font-size:13px}
+.freq .v{font-weight:700;font-family:ui-monospace,Menlo,monospace;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.freq .b{height:12px;border-radius:3px}
+.keys{font-size:11.5px;color:var(--dim);display:flex;flex-wrap:wrap;gap:6px 12px;padding:2px 2px}
+.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1d2330;color:#fff;padding:8px 14px;border-radius:8px;font-size:13px;opacity:0;transition:opacity .2s;pointer-events:none;z-index:60}
+.ov{position:fixed;inset:0;background:rgba(20,24,33,.55);display:none;align-items:center;justify-content:center;z-index:70}
+.ov .box{background:#fff;border-radius:12px;padding:22px 26px;min-width:520px}
+.ov h3{margin-bottom:12px}
+.ov table{border-collapse:collapse;font-size:13.5px}
+.ov td{padding:4px 12px 4px 0}
+#black{position:fixed;inset:0;background:#000;z-index:80;display:none;color:#555;align-items:center;justify-content:center;font-size:13px}
+.timer{font:700 14px ui-monospace,Menlo,monospace;color:var(--indigo)}
+.empty{color:var(--dim);font-size:13px;padding:30px;text-align:center}
+body.hideside .side{display:none}
+</style></head><body class="laser">
+<div class="top">
+  <h1 id="title"></h1>
+  <span class="dim" id="pos"></span>
+  <span class="timer" id="timer"></span>
+  <div class="tools">
+    <button class="tb corr" id="bCorr" title="Afficher la correction (C)">Correction <span class="kbd">C</span></button>
+    <button class="tb" id="bRand" title="Copie d'un élève au hasard, bien lue (E)">Élève au hasard <span class="kbd">E</span></button>
+    <button class="tb" id="bList" title="Liste des élèves (L)">Élèves <span class="kbd">L</span></button>
+    <span class="sep"></span>
+    <button class="tb" id="bLaser" title="Pointeur laser (P)">Pointeur <span class="kbd">P</span></button>
+    <button class="tb" id="bDraw" title="Dessiner sur la carte (D)">Dessin <span class="kbd">D</span></button>
+    <span id="swatches" style="display:flex;gap:4px"></span>
+    <button class="tb" id="bUndo" title="Annuler le dernier trait (Z)">↶</button>
+    <button class="tb" id="bClear" title="Effacer les dessins de cette carte (X)">Effacer</button>
+    <span class="sep"></span>
+    <button class="tb" id="bHelp" title="Raccourcis (?)">?</button>
+    <button class="close" id="bClose" title="Fermer le diaporama">✕</button>
+  </div>
+</div>
+<div class="queue" id="queue"></div>
+<div id="main">
+  <div class="stage">
+    <div class="ctx" id="ctx"></div>
+    <div style="position:relative;flex:1;min-height:0;display:flex">
+      <div class="board" id="board"></div>
+      <div class="zoom" title="Taille de la carte (− / +, 0 pour revenir)"><button id="zOut">−</button><span id="zVal">100 %</span><button id="zIn">+</button></div>
+    </div>
+  </div>
+  <div class="side" id="side"></div>
+</div>
+<canvas id="laser"></canvas>
+<div id="black">Écran masqué — B pour revenir</div>
+<div class="ov" id="help"><div class="box">
+  <h3>Raccourcis</h3>
+  <table>
+    <tr><td><span class="kbd">←</span> <span class="kbd">→</span></td><td>Exercice précédent / suivant</td></tr>
+    <tr><td><span class="kbd">↑</span> <span class="kbd">↓</span></td><td>Jumelle / variante précédente / suivante</td></tr>
+    <tr><td><span class="kbd">C</span></td><td>Afficher / masquer la correction</td></tr>
+    <tr><td><span class="kbd">E</span></td><td>Copie d'un élève au hasard (lecture réussie) ; encore pour un autre</td></tr>
+    <tr><td><span class="kbd">V</span> <span class="kbd">Échap</span></td><td>Revenir à la carte vierge</td></tr>
+    <tr><td><span class="kbd">N</span></td><td>Montrer / cacher le prénom sur la copie affichée</td></tr>
+    <tr><td><span class="kbd">L</span></td><td>Montrer / cacher la liste des élèves</td></tr>
+    <tr><td><span class="kbd">R</span></td><td>Réponses fréquentes de la classe</td></tr>
+    <tr><td><span class="kbd">P</span> / <span class="kbd">D</span></td><td>Pointeur laser / dessin, utilisables ensemble (souris, stylet)</td></tr>
+    <tr><td><span class="kbd">Z</span> / <span class="kbd">X</span></td><td>Annuler le dernier trait / effacer la carte</td></tr>
+    <tr><td><span class="kbd">T</span></td><td>Chrono (lancer, arrêter, remettre à zéro au 3e appui)</td></tr>
+    <tr><td><span class="kbd">B</span></td><td>Écran noir</td></tr>
+    <tr><td><span class="kbd">−</span> <span class="kbd">+</span> <span class="kbd">0</span></td><td>Réduire / agrandir la carte, taille normale</td></tr>
+    <tr><td><span class="kbd">F</span></td><td>Plein écran</td></tr>
+    <tr><td><span class="kbd">Home</span> / <span class="kbd">End</span></td><td>Premier / dernier exercice</td></tr>
+  </table>
+  <p class="dim" style="margin-top:12px;font-size:12px">Les dessins restent jusqu'à la fermeture de la page, pour chaque carte et chaque copie. Rien n'est enregistré.</p>
+</div></div>
+<div class="toast" id="toast"></div>
+<script>
+const D = window.DATA, $ = (id) => document.getElementById(id)
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
+const tex = (s) => esc(String(s ?? '').replace(/\$/g, ''))
+const toast = (m) => { const t = $('toast'); t.textContent = m; t.style.opacity = 1; clearTimeout(t._h); t._h = setTimeout(() => t.style.opacity = 0, 1600) }
+const COLORS = ['#e03131', '#1c6fd1', '#2f9e44', '#1d2330']
+const LEVEL = { 1: ['Facile', 'l1'], 2: ['Moyen', 'l2'], 3: ['Difficile', 'l3'] }
+const TYPES = { qcm_single: 'QCM', qcm_multiple: 'QCM à plusieurs réponses', checkbox_grid: 'Grille', matching: 'Relier', short_text: 'Réponse courte',
+  multiline_text: 'Rédaction', table_fill: 'Tableau', multi_blank: 'Cases à compléter', composite: 'Composé', manual_drawing: 'Construction' }
+
+// « pas de réponse » seulement quand la copie est corrigée et que rien n'a été lu
+D.responses.forEach((r) => { r.blank = r.reason != null ? /blank/.test(r.reason) : r.blank && r.graded && r.max > 0 && !r.answer })
+const S = { zoom: 1, slide: 0, vi: {}, corr: false, view: null, showList: true, freq: false, names: false, laser: true, draw: false, color: COLORS[0],
+  seen: new Set(), shown: {}, ink: {}, timer: { on: false, t0: 0, acc: 0 } }
+
+// ---------------- modèle : un diapo par famille, trié du plus facile au plus dur ----------------
+const OUT = new Set(['absent', 'generated', 'printed'])   // copie non rendue : l'élève n'a pas eu la carte en main
+function verdict(r) {
+  if (r.pending || !r.graded || !r.max) return 'nc'
+  const x = r.score / r.max
+  return x >= 0.999 ? 'ok' : x <= 0.001 ? 'ko' : 'pa'
+}
+function build(L) {
+  const stu = Object.fromEntries(L.students.map((s) => [s.copy_id, s]))
+  const slides = L.families.map((f) => {
+    const resp = L.responses.filter((r) => r.family === f.key && !OUT.has(stu[r.copy_id]?.status))
+    const variants = f.variants.map((v) => ({ ...v, resp: resp.filter((r) => r.variant === v.key) }))
+      .sort((a, b) => a.twin_jeu - b.twin_jeu || a.twin_disposition - b.twin_disposition)
+    const graded = resp.filter((r) => verdict(r) !== 'nc')
+    const rate = graded.length ? graded.reduce((a, r) => a + r.score / r.max, 0) / graded.length : 0
+    const v0 = variants[0] || f.variants[0]
+    const problem = f.variants.some((v) => v.is_problem || v.kind === 'probleme' || v.badge_type === 'probleme' || v.badge_type === 'enigme')
+    const level = Math.min(...f.variants.map((v) => v.level || Math.round((v.difficulty || 6) / 3)))
+    return { key: f.key, variants, resp, rate, problem, level, label: v0.competency_label || '', type: v0.response_type, n: graded.length }
+  })
+  slides.sort((a, b) => (a.problem - b.problem) || (a.level - b.level) || (b.rate - a.rate) || a.key.localeCompare(b.key))
+  return { slides, stu, students: [...L.students].sort((a, b) => a.order - b.order || a.name.localeCompare(b.name, 'fr')) }
+}
+const M = build(D)
+const slide = () => M.slides[S.slide]
+const vIdx = () => Math.min(S.vi[slide().key] || 0, slide().variants.length - 1)
+const variant = () => slide().variants[vIdx()]
+
+// ---------------- rendu ----------------
+function stackBar(resp, cls = 'stack') {
+  const c = { ok: 0, pa: 0, ko: 0 }; resp.forEach((r) => { const v = verdict(r); if (v in c) c[v]++ })
+  const n = c.ok + c.pa + c.ko || 1
+  return `<div class="${cls}"><i style="width:${c.ok / n * 100}%;background:var(--green)"></i><i style="width:${c.pa / n * 100}%;background:#f59f00"></i><i style="width:${c.ko / n * 100}%;background:var(--red)"></i></div>`
+}
+function renderQueue() {
+  let q = '', g = null
+  M.slides.forEach((s, i) => {
+    const grp = s.problem ? 'Problèmes' : LEVEL[s.level]?.[0] || 'Niveau ' + s.level
+    if (grp !== g) { g = grp; q += `<span class="g">${grp}</span>` }
+    q += `<button class="qd ${i === S.slide ? 'cur' : ''} ${S.seen.has(s.key) ? 'seen' : ''}" data-go="${i}" title="Exercice ${i + 1} · ${esc(TYPES[s.type] || s.type)} · ${s.resp.length} élève${s.resp.length > 1 ? 's' : ''} · ${Math.round(s.rate * 100)} % de réussite${s.variants.length > 1 ? ' · ' + s.variants.length + ' jumelles' : ''}">${s.resp.length}${s.variants.length > 1 ? `<span class="tw">×${s.variants.length}</span>` : ''}${stackBar(s.resp, 'bar')}</button>`
+  })
+  $('queue').innerHTML = q
+}
+function renderCtx() {
+  const s = slide(), v = variant(), n = s.variants.length
+  const lv = s.problem ? '<span class="lvl pb">Problème</span>' : `<span class="lvl ${LEVEL[s.level]?.[1]}">${LEVEL[s.level]?.[0] || ''}</span>`
+  $('ctx').innerHTML = `<span class="ex">Exercice ${S.slide + 1}</span>${lv}<span class="dim">${esc(TYPES[s.type] || s.type)}</span>
+    <span class="comp" title="${esc(s.label)}">${tex(s.label)}</span>
+    <div class="var" title="Jumelles / variantes de la famille (↑ ↓)"><button id="vPrev" ${n < 2 ? 'disabled' : ''}>‹</button>
+      <span>${n < 2 ? 'Carte unique' : `Jumelle ${vIdx() + 1} / ${n}`}<br><small class="dim" style="font-weight:500">${v.resp.length ? v.resp.length + ' élève' + (v.resp.length > 1 ? 's' : '') : 'personne ne l’a eue'}</small></span>
+      <button id="vNext" ${n < 2 ? 'disabled' : ''}>›</button></div>`
+  $('vPrev').onclick = () => moveVariant(-1); $('vNext').onclick = () => moveVariant(1)
+  $('pos').textContent = `${S.slide + 1} / ${M.slides.length}`
+}
+function cardBox(src, key, tagHtml, maxW, maxH, nat) {
+  return `<div class="cardw" data-ink="${esc(key)}" data-nat="${nat[0]}x${nat[1]}" data-max="${maxW}x${maxH}">
+    <div class="tag">${tagHtml}</div><img src="${src}" alt=""><canvas></canvas></div>`
+}
+function renderBoard() {
+  const v = variant(), board = $('board'), W = board.clientWidth, H = board.clientHeight - 34
+  let parts = []
+  if (S.view) {
+    const r = v.resp.find((x) => x.copy_id === S.view) || slide().resp.find((x) => x.copy_id === S.view)
+    const who = S.names ? esc(M.stu[S.view].name) : 'Copie d’un élève'
+    const res = verdict(r), lab = { ok: 'juste', pa: 'en partie juste', ko: 'faux', nc: 'à corriger' }[res]
+    parts.push({ src: r.scan, key: 'scan:' + S.view + ':' + r.variant, tag: `<span class="t scan">${who}</span>${S.corr ? `<span class="t ${res === 'ok' ? 'scan' : 'corr'}">${lab}</span>` : ''}` })
+    if (S.corr && v.card_answers) parts.push({ src: v.card_answers, key: 'card:' + v.key, tag: '<span class="t corr">Correction</span>' })
+  } else {
+    const src = S.corr ? v.card_answers : v.card_blank
+    parts.push({ src, key: 'card:' + v.key, tag: S.corr ? '<span class="t corr">Correction</span>' : '<span class="t blank">Carte vierge</span>' })
+  }
+  if (parts.some((p) => !p.src)) { board.innerHTML = `<div class="empty">Pas d'aperçu pour cette carte${v.render_error ? ' : ' + esc(v.render_error) : ''}.</div>`; return }
+  const fitW = (W - (parts.length - 1) * 22) / parts.length
+  const each = Math.min(fitW, parts.length === 1 ? Math.min(W * .62, 820) : 720), maxH = H * .9
+  $('zVal').textContent = Math.round(S.zoom * 100) + ' %'
+  board.innerHTML = parts.map((p) => `<div class="cardw" style="visibility:hidden"><div class="tag">${p.tag}</div><img src="${p.src}" alt=""></div>`).join('')
+    + `<canvas id="ink"></canvas>`
+  board.dataset.ink = parts.map((p) => p.key).join('+')
+  const cards = [...board.querySelectorAll('.cardw')]; let left = cards.length
+  cards.forEach((el) => {
+    const img = el.querySelector('img')
+    const fit = () => { const k = Math.min(S.zoom * Math.min(each / img.naturalWidth, maxH / img.naturalHeight, 1.3), fitW / img.naturalWidth, H / img.naturalHeight); el.style.width = img.naturalWidth * k + 'px'; el.style.height = img.naturalHeight * k + 'px'; el.style.visibility = 'visible'; if (--left === 0) setupInk() }
+    img.complete && img.naturalWidth ? fit() : img.onload = fit
+  })
+}
+function nameBtn(st, r, sv) {
+  const res = r ? verdict(r) : 'no', twin = r && slide().variants.length > 1 && r.variant !== variant().key ? slide().variants.findIndex((v) => v.key === r.variant) + 1 : 0
+  const pts = r && res !== 'nc' ? `${fmt(r.score / r.max * (variant().bareme || 1))}` : ''
+  return `<button class="nm ${r ? res : 'no'} ${S.view === st.copy_id ? 'cur' : ''} ${r?.scan ? '' : 'noscan'}" ${r?.scan ? `data-view="${st.copy_id}"` : ''} title="${r ? (r.blank ? 'Pas de réponse' : esc(r.answer || '')) : 'N’a pas eu cette carte'}${r && !r.ocr_ok && !r.blank ? ' · lecture incertaine' : ''}">
+    <span class="n">${esc(st.name)}</span>${r?.blank ? '<span class="x">∅</span>' : ''}${twin ? `<span class="tw">J${twin}</span>` : ''}${r && !r.blank && res === 'pa' ? `<span class="x">${pts}</span>` : ''}</button>`
+}
+const fmt = (x) => String(Math.round(x * 100) / 100).replace('.', ',')
+function renderSide() {
+  const side = $('side')
+  document.body.classList.toggle('hideside', !S.showList && !S.freq)
+  const s = slide(), byCopy = Object.fromEntries(s.resp.map((r) => [r.copy_id, r]))
+  let h = ''
+  if (S.showList) {
+    const groups = { ok: [], pa: [], ko: [], nc: [], no: [] }
+    M.students.forEach((st) => { if (OUT.has(st.status)) { groups.no.push(st); return } const r = byCopy[st.copy_id]; groups[r ? verdict(r) : 'no'].push(st) })
+    const n = groups.ok.length + groups.pa.length + groups.ko.length, pc = (k) => n ? Math.round(groups[k].length / n * 100) : 0
+    h += `<div class="panel" style="flex:1"><div class="hd">Élèves <span class="dim" style="font-weight:500">${n} sur ${M.students.length}</span>
+        <label style="margin-left:auto;font-weight:500;font-size:12px;display:flex;gap:5px;align-items:center;cursor:pointer"><input type="checkbox" id="cList" checked> afficher</label></div>
+      <div class="bd">
+      <div class="sum"><span style="color:var(--green)"><b>${pc('ok')}</b>%</span><span style="color:#e67700"><b>${pc('pa')}</b>%</span><span style="color:var(--red)"><b>${pc('ko')}</b>%</span></div>
+      ${stackBar(s.resp)}
+      <div class="leg"><span><i style="background:var(--green-l);outline:1px solid #b9e3c2"></i>juste</span><span><i style="background:var(--orange-l);outline:1px solid #f5c9a8"></i>en partie</span><span><i style="background:var(--red-l);outline:1px solid #f1b9b9"></i>faux</span><span><i style="outline:1px solid #ccc"></i>à corriger</span><span style="color:#b8bec8">gris : pas cette carte ou absent</span></div>
+      <div class="names two" style="grid-template-rows:repeat(${Math.ceil(M.students.length / 2)},auto)">${M.students.map((st) => nameBtn(st, OUT.has(st.status) ? null : byCopy[st.copy_id])).join('')}</div>
+      </div></div>`
+  }
+  if (S.freq) {
+    const tally = {}
+    s.resp.forEach((r) => { const k = r.blank ? '(rien)' : (r.answer || '').replace(/\s+/g, ' ').trim() || '(illisible)'; (tally[k] ||= { n: 0, v: verdict(r) }).n++ })
+    const rows = Object.entries(tally).sort((a, b) => b[1].n - a[1].n).slice(0, 8), max = Math.max(1, ...rows.map((x) => x[1].n))
+    const qcm = /^(qcm|matching|checkbox)/.test(s.type)
+    h += `<div class="panel"><div class="hd">Réponses fréquentes <span class="kbd" style="margin-left:auto">R</span></div><div class="bd">
+      ${qcm ? '<div class="dim" style="font-size:12px">Cases cochées : l’ordre des choix change d’une copie à l’autre, le relevé détaillé n’est pas encore disponible.</div>' :
+      `<div class="freq">${rows.map(([k, x]) => `<span class="v" title="${esc(k)}">${esc(k)}</span><span class="b" style="width:${x.n / max * 100}%;background:${x.v === 'ok' ? 'var(--green)' : x.v === 'pa' ? '#f59f00' : x.v === 'ko' ? 'var(--red)' : '#adb5bd'}"></span><span>${x.n}</span>`).join('')}</div>`}
+      </div></div>`
+  }
+  h += `<div class="keys"><span><span class="kbd">←</span><span class="kbd">→</span> exercice</span><span><span class="kbd">↑</span><span class="kbd">↓</span> jumelle</span><span><span class="kbd">C</span> correction</span><span><span class="kbd">E</span> élève</span><span><span class="kbd">?</span> tout</span></div>`
+  side.innerHTML = h
+  fitNames()
+  side.querySelectorAll('[data-view]').forEach((b) => b.onclick = () => showStudent(b.dataset.view))
+  const c = $('cList'); if (c) c.onchange = () => { S.showList = c.checked; render() }
+}
+// La liste tient sans défiler : on réduit les prénoms tant qu'elle déborde (22 px au plus).
+function fitNames() {
+  const bd = document.querySelector('.side .panel .bd'), names = document.querySelector('.side .names')
+  if (!bd || !names) return
+  let fs = 22
+  names.style.setProperty('--nm', fs + 'px')
+  while (fs > 12 && bd.scrollHeight > bd.clientHeight + 1) { fs -= 1; names.style.setProperty('--nm', fs + 'px') }
+}
+function renderTools() {
+  $('bCorr').classList.toggle('on', S.corr); $('bList').classList.toggle('on', S.showList); $('bRand').classList.toggle('on', !!S.view)
+  $('bLaser').classList.toggle('on', S.laser); $('bDraw').classList.toggle('on', S.draw)
+  document.body.classList.toggle('laser', S.laser); document.body.classList.toggle('draw', S.draw)
+  $('swatches').innerHTML = COLORS.map((c) => `<button class="sw ${S.color === c && S.draw ? 'on' : ''}" data-c="${c}" style="background:${c}" title="Couleur du dessin"></button>`).join('')
+  $('swatches').querySelectorAll('[data-c]').forEach((b) => b.onclick = () => { S.color = b.dataset.c; S.draw = true; render() })
+}
+function render() {
+  S.seen.add(slide().key)
+  renderQueue(); renderCtx(); renderSide(); renderTools()
+  requestAnimationFrame(renderBoard)
+}
+
+// ---------------- navigation ----------------
+function go(i) { if (i < 0 || i >= M.slides.length) return; S.slide = i; S.view = null; S.corr = false; render() }
+function moveVariant(d) {
+  const s = slide(), n = s.variants.length; if (n < 2) return
+  S.vi[s.key] = (vIdx() + d + n) % n; S.view = null; render()
+}
+function showStudent(copy) {
+  const s = slide(), r = s.resp.find((x) => x.copy_id === copy); if (!r?.scan) return
+  S.vi[s.key] = s.variants.findIndex((v) => v.key === r.variant); S.view = copy; render()
+}
+function randomStudent() {
+  const s = slide(), pool = s.resp.filter((r) => r.ocr_ok && r.scan && !r.blank)
+  if (!pool.length) { toast('Aucune copie bien lue pour cet exercice'); return }
+  const done = (S.shown[s.key] ||= new Set())
+  let left = pool.filter((r) => !done.has(r.copy_id) && r.copy_id !== S.view)
+  if (!left.length) { done.clear(); left = pool.filter((r) => r.copy_id !== S.view); if (!left.length) left = pool; toast('Toutes les copies lisibles ont été montrées : on recommence') }
+  const r = left[Math.floor(Math.random() * left.length)]; done.add(r.copy_id)
+  S.corr = false; showStudent(r.copy_id)
+}
+
+// ---------------- dessin (mémoire de session uniquement) ----------------
+// Un seul calque sur toute la zone grise : on dessine sur la carte ET autour.
+// Les points sont notés par rapport à la première carte (origine = son coin, unité = sa
+// largeur) : le dessin suit la carte quand la fenêtre change de taille.
+let inkPaint = null
+function setupInk() {
+  const board = $('board'), cv = $('ink'); if (!cv) return
+  const key = board.dataset.ink, dpr = devicePixelRatio || 1, W = board.clientWidth, H = board.clientHeight
+  cv.width = W * dpr; cv.height = H * dpr
+  const ctx = cv.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+  const strokes = (S.ink[key] ||= [])
+  const anchor = () => { const bb = board.getBoundingClientRect(), cb = board.querySelector('.cardw').getBoundingClientRect(); return { ox: cb.left - bb.left, oy: cb.top - bb.top, u: cb.width, bb } }
+  const paint = () => { const { ox, oy, u } = anchor(); ctx.clearRect(0, 0, W, H); ctx.lineCap = ctx.lineJoin = 'round'
+    strokes.forEach((s) => { ctx.strokeStyle = s.c; ctx.lineWidth = s.w * u; ctx.beginPath()
+      s.p.forEach(([x, y], i) => i ? ctx.lineTo(ox + x * u, oy + y * u) : ctx.moveTo(ox + x * u, oy + y * u))
+      if (s.p.length === 1) ctx.lineTo(ox + s.p[0][0] * u + .1, oy + s.p[0][1] * u); ctx.stroke() }) }
+  inkPaint = paint; paint()
+  const at = (e) => { const { ox, oy, u, bb } = anchor(); return [(e.clientX - bb.left - ox) / u, (e.clientY - bb.top - oy) / u] }
+  let cur = null
+  cv.onpointerdown = (e) => { if (!S.draw) return; cv.setPointerCapture(e.pointerId)
+    cur = { c: S.color, w: 4 / anchor().u, p: [at(e)] }; strokes.push(cur); paint() }
+  cv.onpointermove = (e) => { if (!cur) return; (e.getCoalescedEvents?.() || [e]).forEach((ev) => cur.p.push(at(ev))); paint() }
+  cv.onpointerup = cv.onpointercancel = () => cur = null
+  cv.style.pointerEvents = S.draw ? 'auto' : 'none'
+}
+function inkStrokes() { return S.ink[$('board').dataset.ink] || [] }
+function undo() { inkStrokes().pop(); repaint() }
+function clearInk() { inkStrokes().length = 0; repaint() }
+function repaint() { inkPaint && inkPaint() }
+
+// ---------------- pointeur laser ----------------
+// Le point suit la souris partout dans la page, sans jamais masquer le curseur :
+// position = dernier événement reçu (événements fusionnés compris), traînée qui s'estompe.
+const LZ = $('laser'), lctx = LZ.getContext('2d'), trail = [], FADE = 350
+let laserPos = null
+function sizeLaser() { const d = devicePixelRatio || 1; LZ.width = innerWidth * d; LZ.height = innerHeight * d; lctx.setTransform(d, 0, 0, d, 0, 0) }
+sizeLaser()
+addEventListener('pointermove', (e) => {
+  if (!S.laser) return
+  const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [e], now = performance.now()
+  for (const ev of evs.length ? evs : [e]) {
+    const last = trail.at(-1)
+    if (last && now - last.t > 120) trail.length = 0          // pause : pas de trait vers l'ancienne position
+    trail.push({ x: ev.clientX, y: ev.clientY, t: now })
+  }
+  laserPos = { x: e.clientX, y: e.clientY }
+}, { passive: true })
+document.addEventListener('pointerleave', () => { laserPos = null; trail.length = 0 })
+;(function loop() {
+  const now = performance.now()
+  while (trail.length && now - trail[0].t > FADE) trail.shift()
+  lctx.clearRect(0, 0, innerWidth, innerHeight)
+  if (S.laser && laserPos) {
+    lctx.lineCap = lctx.lineJoin = 'round'
+    for (let i = 1; i < trail.length; i++) {
+      const a = trail[i - 1], b = trail[i], k = Math.max(0, 1 - (now - b.t) / FADE)
+      lctx.strokeStyle = `rgba(255,30,30,${.4 * k})`; lctx.lineWidth = 6 * k + 1
+      lctx.beginPath(); lctx.moveTo(a.x, a.y); lctx.lineTo(b.x, b.y); lctx.stroke()
+    }
+    const { x, y } = laserPos, g = lctx.createRadialGradient(x, y, 0, x, y, 14)
+    g.addColorStop(0, 'rgba(255,40,40,1)'); g.addColorStop(.4, 'rgba(255,0,0,.8)'); g.addColorStop(1, 'rgba(255,0,0,0)')
+    lctx.fillStyle = g; lctx.beginPath(); lctx.arc(x, y, 14, 0, 7); lctx.fill()
+  }
+  requestAnimationFrame(loop)
+})()
+
+// ---------------- chrono ----------------
+function tickTimer() {
+  const T = S.timer, ms = T.acc + (T.on ? performance.now() - T.t0 : 0)
+  $('timer').textContent = ms ? `⏱ ${Math.floor(ms / 60000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')}` : ''
+}
+setInterval(tickTimer, 250)
+function timer() { const T = S.timer
+  if (T.on) { T.acc += performance.now() - T.t0; T.on = false; T.stopped = true }
+  else if (T.stopped) { T.acc = 0; T.stopped = false }
+  else { T.t0 = performance.now(); T.on = true }
+  tickTimer() }
+
+// ---------------- événements ----------------
+$('title').innerHTML = `${esc(D.lot.title)}<span>${esc(D.lot.class_name || '')}</span>`
+document.title = `Diaporama · ${D.lot.title}`
+if (window.parent !== window) document.body.classList.add('embedded')
+$('bClose').onclick = () => window.parent.postMessage({ type: 'kn-slideshow-close' }, '*')
+$('queue').onclick = (e) => { const b = e.target.closest('[data-go]'); if (b) go(+b.dataset.go) }
+$('bCorr').onclick = () => { S.corr = !S.corr; render() }
+$('bRand').onclick = () => S.view ? (S.view = null, render()) : randomStudent()
+$('bList').onclick = () => { S.showList = !S.showList; render() }
+$('bLaser').onclick = () => { S.laser = !S.laser; render() }
+$('bDraw').onclick = () => { S.draw = !S.draw; render() }
+function zoom(d) { S.zoom = d ? Math.max(.5, Math.min(2.5, Math.round((S.zoom + d) * 10) / 10)) : 1; renderBoard() }
+$('zOut').onclick = () => zoom(-.1); $('zIn').onclick = () => zoom(.1); $('zVal').onclick = () => zoom(0)
+$('bUndo').onclick = undo; $('bClear').onclick = clearInk
+$('bHelp').onclick = () => $('help').style.display = 'flex'
+$('help').onclick = () => $('help').style.display = 'none'
+addEventListener('resize', () => { sizeLaser(); renderBoard(); fitNames() })
+addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'SELECT' || e.metaKey || e.ctrlKey || e.altKey) { if ((e.metaKey || e.ctrlKey) && e.key === 'z') { e.preventDefault(); undo() } return }
+  const k = e.key, l = k.toLowerCase()
+  if ($('help').style.display === 'flex') { $('help').style.display = 'none'; if (k === 'Escape' || k === '?') return }
+  if ($('black').style.display === 'flex') { if (l === 'b' || k === 'Escape') $('black').style.display = 'none'; return }
+  const act = {
+    arrowright: () => go(S.slide + 1), arrowleft: () => go(S.slide - 1), ' ': () => go(S.slide + 1), pagedown: () => go(S.slide + 1), pageup: () => go(S.slide - 1),
+    arrowup: () => moveVariant(-1), arrowdown: () => moveVariant(1), home: () => go(0), end: () => go(M.slides.length - 1),
+    c: () => { S.corr = !S.corr; render() }, e: randomStudent, h: randomStudent,
+    v: () => { S.view = null; render() }, escape: () => { S.view = null; S.corr = false; render() },
+    n: () => { S.names = !S.names; render() }, l: () => { S.showList = !S.showList; render() }, r: () => { S.freq = !S.freq; render() },
+    p: () => { S.laser = !S.laser; render() }, d: () => { S.draw = !S.draw; render() },
+    z: undo, x: clearInk, t: timer, b: () => $('black').style.display = 'flex',
+    f: () => document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen(),
+    '?': () => $('help').style.display = 'flex',
+    '-': () => zoom(-.1), '+': () => zoom(.1), '=': () => zoom(.1), '0': () => zoom(0),
+  }[l]
+  if (act) { e.preventDefault(); act() }
+})
+render()
+</script>
+</body></html>

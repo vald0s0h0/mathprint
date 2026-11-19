@@ -132,3 +132,13 @@ Demande : les élèves écrivent si mal que l'image seule ne suffit pas. Chaque 
 - **Coût attendu** : sur une mauvaise réponse, quand Uni-MuMER est biaisé, ses deux passages divergent et il s'abstient. Cela fait quelques renvois de plus vers Mathpix, mais aucune erreur.
 - **Mesurer** : le rapport (`/admin/lecture-ocr`, `ocr_report.py`) montre `unimumer+ctx` et `apple_vision+ctx` comme des moteurs à part (exactitude contre la vérité du professeur). `ocr_replay.py --sans-contexte` rejoue la fusion sans les passages avec contexte, pour comparer les décisions automatiques gagnées et perdues.
 - Tests : `backend/tests/test_ocr_context.py` (18, dont une propriété sur 4 000 tirages : une surface soufflée n'est jamais acceptée sans une lecture libre qui la porte ; et deux scénarios de bout en bout : la réponse juste mal écrite est lue grâce au contexte, la réponse fausse n'est jamais changée en réponse attendue), 4 tests du worker.
+
+## Revue de la chaîne avec contexte (2026-11-18, soir)
+- **OCRiser** : les passages avec contexte n'étaient PAS proposés au professeur (`review_options` ne lisait que `read`). Ils le sont désormais, comme sources à part (« Uni-MuMER + contexte », puce violette en contour, infobulle « a pu être influencé »). Le choix du professeur crédite chaque passage séparément.
+- **Rapport** (`/admin/lecture-ocr`, `ocr_report.py`) :
+  - paires : chaque passage est une source, y compris un moteur face à son propre passage avec contexte ;
+  - apport marginal : retrait d'un moteur, d'un seul passage (`moteur (passage libre seul)`, `moteur+ctx`) et de tout le contexte ; avec automatiques gagnées/perdues et erreurs automatiques avant/après sur les découpes relues ;
+  - nouveau « Le contexte améliore-t-il la lecture ? » (`context_gain`) : exactitude libre vs avec contexte sur les mêmes découpes, lectures réparées / cassées, recopies de la réponse attendue quand l'élève a écrit autre chose ;
+  - nouveau « Quelle pile retenir ? » (`stacks`) : chaque combinaison d'au moins deux moteurs rejouée par la fusion complète sur l'échantillon complet relu (800 découpes au plus) : part automatique, erreurs (Wilson), et part où la bonne lecture est proposée.
+- **État du Mac** (`ocr_cascade.local_progress` → `state`) : `mac_reading` (bleu animé), `mac_offline` (gris), `mac_overdue` (orange, au professeur de décider). En ombre aussi : OCRiser attend les propositions du Mac (segment bleu, bouton « Lecture sur le Mac n/N ») ; « OCRiser sans attendre le Mac » reste dans le menu ⋮. Le bouton OCRiser et les lignes « à OCRiser » du tableau de bord passent en orange (intervention humaine).
+- Corrigé au passage : `test_shipped_config_is_valid_and_has_no_secret` attendait un seul serveur alors que le bloc `nas` est livré (sans secret).

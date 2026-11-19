@@ -462,7 +462,8 @@ def _business_steps(status: str, progress: dict | None, pending: int,
                     overlay_printed: bool = False,
                     overlay_stale: bool = False,
                     overlay_rebuilding: bool = False,
-                    late_overlay: bool = False) -> list[dict]:
+                    late_overlay: bool = False,
+                    mac_state: str | None = None) -> list[dict]:
     """Étapes MÉTIER de la correction, pour un visualiseur lisible par le
     professeur — pas les 10 phases techniques internes. La règle de couleur est
     simple et cohérente avec les actions proposées :
@@ -478,7 +479,12 @@ def _business_steps(status: str, progress: dict | None, pending: int,
     n'y a jamais d'orange coincé au milieu avec du vert après."""
     done = progress or {}
     scanned = "split" in done or "uploaded" in done
-    read = "ocr_complete" in done
+    # lecture locale (Mac) en cours : les copies sont lues, c'est l'OCRisation qui travaille ;
+    # en ombre, OCRiser attend les propositions du Mac (bleu, pas encore « à vous »)
+    # (`mac_overdue` : orange, au professeur de décider ; voir ocr_cascade.local_progress)
+    mac_overdue = mac_state == "mac_overdue"
+    mac_reading = not mac_overdue and (mac_state is not None or status == "ocr_local_pending")
+    read = "ocr_complete" in done or mac_reading or mac_overdue
     graded = "graded" in done
     ocr_confirmed = "ocr_confirmed" in done or graded
     finalized = "finalized" in done
@@ -499,8 +505,8 @@ def _business_steps(status: str, progress: dict | None, pending: int,
         {"phase": "read", "label": "Lecture des copies",
          "state": "green" if read else ("blue" if scanned else "gray")},
         {"phase": "ocrize", "label": "OCRisation",
-         "state": "orange" if pending_ocr else ("green" if ocr_confirmed
-                  else "blue" if read else "gray")},
+         "state": "orange" if ((pending_ocr and not mac_reading) or mac_overdue) else ("green" if ocr_confirmed
+                  else "blue" if (read or mac_reading) else "gray")},
         {"phase": "correct", "label": "Correction", "state": correct},
         {"phase": "validate", "label": "Validation",
          "state": "green" if finalized else ("blue" if (graded and not pending) else "gray")},
@@ -553,6 +559,8 @@ def _batch_view(db: Session, b: ScanBatch) -> dict:
         b.status == "ocr_review_pending") else 0
     stale = refine.overlay_stale(b)
     rebuilding = stale and _is_running(b.id)
+    # lecture sur le Mac (cascade, ou ombre avant OCRiser) : état du bouton du lot
+    mac = ocr_cascade.local_progress(db, b)
     # Un lot refermé sans aucune feuille à corriger (ex. un doublon de scan) n'a rien à
     # montrer : pas de ligne « 0 copie ».
     late_jobs = [j for j in late_copies.jobs_view(db, b)
@@ -569,7 +577,8 @@ def _batch_view(db: Session, b: ScanBatch) -> dict:
                                    b.overlay_printed, stale, rebuilding, False)
     else:
         segments = _business_steps(b.status, b.progress_json, pending, pending_ocr,
-                                   b.error, b.overlay_printed, stale, rebuilding, False)
+                                   b.error, b.overlay_printed, stale, rebuilding, False,
+                                   mac_state=mac["state"] if mac else None)
     assessment = db.get(Assessment, b.assessment_id)
     # Les étapes techniques du lot suivent l'enchaînement en cours de correction ;
     # la première vague, elle, reste imprimable sous son état final.
@@ -597,7 +606,7 @@ def _batch_view(db: Session, b: ScanBatch) -> dict:
             "error": None if late_jobs else b.error,
             "pending_reviews": pending, "pending_ocr": pending_ocr,
             # lecture locale (mode cascade) : avancement sur le Mac et présence du worker
-            "ocr_local": (ocr_cascade.local_progress(db, b) if b.status == "ocr_local_pending" else None),
+            "ocr_local": mac,
             "pending_llm": pending_llm, "pending_llm_queued": pending_llm_queued,
             "absent_count": absent_count,
             "ocr_threshold": ocr_confidence_threshold(db), "segments": segments,

@@ -73,6 +73,28 @@ Réservé aux égalités courtes à trous, sur une ligne. Deux cas sont refusés
 - des cases étiquetées (`Abscisse de $A$ : {{blank}}`) : utilise `table_fill` ;
 - une phrase à trous qui se replie : les cases écartent son interligne. Utilise `table_fill`, ou mets-la sur sa propre ligne.
 
+### Phrase à trous manuscrite (toutes les matières)
+
+Une `short_text` ou une `multi_blank` dont l'énoncé est **une phrase complète à compléter**, avec `"response_layout": {"style": "phrase"}`. La phrase est imprimée en écriture manuscrite bleue, au corps d'une écriture d'élève ; chaque trou est un long tiret saumon, de la longueur de **sa** réponse écrite à la main (un nombre court, un mot long). L'élève écrit au-dessus du tiret. Ce n'est pas une case : le moteur ne détache pas le trou, la phrase peut se replier sur plusieurs lignes sans abîmer l'interligne.
+
+Pour toute matière, c'est le format du **rappel de leçon** : rappeler une définition, une règle, un théorème, une date, une loi, un vocabulaire (« réciter la leçon »). Le texte de la phrase est celui de la fiche de leçon, les mots manquants sont ceux que l'élève doit savoir par cœur.
+
+```json
+{"statement": "Dans un triangle rectangle, le carré de l'{{blank}} est égal à la {{blank}} des carrés des deux autres côtés.",
+ "response_type": "multi_blank",
+ "response_layout": {"style": "phrase"},
+ "blanks": [{"type": "text", "value": "hypoténuse"}, {"type": "text", "value": "somme"}],
+ "answer_form": "any"}
+```
+
+- **Une phrase, un fait.** Une seule phrase à trous par carte (deux au plus, sur deux lignes), 1 à 3 trous : le trou remplace un mot ou un groupe de mots qui porte le fait de la fiche, jamais un mot grammatical.
+- **Réponses courtes et déclarées.** Un mot ou un nombre ; les écritures acceptées (singulier et pluriel, avec et sans article, `colour` et `color`) sont déclarées dans `wrong_answers` et les formes admises. Un trou dont la réponse admet beaucoup de formulations ne convient pas : passe en `multiline_text`.
+- **Orthographe.** Quand l'orthographe de la fin d'un mot est la compétence (é, er, ez, accord), fais choisir la forme au lieu de l'écrire (cf. la matière).
+- **Indice.** Une consigne ou un indice entre parenthèses suit son trou (`{{blank}} (cueillir)`) : il reste collé à lui.
+- **Les formules** simples du texte (`$AC^2$`) sont écrites à la main par le moteur ; une formule composée reste en image, à la même taille.
+- **Interdit** : la réponse écrite dans la phrase ou dans un guide ; une phrase dont les trous se devinent sans la leçon ; plus de 3 trous.
+- **Taille.** Une phrase manuscrite occupe plus de place qu'un énoncé imprimé (interligne de 10 mm) : compte-la comme une carte `M`, au plus 120 caractères.
+
 ### `table_fill`
 
 ```json

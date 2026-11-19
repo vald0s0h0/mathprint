@@ -54,6 +54,7 @@ Un protocole, les étapes d'une mesure, l'ordre des appareils dans une boucle s�
   - Quand l'unité n'est pas en jeu (le savoir-faire est le calcul), imprime-la après la case ou dis dans l'énoncé dans quelle unité répondre : sinon l'élève perd des points sur ce qui n'est pas évalué.
   - Varie : sur une même compétence, toutes les cartes ne donnent pas l'unité.
 - **À éviter en réponse écrite** : une formule chimique, un ion, une équation de réaction (indices et charges mal lus) ; fais-les choisir ou compléter dans un tableau de coefficients entiers.
+- **Phrase à trous manuscrite** (`response_layout.style: "phrase"`, voir `courants.md`) : pour rappeler la leçon — une loi, une définition, une relation (« La tension est proportionnelle à ___ »). Un terme de la fiche ou un nombre ; pas de formule chimique ni d'ion écrits.
 - **Mot écrit** : seulement pour un schéma à légender ou un terme de la fiche sans variante.
 - **Rédaction courte** (`multiline_text`, 2 à 4 lignes) : une justification ou une interprétation de mesure, avec un dossier du correcteur qui liste les idées attendues. Pas de compte rendu complet.
 

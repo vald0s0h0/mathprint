@@ -21,7 +21,15 @@ type Report = {
     latency_p50_ms: number | null; latency_p95_ms: number | null; devices: string[]
   }>>
   pairs: { class: string; a: string; b: string; agree_rate: number | null; wrong_agree: number; both_readable: number }[]
-  marginal: { crops: number; engines: Record<string, { decisions_changed: number; automatic_decisions_lost: number; share_changed: number }> }
+  marginal: { crops: number; with_truth?: number; engines: Record<string, {
+    decisions_changed: number; automatic_decisions_lost: number; share_changed: number
+    automatic_decisions_gained?: number; auto_errors_with?: number; auto_errors_without?: number }> }
+  stacks?: { crops: number; sources?: string[]; stacks: {
+    sources: string[]; crops: number; auto: number; auto_share: number; auto_errors: number
+    auto_error_rate: Wilson; oracle: Wilson }[] }
+  context_gain?: { crops: number; engines: Record<string, {
+    crops: number; fixed: number; broken: number; copied_expected: number; wrong_answers: number
+    free_accuracy: Wilson; ctx_accuracy: Wilson; copy_rate: Wilson }> }
   mathpix: { cost_eur: number; crops_read_by_mathpix: number; crops_via_montage: number; copies: number; cost_per_copy_eur: number | null }
   shadow: { zones: number; compared_items: number; agree: number; agreement: Wilson | null }
   waiting: { waiting: number; oldest_hours: number; over_timeout: number; timeout_hours: number }
@@ -131,6 +139,50 @@ export default function OcrReport() {
                   <Table.Td>{p.wrong_agree}</Table.Td></Table.Tr>))}</Table.Tbody>
             </Table>
           </>}
+        </SettingsSection>
+
+        <SettingsSection title="Le contexte améliore-t-il la lecture ?"
+          description="Moteurs qui lisent deux fois (image seule, puis avec l'énoncé et la réponse attendue), sur les découpes relues par le professeur. « Recopie » : le passage avec contexte écrit la réponse attendue alors que l'élève a écrit autre chose — ce biais ne vote jamais seul (garde-fou).">
+          {!rep.context_gain || Object.keys(rep.context_gain.engines).length === 0
+            ? <Text size="sm" c="dimmed">Pas encore de découpe relue par le professeur avec les deux passages.</Text> : (
+            <Table fz="xs" withRowBorders>
+              <Table.Thead><Table.Tr><Table.Th>Moteur</Table.Th><Table.Th>Découpes</Table.Th><Table.Th>Exactitude libre</Table.Th>
+                <Table.Th>Avec contexte</Table.Th><Table.Th>Réparées</Table.Th><Table.Th>Cassées</Table.Th><Table.Th>Recopie l'attendu</Table.Th></Table.Tr></Table.Thead>
+              <Table.Tbody>{Object.entries(rep.context_gain.engines).map(([eng, g]) => (
+                <Table.Tr key={eng}><Table.Td>{eng}</Table.Td><Table.Td>{g.crops}</Table.Td>
+                  <Table.Td>{pct(g.free_accuracy.rate)}</Table.Td>
+                  <Table.Td><Text span size="xs" fw={600} c={(g.ctx_accuracy.rate ?? 0) > (g.free_accuracy.rate ?? 0) ? 'teal' : undefined}>{pct(g.ctx_accuracy.rate)}</Text></Table.Td>
+                  <Table.Td>{g.fixed}</Table.Td><Table.Td>{g.broken}</Table.Td>
+                  <Table.Td>{g.copied_expected} / {g.wrong_answers}</Table.Td></Table.Tr>))}</Table.Tbody>
+            </Table>
+          )}
+          {Object.keys(rep.marginal.engines).length > 0 && <>
+            <Text size="sm" fw={600} mt="md">Sans cette source (échantillon complet, {rep.marginal.crops} découpes, {rep.marginal.with_truth ?? 0} relues)</Text>
+            <Table fz="xs" withRowBorders>
+              <Table.Thead><Table.Tr><Table.Th>Retiré</Table.Th><Table.Th>Décisions changées</Table.Th><Table.Th>Auto perdues</Table.Th>
+                <Table.Th>Auto gagnées</Table.Th><Table.Th>Erreurs auto avec → sans</Table.Th></Table.Tr></Table.Thead>
+              <Table.Tbody>{Object.entries(rep.marginal.engines).map(([name, m]) => (
+                <Table.Tr key={name}><Table.Td>{name}</Table.Td><Table.Td>{m.decisions_changed} ({pct(m.share_changed)})</Table.Td>
+                  <Table.Td>{m.automatic_decisions_lost}</Table.Td><Table.Td>{m.automatic_decisions_gained ?? 0}</Table.Td>
+                  <Table.Td>{m.auto_errors_with ?? 0} → {m.auto_errors_without ?? 0}</Table.Td></Table.Tr>))}</Table.Tbody>
+            </Table>
+          </>}
+        </SettingsSection>
+
+        <SettingsSection title="Quelle pile retenir ?"
+          description="Chaque combinaison de sources (passage libre « moteur », passage avec contexte « moteur+ctx ») rejouée par la fusion complète sur l'échantillon complet relu par le professeur. Les plus sûres d'abord (borne haute de l'erreur automatique), puis les plus automatiques. « Proposée » : la bonne lecture figure parmi les propositions de la pile.">
+          {!rep.stacks || rep.stacks.stacks.length === 0
+            ? <Text size="sm" c="dimmed">Pas encore de découpe de l'échantillon complet relue par le professeur.</Text> : (
+            <Table fz="xs" withRowBorders>
+              <Table.Thead><Table.Tr><Table.Th>Pile</Table.Th><Table.Th>Découpes</Table.Th><Table.Th>Automatiques</Table.Th>
+                <Table.Th>Erreurs auto</Table.Th><Table.Th>Borne haute</Table.Th><Table.Th>Bonne lecture proposée</Table.Th></Table.Tr></Table.Thead>
+              <Table.Tbody>{rep.stacks.stacks.slice(0, 25).map((x) => (
+                <Table.Tr key={x.sources.join('|')}><Table.Td>{x.sources.join(' + ')}</Table.Td><Table.Td>{x.crops}</Table.Td>
+                  <Table.Td>{pct(x.auto_share)}</Table.Td>
+                  <Table.Td><Text span size="xs" c={x.auto_errors ? 'red' : undefined}>{x.auto_errors} / {x.auto}</Text></Table.Td>
+                  <Table.Td>{pct(x.auto_error_rate.high)}</Table.Td><Table.Td>{pct(x.oracle.rate)}</Table.Td></Table.Tr>))}</Table.Tbody>
+            </Table>
+          )}
         </SettingsSection>
 
         <SettingsSection title="Mathpix et mode ombre">

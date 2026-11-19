@@ -72,8 +72,25 @@ def render(rep: dict) -> str:
     L.append("")
     L.append(f"APPORT MARGINAL (échantillon complet, {m['crops']} découpes)")
     for eng, e in m["engines"].items():
-        L.append(f"  {eng:13s} décisions qui changeraient : {e['decisions_changed']} ({pct(e['share_changed'])}), "
-                 f"automatiques perdues : {e['automatic_decisions_lost']}")
+        L.append(f"  {eng:30s} décisions qui changeraient : {e['decisions_changed']} ({pct(e['share_changed'])}), "
+                 f"automatiques perdues : {e['automatic_decisions_lost']}, gagnées : {e.get('automatic_decisions_gained', 0)}"
+                 f" · erreurs auto avec / sans : {e.get('auto_errors_with', 0)} / {e.get('auto_errors_without', 0)}")
+    st = rep.get("stacks") or {}
+    if st.get("stacks"):
+        L.append("")
+        L.append(f"PILES (fusion complète rejouée, {st['crops']} découpes relues par le professeur ; les plus sûres d'abord)")
+        for x in st["stacks"][:15]:
+            er, orc = x["auto_error_rate"], x["oracle"]
+            L.append(f"  {' + '.join(x['sources']):60s} auto {pct(x['auto_share'])} · erreurs {x['auto_errors']}/{x['auto']}"
+                     f" (borne haute {pct(er['high'])}) · bonne lecture proposée {pct(orc['rate'])}")
+    cg = rep.get("context_gain") or {}
+    if cg.get("engines"):
+        L.append("")
+        L.append(f"PASSAGE AVEC CONTEXTE ({cg['crops']} découpes relues par le professeur)")
+        for eng, g in cg["engines"].items():
+            L.append(f"  {eng:13s} libre {pct(g['free_accuracy']['rate'])} → avec contexte {pct(g['ctx_accuracy']['rate'])}"
+                     f" (n={g['crops']}) · réparées {g['fixed']} · cassées {g['broken']}"
+                     f" · recopie la réponse attendue {g['copied_expected']}/{g['wrong_answers']} réponses fausses")
     mp = rep["mathpix"]
     L.append("")
     L.append(f"MATHPIX : {mp['cost_eur']} € · {mp['crops_read_by_mathpix']} découpes · {mp['copies']} copies"

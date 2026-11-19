@@ -54,6 +54,9 @@ const ENGINE_LABELS: Record<string, string> = {
   mathpix: 'Mathpix', mock: 'Mathpix (démo)', unimumer: 'Uni-MuMER', lighton: 'LightOnOCR',
   apple_vision: 'Apple Vision', trocr: 'TrOCR',
 }
+/** « unimumer+ctx » : passage avec l'énoncé et la réponse attendue — il a pu être soufflé. */
+const engineLabel = (e: string) => e.endsWith('+ctx')
+  ? `${ENGINE_LABELS[e.slice(0, -4)] ?? e.slice(0, -4)} + contexte` : (ENGINE_LABELS[e] ?? e)
 const PREFETCH = 6
 
 const isBoxes = (it: OcrItem) => it.response_type.startsWith('qcm') || it.response_type === 'checkbox_grid'
@@ -570,9 +573,13 @@ export default function OcrAssistant({ batch, onClose, onReviewAll }: {
                             </Group>
                             <Group gap={4} mt={6}>
                               {o.engines.map((e) => (
-                                <Badge key={e} size="xs" variant="light" color={e === 'mathpix' ? 'violet' : 'blue'}>
-                                  {ENGINE_LABELS[e] ?? e}
-                                </Badge>
+                                <Tooltip key={e} disabled={!e.endsWith('+ctx')} multiline maw={260}
+                                  label="Lu avec l'énoncé et la réponse attendue : ce moteur a pu être influencé. Vérifiez sur le scan.">
+                                  <Badge size="xs" variant={e.endsWith('+ctx') ? 'outline' : 'light'}
+                                    color={e === 'mathpix' ? 'violet' : e.endsWith('+ctx') ? 'grape' : 'blue'}>
+                                    {engineLabel(e)}
+                                  </Badge>
+                                </Tooltip>
                               ))}
                             </Group>
                           </UnstyledButton>

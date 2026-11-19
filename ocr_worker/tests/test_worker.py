@@ -38,7 +38,9 @@ def test_config_reads_tokens_from_env_and_never_prints_them(tmp_path):
 
 def test_shipped_config_is_valid_and_has_no_secret():
     cfg = config_mod.load(config_mod.DEFAULT_PATH, env={})
-    assert {s.name for s in cfg.servers} == {"local"} and cfg.servers[0].token == ""
+    # le Mac sert le serveur local et le NAS ; les jetons ne viennent QUE de l'environnement
+    assert {s.name for s in cfg.servers} <= {"local", "nas"} and "local" in {s.name for s in cfg.servers}
+    assert all(s.token == "" for s in cfg.servers)
     assert set(cfg.engines) == {"apple_vision", "trocr", "unimumer", "lighton"}
     assert set(cfg.engines) == set(FAMILIES)
     assert "token =" not in config_mod.DEFAULT_PATH.read_text()

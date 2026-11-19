@@ -11,7 +11,7 @@ import SettingsSection from './SettingsSection'
 type Values = Record<string, { value: any }>
 
 const MODES = [
-  { value: 'mathpix', label: 'Mathpix seul (actuel)' },
+  { value: 'mathpix', label: 'Mathpix seul' },
   { value: 'shadow', label: 'Ombre : le local enregistre, Mathpix décide' },
   { value: 'cascade', label: 'Cascade : le local décide' },
 ]
@@ -40,7 +40,7 @@ export default function OcrEngineSettings({ system, onSaved }: { system: Values;
     setAudit(Math.round(Number(v('ocr_audit_share', 0.02)) * 100))
     setShadowAudit(Math.round(Number(v('ocr_shadow_audit_share', 0.05)) * 100))
     setTimeoutH(Number(v('ocr_local_timeout_hours', 6)))
-    setSample(Math.round(Number(v('ocr_full_sample_share', 0.05)) * 100))
+    setSample(Math.round(Number(v('ocr_full_sample_share', 1)) * 100))
     setAccept(Math.round(Number(v('ocr_accept_confidence', 0.95)) * 100))
     setMargin(Number(v('ocr_score_margin', 2)))
     setMontage(Boolean(v('ocr_montage_enabled', false)))
@@ -103,38 +103,50 @@ export default function OcrEngineSettings({ system, onSaved }: { system: Values;
       description="Plusieurs moteurs locaux lisent chaque découpe, un consensus déterministe décide, Mathpix n'intervient qu'en dernier recours. En mode ombre, rien ne change pour les notes : la lecture locale est seulement enregistrée et comparée.">
       <Stack>
         <Select label="Mode" data={MODES} value={mode} onChange={(x) => setMode(x ?? 'mathpix')}
-          allowDeselect={false} maw={420} />
+          allowDeselect={false} maw={420}
+          description="Qui lit et décide : Mathpix seul, ombre (le Mac enregistre) ou cascade (le Mac décide, Mathpix en renfort)." />
         <Group align="flex-end">
           <NumberInput label="Contrôle en cascade" suffix=" %" min={0} max={100} w={160}
+            description="Décisions automatiques relues par le professeur, pour mesurer les erreurs."
             value={audit} onChange={setAudit} />
           <NumberInput label="Contrôle en ombre" suffix=" %" min={0} max={100} w={160}
-            description="zones acceptées par Mathpix" value={shadowAudit} onChange={setShadowAudit} />
+            description="Zones acceptées par Mathpix, relues pour juger le Mac." value={shadowAudit} onChange={setShadowAudit} />
           <NumberInput label="Alerte Mac absent" suffix=" h" min={1} w={150}
+            description="Au-delà, le lot passe en « Mac en retard » : Mathpix proposé."
             value={timeoutH} onChange={setTimeoutH} />
           <NumberInput label="Échantillon complet" suffix=" %" min={0} max={100} w={170}
+            description="Découpes lues par tous les moteurs après la décision, pour la mesure seulement."
             value={sample} onChange={setSample} />
           <NumberInput label="Confiance écrite à l'accord" suffix=" %" min={0} max={100} w={210}
+            description="Confiance inscrite quand les moteurs s'accordent (sert au calcul des notes)."
             value={accept} onChange={setAccept} />
           <NumberInput label="Marge de score" suffix=" nats" min={0} max={50} step={0.5} w={160}
+            description="Écart minimal entre deux scores pour trancher. Plus haut : moins d'automatique, moins d'erreurs."
             value={margin} onChange={setMargin} />
           <NumberInput label="Bail d'une tâche" suffix=" min" min={1} w={150}
+            description="Durée de réservation d'une tâche par le Mac, avant reprise si le Mac s'arrête."
             value={lease} onChange={setLease} />
         </Group>
         <Switch label="Second passage avec le contexte de l'exercice" checked={contextPass}
           onChange={(e) => setContextPass(e.currentTarget.checked)}
           description="Chaque moteur qui le peut (plan : context_engines) relit la découpe avec l'énoncé et la réponse attendue, dans la même vague que sa lecture libre. Ce que le contexte souffle ne compte que si un moteur l'a aussi lu sans contexte, ou si Mathpix le confirme." />
         <Group align="flex-end">
-          <Switch label="Planches Mathpix" checked={montage} onChange={(e) => setMontage(e.currentTarget.checked)} />
-          <NumberInput label="Découpes par planche" min={1} w={170} value={maxCrops} onChange={setMaxCrops} />
-          <NumberInput label="Envoi au plus tard" suffix=" min" min={1} w={170} value={flush} onChange={setFlush} />
+          <Switch label="Planches Mathpix" checked={montage} onChange={(e) => setMontage(e.currentTarget.checked)}
+            description="Plusieurs découpes sur une même image Mathpix (moins cher, mais risque de fusion)." />
+          <NumberInput label="Découpes par planche" min={1} w={170} value={maxCrops} onChange={setMaxCrops}
+            description="Nombre maximum de découpes sur une planche." />
+          <NumberInput label="Envoi au plus tard" suffix=" min" min={1} w={170} value={flush} onChange={setFlush}
+            description="Une planche partie après ce délai, même incomplète." />
         </Group>
         <Text size="xs" c="dimmed">
           Laisser les planches désactivées tant que le banc n'a pas montré 0 écart avec la lecture unitaire.
         </Text>
         <Textarea label="Plan des moteurs (JSON)" autosize minRows={6} maxRows={18}
+          description="Par classe de zone : moteurs qui lisent, qui décident, qui observent seulement, et familles corrélées. Ne pas modifier sans banc."
           styles={{ input: { fontFamily: 'monospace', fontSize: 12 } }}
           value={plan} onChange={(e) => setPlan(e.currentTarget.value)} />
         <Textarea label="Seuils par moteur (JSON)" autosize minRows={4} maxRows={14}
+          description="Confiance minimale par moteur pour qu'une lecture compte."
           styles={{ input: { fontFamily: 'monospace', fontSize: 12 } }}
           value={thresholds} onChange={(e) => setThresholds(e.currentTarget.value)} />
         <Group>

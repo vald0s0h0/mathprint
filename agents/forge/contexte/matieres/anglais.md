@@ -49,6 +49,7 @@ Il n'y a pas de nombres : un jeu change les phrases. Les phrases des jeux ont **
 ## Formats
 
 - **Bien lus** : QCM, vrai-faux en grille, *Right / Wrong / Not mentioned* en grille, relier (mot et définition, question et réponse), numéro de ligne.
+- **Phrase à trous manuscrite** (`response_layout.style: "phrase"`, voir `courants.md`) : pour rappeler la leçon — une règle, un mot de vocabulaire, une forme verbale dans sa phrase (*She ___ (go) to school yesterday.*). Les variantes britannique et américaine sont toutes déclarées.
 - **Mot écrit** : un mot court aux formes peu nombreuses et déclarées (une base verbale, un prétérit), sans apostrophe ni majuscule à lire quand elles comptent ; sinon fais choisir.
 - **Transformation d'une phrase** en une ligne : corrigée par le LLM (`route: llm`, avec `llm_brief` qui liste les formes justes).
 - **Aucune production écrite longue.**

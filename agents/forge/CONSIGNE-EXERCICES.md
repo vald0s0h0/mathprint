@@ -59,7 +59,7 @@ Le nombre de familles dépend de la compétence : une seule pour un savoir à re
 - **Lettres.** Le J en italique se lit « / » ou « I » : nomme les points autrement.
 - **Cases données.** Une case `given` de type `decimal` s'imprime avec un point : mets `type: text` et `$3{,}2$`.
 - **`multi_blank`.** La ligne de réponses reste entière autour du guide ; ne sépare jamais une égalité et sa case.
-- **Mise en page.** Les tableaux sont naturellement dimensionnés et centrés. `response_layout` permet de demander pleine largeur ou champs homogènes. `figure_constraints` impose une échelle ou une lisibilité minimale : le compacteur ne peut pas les contourner.
+- **Mise en page.** Les tableaux sont naturellement dimensionnés et centrés. `response_layout` permet de demander pleine largeur, champs homogènes, ou `style: "phrase"` (phrase à trous manuscrite, pour rappeler la leçon dans toutes les matières). `figure_constraints` impose une échelle ou une lisibilité minimale : le compacteur ne peut pas les contourner.
 - **Arrondi.** `exact_decimal` se déclenche sur le mot « arrondi » ; « au degré près » seul ne suffit pas.
 - **Réponses écrites.** Un « oui » ou un « non » écrit dans un tableau n'est pas encore validé sur de vrais scans : préfère une case à cocher.
 - **Figures.** Toute nouvelle figure s'écrit en TikZ dans la charte (`contexte/figures/commun.md`) ; `check` refuse les anciens moteurs. Une balance s'écrit `\Balance{…}{…}`, jamais à la main. Une figure TikZ n'est presque pas réduite à la mise en page : prévois sa taille dès le dessin. La première compilation du Mac peut prendre une minute, les suivantes une à deux secondes.

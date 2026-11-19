@@ -65,6 +65,8 @@ def _draw(share: float, key: str) -> bool:
     """Tirage stable (même clé, même résultat) avec la probabilité `share`."""
     if share <= 0:
         return False
+    if share >= 1:
+        return True
     return int(hashlib.sha1(key.encode()).hexdigest()[:8], 16) / 0xFFFFFFFF < share
 
 
@@ -229,22 +231,55 @@ def has_pending(db: Session, batch: ScanBatch) -> bool:
             or _unfinished_zones(db, batch.id) != [])
 
 
-def local_progress(db: Session, batch: ScanBatch) -> dict:
-    """Pour l'interface : « Lecture en cours sur le Mac (n/N) » ou « Mac hors ligne », et l'alerte
-    quand le lot attend depuis plus de `ocr_local_timeout_hours`."""
-    q = db.query(OcrCrop).filter(OcrCrop.batch_id == batch.id, OcrCrop.mode == "cascade")
+def local_progress(db: Session, batch: ScanBatch) -> dict | None:
+    """État de la lecture sur le Mac, pour l'interface (machine à états du bouton du lot) :
+
+    - `mac_reading` : le Mac lit (bleu, animé). Rien à faire : on attend, on ne l'interrompt pas ;
+    - `mac_offline` : le worker n'a pas sondé le serveur depuis 2 min ; la lecture reprendra ;
+    - `mac_overdue` : en attente depuis plus de `ocr_local_timeout_hours` (orange : au professeur
+      de décider, « Lire avec Mathpix » en cascade, OCRiser sans les propositions en ombre).
+
+    Cascade (`ocr_local_pending`) : le lot attend le Mac pour continuer. Ombre (`ocr_review_pending`) :
+    Mathpix a déjà lu, mais OCRiser attend les propositions des moteurs locaux. None : rien à attendre."""
+    cascade = batch.status == "ocr_local_pending"
+    if not cascade and batch.status != "ocr_review_pending":
+        return None
+    q = db.query(OcrCrop).filter(OcrCrop.batch_id == batch.id, OcrCrop.mode == ("cascade" if cascade else "shadow"))
     total = q.count()
-    done = q.filter(OcrCrop.status == "decided").count()
-    since = ((batch.progress_json or {}).get("ocr_local_pending") or {}).get("since")
+    if cascade:
+        done = q.filter(OcrCrop.status == "decided").count()
+        since = ((batch.progress_json or {}).get("ocr_local_pending") or {}).get("since")
+    else:
+        if not total:
+            return None
+        # lu par le Mac (Mathpix à part) ; une découpe de l'échantillon complet attend aussi la
+        # lecture de TOUS les moteurs, pour qu'OCRiser propose chacune de leurs lectures
+        from sqlalchemy import String, and_, cast, or_
+        waiting = q.filter(or_(OcrCrop.status == "pending",
+                               and_(OcrCrop.full_sample.is_(True), OcrCrop.status == "decided",
+                                    OcrCrop.id.in_(db.query(OcrDecision.crop_id).filter(or_(
+                                        OcrDecision.full_decision.is_(None),
+                                        ~cast(OcrDecision.full_decision, String).like('%"action"%'))))))).count()
+        done = total - waiting
+        if done >= total:
+            return None
+        first = q.order_by(OcrCrop.created_at).first()
+        since = first.created_at.isoformat() if first and first.created_at else None
     hours = 0.0
     try:
         if since:
-            hours = (datetime.now(timezone.utc) - datetime.fromisoformat(since)).total_seconds() / 3600
+            t0 = datetime.fromisoformat(since)
+            if t0.tzinfo is None:
+                t0 = t0.replace(tzinfo=timezone.utc)
+            hours = (datetime.now(timezone.utc) - t0).total_seconds() / 3600
     except ValueError:
         pass
     timeout = int(rs.ocr_setting(db, "ocr_local_timeout_hours"))
-    return {"decided": done, "total": total, "worker_online": ocr_queue.worker_online(db),
-            "waiting_hours": round(hours, 1), "timeout_hours": timeout, "overdue": hours >= timeout}
+    online = ocr_queue.worker_online(db)
+    overdue = hours >= timeout
+    state = "mac_overdue" if overdue else "mac_reading" if online else "mac_offline"
+    return {"decided": done, "total": total, "worker_online": online, "mode": "cascade" if cascade else "shadow",
+            "state": state, "waiting_hours": round(hours, 1), "timeout_hours": timeout, "overdue": overdue}
 
 
 def cancel_local(db: Session, batch: ScanBatch) -> int:

@@ -21,11 +21,12 @@ import ActionsMenu from '../components/ActionsMenu'
 import MathText, { MathAnswer } from '../components/MathText'
 import { type Segment, stepWidths } from '../components/SegmentBar'
 import { type LateJob, lateJobNames } from '../components/LateJobs'
-import ScanLotRow, { type Lot, type LotHandlers, type LotStage } from '../components/ScanLotRow'
+import ScanLotRow, { type Lot, type LotHandlers, type LotStage, type OcrLocal } from '../components/ScanLotRow'
 import PrintButton from '../components/PrintButton'
 import OcrAssistant, { type OcrBatchRef } from '../components/OcrAssistant'
 import FeedbackEditor from '../components/FeedbackEditor'
 import RefineCorrectionModal from '../components/RefineCorrectionModal'
+import SlideshowOverlay, { exportSlideshow } from '../components/SlideshowOverlay'
 import { useAppState } from '../state/AppState'
 
 type Batch = {
@@ -41,7 +42,7 @@ type Batch = {
   error: string | null; pending_reviews: number; pending_ocr: number; pending_llm: number
   pending_llm_queued?: number
   // lecture locale sur le Mac (mode cascade) : découpes lues / total, worker joignable ?
-  ocr_local?: { decided: number; total: number; worker_online: boolean; waiting_hours?: number; timeout_hours?: number; overdue?: boolean } | null
+  ocr_local?: OcrLocal | null
   // élèves jamais revenus à la finalisation (jamais pénalisés, cf. services
   // .pipeline.finalize_batch) — le prof doit savoir combien manquent sur ce sujet
   absent_count: number
@@ -164,7 +165,7 @@ const STAGE_BADGE: Record<Stage, { label: string; color: string }> = {
   awaiting: { label: 'en attente de scan', color: 'gray' },
   processing: { label: 'correction en cours', color: 'blue' },
   error: { label: 'bloqué', color: 'red' },
-  ocr_review: { label: 'lecture à vérifier', color: 'blue' },
+  ocr_review: { label: 'à OCRiser', color: 'orange' },
   review: { label: 'à corriger', color: 'orange' },
   done: { label: 'prêt à imprimer', color: 'green' },
 }
@@ -376,6 +377,8 @@ export default function Corrections() {
   const [mathpixOk, setMathpixOk] = useState(true)
   const [llmOk, setLlmOk] = useState(true)
   const [refine, setRefine] = useState<{ id: string; wave?: number } | null>(null)
+  const [slideshow, setSlideshow] = useState<string | null>(null)
+  const closeSlideshow = useCallback(() => setSlideshow(null), [])
   // revue copie par copie AVANT la correction, ouverte depuis la fin d'OCRiser
   const [preReview, setPreReview] = useState<{ id: string; wave?: number } | null>(null)
   const [idx, setIdx] = useState(0)
@@ -768,6 +771,19 @@ export default function Corrections() {
       onReset: isMain ? () => setResetTarget(b) : undefined,
       onDistributed: (v) => (isMain ? setDistributed(b, v) : setLateDistributed(b, lot.wave, v)),
       onChanged: refresh,
+      onSlideshow: isMain ? () => setSlideshow(b.id) : undefined,
+      onExportSlideshow: isMain ? () => runExportSlideshow(b) : undefined,
+    }
+  }
+
+  async function runExportSlideshow(b: Batch) {
+    const id = notifications.show({ loading: true, autoClose: false, withCloseButton: false,
+      message: 'Préparation du diaporama : cartes, copies et résultats…' })
+    try {
+      await exportSlideshow(b.id)
+      notifications.update({ id, loading: false, autoClose: 3000, color: 'green', message: 'Diaporama exporté' })
+    } catch (e) {
+      notifications.update({ id, loading: false, autoClose: 6000, color: 'red', message: (e as Error).message })
     }
   }
 
@@ -1027,6 +1043,8 @@ export default function Corrections() {
       {/* aperçu avant impression de l'overlay : copie scannée + overlay, lecture seule */}
       <RefineCorrectionModal mode="overlay" batchId={preview?.id ?? null} wave={preview?.wave}
         opened={!!preview} onClose={() => setPreview(null)} />
+
+      <SlideshowOverlay batchId={slideshow} onClose={closeSlideshow} />
 
       <RefineCorrectionModal batchId={refine?.id ?? null} wave={refine?.wave} opened={!!refine}
         onClose={() => { setRefine(null); refresh() }} />

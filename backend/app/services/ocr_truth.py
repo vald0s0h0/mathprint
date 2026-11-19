@@ -114,7 +114,10 @@ _DISPLAY_PRIORITY = ("mathpix", "mock", "unimumer", "lighton", "apple_vision", "
 
 
 def _prio(engine: str) -> int:
-    return _DISPLAY_PRIORITY.index(engine) if engine in _DISPLAY_PRIORITY else len(_DISPLAY_PRIORITY)
+    """Le passage avec contexte (« moteur+ctx ») se range juste après le passage libre du moteur."""
+    base, ctx = (engine[:-4], 0.5) if engine.endswith("+ctx") else (engine, 0)
+    i = _DISPLAY_PRIORITY.index(base) if base in _DISPLAY_PRIORITY else len(_DISPLAY_PRIORITY)
+    return i + ctx
 
 
 def group_options(entries: list[tuple[str, str]], zone_class: str) -> list[dict]:
@@ -141,16 +144,20 @@ def group_options(entries: list[tuple[str, str]], zone_class: str) -> list[dict]
 
 
 def _crop_reads(db: Session, crop: OcrCrop) -> dict[str, str]:
-    """Dernière lecture exploitable de chaque moteur (et de Mathpix) pour une découpe."""
+    """Dernière lecture exploitable de chaque moteur (et de Mathpix) pour une découpe. Le passage
+    avec contexte d'un moteur est une source à part, « moteur+ctx » : le professeur le voit
+    étiqueté comme tel, et son choix crédite chaque passage séparément dans le rapport."""
     from ..models import OcrEngineRead
     out: dict[str, str] = {}
     for r in (db.query(OcrEngineRead)
-              .filter(OcrEngineRead.crop_id == crop.id, OcrEngineRead.kind.in_(("read", "mathpix")))
+              .filter(OcrEngineRead.crop_id == crop.id,
+                      OcrEngineRead.kind.in_(("read", "read_ctx", "mathpix")))
               .order_by(OcrEngineRead.created_at).all()):
+        key = f"{r.engine}+ctx" if r.kind == "read_ctx" else r.engine
         if r.error or r.illegible or not (r.raw_text or "").strip():
-            out.pop(r.engine, None)
+            out.pop(key, None)
             continue
-        out[r.engine] = r.raw_text
+        out[key] = r.raw_text
     return out
 
 
@@ -158,7 +165,8 @@ def review_options(db: Session, zone_id: str, expected_type: str | None = None,
                    multiline: bool = False) -> dict:
     """Lectures proposées au professeur dans OCRiser, quel que soit le mode : moteurs locaux
     (cascade, ombre) et Mathpix (tous modes). {"zone": [...], "cells": {index: [...]}}.
-    Jamais la valeur attendue : seulement ce que les moteurs ont lu librement."""
+    Jamais la valeur attendue elle-même : seulement ce que les moteurs ont lu, y compris leur
+    passage avec contexte (« moteur+ctx », étiqueté à part car il a pu être soufflé)."""
     from ..models import OcrAttempt
     from .ocr_cascade import zone_class_for
     zone_entries: list[tuple[str, str]] = []

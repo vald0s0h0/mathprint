@@ -1550,8 +1550,16 @@ def _slot_problems(exercise: dict, slot: dict, payload: dict) -> list[str]:
         problems.append("figure_layout : above, below, left, right, grid_left ou grid_right")
     for node in [exercise, *_leaves(exercise)]:
         layout = node.get("response_layout") or {}
-        if not isinstance(layout, dict) or set(layout) - {"width", "align", "uniform_fields"}:
+        if not isinstance(layout, dict) or set(layout) - {"width", "align", "uniform_fields", "style"}:
             problems.append("response_layout invalide")
+        elif layout.get("style") not in (None, "phrase"):
+            problems.append("response_layout.style : seule valeur admise « phrase »")
+        elif layout.get("style") == "phrase" and (
+                exercise.get("response_type") not in ("short_text", "multi_blank")
+                or "{{blank}}" not in str(exercise.get("statement") or "")):
+            problems.append("response_layout.style « phrase » : réservé à une carte short_text ou "
+                            "multi_blank (pas à une partie de composite) dont l'énoncé porte la phrase "
+                            "à trous avec {{blank}}")
         elif layout.get("width", "content") not in ("content", "full") or layout.get("align", "center") not in ("center", "left"):
             problems.append("response_layout : width content/full, align center/left")
     constraints = exercise.get("figure_constraints") or {}

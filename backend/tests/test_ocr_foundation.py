@@ -144,7 +144,7 @@ def _set(db, key, value, role="admin"):
 def test_defaults_are_safe(db):
     assert rs.ocr_mode(db) == "mathpix"
     assert rs.ocr_setting(db, "ocr_audit_share") == pytest.approx(0.02)
-    assert rs.ocr_setting(db, "ocr_full_sample_share") == pytest.approx(0.05)
+    assert rs.ocr_setting(db, "ocr_full_sample_share") == pytest.approx(1.0)
     assert rs.ocr_setting(db, "ocr_accept_confidence") == pytest.approx(0.95)
     assert rs.ocr_setting(db, "ocr_montage_enabled") is False
     assert (rs.ocr_setting(db, "ocr_montage_max_crops"), rs.ocr_setting(db, "ocr_montage_flush_minutes"),
